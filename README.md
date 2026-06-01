@@ -1,35 +1,104 @@
 # CompactGate
 
-CompactGate is a local OpenAI-compatible reverse proxy for Codex CLI compact requests.
+CompactGate 是一个给 Codex CLI 用的本地代理。
 
-Codex can point its OpenAI-compatible `base_url` at CompactGate, while CompactGate routes normal `/v1/*` traffic to a primary upstream and can route `POST /v1/responses/compact` to either a separate compact upstream or the same primary upstream. Compact requests can rewrite the JSON `model` automatically or use a manual override.
+它的作用很简单：
 
-If your primary API already supports the compact model you want to use, set `compact.upstream_mode` to `"primary"`. That disables separate compact upstream routing while keeping Codex-facing `/v1/responses/compact` compatibility.
+- 普通请求继续发到你的主上游
+- 只有 compact 请求单独分流
+- 必要时自动改写 compact 模型名
+- 你还能在本地页面里看配置、健康状态和最近日志
 
-The project also ships CompactGate Studio, a single-page local console for editing live config, previewing routes, checking health, and inspecting recent request logs without recording prompt bodies.
+如果你现在还不清楚 “compact 请求” 是什么，也没关系。你只要记住：
 
-## Current Features
+> CompactGate 让 Codex 在“正常对话”和“压缩上下文”这两类请求上，可以走不同的上游。
 
-- Routes normal `/v1/*` traffic to a primary upstream and compact traffic to either a dedicated compact upstream or the same primary upstream.
-- Rewrites compact request models in linked or fully custom mode.
-- Preserves streaming for normal upstream responses while removing `stream` from compact request bodies.
-- Persists recent route logs to SQLite and pushes new log entries into Studio over Server-Sent Events.
-- Supports direct saved API keys, environment-variable fallback keys, and request-by-request upstream route diagnostics.
-- Optionally captures full upstream request and response payloads to disk for debugging when explicitly enabled.
-- Repairs split-mode follow-up requests after compaction by translating readable compact state into assistant summary messages before forwarding to the primary upstream.
+## 这个项目解决什么问题
 
-## Quick Start
+很多时候你会遇到下面几种情况：
+
+1. 你的主上游能跑正常对话，但不支持 compact 模型。
+2. 你想把 compact 请求单独走另一家兼容 OpenAI API 的服务。
+3. 你想保留原来的 Codex 使用方式，只在中间加一层本地代理。
+4. 你想在本地看最近请求都走到了哪条路由，但又不想默认记录 prompt 正文。
+
+CompactGate 就是为这个场景做的。
+
+## 30 秒理解工作方式
+
+接入后，链路会变成这样：
+
+```text
+Codex -> CompactGate -> 你的上游服务
+```
+
+CompactGate 会按规则转发：
+
+```text
+普通 /v1/* 请求          -> primary 主上游
+/v1/responses/compact -> compact 上游，或者仍走 primary
+```
+
+你只需要把 Codex 的 `base_url` 改成 CompactGate，本地代理就会替你处理剩下的事情。
+
+## 最短上手
+
+### 1. 安装依赖
 
 ```bash
 npm install
+```
+
+### 2. 复制配置文件
+
+```bash
 cp compactgate.example.json compactgate.json
+```
+
+### 3. 修改 `compactgate.json`
+
+先至少改这几个值：
+
+- `primary.base_url`：你的主上游地址
+- `compact.base_url`：你的 compact 上游地址
+- `primary.api_key_env`：主上游密钥环境变量名
+- `compact.api_key_env`：compact 上游密钥环境变量名
+
+如果你暂时只想走一套上游，也可以把：
+
+```json
+"upstream_mode": "primary"
+```
+
+这样 compact 请求也会走主上游。
+
+### 4. 设置环境变量
+
+```bash
+export PRIMARY_API_KEY="你的主上游密钥"
+export COMPACT_API_KEY="你的 compact 上游密钥"
+```
+
+如果你不想用环境变量，也可以先启动服务，再去 Studio 页面里直接保存 API Key。
+
+### 5. 启动
+
+```bash
 npm run build
 npm start
 ```
 
-Open `http://127.0.0.1:7865/` for CompactGate Studio.
+启动后打开：
 
-Use this base URL in Codex:
+```text
+http://127.0.0.1:7865/
+```
+
+这里就是 CompactGate Studio。
+
+## Codex 怎么接入
+
+把 Codex 的 OpenAI 兼容 `base_url` 指向 CompactGate：
 
 ```toml
 model_provider = "compactgate"
@@ -42,41 +111,28 @@ requires_openai_auth = true
 base_url = "http://127.0.0.1:7865/v1"
 ```
 
-The provider `name` must stay `"OpenAI"` so Codex uses the remote `/v1/responses/compact` path.
+这里有一个非常重要的点：
 
-## Configuration
-
-CompactGate reads `compactgate.json` by default. Override the path with `COMPACTGATE_CONFIG`.
-
-```bash
-COMPACTGATE_CONFIG=/path/to/compactgate.json npm start
+```toml
+name = "OpenAI"
+wire_api = "responses"
 ```
 
-Request logs are persisted to SQLite. By default CompactGate writes `compactgate-logs.sqlite` next to the active config file. Override that path with `COMPACTGATE_LOG_DB`.
+这两项不要随便改，尤其是 `name` 必须保持 `"OpenAI"`，否则 Codex 可能不会按预期调用 `/v1/responses/compact`。
 
-```bash
-COMPACTGATE_LOG_DB=/path/to/compactgate-logs.sqlite npm start
-```
+## 配置文件怎么理解
 
-Full request and response capture is disabled by default. Enable it only for debugging by pointing `COMPACTGATE_CAPTURE_DIR` at a local directory.
-
-```bash
-COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
-```
-
-Example config:
+下面是一个最常见的配置例子：
 
 ```json
 {
   "listen": "127.0.0.1:7865",
   "primary": {
     "base_url": "https://primary.example/v1",
-    "api_key": "sk-primary-example",
     "api_key_env": "PRIMARY_API_KEY"
   },
   "compact": {
     "base_url": "https://compact.example/v1",
-    "api_key": "sk-compact-example",
     "api_key_env": "COMPACT_API_KEY",
     "upstream_mode": "split",
     "model_mode": "linked",
@@ -94,148 +150,226 @@ Example config:
 }
 ```
 
-CompactGate Studio now lets you enter and save one API key directly under each upstream URL. Saved keys are written to `compactgate.json` and take priority over environment variables.
+最重要的字段只有这些：
 
-If you still prefer shell-based secrets, `api_key_env` remains as an optional fallback:
+### `primary`
+
+普通请求走的主上游。
+
+### `compact`
+
+compact 请求走的上游。
+
+### `compact.upstream_mode`
+
+可选值：
+
+- `split`：compact 请求走 `compact.base_url`
+- `primary`：compact 请求也走 `primary.base_url`
+
+### `compact.model_mode`
+
+可选值：
+
+- `linked`：按模板改写模型名
+- `custom`：无论原模型是什么，都改成固定模型
+
+### `compact.model_template`
+
+当 `model_mode = "linked"` 时使用。
+
+比如：
+
+```text
+{model}-openai-compact
+```
+
+如果原模型是：
+
+```text
+gpt-5.5
+```
+
+那么 compact 请求会被改写成：
+
+```text
+gpt-5.5-openai-compact
+```
+
+### `compact.model_override`
+
+当 `model_mode = "custom"` 时使用。
+
+例如你可以固定改成：
+
+```text
+my-compact-model
+```
+
+## Studio 页面能做什么
+
+打开 `http://127.0.0.1:7865/` 后，你可以直接：
+
+- 修改主上游和 compact 上游地址
+- 切换 `split` / `primary` 模式
+- 切换 linked / custom 模型改写方式
+- 直接保存 API Key
+- 预览某条请求会走哪条路由
+- 查看健康状态
+- 实时查看最近日志
+
+日志是实时刷新的，使用的是 SSE。
+
+默认情况下，日志只记录这些信息：
+
+- 路由类型
+- 状态码
+- 模型映射
+- 上游主机
+- 耗时
+- request id
+
+默认不会记录 prompt 正文。
+
+## 日志和本地数据库
+
+最近请求日志会持久化到 SQLite。
+
+默认文件位置是：
+
+```text
+compactgate-logs.sqlite
+```
+
+如果你想自定义位置，可以这样启动：
 
 ```bash
-export PRIMARY_API_KEY="..."
-export COMPACT_API_KEY="..."
+COMPACTGATE_LOG_DB=/path/to/compactgate-logs.sqlite npm start
 ```
 
-The management API reports whether a saved key or environment variable is active, but the default `GET /api/config` response does not return plaintext API keys.
+## 调试抓包
 
-## Routing
+如果你需要抓完整的上游请求和响应内容，可以临时打开调试捕获：
 
-Normal requests:
+```bash
+COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
+```
+
+只有在你明确设置这个环境变量时，CompactGate 才会把完整正文写到本地文件里。
+
+默认不开启。
+
+## 管理 API
+
+如果你想自己对接页面或脚本，可以用这些接口：
+
+### `GET /api/health`
+
+查看服务和上下游状态。
+
+### `GET /api/config`
+
+查看当前运行配置。
+
+注意：这个接口不会返回明文 API Key。
+
+### `GET /api/config/export`
+
+导出完整配置。
+
+### `PATCH /api/config`
+
+热更新配置并写回磁盘，不需要重启。
+
+### `POST /api/test-route`
+
+预览一条请求最终会怎么路由、怎么改模型。
+
+### `GET /api/logs/recent`
+
+读取最近日志。
+
+可以加筛选：
 
 ```text
-POST /v1/responses -> primary.base_url + /responses
+?route=primary
+?route=compact
 ```
 
-Compact requests:
+### `GET /api/events`
 
-```text
-POST /v1/responses/compact -> compact.base_url + /responses/compact
-```
+SSE 实时事件流。
 
-Set `compact.upstream_mode` to control where compact requests go:
+它会推送两类事件：
 
-```text
-split   -> compact.base_url + /responses/compact
-primary -> primary.base_url + /responses/compact
-```
+- `snapshot`：当前配置、健康状态、最近日志
+- `log`：一条新完成的代理日志
 
-Use `primary` mode when the primary upstream already provides the compact-capable model. CompactGate will still rewrite the model according to `model_mode`.
+## 开发
 
-In linked mode, CompactGate rewrites compact request models with `model_template`:
-
-```text
-gpt-5.5 -> gpt-5.5-openai-compact
-gpt-5.4 -> gpt-5.4-openai-compact
-```
-
-In custom mode, CompactGate uses `compact.model_override` for every compact request.
-
-CompactGate removes `stream` from compact request JSON bodies. Normal `/v1/*` proxying does not buffer the upstream response, so streaming responses remain streamed.
-
-Debug response headers:
-
-```text
-x-compactgate-route: primary
-x-compactgate-route: compact
-x-compactgate-model: gpt-5.5-openai-compact
-x-compactgate-request-id: ...
-```
-
-## Management API
-
-`GET /api/health`
-
-Returns CompactGate status plus primary and compact upstream configuration status.
-
-`GET /api/config`
-
-Returns current runtime config plus key source metadata. Saved API keys are redacted from this response.
-
-`GET /api/config/export`
-
-Returns the full saved config, including persisted API keys. CompactGate Studio uses this only for explicit config export.
-
-`PATCH /api/config`
-
-Hot-patches config and writes it to disk. Restart is not required. This endpoint can update `primary.api_key`, `compact.api_key`, and the optional `api_key_env` fallback fields.
-
-To disable separate compact upstream routing at runtime:
-
-```json
-{
-  "compact": {
-    "upstream_mode": "primary"
-  }
-}
-```
-
-`POST /api/test-route`
-
-Previews route selection and model rewriting.
-
-```json
-{
-  "path": "/v1/responses/compact",
-  "body": {
-    "model": "gpt-5.5",
-    "stream": true
-  }
-}
-```
-
-`GET /api/logs/recent`
-
-Returns recent request logs. Add `?route=primary` or `?route=compact` to filter. Logs are backed by SQLite and survive process restarts, while request bodies remain excluded.
-
-`GET /api/events`
-
-Returns a long-lived Server-Sent Events stream for CompactGate Studio or lightweight integrations.
-
-- `snapshot` event: current public config, health, and recent logs
-- `log` event: one newly completed proxied request log entry
-
-The Studio page uses this stream for live log updates and falls back to polling only when `EventSource` is unavailable.
-
-## Development
-
-Run the backend:
+启动后端开发模式：
 
 ```bash
 npm run dev
 ```
 
-Run the Vite dev server in another terminal:
+如果你还想单独跑前端开发服务器，再开一个终端：
 
 ```bash
 npx vite --host 127.0.0.1 --port 5173
 ```
 
-Run verification:
+运行检查：
 
 ```bash
 npm test
 npm run build
 ```
 
-## Troubleshooting
+## 常见问题
 
-If Codex does not call `/v1/responses/compact`, confirm the provider block uses `name = "OpenAI"` and `wire_api = "responses"`.
+### 1. Codex 没有调用 `/v1/responses/compact`
 
-If compact requests hit the wrong upstream, open CompactGate Studio and use Inspector with `/v1/responses/compact` and `{ "model": "gpt-5.5" }`.
+先检查 Codex 配置里是不是：
 
-If your primary API already has a compact model, switch Compact upstream mode to `Primary` in Studio or set `compact.upstream_mode` to `"primary"`.
+```toml
+name = "OpenAI"
+wire_api = "responses"
+```
 
-If the upstream rejects authentication, first confirm the saved API key under that upstream is correct. If the field is blank, confirm the fallback environment variable is exported in the same shell that starts CompactGate.
+### 2. compact 请求走错了上游
 
-If Compact upstream mode is `primary`, Compact requests reuse the primary credential source even if `compact.api_key` or `compact.api_key_env` is configured.
+去 Studio 页面里看：
 
-If route logs do not show prompt content, that is expected. CompactGate logs route metadata by default and intentionally avoids request body logging.
+- `compact.upstream_mode` 是不是你想要的值
+- `compact.base_url` 配得对不对
 
-If split mode fails after a prior compact operation from another upstream, make sure you are running a recent CompactGate build. Current builds translate readable compact state into assistant summary messages before the next normal request reaches the primary upstream.
+也可以用 `POST /api/test-route` 预览。
+
+### 3. 主上游已经支持 compact 模型，还需要单独 compact 上游吗
+
+不需要。
+
+直接把：
+
+```json
+"upstream_mode": "primary"
+```
+
+这样 compact 请求也走主上游。
+
+### 4. 日志里为什么没有 prompt 正文
+
+这是默认设计，出于安全和隐私考虑，普通日志只记录路由元信息。
+
+如果你确实要抓完整正文，请临时启用：
+
+```bash
+COMPACTGATE_CAPTURE_DIR=/path/to/captures
+```
+
+### 5. split 模式下 compact 之后下一次普通请求报错怎么办
+
+请确认你运行的是新版 CompactGate。
+
+当前版本会在需要时把可读的 compact 状态自动修复成 assistant summary message，再转发给 primary，上游兼容性会更好。
