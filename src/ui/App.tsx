@@ -1,11 +1,14 @@
 import React, { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type {
   CompactGateConfig,
   CredentialSource,
+  HostLogCount,
   HealthResponse,
   PublicConfig,
   RequestLogEntry,
+  RequestLogPage,
   RouteKind,
   RoutePreviewResponse,
   StudioLogEvent,
@@ -35,12 +38,7 @@ type HealthBadge = {
   tone: HealthTone;
 };
 
-interface HostFilterOption {
-  host: string;
-  total: number;
-  primary: number;
-  compact: number;
-}
+type HostFilterOption = HostLogCount;
 
 interface SelectOption {
   value: string;
@@ -52,12 +50,15 @@ interface SelectOption {
 
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
 const ALL_HOSTS_FILTER = "__all_hosts__";
+const DEFAULT_LOG_PAGE_LIMIT = 200;
+const TOKEN_TOOLTIP_WIDTH = 350;
+const TOKEN_TOOLTIP_ESTIMATED_HEIGHT = 216;
 
 function App() {
   const pageMode = window.location.pathname === "/health" ? "health" : "studio";
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [logs, setLogs] = useState<RequestLogEntry[]>([]);
+  const [logPage, setLogPage] = useState<RequestLogPage>(() => emptyLogPage(DEFAULT_LOG_PAGE_LIMIT));
   const [routeFilter, setRouteFilter] = useState<"all" | RouteKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
   const [form, setForm] = useState<ConfigFormState>(emptyForm());
@@ -70,12 +71,16 @@ function App() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
   const [isRefreshingHealth, setIsRefreshingHealth] = useState(false);
 
   const deferredFilter = useDeferredValue(routeFilter);
   const deferredHostFilter = useDeferredValue(hostFilter);
+  const logs = logPage.logs;
   const latestLog = logs[0] ?? null;
-  const keepRecent = config?.logging.keep_recent ?? 200;
+  const hasConfig = config !== null;
+  const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
   const linkedCompactModel = renderLinkedModel(currentModel, form.modelTemplate);
   const effectiveCompactModel =
     form.modelMode === "linked" ? linkedCompactModel : form.modelOverride || "手动模型";
@@ -83,15 +88,11 @@ function App() {
   const hasPendingChanges = useMemo(() => {
     return config ? isFormDirty(config, form) : false;
   }, [config, form]);
-  const logCounts = useMemo(
-    () => ({
-      all: logs.length,
-      primary: logs.filter((entry) => entry.route === "primary").length,
-      compact: logs.filter((entry) => entry.route === "compact").length
-    }),
-    [logs]
+  const logCounts = logPage.counts;
+  const hostOptions = useMemo(
+    () => buildHostFilterOptions(logPage.host_counts, hostFilter),
+    [logPage.host_counts, hostFilter]
   );
-  const hostOptions = useMemo(() => buildHostFilterOptions(logs, hostFilter), [logs, hostFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,10 +111,9 @@ function App() {
           return;
         }
 
-        const [nextConfig, nextHealth, nextLogs] = await Promise.all([
+        const [nextConfig, nextHealth] = await Promise.all([
           api<PublicConfig>("/api/config"),
-          api<HealthResponse>("/api/health"),
-          api<{ logs: RequestLogEntry[] }>("/api/logs/recent")
+          api<HealthResponse>("/api/health")
         ]);
 
         if (cancelled) {
@@ -122,7 +122,6 @@ function App() {
 
         setConfig(nextConfig);
         setHealth(nextHealth);
-        setLogs(nextLogs.logs);
         setForm(formFromConfig(nextConfig));
         setPageError(null);
       } catch (error) {
@@ -139,6 +138,46 @@ function App() {
   }, [pageMode]);
 
   useEffect(() => {
+    if (pageMode !== "studio" || !hasConfig) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadLogs() {
+      setIsLoadingLogs(true);
+
+      try {
+        const nextPage = await fetchLogPage({
+          route: deferredFilter,
+          host: deferredHostFilter,
+          limit: logPageLimit,
+          offset: 0
+        });
+
+        if (!cancelled) {
+          setLogPage(nextPage);
+          setLogError(null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLogError(errorSummary(error));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingLogs(false);
+        }
+      }
+    }
+
+    void loadLogs();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [deferredFilter, deferredHostFilter, hasConfig, logPageLimit, pageMode]);
+
+  useEffect(() => {
     if (pageMode !== "studio") {
       return;
     }
@@ -147,8 +186,13 @@ function App() {
       setLogError("当前浏览器不支持 SSE，已回退为轮询刷新。");
       const interval = window.setInterval(async () => {
         try {
-          const nextLogs = await api<{ logs: RequestLogEntry[] }>("/api/logs/recent");
-          setLogs(nextLogs.logs);
+          const nextPage = await fetchLogPage({
+            route: deferredFilter,
+            host: deferredHostFilter,
+            limit: logPageLimit,
+            offset: 0
+          });
+          setLogPage(nextPage);
         } catch (error) {
           setLogError(errorSummary(error));
         }
@@ -166,7 +210,9 @@ function App() {
         const snapshot = JSON.parse(event.data) as StudioSnapshotEvent;
         setConfig(snapshot.config);
         setHealth(snapshot.health);
-        setLogs(snapshot.logs);
+        if (routeFilter === "all" && hostFilter === ALL_HOSTS_FILTER) {
+          setLogPage((previous) => mergeSnapshotLogPage(previous, snapshot.log_page));
+        }
         setLogError(null);
       } catch (error) {
         setLogError(errorSummary(error));
@@ -175,7 +221,9 @@ function App() {
     const handleLog = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
-        setLogs((previous) => mergeLiveLog(previous, payload.entry, keepRecent));
+        setLogPage((previous) =>
+          mergeLiveLogPage(previous, payload.entry, routeFilter, hostFilter)
+        );
         setLogError(null);
       } catch (error) {
         setLogError(errorSummary(error));
@@ -197,7 +245,7 @@ function App() {
       stream.removeEventListener("error", handleError as EventListener);
       stream.close();
     };
-  }, [keepRecent, pageMode]);
+  }, [deferredFilter, deferredHostFilter, logPageLimit, routeFilter, hostFilter, pageMode]);
 
   useEffect(() => {
     if (pageMode !== "health" && pageMode !== "studio") {
@@ -226,15 +274,6 @@ function App() {
   useEffect(() => {
     document.title = pageMode === "health" ? "CompactGate Health" : "CompactGate Studio";
   }, [pageMode]);
-
-  const filteredLogs = useMemo(() => {
-    return logs.filter((entry) => {
-      const routeMatches = deferredFilter === "all" || entry.route === deferredFilter;
-      const hostMatches =
-        deferredHostFilter === ALL_HOSTS_FILTER || entry.upstream_host === deferredHostFilter;
-      return routeMatches && hostMatches;
-    });
-  }, [logs, deferredFilter, deferredHostFilter]);
 
   async function saveConfig(event: React.FormEvent) {
     event.preventDefault();
@@ -333,6 +372,25 @@ function App() {
     }
   }
 
+  async function loadMoreLogs() {
+    setIsLoadingMoreLogs(true);
+
+    try {
+      const nextPage = await fetchLogPage({
+        route: routeFilter,
+        host: hostFilter,
+        limit: logPageLimit,
+        offset: logPage.logs.length
+      });
+      setLogPage((previous) => appendLogPage(previous, nextPage));
+      setLogError(null);
+    } catch (error) {
+      setLogError(errorSummary(error));
+    } finally {
+      setIsLoadingMoreLogs(false);
+    }
+  }
+
   if (pageMode === "health") {
     return (
       <HealthPage
@@ -413,14 +471,19 @@ function App() {
         </section>
 
         <LogsPanel
-          logs={filteredLogs}
+          logs={logs}
           logCounts={logCounts}
-          totalLogCount={logs.length}
+          totalLogCount={logPage.total}
+          allLogCount={logPage.all_total}
           hostOptions={hostOptions}
+          hasMoreLogs={logPage.has_more}
+          isLoadingLogs={isLoadingLogs}
+          isLoadingMoreLogs={isLoadingMoreLogs}
           routeFilter={routeFilter}
           hostFilter={hostFilter}
           onRouteFilterChange={setRouteFilter}
           onHostFilterChange={setHostFilter}
+          onLoadMore={loadMoreLogs}
           error={logError}
         />
       </section>
@@ -546,7 +609,7 @@ function CommandDeck({
           />
           <DeckReadout
             label="最近请求"
-            value={latestLog ? `${routeLabel(latestLog.route)} ${latestLog.status}` : "等待 Codex 请求"}
+            value={formatLatestLogStatus(latestLog, "等待 Codex 请求")}
             state={compactHealth.tone === "good" ? "健康检查正常" : `Compact ${compactHealth.label}`}
             tone={compactHealth.tone}
           />
@@ -917,7 +980,7 @@ function RouteBoard({
       <div className="route-foot">
         <div>
           <span>最近命中</span>
-          <strong>{latestLog ? `${routeLabel(latestLog.route)} ${latestLog.status}` : "等待请求"}</strong>
+          <strong>{formatLatestLogStatus(latestLog, "等待请求")}</strong>
         </div>
         <div>
           <span>模型映射</span>
@@ -1327,25 +1390,35 @@ function LogsPanel({
   logs,
   logCounts,
   totalLogCount,
+  allLogCount,
   hostOptions,
+  hasMoreLogs,
+  isLoadingLogs,
+  isLoadingMoreLogs,
   routeFilter,
   hostFilter,
   onRouteFilterChange,
   onHostFilterChange,
+  onLoadMore,
   error
 }: {
   logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
   totalLogCount: number;
+  allLogCount: number;
   hostOptions: HostFilterOption[];
+  hasMoreLogs: boolean;
+  isLoadingLogs: boolean;
+  isLoadingMoreLogs: boolean;
   routeFilter: "all" | RouteKind;
   hostFilter: string;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
   onHostFilterChange: (host: string) => void;
+  onLoadMore: () => void;
   error: string | null;
 }) {
   const routeOptions = buildRouteSelectOptions(logCounts);
-  const hostSelectOptions = buildHostSelectOptions(hostOptions, totalLogCount);
+  const hostSelectOptions = buildHostSelectOptions(hostOptions, allLogCount);
   const visibleLogCount = logs.length;
 
   return (
@@ -1372,7 +1445,8 @@ function LogsPanel({
             />
           </div>
           <p className="log-filter-summary" aria-live="polite">
-            当前显示 {visibleLogCount} / {totalLogCount} 条最近日志；筛选只影响可见列表，不会删除日志。
+            当前加载 {visibleLogCount} / {totalLogCount} 条匹配日志；日志库共 {allLogCount} 条。
+            展示分批加载，不会删除历史日志。
           </p>
         </div>
       </div>
@@ -1392,8 +1466,13 @@ function LogsPanel({
         </div>
       )}
 
-      <div className="log-list">
-        {logs.length === 0 ? (
+      <div className="log-list" aria-busy={isLoadingLogs}>
+        {isLoadingLogs && logs.length === 0 ? (
+          <div className="empty-log">
+            <strong>正在加载日志。</strong>
+            <span>先读取最新一页，较早的日志可以继续懒加载。</span>
+          </div>
+        ) : logs.length === 0 ? (
           <div className="empty-log">
             <strong>{emptyLogTitle(routeFilter, hostFilter, logCounts.all)}</strong>
             <span>{emptyLogHint(routeFilter, hostFilter, logCounts.all)}</span>
@@ -1407,6 +1486,25 @@ function LogsPanel({
           ))
         )}
       </div>
+
+      {logs.length > 0 && (
+        <div className="log-load-more">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={!hasMoreLogs || isLoadingMoreLogs}
+          >
+            {hasMoreLogs
+              ? isLoadingMoreLogs
+                ? "正在加载更早日志..."
+                : "加载更早日志"
+              : "已加载全部匹配日志"}
+          </button>
+          <span>
+            已加载 {visibleLogCount} / {totalLogCount} 条匹配日志
+          </span>
+        </div>
+      )}
     </section>
   );
 }
@@ -1458,6 +1556,18 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
             <div>
               <span>缓存读取 Token</span>
               <strong>{formatMetricNumber(entry.cached_input_tokens)}</strong>
+            </div>
+            <div>
+              <span>缓存输出 Token</span>
+              <strong>{formatMetricNumber(entry.cached_output_tokens)}</strong>
+            </div>
+            <div>
+              <span>未缓存输入</span>
+              <strong>{formatMetricNumber(uncachedInputTokens(entry))}</strong>
+            </div>
+            <div>
+              <span>缓存命中率</span>
+              <strong>{formatCacheHitRate(entry)}</strong>
             </div>
             <div>
               <span>总 Token</span>
@@ -1668,29 +1778,84 @@ function CustomSelect({
 }
 
 function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
+  const [placement, setPlacement] = useState<React.CSSProperties | null>(null);
   const tooltipId = useId();
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+
+  function showTooltip() {
+    const anchor = anchorRef.current;
+    if (!anchor) {
+      return;
+    }
+
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(TOKEN_TOOLTIP_WIDTH, window.innerWidth - 24);
+    const left = clamp(rect.right - width, 12, window.innerWidth - width - 12);
+    const canShowAbove = rect.top > TOKEN_TOOLTIP_ESTIMATED_HEIGHT + 18;
+    const top = canShowAbove
+      ? rect.top - TOKEN_TOOLTIP_ESTIMATED_HEIGHT - 10
+      : rect.bottom + 10;
+
+    setPlacement({
+      left,
+      top,
+      width
+    });
+  }
+
+  function hideTooltip() {
+    setPlacement(null);
+  }
 
   return (
-    <span className="token-tooltip" aria-describedby={tooltipId}>
+    <span
+      ref={anchorRef}
+      className="token-tooltip"
+      aria-describedby={tooltipId}
+      onMouseEnter={showTooltip}
+      onMouseLeave={hideTooltip}
+    >
       <span className="token-total-pill">总 {formatMetricNumber(entry.total_tokens)}</span>
-      <span className="token-tooltip-panel" id={tooltipId} role="tooltip" aria-hidden="true">
-        <span>
-          <em>输入</em>
-          <strong>{formatMetricNumber(entry.input_tokens)}</strong>
-        </span>
-        <span>
-          <em>输出</em>
-          <strong>{formatMetricNumber(entry.output_tokens)}</strong>
-        </span>
-        <span>
-          <em>缓存</em>
-          <strong>{formatMetricNumber(entry.cached_input_tokens)}</strong>
-        </span>
-        <span>
-          <em>总计</em>
-          <strong>{formatMetricNumber(entry.total_tokens)}</strong>
-        </span>
-      </span>
+      {placement &&
+        createPortal(
+          <span
+            className="token-tooltip-panel"
+            id={tooltipId}
+            role="tooltip"
+            style={placement}
+          >
+            <strong className="token-tooltip-title">Token 明细</strong>
+            <span className="token-tooltip-row">
+              <em>输入 Token</em>
+              <b>{formatMetricNumber(entry.input_tokens)}</b>
+            </span>
+            <span className="token-tooltip-row">
+              <em>输出 Token</em>
+              <b>{formatMetricNumber(entry.output_tokens)}</b>
+            </span>
+            <span className="token-tooltip-row">
+              <em>缓存输入 Token</em>
+              <b>{formatMetricNumber(entry.cached_input_tokens)}</b>
+            </span>
+            <span className="token-tooltip-row">
+              <em>缓存输出 Token</em>
+              <b>{formatMetricNumber(entry.cached_output_tokens)}</b>
+            </span>
+            <span className="token-tooltip-row">
+              <em>未缓存输入</em>
+              <b>{formatMetricNumber(uncachedInputTokens(entry))}</b>
+            </span>
+            <span className="token-tooltip-row">
+              <em>缓存命中率</em>
+              <b>{formatCacheHitRate(entry)}</b>
+            </span>
+            <span className="token-tooltip-total">
+              <em>总 Token</em>
+              <b>{formatMetricNumber(entry.total_tokens)}</b>
+            </span>
+          </span>,
+          document.body
+        )}
     </span>
   );
 }
@@ -1924,6 +2089,10 @@ function routeLabel(route: RouteKind): string {
   return route === "primary" ? "普通" : "压缩";
 }
 
+function formatLatestLogStatus(entry: RequestLogEntry | null, fallback: string): string {
+  return entry ? `${routeLabel(entry.route)} · 状态 ${entry.status}` : fallback;
+}
+
 function requestTypeLabel(type: RequestLogEntry["request_type"]): string {
   return type === "stream" ? "Stream" : "HTTP";
 }
@@ -1979,30 +2148,14 @@ function readRouteFilterValue(value: string): "all" | RouteKind {
   return value === "primary" || value === "compact" ? value : "all";
 }
 
-function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): HostFilterOption[] {
-  const stats = new Map<string, HostFilterOption>();
+function buildHostFilterOptions(
+  hostCounts: HostLogCount[],
+  selectedHost: string
+): HostFilterOption[] {
+  const options = hostCounts.map((option) => ({ ...option }));
 
-  for (const entry of logs) {
-    const existing =
-      stats.get(entry.upstream_host) ??
-      ({
-        host: entry.upstream_host,
-        total: 0,
-        primary: 0,
-        compact: 0
-      } satisfies HostFilterOption);
-
-    existing.total += 1;
-    if (entry.route === "primary") {
-      existing.primary += 1;
-    } else {
-      existing.compact += 1;
-    }
-    stats.set(entry.upstream_host, existing);
-  }
-
-  if (selectedHost !== ALL_HOSTS_FILTER && !stats.has(selectedHost)) {
-    stats.set(selectedHost, {
+  if (selectedHost !== ALL_HOSTS_FILTER && !options.some((option) => option.host === selectedHost)) {
+    options.push({
       host: selectedHost,
       total: 0,
       primary: 0,
@@ -2010,7 +2163,7 @@ function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): 
     });
   }
 
-  return [...stats.values()].sort((left, right) => {
+  return options.sort((left, right) => {
     if (right.total !== left.total) {
       return right.total - left.total;
     }
@@ -2025,6 +2178,26 @@ function formatMetricNumber(value: number | null): string {
   }
 
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function uncachedInputTokens(entry: RequestLogEntry): number | null {
+  if (entry.input_tokens === null && entry.cached_input_tokens === null) {
+    return null;
+  }
+
+  return Math.max(0, (entry.input_tokens ?? 0) - (entry.cached_input_tokens ?? 0));
+}
+
+function formatCacheHitRate(entry: RequestLogEntry): string {
+  if (!entry.input_tokens || entry.cached_input_tokens === null) {
+    return "-";
+  }
+
+  return `${Math.round((entry.cached_input_tokens / entry.input_tokens) * 100)}%`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function formatDurationMs(value: number | null): string {
@@ -2063,21 +2236,175 @@ function emptyLogHint(route: "all" | RouteKind, hostFilter: string, totalLogs: n
   }
 
   return route === "primary"
-    ? "当前保留的最近日志里只有压缩请求，切回“全部”可以查看完整记录。"
-    : "当前保留的最近日志里只有普通请求，切回“全部”可以查看完整记录。";
+    ? "当前筛选条件下只有压缩请求，切回“全部”可以查看完整记录。"
+    : "当前筛选条件下只有普通请求，切回“全部”可以查看完整记录。";
 }
 
 function compactModeLabel(mode: "split" | "primary"): string {
   return mode === "split" ? "独立分流" : "复用主上游";
 }
 
-function mergeLiveLog(
-  previous: RequestLogEntry[],
+function emptyLogPage(limit: number): RequestLogPage {
+  return {
+    logs: [],
+    limit,
+    offset: 0,
+    total: 0,
+    all_total: 0,
+    has_more: false,
+    counts: {
+      all: 0,
+      primary: 0,
+      compact: 0
+    },
+    host_counts: []
+  };
+}
+
+async function fetchLogPage({
+  route,
+  host,
+  limit,
+  offset
+}: {
+  route: "all" | RouteKind;
+  host: string;
+  limit: number;
+  offset: number;
+}): Promise<RequestLogPage> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset)
+  });
+
+  if (route !== "all") {
+    params.set("route", route);
+  }
+
+  if (host !== ALL_HOSTS_FILTER) {
+    params.set("host", host);
+  }
+
+  return api<RequestLogPage>(`/api/logs/recent?${params.toString()}`);
+}
+
+function appendLogPage(previous: RequestLogPage, nextPage: RequestLogPage): RequestLogPage {
+  return {
+    ...nextPage,
+    offset: 0,
+    logs: mergeUniqueLogs([...previous.logs, ...nextPage.logs])
+  };
+}
+
+function mergeSnapshotLogPage(
+  previous: RequestLogPage,
+  snapshotPage: RequestLogPage
+): RequestLogPage {
+  const logs = mergeUniqueLogs([...snapshotPage.logs, ...previous.logs]);
+
+  return {
+    ...snapshotPage,
+    offset: 0,
+    logs,
+    has_more: logs.length < snapshotPage.total
+  };
+}
+
+function mergeLiveLogPage(
+  previous: RequestLogPage,
   nextEntry: RequestLogEntry,
-  keepRecent: number
-): RequestLogEntry[] {
-  const deduped = previous.filter((entry) => entry.request_id !== nextEntry.request_id);
-  return [nextEntry, ...deduped].slice(0, keepRecent);
+  routeFilter: "all" | RouteKind,
+  hostFilter: string
+): RequestLogPage {
+  const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
+  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, hostFilter);
+  const nextLogs = matchesFilter
+    ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
+    : previous.logs;
+
+  return {
+    ...previous,
+    logs: nextLogs,
+    total: previous.total + (matchesFilter && !duplicate ? 1 : 0),
+    all_total: previous.all_total + (duplicate ? 0 : 1),
+    counts: incrementRouteCounts(previous.counts, nextEntry.route, duplicate),
+    host_counts: incrementHostCounts(previous.host_counts, nextEntry, duplicate)
+  };
+}
+
+function mergeUniqueLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
+  const seen = new Set<string>();
+  const next: RequestLogEntry[] = [];
+
+  for (const entry of logs) {
+    if (seen.has(entry.request_id)) {
+      continue;
+    }
+
+    seen.add(entry.request_id);
+    next.push(entry);
+  }
+
+  return next;
+}
+
+function logEntryMatchesFilter(
+  entry: RequestLogEntry,
+  routeFilter: "all" | RouteKind,
+  hostFilter: string
+): boolean {
+  const routeMatches = routeFilter === "all" || entry.route === routeFilter;
+  const hostMatches = hostFilter === ALL_HOSTS_FILTER || entry.upstream_host === hostFilter;
+  return routeMatches && hostMatches;
+}
+
+function incrementRouteCounts(
+  counts: Record<"all" | RouteKind, number>,
+  route: RouteKind,
+  duplicate: boolean
+): Record<"all" | RouteKind, number> {
+  if (duplicate) {
+    return counts;
+  }
+
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [route]: counts[route] + 1
+  };
+}
+
+function incrementHostCounts(
+  hostCounts: HostLogCount[],
+  entry: RequestLogEntry,
+  duplicate: boolean
+): HostLogCount[] {
+  if (duplicate) {
+    return hostCounts;
+  }
+
+  const next = hostCounts.map((option) => ({ ...option }));
+  const existing = next.find((option) => option.host === entry.upstream_host);
+
+  if (existing) {
+    existing.total += 1;
+    existing[entry.route] += 1;
+  } else {
+    next.push({
+      host: entry.upstream_host,
+      total: 1,
+      primary: entry.route === "primary" ? 1 : 0,
+      compact: entry.route === "compact" ? 1 : 0
+    });
+  }
+
+  return next.sort((left, right) => {
+    if (right.total !== left.total) {
+      return right.total - left.total;
+    }
+
+    return left.host.localeCompare(right.host);
+  });
 }
 
 function upstreamHealthBadge(

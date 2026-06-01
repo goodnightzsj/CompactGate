@@ -150,6 +150,8 @@ wire_api = "responses"
 }
 ```
 
+`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。历史日志会继续保存在本地数据库里，页面可以继续加载更早记录。
+
 最重要的字段只有这些：
 
 ### `primary`
@@ -233,7 +235,7 @@ my-compact-model
 
 ## 日志和本地数据库
 
-最近请求日志会持久化到 SQLite。
+请求日志会持久化到 SQLite，不按页面展示数量自动删除。
 
 默认文件位置是：
 
@@ -287,13 +289,15 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 ### `GET /api/logs/recent`
 
-读取最近日志。
+分页读取日志。默认返回 `logging.keep_recent` 条；历史记录可以用 `limit` 和 `offset` 继续读取。
 
 可以加筛选：
 
 ```text
 ?route=primary
 ?route=compact
+?host=api.example.com
+?limit=200&offset=200
 ```
 
 ### `GET /api/events`
@@ -302,7 +306,7 @@ SSE 实时事件流。
 
 它会推送两类事件：
 
-- `snapshot`：当前配置、健康状态、最近日志
+- `snapshot`：当前配置、健康状态、当前日志页
 - `log`：一条新完成的代理日志
 
 ## 开发

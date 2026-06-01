@@ -13,6 +13,7 @@ import type {
   CompactGateConfig,
   HealthResponse,
   RequestLogEntry,
+  RequestLogPage,
   RequestTransport,
   RouteKind,
   StudioLogEvent,
@@ -291,7 +292,10 @@ async function handleApi(
 
   if (req.method === "GET" && url.pathname === "/api/logs/recent") {
     const route = parseRouteFilter(url.searchParams.get("route"));
-    sendJson(res, 200, { logs: logger.recent(route) });
+    const host = parseHostFilter(url.searchParams.get("host"));
+    const limit = parsePositiveInteger(url.searchParams.get("limit"), configStore.get().logging.keep_recent);
+    const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
+    sendJson(res, 200, logger.page({ route, host, limit, offset }));
     return;
   }
 
@@ -778,6 +782,7 @@ function addLog(
     input_tokens: input.usage.inputTokens,
     output_tokens: input.usage.outputTokens,
     cached_input_tokens: input.usage.cachedInputTokens,
+    cached_output_tokens: input.usage.cachedOutputTokens,
     total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
     request_id: input.requestId,
@@ -792,6 +797,7 @@ function emptyUsageMetrics(): TokenUsageMetrics {
     inputTokens: null,
     outputTokens: null,
     cachedInputTokens: null,
+    cachedOutputTokens: null,
     totalTokens: null
   };
 }
@@ -899,10 +905,16 @@ function createStudioSnapshot(
   configStore: ConfigStore,
   logger: RequestLogger
 ): StudioSnapshotEvent {
+  const logPage = logger.page({
+    limit: configStore.get().logging.keep_recent,
+    offset: 0
+  });
+
   return {
     config: configStore.toPublicConfig(),
     health: healthForConfig(configStore.get()),
-    logs: logger.recent()
+    logs: logPage.logs,
+    log_page: logPage
   };
 }
 
@@ -959,6 +971,29 @@ function parseRouteFilter(value: string | null): RouteKind | undefined {
   }
 
   return undefined;
+}
+
+function parseHostFilter(value: string | null): string | undefined {
+  const host = value?.trim();
+  return host && host.length > 0 ? host : undefined;
+}
+
+function parsePositiveInteger(value: string | null, fallback: number): number {
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return Math.min(parsed, 2_000);
+}
+
+function parseNonNegativeInteger(value: string | null, fallback: number): number {
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function statusForBaseUrl(value: string): "configured" | "invalid" {

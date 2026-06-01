@@ -104,10 +104,29 @@ export interface RequestLogEntry {
   input_tokens: number | null;
   output_tokens: number | null;
   cached_input_tokens: number | null;
+  cached_output_tokens: number | null;
   total_tokens: number | null;
   upstream_host: string;
   request_id: string;
   error_summary: string | null;
+}
+
+export interface HostLogCount {
+  host: string;
+  total: number;
+  primary: number;
+  compact: number;
+}
+
+export interface RequestLogPage {
+  logs: RequestLogEntry[];
+  limit: number;
+  offset: number;
+  total: number;
+  all_total: number;
+  has_more: boolean;
+  counts: Record<"all" | RouteKind, number>;
+  host_counts: HostLogCount[];
 }
 
 export interface HealthResponse {
@@ -130,6 +149,7 @@ export interface StudioSnapshotEvent {
   config: PublicConfig;
   health: HealthResponse;
   logs: RequestLogEntry[];
+  log_page: RequestLogPage;
 }
 
 export interface StudioLogEvent {

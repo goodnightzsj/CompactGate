@@ -12,6 +12,7 @@ export interface TokenUsageMetrics {
   inputTokens: number | null;
   outputTokens: number | null;
   cachedInputTokens: number | null;
+  cachedOutputTokens: number | null;
   totalTokens: number | null;
 }
 
@@ -19,6 +20,7 @@ const EMPTY_USAGE: TokenUsageMetrics = {
   inputTokens: null,
   outputTokens: null,
   cachedInputTokens: null,
+  cachedOutputTokens: null,
   totalTokens: null
 };
 
@@ -109,6 +111,11 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
     readNestedNumber(usage.prompt_tokens_details, "cached_tokens") ??
     readNumber(usage.cached_tokens) ??
     readNumber(usage.cache_read_input_tokens);
+  const cachedOutputTokens =
+    readNestedNumber(usage.output_tokens_details, "cached_tokens") ??
+    readNestedNumber(usage.completion_tokens_details, "cached_tokens") ??
+    readNumber(usage.cached_output_tokens) ??
+    readNumber(usage.cache_read_output_tokens);
   const totalTokens =
     readNumber(usage.total_tokens) ??
     (inputTokens !== null || outputTokens !== null
@@ -119,6 +126,7 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
     inputTokens,
     outputTokens,
     cachedInputTokens,
+    cachedOutputTokens,
     totalTokens
   };
 }

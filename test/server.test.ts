@@ -7,7 +7,12 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
 import { createCompactGateServer } from "../src/server/http.js";
-import type { HealthResponse, PublicConfig, RequestLogEntry } from "../src/shared/types.js";
+import type {
+  HealthResponse,
+  PublicConfig,
+  RequestLogEntry,
+  RequestLogPage
+} from "../src/shared/types.js";
 
 interface CapturedRequest {
   method: string;
@@ -145,6 +150,9 @@ describe("CompactGate HTTP server", () => {
             input_tokens_details: {
               cached_tokens: 28032
             },
+            output_tokens_details: {
+              cached_tokens: 120
+            },
             total_tokens: 64113
           }
         })
@@ -174,6 +182,7 @@ describe("CompactGate HTTP server", () => {
       input_tokens: 35213,
       output_tokens: 868,
       cached_input_tokens: 28032,
+      cached_output_tokens: 120,
       total_tokens: 64113
     });
     expect(entry.first_token_ms).toEqual(expect.any(Number));
@@ -196,6 +205,9 @@ describe("CompactGate HTTP server", () => {
               output_tokens: 3,
               input_tokens_details: {
                 cached_tokens: 4
+              },
+              output_tokens_details: {
+                cached_tokens: 1
               },
               total_tokens: 15
             }
@@ -228,6 +240,7 @@ describe("CompactGate HTTP server", () => {
       input_tokens: 12,
       output_tokens: 3,
       cached_input_tokens: 4,
+      cached_output_tokens: 1,
       total_tokens: 15
     });
     expect(entry.first_token_ms).toEqual(expect.any(Number));
@@ -816,7 +829,7 @@ describe("CompactGate HTTP server", () => {
     ]);
   });
 
-  it("persists recent logs to SQLite across restarts", async () => {
+  it("persists all SQLite logs across restarts and pages the visible list", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-app-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
 
@@ -838,6 +851,10 @@ describe("CompactGate HTTP server", () => {
     const firstLogs = await fetchRecentLogs(firstApp.url);
     expect(firstLogs).toHaveLength(2);
     expect(firstLogs.map((entry) => entry.source_model)).toEqual(["gpt-5.5", "gpt-5.4"]);
+    const firstPage = await fetchLogPage(firstApp.url);
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.all_total).toBe(3);
+    expect(firstPage.has_more).toBe(true);
 
     await firstApp.close();
 
@@ -848,6 +865,11 @@ describe("CompactGate HTTP server", () => {
 
     expect(restartedLogs).toHaveLength(2);
     expect(restartedLogs.map((entry) => entry.source_model)).toEqual(["gpt-5.5", "gpt-5.4"]);
+    const olderPage = await fetchLogPage(restartedApp.url, "?limit=2&offset=2");
+    expect(olderPage.logs).toHaveLength(1);
+    expect(olderPage.logs[0].source_model).toBe("gpt-5.3");
+    expect(olderPage.total).toBe(3);
+    expect(olderPage.has_more).toBe(false);
     expect(JSON.stringify(restartedLogs)).not.toContain("sensitive prompt");
   });
 
@@ -867,6 +889,7 @@ describe("CompactGate HTTP server", () => {
       input_tokens: null,
       output_tokens: null,
       cached_input_tokens: null,
+      cached_output_tokens: null,
       total_tokens: null
     });
   });
@@ -986,9 +1009,13 @@ async function sendCompactRequest(baseUrl: string, model: string) {
 }
 
 async function fetchRecentLogs(baseUrl: string) {
-  const response = await fetch(`${baseUrl}/api/logs/recent`);
+  return (await fetchLogPage(baseUrl)).logs;
+}
+
+async function fetchLogPage(baseUrl: string, query = "") {
+  const response = await fetch(`${baseUrl}/api/logs/recent${query}`);
   const body = await response.json();
-  return body.logs as RequestLogEntry[];
+  return body as RequestLogPage;
 }
 
 function seedLegacyLogDatabase(databasePath: string): void {

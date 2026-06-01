@@ -1,7 +1,13 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { RequestLogEntry, RequestTransport, RouteKind } from "../shared/types.js";
+import type {
+  HostLogCount,
+  RequestLogEntry,
+  RequestLogPage,
+  RequestTransport,
+  RouteKind
+} from "../shared/types.js";
 
 const LOG_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS request_logs (
@@ -21,6 +27,7 @@ const LOG_TABLE_SQL = `
     input_tokens INTEGER,
     output_tokens INTEGER,
     cached_input_tokens INTEGER,
+    cached_output_tokens INTEGER,
     total_tokens INTEGER,
     upstream_host TEXT NOT NULL,
     request_id TEXT NOT NULL,
@@ -45,6 +52,7 @@ const RECENT_LOG_FIELDS = `
   input_tokens,
   output_tokens,
   cached_input_tokens,
+  cached_output_tokens,
   total_tokens,
   upstream_host,
   request_id,
@@ -59,8 +67,16 @@ const MIGRATION_COLUMNS: Record<string, string> = {
   input_tokens: "INTEGER",
   output_tokens: "INTEGER",
   cached_input_tokens: "INTEGER",
+  cached_output_tokens: "INTEGER",
   total_tokens: "INTEGER"
 };
+
+interface LogPageOptions {
+  route?: RouteKind;
+  host?: string;
+  limit: number;
+  offset: number;
+}
 
 export function resolveLogDatabasePath(configPath: string, overridePath?: string): string {
   if (overridePath && overridePath.trim().length > 0) {
@@ -90,13 +106,11 @@ export class RequestLogger {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
-    this.prunePersisted();
     this.reloadRecent();
   }
 
   resize(keepRecent: number): void {
     this.keepRecent = keepRecent;
-    this.prunePersisted();
     this.reloadRecent();
   }
 
@@ -126,11 +140,12 @@ export class RequestLogger {
               input_tokens,
               output_tokens,
               cached_input_tokens,
+              cached_output_tokens,
               total_tokens,
               upstream_host,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -149,20 +164,62 @@ export class RequestLogger {
           entry.input_tokens,
           entry.output_tokens,
           entry.cached_input_tokens,
+          entry.cached_output_tokens,
           entry.total_tokens,
           entry.upstream_host,
           entry.request_id,
           entry.error_summary
         );
-      this.prunePersisted();
     } catch (error) {
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
   }
 
   recent(route?: RouteKind): RequestLogEntry[] {
-    const entries = route ? this.entries.filter((entry) => entry.route === route) : this.entries;
-    return [...entries].reverse();
+    return this.page({
+      route,
+      limit: this.keepRecent,
+      offset: 0
+    }).logs;
+  }
+
+  page(options: LogPageOptions): RequestLogPage {
+    const limit = Math.max(1, Math.floor(options.limit));
+    const offset = Math.max(0, Math.floor(options.offset));
+    const where = buildWhereClause(options);
+    const logs = (
+      this.db
+        .prepare(
+          `
+            SELECT ${RECENT_LOG_FIELDS}
+            FROM request_logs
+            ${where.sql}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+          `
+        )
+        .all(...where.params, limit, offset) as Array<Record<string, unknown>>
+    ).map(rowToLogEntry);
+    const total = readCount(
+      this.db
+        .prepare(`SELECT COUNT(*) AS count FROM request_logs ${where.sql}`)
+        .get(...where.params)
+    );
+    const allTotal = readCount(
+      this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
+    );
+    const counts = this.counts();
+
+    return {
+      logs,
+      limit,
+      offset,
+      total,
+      all_total: allTotal,
+      has_more: offset + logs.length < total,
+      counts,
+      host_counts: this.hostCounts()
+    };
   }
 
   close(): void {
@@ -185,45 +242,7 @@ export class RequestLogger {
         `
       )
       .all(this.keepRecent) as Array<Record<string, unknown>>;
-    this.entries = rows
-      .map((row) => ({
-        time: String(row.time),
-        route: row.route as RouteKind,
-        method: String(row.method),
-        path: String(row.path),
-        endpoint: readEndpoint(row.endpoint, String(row.path)),
-        request_type: readRequestTransport(row.request_type),
-        reasoning_effort: readNullableString(row.reasoning_effort),
-        source_model: readNullableString(row.source_model),
-        target_model: readNullableString(row.target_model),
-        status: Number(row.status),
-        duration_ms: Number(row.duration_ms),
-        first_token_ms: readNullableNumber(row.first_token_ms),
-        input_tokens: readNullableNumber(row.input_tokens),
-        output_tokens: readNullableNumber(row.output_tokens),
-        cached_input_tokens: readNullableNumber(row.cached_input_tokens),
-        total_tokens: readNullableNumber(row.total_tokens),
-        upstream_host: String(row.upstream_host),
-        request_id: String(row.request_id),
-        error_summary: readNullableString(row.error_summary)
-      }))
-      .reverse();
-  }
-
-  private prunePersisted(): void {
-    this.db
-      .prepare(
-        `
-          DELETE FROM request_logs
-          WHERE id NOT IN (
-            SELECT id
-            FROM request_logs
-            ORDER BY id DESC
-            LIMIT ?
-          )
-        `
-      )
-      .run(this.keepRecent);
+    this.entries = rows.map(rowToLogEntry).reverse();
   }
 
   private migratePersistedSchema(): void {
@@ -241,6 +260,112 @@ export class RequestLogger {
       }
     }
   }
+
+  private counts(): Record<"all" | RouteKind, number> {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT route, COUNT(*) AS count
+          FROM request_logs
+          GROUP BY route
+        `
+      )
+      .all() as Array<Record<string, unknown>>;
+    const counts = {
+      all: 0,
+      primary: 0,
+      compact: 0
+    };
+
+    for (const row of rows) {
+      const route = row.route === "compact" ? "compact" : "primary";
+      const count = readCount(row);
+      counts[route] = count;
+      counts.all += count;
+    }
+
+    return counts;
+  }
+
+  private hostCounts(): HostLogCount[] {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            upstream_host AS host,
+            COUNT(*) AS total,
+            SUM(CASE WHEN route = 'primary' THEN 1 ELSE 0 END) AS primary_count,
+            SUM(CASE WHEN route = 'compact' THEN 1 ELSE 0 END) AS compact_count
+          FROM request_logs
+          GROUP BY upstream_host
+          ORDER BY total DESC, upstream_host ASC
+        `
+      )
+      .all() as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      host: String(row.host),
+      total: readNullableNumber(row.total) ?? 0,
+      primary: readNullableNumber(row.primary_count) ?? 0,
+      compact: readNullableNumber(row.compact_count) ?? 0
+    }));
+  }
+}
+
+function buildWhereClause(options: Pick<LogPageOptions, "route" | "host">): {
+  sql: string;
+  params: Array<RouteKind | string>;
+} {
+  const conditions: string[] = [];
+  const params: Array<RouteKind | string> = [];
+
+  if (options.route) {
+    conditions.push("route = ?");
+    params.push(options.route);
+  }
+
+  if (options.host) {
+    conditions.push("upstream_host = ?");
+    params.push(options.host);
+  }
+
+  return {
+    sql: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    params
+  };
+}
+
+function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
+  return {
+    time: String(row.time),
+    route: row.route as RouteKind,
+    method: String(row.method),
+    path: String(row.path),
+    endpoint: readEndpoint(row.endpoint, String(row.path)),
+    request_type: readRequestTransport(row.request_type),
+    reasoning_effort: readNullableString(row.reasoning_effort),
+    source_model: readNullableString(row.source_model),
+    target_model: readNullableString(row.target_model),
+    status: Number(row.status),
+    duration_ms: Number(row.duration_ms),
+    first_token_ms: readNullableNumber(row.first_token_ms),
+    input_tokens: readNullableNumber(row.input_tokens),
+    output_tokens: readNullableNumber(row.output_tokens),
+    cached_input_tokens: readNullableNumber(row.cached_input_tokens),
+    cached_output_tokens: readNullableNumber(row.cached_output_tokens),
+    total_tokens: readNullableNumber(row.total_tokens),
+    upstream_host: String(row.upstream_host),
+    request_id: String(row.request_id),
+    error_summary: readNullableString(row.error_summary)
+  };
+}
+
+function readCount(row: unknown): number {
+  return isRecord(row) ? readNullableNumber(row.count) ?? 0 : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readNullableString(value: unknown): string | null {
