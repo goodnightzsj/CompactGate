@@ -652,6 +652,67 @@ describe("CompactGate HTTP server", () => {
     ]);
   });
 
+  it("repairs readable Chinese legacy compaction items without a cached compact response", async () => {
+    const summaryText = [
+      "- 项目：`/Users/zsj/code/program/CompactGate`。",
+      "- 用户请求：分析压缩后 resume 仍然断流的问题。",
+      "- 当前结论：这个可读摘要应该转换成 assistant summary message。"
+    ].join("\n");
+    const primaryCapture: { current: CapturedRequest | null } = { current: null };
+    const primary = await startUpstream(async (req, res) => {
+      primaryCapture.current = {
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const primaryResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        input: [
+          {
+            type: "compaction",
+            encrypted_content: summaryText
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "continue old session" }]
+          }
+        ]
+      }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(primaryResponse.status).toBe(200);
+    assertCaptured(primaryCapture.current);
+
+    const rewrittenBody = JSON.parse(primaryCapture.current.body) as {
+      input: Array<Record<string, unknown>>;
+    };
+    expect(rewrittenBody.input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue old session" }]
+      }
+    ]);
+  });
+
   it("persists recent logs to SQLite across restarts", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-app-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

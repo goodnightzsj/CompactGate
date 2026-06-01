@@ -153,17 +153,38 @@ function looksLikeReadableSummary(text: string): boolean {
     return false;
   }
 
-  if (!/[A-Za-z]/.test(text) || !/[\s`:\-.]/.test(text)) {
+  if (looksLikeEncodedBlob(text) || !hasReadableTextContent(text) || !hasNaturalTextStructure(text)) {
     return false;
   }
 
   const characters = Array.from(text);
   const readableCount = characters.filter((character) => isReadableSummaryCharacter(character)).length;
-  return readableCount / characters.length >= 0.9;
+  return readableCount / characters.length >= 0.98;
+}
+
+function hasReadableTextContent(text: string): boolean {
+  return Array.from(text).filter((character) => /[\p{L}\p{N}]/u.test(character)).length >= 8;
+}
+
+function hasNaturalTextStructure(text: string): boolean {
+  return /[\s`:\-.,;!?()[\]{}#*_>，。；：、（）【】《》？！]/u.test(text);
+}
+
+function looksLikeEncodedBlob(text: string): boolean {
+  const compact = text.replace(/\s+/g, "");
+  if (compact.length < 80) {
+    return false;
+  }
+
+  if (!/^[A-Za-z0-9+/_=-]+$/.test(compact)) {
+    return false;
+  }
+
+  return !/[`:,.;!?()[\]{}#*，。；：、（）【】《》？！]/u.test(text);
 }
 
 function isReadableSummaryCharacter(character: string): boolean {
-  return /^[\n\r\t -~]$/.test(character);
+  return /^[\n\r\t ]$/.test(character) || !/\p{C}/u.test(character);
 }
 
 function looksLikeGzip(buffer: Buffer): boolean {
