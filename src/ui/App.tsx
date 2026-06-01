@@ -35,7 +35,15 @@ type HealthBadge = {
   tone: HealthTone;
 };
 
+interface HostFilterOption {
+  host: string;
+  total: number;
+  primary: number;
+  compact: number;
+}
+
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
+const ALL_HOSTS_FILTER = "__all_hosts__";
 
 function App() {
   const pageMode = window.location.pathname === "/health" ? "health" : "studio";
@@ -43,6 +51,7 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [logs, setLogs] = useState<RequestLogEntry[]>([]);
   const [routeFilter, setRouteFilter] = useState<"all" | RouteKind>("all");
+  const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
   const [form, setForm] = useState<ConfigFormState>(emptyForm());
   const [currentModel, setCurrentModel] = useState("gpt-5.5");
   const [previewPath, setPreviewPath] = useState("/v1/responses/compact");
@@ -56,6 +65,7 @@ function App() {
   const [isRefreshingHealth, setIsRefreshingHealth] = useState(false);
 
   const deferredFilter = useDeferredValue(routeFilter);
+  const deferredHostFilter = useDeferredValue(hostFilter);
   const latestLog = logs[0] ?? null;
   const keepRecent = config?.logging.keep_recent ?? 200;
   const linkedCompactModel = renderLinkedModel(currentModel, form.modelTemplate);
@@ -73,6 +83,7 @@ function App() {
     }),
     [logs]
   );
+  const hostOptions = useMemo(() => buildHostFilterOptions(logs, hostFilter), [logs, hostFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,12 +220,13 @@ function App() {
   }, [pageMode]);
 
   const filteredLogs = useMemo(() => {
-    if (deferredFilter === "all") {
-      return logs;
-    }
-
-    return logs.filter((entry) => entry.route === deferredFilter);
-  }, [logs, deferredFilter]);
+    return logs.filter((entry) => {
+      const routeMatches = deferredFilter === "all" || entry.route === deferredFilter;
+      const hostMatches =
+        deferredHostFilter === ALL_HOSTS_FILTER || entry.upstream_host === deferredHostFilter;
+      return routeMatches && hostMatches;
+    });
+  }, [logs, deferredFilter, deferredHostFilter]);
 
   async function saveConfig(event: React.FormEvent) {
     event.preventDefault();
@@ -395,8 +407,12 @@ function App() {
         <LogsPanel
           logs={filteredLogs}
           logCounts={logCounts}
+          totalLogCount={logs.length}
+          hostOptions={hostOptions}
           routeFilter={routeFilter}
+          hostFilter={hostFilter}
           onRouteFilterChange={setRouteFilter}
+          onHostFilterChange={setHostFilter}
           error={logError}
         />
       </section>
@@ -1302,16 +1318,26 @@ function InspectorPanel({
 function LogsPanel({
   logs,
   logCounts,
+  totalLogCount,
+  hostOptions,
   routeFilter,
+  hostFilter,
   onRouteFilterChange,
+  onHostFilterChange,
   error
 }: {
   logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
+  totalLogCount: number;
+  hostOptions: HostFilterOption[];
   routeFilter: "all" | RouteKind;
+  hostFilter: string;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
+  onHostFilterChange: (host: string) => void;
   error: string | null;
 }) {
+  const hostFilterLabel = hostFilter === ALL_HOSTS_FILTER ? null : hostFilter;
+
   return (
     <section className="logs-panel" aria-labelledby="logs-title">
       <div className="logs-head">
@@ -1319,29 +1345,83 @@ function LogsPanel({
           <p className="eyebrow">Logs</p>
           <h2 id="logs-title">最近请求，不记录 prompt/body。</h2>
         </div>
-        <div className="filter-tabs" role="group" aria-label="按通道筛选日志">
-          {(["all", "primary", "compact"] as const).map((route) => (
-            <button
-              key={route}
-              className={routeFilter === route ? "is-selected" : ""}
-              type="button"
-              aria-pressed={routeFilter === route}
-              onClick={() => onRouteFilterChange(route)}
-            >
-              {routeFilterLabel(route)}
-              <span>{logCounts[route]}</span>
-            </button>
-          ))}
+        <div className="log-filter-stack">
+          <div className="filter-line">
+            <span>通道</span>
+            <div className="filter-tabs" role="group" aria-label="按通道筛选日志">
+              {(["all", "primary", "compact"] as const).map((route) => (
+                <button
+                  key={route}
+                  className={routeFilter === route ? "is-selected" : ""}
+                  type="button"
+                  aria-pressed={routeFilter === route}
+                  onClick={() => onRouteFilterChange(route)}
+                >
+                  {routeFilterLabel(route)}
+                  <span>{logCounts[route]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="host-filter">
+            <div className="host-filter-head">
+              <span>上游 Host</span>
+              <small>新 host 会随实时日志自动出现</small>
+            </div>
+            <div className="host-filter-scroll" role="group" aria-label="按上游 Host 筛选日志">
+              <button
+                className={`host-filter-chip ${hostFilter === ALL_HOSTS_FILTER ? "is-selected" : ""}`}
+                type="button"
+                aria-pressed={hostFilter === ALL_HOSTS_FILTER}
+                onClick={() => onHostFilterChange(ALL_HOSTS_FILTER)}
+              >
+                <strong>全部上游</strong>
+                <span className="host-total">{totalLogCount}</span>
+              </button>
+
+              {hostOptions.map((option) => (
+                <button
+                  key={option.host}
+                  className={`host-filter-chip ${
+                    hostFilter === option.host ? "is-selected" : ""
+                  } ${option.total === 0 ? "is-empty" : ""}`}
+                  type="button"
+                  title={hostFilterChipTitle(option)}
+                  aria-pressed={hostFilter === option.host}
+                  onClick={() => onHostFilterChange(option.host)}
+                >
+                  <strong>{option.host}</strong>
+                  <span className="host-total">{option.total}</span>
+                  <span className="host-route-counts" aria-label="普通和压缩命中数">
+                    {option.primary > 0 && <em className="primary">普 {option.primary}</em>}
+                    {option.compact > 0 && <em className="compact">压 {option.compact}</em>}
+                    {option.total === 0 && <em>0</em>}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
       {error && <p className="error-note">{error}</p>}
 
+      {hostFilterLabel && (
+        <div className="active-host-filter" aria-live="polite">
+          <span>当前只看</span>
+          <code>{hostFilterLabel}</code>
+          <button type="button" onClick={() => onHostFilterChange(ALL_HOSTS_FILTER)}>
+            清除 Host
+          </button>
+        </div>
+      )}
+
       <div className="log-list">
         {logs.length === 0 ? (
           <div className="empty-log">
-            <strong>{emptyLogTitle(routeFilter, logCounts.all)}</strong>
-            <span>{emptyLogHint(routeFilter, logCounts.all)}</span>
+            <strong>{emptyLogTitle(routeFilter, hostFilter, logCounts.all)}</strong>
+            <span>{emptyLogHint(routeFilter, hostFilter, logCounts.all)}</span>
           </div>
         ) : (
           logs.map((entry, index) => (
@@ -1644,17 +1724,71 @@ function routeFilterLabel(route: "all" | RouteKind): string {
   return routeLabel(route);
 }
 
-function emptyLogTitle(route: "all" | RouteKind, totalLogs: number): string {
+function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): HostFilterOption[] {
+  const stats = new Map<string, HostFilterOption>();
+
+  for (const entry of logs) {
+    const existing =
+      stats.get(entry.upstream_host) ??
+      ({
+        host: entry.upstream_host,
+        total: 0,
+        primary: 0,
+        compact: 0
+      } satisfies HostFilterOption);
+
+    existing.total += 1;
+    if (entry.route === "primary") {
+      existing.primary += 1;
+    } else {
+      existing.compact += 1;
+    }
+    stats.set(entry.upstream_host, existing);
+  }
+
+  if (selectedHost !== ALL_HOSTS_FILTER && !stats.has(selectedHost)) {
+    stats.set(selectedHost, {
+      host: selectedHost,
+      total: 0,
+      primary: 0,
+      compact: 0
+    });
+  }
+
+  return [...stats.values()].sort((left, right) => {
+    if (right.total !== left.total) {
+      return right.total - left.total;
+    }
+
+    return left.host.localeCompare(right.host);
+  });
+}
+
+function hostFilterChipTitle(option: HostFilterOption): string {
+  return `${option.host}：普通 ${option.primary}，压缩 ${option.compact}`;
+}
+
+function emptyLogTitle(route: "all" | RouteKind, hostFilter: string, totalLogs: number): string {
   if (totalLogs === 0) {
     return "还没有请求经过。";
+  }
+
+  if (hostFilter !== ALL_HOSTS_FILTER) {
+    return "当前 Host 没有匹配日志。";
   }
 
   return route === "primary" ? "最近没有普通请求。" : "最近没有压缩请求。";
 }
 
-function emptyLogHint(route: "all" | RouteKind, totalLogs: number): string {
+function emptyLogHint(route: "all" | RouteKind, hostFilter: string, totalLogs: number): string {
   if (totalLogs === 0) {
     return "把 Codex 的 base_url 指到 http://127.0.0.1:7865/v1 后，这里会实时出现路由记录。";
+  }
+
+  if (hostFilter !== ALL_HOSTS_FILTER) {
+    return route === "all"
+      ? "这个上游 host 不在当前最近日志里，清除 Host 可以回到全部上游。"
+      : "这个上游 host 在当前通道下没有命中，切换通道或清除 Host 可以查看其它记录。";
   }
 
   return route === "primary"
