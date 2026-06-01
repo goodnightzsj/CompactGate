@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from "react";
+import React, { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   CompactGateConfig,
@@ -40,6 +40,14 @@ interface HostFilterOption {
   total: number;
   primary: number;
   compact: number;
+}
+
+interface SelectOption {
+  value: string;
+  label: string;
+  count: number;
+  meta?: string;
+  tone?: RouteKind;
 }
 
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
@@ -1336,7 +1344,9 @@ function LogsPanel({
   onHostFilterChange: (host: string) => void;
   error: string | null;
 }) {
-  const hostFilterLabel = hostFilter === ALL_HOSTS_FILTER ? null : hostFilter;
+  const routeOptions = buildRouteSelectOptions(logCounts);
+  const hostSelectOptions = buildHostSelectOptions(hostOptions, totalLogCount);
+  const visibleLogCount = logs.length;
 
   return (
     <section className="logs-panel" aria-labelledby="logs-title">
@@ -1346,82 +1356,35 @@ function LogsPanel({
           <h2 id="logs-title">最近请求，不记录 prompt/body。</h2>
         </div>
         <div className="log-filter-stack">
-          <div className="filter-line">
-            <span>通道</span>
-            <div className="filter-tabs" role="group" aria-label="按通道筛选日志">
-              {(["all", "primary", "compact"] as const).map((route) => (
-                <button
-                  key={route}
-                  className={routeFilter === route ? "is-selected" : ""}
-                  type="button"
-                  aria-pressed={routeFilter === route}
-                  onClick={() => onRouteFilterChange(route)}
-                >
-                  {routeFilterLabel(route)}
-                  <span>{logCounts[route]}</span>
-                </button>
-              ))}
-            </div>
+          <div className="log-select-row">
+            <CustomSelect
+              label="通道"
+              value={routeFilter}
+              options={routeOptions}
+              onChange={(value) => onRouteFilterChange(readRouteFilterValue(value))}
+            />
+            <CustomSelect
+              label="上游 Host"
+              value={hostFilter}
+              options={hostSelectOptions}
+              onChange={onHostFilterChange}
+              wide
+            />
           </div>
-
-          <div className="host-filter">
-            <div className="host-filter-head">
-              <span>上游 Host</span>
-              <small>新 host 会随实时日志自动出现</small>
-            </div>
-            <div className="host-filter-scroll" role="group" aria-label="按上游 Host 筛选日志">
-              <button
-                className={`host-filter-chip ${hostFilter === ALL_HOSTS_FILTER ? "is-selected" : ""}`}
-                type="button"
-                aria-pressed={hostFilter === ALL_HOSTS_FILTER}
-                onClick={() => onHostFilterChange(ALL_HOSTS_FILTER)}
-              >
-                <strong>全部上游</strong>
-                <span className="host-total">{totalLogCount}</span>
-              </button>
-
-              {hostOptions.map((option) => (
-                <button
-                  key={option.host}
-                  className={`host-filter-chip ${
-                    hostFilter === option.host ? "is-selected" : ""
-                  } ${option.total === 0 ? "is-empty" : ""}`}
-                  type="button"
-                  title={hostFilterChipTitle(option)}
-                  aria-pressed={hostFilter === option.host}
-                  onClick={() => onHostFilterChange(option.host)}
-                >
-                  <strong>{option.host}</strong>
-                  <span className="host-total">{option.total}</span>
-                  <span className="host-route-counts" aria-label="普通和压缩命中数">
-                    {option.primary > 0 && <em className="primary">普 {option.primary}</em>}
-                    {option.compact > 0 && <em className="compact">压 {option.compact}</em>}
-                    {option.total === 0 && <em>0</em>}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <p className="log-filter-summary" aria-live="polite">
+            当前显示 {visibleLogCount} / {totalLogCount} 条最近日志；筛选只影响可见列表，不会删除日志。
+          </p>
         </div>
       </div>
 
       {error && <p className="error-note">{error}</p>}
-
-      {hostFilterLabel && (
-        <div className="active-host-filter" aria-live="polite">
-          <span>当前只看</span>
-          <code>{hostFilterLabel}</code>
-          <button type="button" onClick={() => onHostFilterChange(ALL_HOSTS_FILTER)}>
-            清除 Host
-          </button>
-        </div>
-      )}
 
       {logs.length > 0 && (
         <div className="log-usage-head" aria-hidden="true">
           <span>模型</span>
           <span>推理强度</span>
           <span>端点</span>
+          <span>上游 Host</span>
           <span>类型</span>
           <span>Token</span>
           <span>首 Token</span>
@@ -1458,22 +1421,24 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
 
   return (
     <article className={`log-row ${hasError ? "has-error" : ""}`}>
-      <button type="button" onClick={() => setExpanded((value) => !value)}>
+      <button
+        className="log-row-main"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
         <span className="log-model-cell">
           <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-          <strong title={entry.source_model ?? undefined}>{entry.source_model ?? "-"}</strong>
-          {hasModelRewrite && <small title={targetModel ?? undefined}>{"->"} {targetModel}</small>}
+          <strong>{entry.source_model ?? "-"}</strong>
+          {hasModelRewrite && <small>{"->"} {targetModel}</small>}
         </span>
         <span className="log-reasoning">{entry.reasoning_effort ?? "-"}</span>
-        <code className="log-endpoint" title={entry.path}>{entry.endpoint}</code>
+        <code className="log-endpoint">{entry.endpoint}</code>
+        <code className="log-host">{entry.upstream_host}</code>
         <span className={`transport-pill is-${entry.request_type}`}>
           {requestTypeLabel(entry.request_type)}
         </span>
-        <span className="token-summary" title={tokenSummaryTitle(entry)}>
-          <span>入 {formatMetricNumber(entry.input_tokens)}</span>
-          <span>出 {formatMetricNumber(entry.output_tokens)}</span>
-          <span>缓存 {formatMetricNumber(entry.cached_input_tokens)}</span>
-        </span>
+        <TokenTooltip entry={entry} />
         <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
         <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
       </button>
@@ -1547,6 +1512,186 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
         </div>
       )}
     </article>
+  );
+}
+
+function CustomSelect({
+  label,
+  value,
+  options,
+  onChange,
+  wide = false
+}: {
+  label: string;
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  wide?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const selected = options.find((option) => option.value === value) ?? options[0];
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === selected.value)
+  );
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      optionRefs.current[selectedIndex]?.focus();
+    });
+  }, [open, selectedIndex]);
+
+  function closeAndFocusTrigger() {
+    setOpen(false);
+    window.requestAnimationFrame(() => {
+      triggerRef.current?.focus();
+    });
+  }
+
+  function focusOption(index: number) {
+    optionRefs.current[index]?.focus();
+  }
+
+  function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      return;
+    }
+
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      closeAndFocusTrigger();
+    }
+  }
+
+  function handleOptionKeyDown(
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    optionIndex: number
+  ) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAndFocusTrigger();
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusOption((optionIndex + 1) % options.length);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusOption((optionIndex - 1 + options.length) % options.length);
+      return;
+    }
+
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusOption(0);
+      return;
+    }
+
+    if (event.key === "End") {
+      event.preventDefault();
+      focusOption(options.length - 1);
+    }
+  }
+
+  return (
+    <div
+      className={`custom-select ${wide ? "is-wide" : ""}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <span className="custom-select-label">{label}</span>
+      <button
+        ref={triggerRef}
+        className="custom-select-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={handleTriggerKeyDown}
+      >
+        <span className="custom-select-copy">
+          <strong>{selected.label}</strong>
+          {selected.meta && <small>{selected.meta}</small>}
+        </span>
+        <span className="custom-select-count">{selected.count}</span>
+        <span className="custom-select-caret" aria-hidden="true">v</span>
+      </button>
+
+      {open && (
+        <div id={listId} className="custom-select-menu" role="listbox">
+          {options.map((option, optionIndex) => (
+            <button
+              key={option.value}
+              ref={(node) => {
+                optionRefs.current[optionIndex] = node;
+              }}
+              className={`custom-select-option ${option.value === value ? "is-selected" : ""} ${
+                option.tone ? `is-${option.tone}` : ""
+              }`}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+              onKeyDown={(event) => handleOptionKeyDown(event, optionIndex)}
+            >
+              <span className="custom-select-copy">
+                <strong>{option.label}</strong>
+                {option.meta && <small>{option.meta}</small>}
+              </span>
+              <span className="custom-select-count">{option.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
+  const tooltipId = useId();
+
+  return (
+    <span className="token-tooltip" aria-describedby={tooltipId}>
+      <span className="token-total-pill">总 {formatMetricNumber(entry.total_tokens)}</span>
+      <span className="token-tooltip-panel" id={tooltipId} role="tooltip" aria-hidden="true">
+        <span>
+          <em>输入</em>
+          <strong>{formatMetricNumber(entry.input_tokens)}</strong>
+        </span>
+        <span>
+          <em>输出</em>
+          <strong>{formatMetricNumber(entry.output_tokens)}</strong>
+        </span>
+        <span>
+          <em>缓存</em>
+          <strong>{formatMetricNumber(entry.cached_input_tokens)}</strong>
+        </span>
+        <span>
+          <em>总计</em>
+          <strong>{formatMetricNumber(entry.total_tokens)}</strong>
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -1783,12 +1928,55 @@ function requestTypeLabel(type: RequestLogEntry["request_type"]): string {
   return type === "stream" ? "Stream" : "HTTP";
 }
 
-function routeFilterLabel(route: "all" | RouteKind): string {
-  if (route === "all") {
-    return "全部";
-  }
+function buildRouteSelectOptions(logCounts: Record<"all" | RouteKind, number>): SelectOption[] {
+  return [
+    {
+      value: "all",
+      label: "全部",
+      count: logCounts.all,
+      meta: "所有通道"
+    },
+    {
+      value: "primary",
+      label: "普通",
+      count: logCounts.primary,
+      meta: "主上游",
+      tone: "primary"
+    },
+    {
+      value: "compact",
+      label: "压缩",
+      count: logCounts.compact,
+      meta: "Compact",
+      tone: "compact"
+    }
+  ];
+}
 
-  return routeLabel(route);
+function buildHostSelectOptions(
+  hostOptions: HostFilterOption[],
+  totalLogCount: number
+): SelectOption[] {
+  return [
+    {
+      value: ALL_HOSTS_FILTER,
+      label: "全部上游",
+      count: totalLogCount,
+      meta: "所有 Host"
+    },
+    ...hostOptions
+      .filter((option) => option.host !== ALL_HOSTS_FILTER)
+      .map((option) => ({
+        value: option.host,
+        label: option.host,
+        count: option.total,
+        meta: `普 ${option.primary} / 压 ${option.compact}` as string
+      }))
+  ];
+}
+
+function readRouteFilterValue(value: string): "all" | RouteKind {
+  return value === "primary" || value === "compact" ? value : "all";
 }
 
 function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): HostFilterOption[] {
@@ -1829,19 +2017,6 @@ function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): 
 
     return left.host.localeCompare(right.host);
   });
-}
-
-function hostFilterChipTitle(option: HostFilterOption): string {
-  return `${option.host}：普通 ${option.primary}，压缩 ${option.compact}`;
-}
-
-function tokenSummaryTitle(entry: RequestLogEntry): string {
-  return [
-    `输入 Token：${formatMetricNumber(entry.input_tokens)}`,
-    `输出 Token：${formatMetricNumber(entry.output_tokens)}`,
-    `缓存读取 Token：${formatMetricNumber(entry.cached_input_tokens)}`,
-    `总 Token：${formatMetricNumber(entry.total_tokens)}`
-  ].join("，");
 }
 
 function formatMetricNumber(value: number | null): string {
