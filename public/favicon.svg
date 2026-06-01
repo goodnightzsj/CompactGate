@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="cg-bg" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#31435c" />
+      <stop offset="0.58" stop-color="#182331" />
+      <stop offset="1" stop-color="#2454d6" />
+    </linearGradient>
+    <radialGradient id="cg-glow" cx="0" cy="0" r="1" gradientTransform="translate(49 47) rotate(180) scale(20 18)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d88a1d" stop-opacity="0.72" />
+      <stop offset="1" stop-color="#d88a1d" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#f4f1ea" />
+  <rect x="5" y="5" width="54" height="54" rx="14" fill="url(#cg-bg)" />
+  <path d="M5 22h54" stroke="#fbf8f0" stroke-opacity="0.12" stroke-width="1" />
+  <path d="M22 5v54" stroke="#fbf8f0" stroke-opacity="0.1" stroke-width="1" />
+  <circle cx="46" cy="45" r="16" fill="url(#cg-glow)" />
+  <path
+    d="M18.3 34.2c0-6.8 4.5-11.1 11.4-11.1 3.8 0 6.7 1.2 8.7 3.5l-3.4 3.1c-1.4-1.6-3-2.4-5-2.4-3.8 0-6.4 2.6-6.4 6.9s2.6 6.9 6.4 6.9c2 0 3.6-.8 5-2.4l3.4 3.1c-2 2.3-4.9 3.5-8.7 3.5-6.9 0-11.4-4.3-11.4-11.1Z"
+    fill="#fbf8f0"
+  />
+  <path
+    d="M41 24.1h5.2v16.7h10.3v4.3H41V24.1Z"
+    fill="#fbf8f0"
+    opacity="0.92"
+  />
+</svg>

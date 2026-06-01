@@ -1,0 +1,23 @@
+{
+  "listen": "127.0.0.1:7865",
+  "primary": {
+    "base_url": "https://primary.example/v1",
+    "api_key_env": "PRIMARY_API_KEY"
+  },
+  "compact": {
+    "base_url": "https://compact.example/v1",
+    "api_key_env": "COMPACT_API_KEY",
+    "upstream_mode": "split",
+    "model_mode": "linked",
+    "model_template": "{model}-openai-compact",
+    "model_override": ""
+  },
+  "timeouts": {
+    "primary_ms": 120000,
+    "compact_ms": 900000
+  },
+  "logging": {
+    "redact_body": true,
+    "keep_recent": 200
+  }
+}

@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+
+# Local runtime config and secrets
+compactgate.json
+.env
+.env.*
+!.env.example
+/compactgate-logs.sqlite*
+
+# Local task and agent state
+.codex-tasks/
+.ai/handoff/
+.playwright-mcp/
+/README-assets/
+
+# Tool caches
+.vite/
+.turbo/
+.cache/
+.eslintcache
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local screenshots captured during UI review
+/*.png
