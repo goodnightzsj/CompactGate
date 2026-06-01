@@ -13,6 +13,7 @@ import type {
   CompactGateConfig,
   HealthResponse,
   RequestLogEntry,
+  RequestTransport,
   RouteKind,
   StudioLogEvent,
   StudioSnapshotEvent
@@ -36,6 +37,13 @@ import {
   rewriteCompactBody,
   routeForPath
 } from "./routing.js";
+import {
+  extractRequestMetadata,
+  extractResponseUsage,
+  responseTransport,
+  type RequestMetadata,
+  type TokenUsageMetrics
+} from "./usage.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -364,9 +372,15 @@ async function proxyPrimaryRequest(
   let responseHeaders: IncomingHttpHeaders = {};
   let sourceModel: string | null = null;
   let compactBridgeReplacements = 0;
+  let requestMetadata: RequestMetadata | null = null;
+  let requestType: RequestTransport = "http";
+  let firstTokenMs: number | null = null;
+  let usage: TokenUsageMetrics = emptyUsageMetrics();
 
   try {
     rawBody = await readRawBody(req);
+    requestMetadata = extractRequestMetadata(url.pathname, rawBody);
+    requestType = requestMetadata.requestType;
     sourceModel = extractJsonModel(rawBody).sourceModel;
 
     const bridgeResult =
@@ -381,6 +395,7 @@ async function proxyPrimaryRequest(
       req,
       res,
       upstream,
+      startedAt,
       timeoutMs: config.timeouts.primary_ms,
       timeoutMessage: "Primary upstream request timed out.",
       requestHeaders,
@@ -395,6 +410,9 @@ async function proxyPrimaryRequest(
     errorSummary = result.errorSummary;
     responseBody = result.responseBody;
     responseHeaders = result.responseHeaders;
+    requestType = responseTransport(responseHeaders) ?? requestType;
+    firstTokenMs = result.firstTokenMs;
+    usage = extractResponseUsage(responseBody, responseHeaders);
   } catch (error) {
     status = 502;
     errorSummary = summaryForError(error);
@@ -410,10 +428,15 @@ async function proxyPrimaryRequest(
       url,
       status,
       startedAt,
+      endpoint: requestMetadata?.endpoint ?? endpointFromPath(url.pathname),
+      requestType,
+      reasoningEffort: requestMetadata?.reasoningEffort ?? null,
       upstreamHost: upstream.host,
       requestId,
       sourceModel,
       targetModel: sourceModel,
+      firstTokenMs,
+      usage,
       errorSummary
     });
     studioEvents.broadcastLog(logEntry);
@@ -471,9 +494,15 @@ async function proxyCompactRequest(
   let responseHeaders: IncomingHttpHeaders = {};
   let requestHeaders: Record<string, string> = {};
   let attemptedUpstream = false;
+  let requestMetadata: RequestMetadata | null = null;
+  let requestType: RequestTransport = "http";
+  let firstTokenMs: number | null = null;
+  let usage: TokenUsageMetrics = emptyUsageMetrics();
 
   try {
     rawBody = await readRawBody(req);
+    requestMetadata = extractRequestMetadata(url.pathname, rawBody);
+    requestType = requestMetadata.requestType;
     const rewrite = rewriteCompactBody(rawBody, config);
     sourceModel = rewrite.sourceModel;
     targetModel = rewrite.targetModel;
@@ -485,6 +514,7 @@ async function proxyCompactRequest(
       req,
       res,
       upstream,
+      startedAt,
       timeoutMs: config.timeouts.compact_ms,
       timeoutMessage: "Compact upstream request timed out.",
       requestHeaders,
@@ -500,6 +530,9 @@ async function proxyCompactRequest(
     errorSummary = result.errorSummary;
     responseBody = result.responseBody;
     responseHeaders = result.responseHeaders;
+    requestType = responseTransport(responseHeaders) ?? requestType;
+    firstTokenMs = result.firstTokenMs;
+    usage = extractResponseUsage(responseBody, responseHeaders);
     if (status >= 200 && status < 300) {
       compactionBridge.storeCompactResponse(responseBody);
     }
@@ -521,10 +554,15 @@ async function proxyCompactRequest(
       url,
       status,
       startedAt,
+      endpoint: requestMetadata?.endpoint ?? endpointFromPath(url.pathname),
+      requestType,
+      reasoningEffort: requestMetadata?.reasoningEffort ?? null,
       upstreamHost: upstream.host,
       requestId,
       sourceModel,
       targetModel,
+      firstTokenMs,
+      usage,
       errorSummary
     });
     studioEvents.broadcastLog(logEntry);
@@ -561,6 +599,7 @@ interface BufferedUpstreamOptions {
   req: IncomingMessage;
   res: ServerResponse;
   upstream: URL;
+  startedAt: number;
   timeoutMs: number;
   timeoutMessage: string;
   requestHeaders: Record<string, string>;
@@ -573,6 +612,7 @@ interface BufferedUpstreamResult {
   errorSummary: string | null;
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
+  firstTokenMs: number | null;
 }
 
 function sendBufferedUpstreamRequest(
@@ -597,12 +637,14 @@ function sendBufferedUpstreamRequest(
       (upstreamRes) => {
         const status = upstreamRes.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
+        let firstTokenMs: number | null = null;
         copyResponseHeaders(upstreamRes.headers, options.res);
         for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
           options.res.setHeader(name, value);
         }
         options.res.writeHead(status);
         upstreamRes.on("data", (chunk: Buffer) => {
+          firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
           responseChunks.push(Buffer.from(chunk));
         });
         upstreamRes.pipe(options.res);
@@ -612,7 +654,8 @@ function sendBufferedUpstreamRequest(
             status,
             errorSummary: null,
             responseBody: Buffer.concat(responseChunks),
-            responseHeaders: upstreamRes.headers
+            responseHeaders: upstreamRes.headers,
+            firstTokenMs
           });
         });
       }
@@ -707,10 +750,15 @@ function addLog(
     url: URL;
     status: number;
     startedAt: number;
+    endpoint: string;
+    requestType: RequestTransport;
+    reasoningEffort: string | null;
     upstreamHost: string;
     requestId: string;
     sourceModel: string | null;
     targetModel: string | null;
+    firstTokenMs: number | null;
+    usage: TokenUsageMetrics;
     errorSummary: string | null;
   }
 ): RequestLogEntry {
@@ -719,16 +767,45 @@ function addLog(
     route: input.route,
     method: input.req.method ?? "GET",
     path: `${input.url.pathname}${input.url.search}`,
+    endpoint: input.endpoint,
+    request_type: input.requestType,
+    reasoning_effort: input.reasoningEffort,
     source_model: input.sourceModel,
     target_model: input.targetModel,
     status: input.status,
     duration_ms: Math.max(0, Math.round(performance.now() - input.startedAt)),
+    first_token_ms: input.firstTokenMs,
+    input_tokens: input.usage.inputTokens,
+    output_tokens: input.usage.outputTokens,
+    cached_input_tokens: input.usage.cachedInputTokens,
+    total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
     request_id: input.requestId,
     error_summary: input.errorSummary
   };
   logger.add(entry);
   return entry;
+}
+
+function emptyUsageMetrics(): TokenUsageMetrics {
+  return {
+    inputTokens: null,
+    outputTokens: null,
+    cachedInputTokens: null,
+    totalTokens: null
+  };
+}
+
+function endpointFromPath(pathname: string): string {
+  if (pathname === "/v1") {
+    return "/";
+  }
+
+  if (pathname.startsWith("/v1/")) {
+    return pathname.slice(3);
+  }
+
+  return pathname || "/";
 }
 
 async function persistCapture(

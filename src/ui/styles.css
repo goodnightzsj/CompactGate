@@ -2424,11 +2424,24 @@ textarea:hover {
   display: grid;
   max-height: min(620px, 68vh);
   gap: var(--space-2);
-  margin-top: var(--space-4);
+  margin-top: var(--space-2);
   padding-right: 0.25rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.log-usage-head {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.1fr) 92px minmax(128px, 0.75fr) 76px minmax(210px, 1.2fr) 90px 86px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: 0 var(--space-3) 0.45rem;
+  color: rgba(251, 248, 240, 0.56);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .empty-log {
@@ -2470,7 +2483,7 @@ textarea:hover {
 
 .log-row > button {
   display: grid;
-  grid-template-columns: 82px 88px 54px 74px minmax(170px, 1fr) minmax(110px, 0.7fr);
+  grid-template-columns: minmax(170px, 1.1fr) 92px minmax(128px, 0.75fr) 76px minmax(210px, 1.2fr) 90px 86px;
   gap: var(--space-2);
   align-items: center;
   width: 100%;
@@ -2479,6 +2492,107 @@ textarea:hover {
   background: transparent;
   color: inherit;
   text-align: left;
+}
+
+.log-model-cell,
+.token-summary,
+.token-detail-card,
+.token-detail-card div {
+  display: grid;
+}
+
+.log-model-cell {
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.log-model-cell .route-chip {
+  width: fit-content;
+  min-height: 24px;
+  padding: 0 0.58rem;
+  font-size: 0.68rem;
+}
+
+.log-model-cell strong,
+.log-model-cell small,
+.log-reasoning,
+.log-endpoint,
+.metric-time {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-model-cell strong,
+.metric-time {
+  color: var(--paper-lift);
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 800;
+}
+
+.log-model-cell small {
+  color: rgba(251, 248, 240, 0.58);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.log-reasoning,
+.transport-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.log-reasoning {
+  padding: 0 0.62rem;
+  background: rgba(251, 248, 240, 0.075);
+  color: rgba(251, 248, 240, 0.76);
+}
+
+.transport-pill {
+  width: fit-content;
+  padding: 0 0.72rem;
+  border: 1px solid rgba(251, 248, 240, 0.12);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.transport-pill.is-stream {
+  background: rgba(112, 65, 214, 0.36);
+  color: #d8c5ff;
+}
+
+.transport-pill.is-http {
+  background: rgba(36, 84, 214, 0.22);
+  color: #9ab4ff;
+}
+
+.token-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.token-summary span {
+  min-width: 0;
+  padding: 0.32rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(251, 248, 240, 0.07);
+  color: rgba(251, 248, 240, 0.78);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-endpoint {
+  color: rgba(251, 248, 240, 0.82);
 }
 
 .log-row time,
@@ -2530,6 +2644,33 @@ textarea:hover {
 
 .log-detail p {
   margin: 0;
+}
+
+.token-detail-card {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.token-detail-card div {
+  gap: 0.25rem;
+  padding: var(--space-3);
+  border: 1px solid rgba(251, 248, 240, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.token-detail-card span {
+  color: rgba(251, 248, 240, 0.58);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.token-detail-card strong {
+  color: #55b9ff;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 1.05rem;
 }
 
 .log-detail-grid {
@@ -2955,6 +3096,10 @@ textarea:hover {
     display: grid;
   }
 
+  .log-usage-head {
+    display: none;
+  }
+
   .log-filter-stack {
     width: 100%;
     justify-items: stretch;
@@ -3011,12 +3156,24 @@ textarea:hover {
   }
 
   .log-row > button {
-    grid-template-columns: 76px 1fr 52px;
+    grid-template-columns: 1fr 1fr;
+    align-items: stretch;
   }
 
-  .log-row > button span:nth-of-type(2),
-  .log-row > button code,
-  .log-row > button span:last-child {
+  .log-model-cell,
+  .token-summary,
+  .log-endpoint {
     grid-column: 1 / -1;
+  }
+
+  .log-reasoning,
+  .transport-pill,
+  .metric-time {
+    width: 100%;
+  }
+
+  .token-summary,
+  .token-detail-card {
+    grid-template-columns: 1fr;
   }
 }

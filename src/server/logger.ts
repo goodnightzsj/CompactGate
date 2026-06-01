@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { RequestLogEntry, RouteKind } from "../shared/types.js";
+import type { RequestLogEntry, RequestTransport, RouteKind } from "../shared/types.js";
 
 const LOG_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS request_logs (
@@ -10,10 +10,18 @@ const LOG_TABLE_SQL = `
     route TEXT NOT NULL,
     method TEXT NOT NULL,
     path TEXT NOT NULL,
+    endpoint TEXT NOT NULL DEFAULT '',
+    request_type TEXT NOT NULL DEFAULT 'http',
+    reasoning_effort TEXT,
     source_model TEXT,
     target_model TEXT,
     status INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
+    first_token_ms INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cached_input_tokens INTEGER,
+    total_tokens INTEGER,
     upstream_host TEXT NOT NULL,
     request_id TEXT NOT NULL,
     error_summary TEXT
@@ -26,14 +34,33 @@ const RECENT_LOG_FIELDS = `
   route,
   method,
   path,
+  endpoint,
+  request_type,
+  reasoning_effort,
   source_model,
   target_model,
   status,
   duration_ms,
+  first_token_ms,
+  input_tokens,
+  output_tokens,
+  cached_input_tokens,
+  total_tokens,
   upstream_host,
   request_id,
   error_summary
 `;
+
+const MIGRATION_COLUMNS: Record<string, string> = {
+  endpoint: "TEXT NOT NULL DEFAULT ''",
+  request_type: "TEXT NOT NULL DEFAULT 'http'",
+  reasoning_effort: "TEXT",
+  first_token_ms: "INTEGER",
+  input_tokens: "INTEGER",
+  output_tokens: "INTEGER",
+  cached_input_tokens: "INTEGER",
+  total_tokens: "INTEGER"
+};
 
 export function resolveLogDatabasePath(configPath: string, overridePath?: string): string {
   if (overridePath && overridePath.trim().length > 0) {
@@ -62,6 +89,7 @@ export class RequestLogger {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
+    this.migratePersistedSchema();
     this.prunePersisted();
     this.reloadRecent();
   }
@@ -87,14 +115,22 @@ export class RequestLogger {
               route,
               method,
               path,
+              endpoint,
+              request_type,
+              reasoning_effort,
               source_model,
               target_model,
               status,
               duration_ms,
+              first_token_ms,
+              input_tokens,
+              output_tokens,
+              cached_input_tokens,
+              total_tokens,
               upstream_host,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -102,10 +138,18 @@ export class RequestLogger {
           entry.route,
           entry.method,
           entry.path,
+          entry.endpoint,
+          entry.request_type,
+          entry.reasoning_effort,
           entry.source_model,
           entry.target_model,
           entry.status,
           entry.duration_ms,
+          entry.first_token_ms,
+          entry.input_tokens,
+          entry.output_tokens,
+          entry.cached_input_tokens,
+          entry.total_tokens,
           entry.upstream_host,
           entry.request_id,
           entry.error_summary
@@ -147,10 +191,18 @@ export class RequestLogger {
         route: row.route as RouteKind,
         method: String(row.method),
         path: String(row.path),
+        endpoint: readEndpoint(row.endpoint, String(row.path)),
+        request_type: readRequestTransport(row.request_type),
+        reasoning_effort: readNullableString(row.reasoning_effort),
         source_model: readNullableString(row.source_model),
         target_model: readNullableString(row.target_model),
         status: Number(row.status),
         duration_ms: Number(row.duration_ms),
+        first_token_ms: readNullableNumber(row.first_token_ms),
+        input_tokens: readNullableNumber(row.input_tokens),
+        output_tokens: readNullableNumber(row.output_tokens),
+        cached_input_tokens: readNullableNumber(row.cached_input_tokens),
+        total_tokens: readNullableNumber(row.total_tokens),
         upstream_host: String(row.upstream_host),
         request_id: String(row.request_id),
         error_summary: readNullableString(row.error_summary)
@@ -173,8 +225,54 @@ export class RequestLogger {
       )
       .run(this.keepRecent);
   }
+
+  private migratePersistedSchema(): void {
+    const existingColumns = new Set(
+      (
+        this.db.prepare("PRAGMA table_info(request_logs)").all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name)
+    );
+
+    for (const [name, definition] of Object.entries(MIGRATION_COLUMNS)) {
+      if (!existingColumns.has(name)) {
+        this.db.exec(`ALTER TABLE request_logs ADD COLUMN ${name} ${definition};`);
+      }
+    }
+  }
 }
 
 function readNullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function readRequestTransport(value: unknown): RequestTransport {
+  return value === "stream" ? "stream" : "http";
+}
+
+function readEndpoint(value: unknown, pathValue: string): string {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+
+  const pathname = pathValue.split("?")[0] ?? "/";
+  if (pathname === "/v1") {
+    return "/";
+  }
+
+  if (pathname.startsWith("/v1/")) {
+    return pathname.slice(3);
+  }
+
+  return pathname || "/";
 }

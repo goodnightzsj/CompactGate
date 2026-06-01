@@ -1417,6 +1417,18 @@ function LogsPanel({
         </div>
       )}
 
+      {logs.length > 0 && (
+        <div className="log-usage-head" aria-hidden="true">
+          <span>模型</span>
+          <span>推理强度</span>
+          <span>端点</span>
+          <span>类型</span>
+          <span>Token</span>
+          <span>首 Token</span>
+          <span>耗时</span>
+        </div>
+      )}
+
       <div className="log-list">
         {logs.length === 0 ? (
           <div className="empty-log">
@@ -1441,21 +1453,52 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
   const hasError = Boolean(entry.error_summary) || entry.status >= 400;
   const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
   const requestLine = `${entry.method} ${entry.path}`;
+  const targetModel = entry.target_model ?? entry.source_model;
+  const hasModelRewrite = Boolean(entry.source_model && targetModel && entry.source_model !== targetModel);
 
   return (
     <article className={`log-row ${hasError ? "has-error" : ""}`}>
       <button type="button" onClick={() => setExpanded((value) => !value)}>
-        <time>{formatClock(entry.time)}</time>
-        <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-        <strong>{entry.status}</strong>
-        <span>{entry.duration_ms}ms</span>
-        <code title={modelMapping}>{modelMapping}</code>
-        <span>{entry.upstream_host}</span>
+        <span className="log-model-cell">
+          <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+          <strong title={entry.source_model ?? undefined}>{entry.source_model ?? "-"}</strong>
+          {hasModelRewrite && <small title={targetModel ?? undefined}>{"->"} {targetModel}</small>}
+        </span>
+        <span className="log-reasoning">{entry.reasoning_effort ?? "-"}</span>
+        <code className="log-endpoint" title={entry.path}>{entry.endpoint}</code>
+        <span className={`transport-pill is-${entry.request_type}`}>
+          {requestTypeLabel(entry.request_type)}
+        </span>
+        <span className="token-summary" title={tokenSummaryTitle(entry)}>
+          <span>入 {formatMetricNumber(entry.input_tokens)}</span>
+          <span>出 {formatMetricNumber(entry.output_tokens)}</span>
+          <span>缓存 {formatMetricNumber(entry.cached_input_tokens)}</span>
+        </span>
+        <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
+        <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
       </button>
 
       {expanded && (
         <div className="log-detail">
           <p>{entry.error_summary ?? "请求已完成，上游未返回代理层错误。"}</p>
+          <div className="token-detail-card" aria-label="Token 明细">
+            <div>
+              <span>输入 Token</span>
+              <strong>{formatMetricNumber(entry.input_tokens)}</strong>
+            </div>
+            <div>
+              <span>输出 Token</span>
+              <strong>{formatMetricNumber(entry.output_tokens)}</strong>
+            </div>
+            <div>
+              <span>缓存读取 Token</span>
+              <strong>{formatMetricNumber(entry.cached_input_tokens)}</strong>
+            </div>
+            <div>
+              <span>总 Token</span>
+              <strong>{formatMetricNumber(entry.total_tokens)}</strong>
+            </div>
+          </div>
           <dl className="log-detail-grid">
             <div>
               <dt>请求</dt>
@@ -1470,13 +1513,33 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
               </dd>
             </div>
             <div>
-              <dt>上游</dt>
-              <dd>{entry.upstream_host}</dd>
+              <dt>上游 / 端点</dt>
+              <dd>
+                <code>{entry.upstream_host}{entry.endpoint}</code>
+              </dd>
             </div>
             <div>
-              <dt>状态 / 耗时</dt>
+              <dt>状态 / 类型</dt>
               <dd>
-                {entry.status} / {entry.duration_ms}ms
+                {entry.status} / {requestTypeLabel(entry.request_type)}
+              </dd>
+            </div>
+            <div>
+              <dt>首 Token / 总耗时</dt>
+              <dd>
+                {formatDurationMs(entry.first_token_ms)} / {formatDurationMs(entry.duration_ms)}
+              </dd>
+            </div>
+            <div>
+              <dt>推理强度</dt>
+              <dd>
+                <code>{entry.reasoning_effort ?? "无"}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>采样时间</dt>
+              <dd>
+                <time>{formatDateTime(entry.time)}</time>
               </dd>
             </div>
           </dl>
@@ -1716,6 +1779,10 @@ function routeLabel(route: RouteKind): string {
   return route === "primary" ? "普通" : "压缩";
 }
 
+function requestTypeLabel(type: RequestLogEntry["request_type"]): string {
+  return type === "stream" ? "Stream" : "HTTP";
+}
+
 function routeFilterLabel(route: "all" | RouteKind): string {
   if (route === "all") {
     return "全部";
@@ -1766,6 +1833,35 @@ function buildHostFilterOptions(logs: RequestLogEntry[], selectedHost: string): 
 
 function hostFilterChipTitle(option: HostFilterOption): string {
   return `${option.host}：普通 ${option.primary}，压缩 ${option.compact}`;
+}
+
+function tokenSummaryTitle(entry: RequestLogEntry): string {
+  return [
+    `输入 Token：${formatMetricNumber(entry.input_tokens)}`,
+    `输出 Token：${formatMetricNumber(entry.output_tokens)}`,
+    `缓存读取 Token：${formatMetricNumber(entry.cached_input_tokens)}`,
+    `总 Token：${formatMetricNumber(entry.total_tokens)}`
+  ].join("，");
+}
+
+function formatMetricNumber(value: number | null): string {
+  if (value === null) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatDurationMs(value: number | null): string {
+  if (value === null) {
+    return "-";
+  }
+
+  if (value < 1000) {
+    return `${value}ms`;
+  }
+
+  return `${(value / 1000).toFixed(2)}s`;
 }
 
 function emptyLogTitle(route: "all" | RouteKind, hostFilter: string, totalLogs: number): string {

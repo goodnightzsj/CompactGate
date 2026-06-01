@@ -1,5 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -128,6 +129,108 @@ describe("CompactGate HTTP server", () => {
       source_model: "gpt-5.5",
       target_model: "gpt-5.5"
     });
+  });
+
+  it("logs usage metrics from JSON upstream responses", async () => {
+    const primary = await startUpstream((_req, res) => res.end("{}"));
+    const compact = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "resp_usage_json",
+          usage: {
+            input_tokens: 35213,
+            output_tokens: 868,
+            input_tokens_details: {
+              cached_tokens: 28032
+            },
+            total_tokens: 64113
+          }
+        })
+      );
+    });
+    const app = await startApp(primary.url, compact.url);
+
+    const response = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        reasoning: { effort: "xhigh" },
+        input: "sensitive prompt"
+      }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "compact",
+      endpoint: "/responses/compact",
+      request_type: "http",
+      reasoning_effort: "xhigh",
+      input_tokens: 35213,
+      output_tokens: 868,
+      cached_input_tokens: 28032,
+      total_tokens: 64113
+    });
+    expect(entry.first_token_ms).toEqual(expect.any(Number));
+    expect(JSON.stringify(entry)).not.toContain("sensitive prompt");
+    expect("cost" in entry).toBe(false);
+    expect("billing_mode" in entry).toBe(false);
+  });
+
+  it("logs usage metrics from streamed SSE upstream responses", async () => {
+    const primary = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\n\n`);
+      res.end(
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 12,
+              output_tokens: 3,
+              input_tokens_details: {
+                cached_tokens: 4
+              },
+              total_tokens: 15
+            }
+          }
+        })}\n\n`
+      );
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url);
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        stream: true,
+        reasoning_effort: "high"
+      }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "primary",
+      endpoint: "/responses",
+      request_type: "stream",
+      reasoning_effort: "high",
+      input_tokens: 12,
+      output_tokens: 3,
+      cached_input_tokens: 4,
+      total_tokens: 15
+    });
+    expect(entry.first_token_ms).toEqual(expect.any(Number));
   });
 
   it("rewrites compact model and removes stream", async () => {
@@ -747,6 +850,26 @@ describe("CompactGate HTTP server", () => {
     expect(restartedLogs.map((entry) => entry.source_model)).toEqual(["gpt-5.5", "gpt-5.4"]);
     expect(JSON.stringify(restartedLogs)).not.toContain("sensitive prompt");
   });
+
+  it("migrates older SQLite log databases with usage metric defaults", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-app-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    seedLegacyLogDatabase(path.join(dir, "compactgate-logs.sqlite"));
+
+    const app = await startAppInDir(dir);
+    const [entry] = await fetchRecentLogs(app.url);
+
+    expect(entry).toMatchObject({
+      route: "compact",
+      path: "/v1/responses/compact",
+      endpoint: "/responses/compact",
+      request_type: "http",
+      input_tokens: null,
+      output_tokens: null,
+      cached_input_tokens: null,
+      total_tokens: null
+    });
+  });
 });
 
 async function startApp(
@@ -865,9 +988,61 @@ async function sendCompactRequest(baseUrl: string, model: string) {
 async function fetchRecentLogs(baseUrl: string) {
   const response = await fetch(`${baseUrl}/api/logs/recent`);
   const body = await response.json();
-  return body.logs as Array<{
-    source_model: string | null;
-  }>;
+  return body.logs as RequestLogEntry[];
+}
+
+function seedLegacyLogDatabase(databasePath: string): void {
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.exec(`
+      CREATE TABLE request_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        time TEXT NOT NULL,
+        route TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        source_model TEXT,
+        target_model TEXT,
+        status INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        upstream_host TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        error_summary TEXT
+      );
+      CREATE INDEX idx_request_logs_id ON request_logs(id DESC);
+    `);
+    db.prepare(
+      `
+        INSERT INTO request_logs (
+          time,
+          route,
+          method,
+          path,
+          source_model,
+          target_model,
+          status,
+          duration_ms,
+          upstream_host,
+          request_id,
+          error_summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      new Date().toISOString(),
+      "compact",
+      "POST",
+      "/v1/responses/compact",
+      "gpt-5.5",
+      "gpt-5.5-openai-compact",
+      200,
+      42,
+      "legacy.example",
+      "legacy-request",
+      null
+    );
+  } finally {
+    db.close();
+  }
 }
 
 async function readCaptureRecords(dir: string) {

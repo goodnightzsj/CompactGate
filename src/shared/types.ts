@@ -1,6 +1,7 @@
 export type RouteKind = "primary" | "compact";
 export type CredentialScope = "primary" | "compact";
 export type CredentialSource = "config" | "env" | "missing";
+export type RequestTransport = "http" | "stream";
 
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
@@ -92,10 +93,18 @@ export interface RequestLogEntry {
   route: RouteKind;
   method: string;
   path: string;
+  endpoint: string;
+  request_type: RequestTransport;
+  reasoning_effort: string | null;
   source_model: string | null;
   target_model: string | null;
   status: number;
   duration_ms: number;
+  first_token_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_input_tokens: number | null;
+  total_tokens: number | null;
   upstream_host: string;
   request_id: string;
   error_summary: string | null;
