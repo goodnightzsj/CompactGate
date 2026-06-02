@@ -18,7 +18,12 @@ export function resolveRouteCredential(
 ): ResolvedCredential {
   const activeCredentialScope =
     route === "compact" && config.compact.upstream_mode === "primary" ? "primary" : route;
-  const activeConfig = activeCredentialScope === "primary" ? config.primary : config.compact;
+  const activeConfig =
+    activeCredentialScope === "primary"
+      ? config.primary
+      : activeCredentialScope === "compact"
+        ? config.compact
+        : config.claude;
   const directApiKey = activeConfig.api_key.trim();
 
   if (directApiKey.length > 0) {

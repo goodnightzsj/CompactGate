@@ -74,6 +74,11 @@ export function serializeHeaders(
       continue;
     }
 
+    if (isSensitiveHeader(name)) {
+      next[name] = "[redacted]";
+      continue;
+    }
+
     if (Array.isArray(value)) {
       next[name] = [...value];
       continue;
@@ -83,6 +88,17 @@ export function serializeHeaders(
   }
 
   return next;
+}
+
+function isSensitiveHeader(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return (
+    lowerName === "authorization" ||
+    lowerName === "proxy-authorization" ||
+    lowerName === "x-api-key" ||
+    lowerName === "api-key" ||
+    lowerName === "anthropic-api-key"
+  );
 }
 
 export function serializeBody(buffer: Buffer): SerializedBody {

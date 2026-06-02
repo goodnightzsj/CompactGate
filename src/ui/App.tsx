@@ -1455,11 +1455,13 @@ function LogsPanel({
 
       {logs.length > 0 && (
         <div className="log-usage-head" aria-hidden="true">
+          <span>时间</span>
           <span>模型</span>
           <span>推理强度</span>
           <span>端点</span>
           <span>上游 Host</span>
           <span>类型</span>
+          <span>User Agent</span>
           <span>Token</span>
           <span>首 Token</span>
           <span>耗时</span>
@@ -1516,6 +1518,7 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
   const requestLine = `${entry.method} ${entry.path}`;
   const targetModel = entry.target_model ?? entry.source_model;
   const hasModelRewrite = Boolean(entry.source_model && targetModel && entry.source_model !== targetModel);
+  const userAgent = entry.user_agent ?? "-";
 
   return (
     <article className={`log-row ${hasError ? "has-error" : ""}`}>
@@ -1525,6 +1528,7 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
         aria-expanded={expanded}
         onClick={() => setExpanded((value) => !value)}
       >
+        <time className="log-time" dateTime={entry.time}>{formatDateTime(entry.time)}</time>
         <span className="log-model-cell">
           <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
           <strong>{entry.source_model ?? "-"}</strong>
@@ -1536,6 +1540,7 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
         <span className={`transport-pill is-${entry.request_type}`}>
           {requestTypeLabel(entry.request_type)}
         </span>
+        <code className="log-user-agent" title={userAgent}>{userAgent}</code>
         <TokenTooltip entry={entry} />
         <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
         <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
@@ -1614,7 +1619,13 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
             <div>
               <dt>采样时间</dt>
               <dd>
-                <time>{formatDateTime(entry.time)}</time>
+                <time dateTime={entry.time}>{formatDateTime(entry.time)}</time>
+              </dd>
+            </div>
+            <div>
+              <dt>User Agent</dt>
+              <dd>
+                <code>{userAgent}</code>
               </dd>
             </div>
           </dl>
@@ -2027,6 +2038,7 @@ function applyDraftToConfigExport(
       model_template: form.modelTemplate,
       model_override: form.modelOverride
     },
+    claude: { ...config.claude },
     timeouts: { ...config.timeouts },
     logging: { ...config.logging }
   };
@@ -2086,7 +2098,11 @@ function renderLinkedModel(model: string, template: string): string {
 }
 
 function routeLabel(route: RouteKind): string {
-  return route === "primary" ? "普通" : "压缩";
+  if (route === "primary") {
+    return "普通";
+  }
+
+  return route === "compact" ? "压缩" : "Claude";
 }
 
 function formatLatestLogStatus(entry: RequestLogEntry | null, fallback: string): string {
@@ -2118,6 +2134,13 @@ function buildRouteSelectOptions(logCounts: Record<"all" | RouteKind, number>): 
       count: logCounts.compact,
       meta: "Compact",
       tone: "compact"
+    },
+    {
+      value: "claude",
+      label: "Claude",
+      count: logCounts.claude,
+      meta: "Anthropic",
+      tone: "claude"
     }
   ];
 }
@@ -2139,13 +2162,13 @@ function buildHostSelectOptions(
         value: option.host,
         label: option.host,
         count: option.total,
-        meta: `普 ${option.primary} / 压 ${option.compact}` as string
+        meta: `普 ${option.primary} / 压 ${option.compact} / Claude ${option.claude}` as string
       }))
   ];
 }
 
 function readRouteFilterValue(value: string): "all" | RouteKind {
-  return value === "primary" || value === "compact" ? value : "all";
+  return value === "primary" || value === "compact" || value === "claude" ? value : "all";
 }
 
 function buildHostFilterOptions(
@@ -2159,7 +2182,8 @@ function buildHostFilterOptions(
       host: selectedHost,
       total: 0,
       primary: 0,
-      compact: 0
+      compact: 0,
+      claude: 0
     });
   }
 
@@ -2255,7 +2279,8 @@ function emptyLogPage(limit: number): RequestLogPage {
     counts: {
       all: 0,
       primary: 0,
-      compact: 0
+      compact: 0,
+      claude: 0
     },
     host_counts: []
   };
@@ -2394,7 +2419,8 @@ function incrementHostCounts(
       host: entry.upstream_host,
       total: 1,
       primary: entry.route === "primary" ? 1 : 0,
-      compact: entry.route === "compact" ? 1 : 0
+      compact: entry.route === "compact" ? 1 : 0,
+      claude: entry.route === "claude" ? 1 : 0
     });
   }
 
@@ -2430,7 +2456,11 @@ function overallHealthBadge(health: HealthResponse | null): HealthBadge {
     return { label: "等待健康数据", tone: "warn" };
   }
 
-  const statuses = [upstreamHealthBadge(health.primary), upstreamHealthBadge(health.compact)];
+  const statuses = [
+    upstreamHealthBadge(health.primary),
+    upstreamHealthBadge(health.compact),
+    upstreamHealthBadge(health.claude)
+  ];
 
   if (statuses.some((item) => item.tone === "bad")) {
     return { label: "存在异常", tone: "bad" };

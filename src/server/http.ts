@@ -41,6 +41,7 @@ import {
 import {
   extractRequestMetadata,
   extractResponseUsage,
+  extractSourceModel,
   responseTransport,
   type RequestMetadata,
   type TokenUsageMetrics
@@ -68,6 +69,8 @@ const STATIC_MIME_TYPES: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2"
 };
+
+const ANTHROPIC_PROXY_PREFIX = "/anthropic";
 
 export interface CompactGateApp {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -222,6 +225,11 @@ async function routeRequest(
       return;
     }
 
+    if (isAnthropicProxyPath(url.pathname)) {
+      await proxyClaudeRequest(req, res, url, configStore, logger, captureWriter, studioEvents);
+      return;
+    }
+
     if (isV1Path(url.pathname)) {
       await proxyOpenAiRequest(
         req,
@@ -350,6 +358,120 @@ async function proxyOpenAiRequest(
     requestId,
     startedAt
   );
+}
+
+async function proxyClaudeRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  configStore: ConfigStore,
+  logger: RequestLogger,
+  captureWriter: DebugCaptureWriter,
+  studioEvents: StudioEventBroadcaster
+): Promise<void> {
+  const startedAt = performance.now();
+  const config = configStore.get();
+  const route: RouteKind = "claude";
+  const requestId = randomUUID();
+  const upstreamPath = stripAnthropicProxyPrefix(url.pathname);
+  const upstream = buildClaudeUpstreamUrl(config.claude.base_url, upstreamPath, url.search);
+  const auth = resolveRouteCredential("claude", config);
+  let requestHeaders: Record<string, string> = {};
+  let status = 502;
+  let errorSummary: string | null = null;
+  let rawBody: Buffer = Buffer.alloc(0);
+  let responseBody: Buffer = Buffer.alloc(0);
+  let responseHeaders: IncomingHttpHeaders = {};
+  let requestMetadata: RequestMetadata | null = null;
+  let requestType: RequestTransport = "http";
+  let firstTokenMs: number | null = null;
+  let sourceModel: string | null = null;
+  let usage: TokenUsageMetrics = emptyUsageMetrics();
+
+  try {
+    rawBody = await readRawBody(req, 100 * 1024 * 1024);
+    requestMetadata = extractRequestMetadata(upstreamPath, rawBody);
+    requestType = requestMetadata.requestType;
+    sourceModel = extractSourceModel(rawBody);
+    requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
+
+    const result = await sendBufferedUpstreamRequest({
+      req,
+      res,
+      upstream,
+      startedAt,
+      timeoutMs: config.timeouts.claude_ms,
+      timeoutMessage: "Claude upstream request timed out.",
+      requestHeaders,
+      body: rawBody,
+      extraResponseHeaders: {
+        "x-compactgate-route": route,
+        "x-compactgate-request-id": requestId
+      }
+    });
+
+    status = result.status;
+    errorSummary = result.errorSummary;
+    responseBody = result.responseBody;
+    responseHeaders = result.responseHeaders;
+    requestType = responseTransport(responseHeaders) ?? requestType;
+    firstTokenMs = result.firstTokenMs;
+    usage = extractResponseUsage(responseBody, responseHeaders);
+  } catch (error) {
+    status = 502;
+    errorSummary = summaryForError(error);
+    if (!res.headersSent) {
+      sendJson(res, status, { error: errorSummary, request_id: requestId });
+    } else {
+      res.destroy(error instanceof Error ? error : new Error(errorSummary));
+    }
+  } finally {
+    const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");
+    const logEntry = addLog(logger, {
+      route,
+      req,
+      url: logUrl,
+      status,
+      startedAt,
+      endpoint: requestMetadata?.endpoint ?? endpointFromPath(upstreamPath),
+      requestType,
+      reasoningEffort: requestMetadata?.reasoningEffort ?? null,
+      upstreamHost: upstream.host,
+      requestId,
+      sourceModel,
+      targetModel: sourceModel,
+      firstTokenMs,
+      usage,
+      errorSummary
+    });
+    studioEvents.broadcastLog(logEntry);
+
+    await persistCapture(captureWriter, {
+      request_id: requestId,
+      time: new Date().toISOString(),
+      route,
+      method: req.method ?? "GET",
+      path: `${upstreamPath}${url.search}`,
+      upstream_url: upstream.toString(),
+      upstream_host: upstream.host,
+      source_model: sourceModel,
+      target_model: sourceModel,
+      compact_bridge_replacements: 0,
+      incoming_request: {
+        headers: serializeHeaders(req.headers),
+        body: serializeBody(rawBody)
+      },
+      upstream_request: {
+        headers: serializeHeaders(requestHeaders),
+        body: serializeBody(rawBody)
+      },
+      upstream_response: {
+        status,
+        headers: serializeHeaders(responseHeaders),
+        body: serializeBody(responseBody)
+      }
+    });
+  }
 }
 
 async function proxyPrimaryRequest(
@@ -631,47 +753,111 @@ function sendBufferedUpstreamRequest(
   delete headers["transfer-encoding"];
 
   return new Promise((resolve, reject) => {
-    const upstreamReq = client.request(
+    let settled = false;
+    let upstreamReq: http.ClientRequest | null = null;
+    let upstreamRes: IncomingMessage | null = null;
+
+    const cleanup = () => {
+      options.res.off("close", handleClientClose);
+      options.res.off("error", handleClientError);
+      upstreamReq?.off("timeout", handleTimeout);
+    };
+
+    const resolveOnce = (result: BufferedUpstreamResult) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const rejectOnce = (error: Error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const clientDisconnectError = () =>
+      new Error("Client disconnected before upstream response completed.");
+
+    function handleClientClose() {
+      if (options.res.writableEnded || settled) {
+        return;
+      }
+
+      const error = clientDisconnectError();
+      upstreamReq?.destroy();
+      rejectOnce(error);
+    }
+
+    function handleClientError(error: Error) {
+      upstreamReq?.destroy();
+      rejectOnce(error);
+    }
+
+    function handleTimeout() {
+      upstreamReq?.destroy(new Error(options.timeoutMessage));
+    }
+
+    function handleUpstreamRequestError(error: Error) {
+      rejectOnce(error);
+    }
+
+    function handleUpstreamResponseAborted() {
+      rejectOnce(new Error("Upstream response aborted before completion."));
+    }
+
+    function handleUpstreamResponseError(error: Error) {
+      rejectOnce(error);
+    }
+
+    upstreamReq = client.request(
       options.upstream,
       {
         method: options.req.method,
         headers,
         timeout: options.timeoutMs
       },
-      (upstreamRes) => {
-        const status = upstreamRes.statusCode ?? 502;
+      (response) => {
+        upstreamRes = response;
+        const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
         let firstTokenMs: number | null = null;
-        copyResponseHeaders(upstreamRes.headers, options.res);
+        copyResponseHeaders(response.headers, options.res);
         for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
           options.res.setHeader(name, value);
         }
         options.res.writeHead(status);
-        upstreamRes.on("data", (chunk: Buffer) => {
+        response.on("data", (chunk: Buffer) => {
           firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
           responseChunks.push(Buffer.from(chunk));
         });
-        upstreamRes.pipe(options.res);
+        response.on("aborted", handleUpstreamResponseAborted);
+        response.on("error", handleUpstreamResponseError);
+        response.pipe(options.res);
 
-        upstreamRes.on("end", () => {
-          resolve({
+        response.on("end", () => {
+          resolveOnce({
             status,
             errorSummary: null,
             responseBody: Buffer.concat(responseChunks),
-            responseHeaders: upstreamRes.headers,
+            responseHeaders: response.headers,
             firstTokenMs
           });
         });
       }
     );
 
-    upstreamReq.on("timeout", () => {
-      upstreamReq.destroy(new Error(options.timeoutMessage));
-    });
-
-    upstreamReq.on("error", (error) => {
-      reject(error);
-    });
+    options.res.once("close", handleClientClose);
+    options.res.once("error", handleClientError);
+    upstreamReq.once("timeout", handleTimeout);
+    upstreamReq.once("error", handleUpstreamRequestError);
 
     upstreamReq.end(options.body);
   });
@@ -698,6 +884,21 @@ function buildUpstreamHeaders(
 
   if (apiKey) {
     next.authorization = `Bearer ${apiKey}`;
+  }
+
+  return next;
+}
+
+function buildAnthropicUpstreamHeaders(
+  headers: IncomingHttpHeaders,
+  apiKey: string | null
+): Record<string, string> {
+  const next = buildUpstreamHeaders(headers, null);
+
+  if (apiKey) {
+    next.authorization = `Bearer ${apiKey}`;
+    next["x-api-key"] = apiKey;
+    next["anthropic-api-key"] = apiKey;
   }
 
   return next;
@@ -785,11 +986,22 @@ function addLog(
     cached_output_tokens: input.usage.cachedOutputTokens,
     total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
+    user_agent: readHeaderString(input.req.headers["user-agent"]),
     request_id: input.requestId,
     error_summary: input.errorSummary
   };
   logger.add(entry);
   return entry;
+}
+
+function readHeaderString(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    const joined = value.join(", ").trim();
+    return joined.length > 0 ? joined : null;
+  }
+
+  const text = value?.trim();
+  return text && text.length > 0 ? text : null;
 }
 
 function emptyUsageMetrics(): TokenUsageMetrics {
@@ -814,6 +1026,25 @@ function endpointFromPath(pathname: string): string {
   return pathname || "/";
 }
 
+function isAnthropicProxyPath(pathname: string): boolean {
+  return pathname === ANTHROPIC_PROXY_PREFIX || pathname.startsWith(`${ANTHROPIC_PROXY_PREFIX}/`);
+}
+
+function stripAnthropicProxyPrefix(pathname: string): string {
+  const stripped = pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
+  return stripped.length > 0 ? stripped : "/";
+}
+
+function buildClaudeUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
+  const base = new URL(baseUrl);
+  const cleanBasePath = base.pathname.replace(/\/+$/, "");
+  const cleanRequestPath = requestPath.startsWith("/") ? requestPath : `/${requestPath}`;
+
+  base.pathname = `${cleanBasePath}${cleanRequestPath}`.replace(/\/{2,}/g, "/");
+  base.search = search;
+  return base;
+}
+
 async function persistCapture(
   captureWriter: DebugCaptureWriter,
   record: CaptureRecord
@@ -828,6 +1059,7 @@ async function persistCapture(
 function healthForConfig(config: CompactGateConfig): HealthResponse {
   const primaryCredential = resolveRouteCredential("primary", config);
   const compactCredential = resolveRouteCredential("compact", config);
+  const claudeCredential = resolveRouteCredential("claude", config);
 
   return {
     status: "ok",
@@ -854,6 +1086,17 @@ function healthForConfig(config: CompactGateConfig): HealthResponse {
       api_key_source: compactCredential.apiKeySource,
       active_api_key_env: compactCredential.activeApiKeyEnv,
       active_credential_scope: compactCredential.activeCredentialScope
+    },
+    claude: {
+      status: statusForBaseUrl(config.claude.base_url),
+      base_url: config.claude.base_url,
+      host: hostOrNull(config.claude.base_url),
+      api_key_env: config.claude.api_key_env,
+      stored_api_key: config.claude.api_key.trim().length > 0,
+      api_key_configured: claudeCredential.apiKeyConfigured,
+      api_key_source: claudeCredential.apiKeySource,
+      active_api_key_env: claudeCredential.activeApiKeyEnv,
+      active_credential_scope: claudeCredential.activeCredentialScope
     }
   };
 }
@@ -966,7 +1209,7 @@ function summaryForError(error: unknown): string {
 }
 
 function parseRouteFilter(value: string | null): RouteKind | undefined {
-  if (value === "primary" || value === "compact") {
+  if (value === "primary" || value === "compact" || value === "claude") {
     return value;
   }
 

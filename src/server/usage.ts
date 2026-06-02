@@ -35,6 +35,13 @@ export function extractRequestMetadata(pathname: string, rawBody: Buffer): Reque
   };
 }
 
+export function extractSourceModel(rawBody: Buffer): string | null {
+  const parsed = parseJsonRecord(rawBody);
+  return typeof parsed?.model === "string" && parsed.model.trim().length > 0
+    ? parsed.model
+    : null;
+}
+
 export function responseTransport(headers: IncomingHttpHeaders): RequestTransport | null {
   const contentType = readHeader(headers["content-type"]);
   return contentType?.toLowerCase().includes("text/event-stream") ? "stream" : null;
@@ -82,11 +89,56 @@ function extractSseUsage(text: string): TokenUsageMetrics | null {
 
     const usage = extractUsageFromJsonText(data);
     if (usage) {
-      latestUsage = usage;
+      latestUsage = mergeUsage(latestUsage, usage);
     }
   }
 
   return latestUsage;
+}
+
+function mergeUsage(
+  previous: TokenUsageMetrics | null,
+  next: TokenUsageMetrics
+): TokenUsageMetrics {
+  if (!previous) {
+    return next;
+  }
+
+  const inputTokens = next.inputTokens ?? previous.inputTokens;
+  const outputTokens = next.outputTokens ?? previous.outputTokens;
+  const cachedInputTokens = next.cachedInputTokens ?? previous.cachedInputTokens;
+  const cachedOutputTokens = next.cachedOutputTokens ?? previous.cachedOutputTokens;
+  const derivedTotal =
+    inputTokens !== null || outputTokens !== null ? (inputTokens ?? 0) + (outputTokens ?? 0) : null;
+  const explicitTotal = pickUsableTotal(next.totalTokens, previous.totalTokens, derivedTotal);
+
+  return {
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    cachedOutputTokens,
+    totalTokens: explicitTotal ?? derivedTotal
+  };
+}
+
+function pickUsableTotal(
+  nextTotal: number | null,
+  previousTotal: number | null,
+  derivedTotal: number | null
+): number | null {
+  if (derivedTotal === null) {
+    return nextTotal ?? previousTotal;
+  }
+
+  if (nextTotal !== null && nextTotal >= derivedTotal) {
+    return nextTotal;
+  }
+
+  if (previousTotal !== null && previousTotal >= derivedTotal) {
+    return previousTotal;
+  }
+
+  return null;
 }
 
 function extractJsonUsage(text: string): TokenUsageMetrics | null {
@@ -110,7 +162,10 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
     readNestedNumber(usage.input_tokens_details, "cached_tokens") ??
     readNestedNumber(usage.prompt_tokens_details, "cached_tokens") ??
     readNumber(usage.cached_tokens) ??
-    readNumber(usage.cache_read_input_tokens);
+    sumNullableNumbers(
+      readNumber(usage.cache_read_input_tokens),
+      readNumber(usage.cache_creation_input_tokens)
+    );
   const cachedOutputTokens =
     readNestedNumber(usage.output_tokens_details, "cached_tokens") ??
     readNestedNumber(usage.completion_tokens_details, "cached_tokens") ??
@@ -129,6 +184,14 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
     cachedOutputTokens,
     totalTokens
   };
+}
+
+function sumNullableNumbers(left: number | null, right: number | null): number | null {
+  if (left === null && right === null) {
+    return null;
+  }
+
+  return (left ?? 0) + (right ?? 0);
 }
 
 function findUsageRecord(value: unknown, depth = 0): Record<string, unknown> | null {

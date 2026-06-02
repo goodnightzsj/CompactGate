@@ -2393,11 +2393,13 @@ textarea:hover {
 .log-usage-head {
   display: grid;
   grid-template-columns:
+    minmax(116px, 0.72fr)
     minmax(160px, 1.05fr)
     92px
     minmax(124px, 0.74fr)
     minmax(140px, 0.92fr)
     78px
+    minmax(150px, 0.94fr)
     98px
     90px
     86px;
@@ -2451,11 +2453,13 @@ textarea:hover {
 .log-row-main {
   display: grid;
   grid-template-columns:
+    minmax(116px, 0.72fr)
     minmax(160px, 1.05fr)
     92px
     minmax(124px, 0.74fr)
     minmax(140px, 0.92fr)
     78px
+    minmax(150px, 0.94fr)
     98px
     90px
     86px;
@@ -2490,9 +2494,11 @@ textarea:hover {
 
 .log-model-cell strong,
 .log-model-cell small,
+.log-time,
 .log-reasoning,
 .log-endpoint,
 .log-host,
+.log-user-agent,
 .metric-time {
   overflow: hidden;
   min-width: 0;
@@ -2501,10 +2507,16 @@ textarea:hover {
 }
 
 .log-model-cell strong,
+.log-time,
 .metric-time {
   color: var(--paper-lift);
   font-family: "JetBrains Mono", monospace;
   font-weight: 800;
+}
+
+.log-time,
+.log-user-agent {
+  font-size: 0.74rem;
 }
 
 .log-model-cell small {
@@ -2548,11 +2560,13 @@ textarea:hover {
 }
 
 .log-endpoint,
-.log-host {
+.log-host,
+.log-user-agent {
   color: rgba(251, 248, 240, 0.82);
 }
 
-.log-host {
+.log-host,
+.log-user-agent {
   color: rgba(251, 248, 240, 0.66);
 }
 
@@ -3204,8 +3218,10 @@ textarea:hover {
   }
 
   .log-model-cell,
+  .log-time,
   .log-endpoint,
   .log-host,
+  .log-user-agent,
   .token-tooltip {
     grid-column: 1 / -1;
   }

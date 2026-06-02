@@ -30,6 +30,7 @@ const LOG_TABLE_SQL = `
     cached_output_tokens INTEGER,
     total_tokens INTEGER,
     upstream_host TEXT NOT NULL,
+    user_agent TEXT,
     request_id TEXT NOT NULL,
     error_summary TEXT
   );
@@ -55,6 +56,7 @@ const RECENT_LOG_FIELDS = `
   cached_output_tokens,
   total_tokens,
   upstream_host,
+  user_agent,
   request_id,
   error_summary
 `;
@@ -68,7 +70,8 @@ const MIGRATION_COLUMNS: Record<string, string> = {
   output_tokens: "INTEGER",
   cached_input_tokens: "INTEGER",
   cached_output_tokens: "INTEGER",
-  total_tokens: "INTEGER"
+  total_tokens: "INTEGER",
+  user_agent: "TEXT"
 };
 
 interface LogPageOptions {
@@ -143,9 +146,10 @@ export class RequestLogger {
               cached_output_tokens,
               total_tokens,
               upstream_host,
+              user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -167,6 +171,7 @@ export class RequestLogger {
           entry.cached_output_tokens,
           entry.total_tokens,
           entry.upstream_host,
+          entry.user_agent,
           entry.request_id,
           entry.error_summary
         );
@@ -274,11 +279,12 @@ export class RequestLogger {
     const counts = {
       all: 0,
       primary: 0,
-      compact: 0
+      compact: 0,
+      claude: 0
     };
 
     for (const row of rows) {
-      const route = row.route === "compact" ? "compact" : "primary";
+      const route = normalizeRoute(row.route);
       const count = readCount(row);
       counts[route] = count;
       counts.all += count;
@@ -295,7 +301,8 @@ export class RequestLogger {
             upstream_host AS host,
             COUNT(*) AS total,
             SUM(CASE WHEN route = 'primary' THEN 1 ELSE 0 END) AS primary_count,
-            SUM(CASE WHEN route = 'compact' THEN 1 ELSE 0 END) AS compact_count
+            SUM(CASE WHEN route = 'compact' THEN 1 ELSE 0 END) AS compact_count,
+            SUM(CASE WHEN route = 'claude' THEN 1 ELSE 0 END) AS claude_count
           FROM request_logs
           GROUP BY upstream_host
           ORDER BY total DESC, upstream_host ASC
@@ -307,7 +314,8 @@ export class RequestLogger {
       host: String(row.host),
       total: readNullableNumber(row.total) ?? 0,
       primary: readNullableNumber(row.primary_count) ?? 0,
-      compact: readNullableNumber(row.compact_count) ?? 0
+      compact: readNullableNumber(row.compact_count) ?? 0,
+      claude: readNullableNumber(row.claude_count) ?? 0
     }));
   }
 }
@@ -338,7 +346,7 @@ function buildWhereClause(options: Pick<LogPageOptions, "route" | "host">): {
 function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
   return {
     time: String(row.time),
-    route: row.route as RouteKind,
+    route: normalizeRoute(row.route),
     method: String(row.method),
     path: String(row.path),
     endpoint: readEndpoint(row.endpoint, String(row.path)),
@@ -355,9 +363,18 @@ function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     cached_output_tokens: readNullableNumber(row.cached_output_tokens),
     total_tokens: readNullableNumber(row.total_tokens),
     upstream_host: String(row.upstream_host),
+    user_agent: readNullableString(row.user_agent),
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary)
   };
+}
+
+function normalizeRoute(value: unknown): RouteKind {
+  if (value === "compact" || value === "claude") {
+    return value;
+  }
+
+  return "primary";
 }
 
 function readCount(row: unknown): number {

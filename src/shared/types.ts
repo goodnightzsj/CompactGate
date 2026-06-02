@@ -1,5 +1,5 @@
-export type RouteKind = "primary" | "compact";
-export type CredentialScope = "primary" | "compact";
+export type RouteKind = "primary" | "compact" | "claude";
+export type CredentialScope = "primary" | "compact" | "claude";
 export type CredentialSource = "config" | "env" | "missing";
 export type RequestTransport = "http" | "stream";
 
@@ -22,6 +22,7 @@ export interface CompactConfig extends UpstreamConfig {
 export interface TimeoutConfig {
   primary_ms: number;
   compact_ms: number;
+  claude_ms: number;
 }
 
 export interface LoggingConfig {
@@ -33,6 +34,7 @@ export interface CompactGateConfig {
   listen: string;
   primary: UpstreamConfig;
   compact: CompactConfig;
+  claude: UpstreamConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
 }
@@ -64,6 +66,7 @@ export interface PublicConfig {
   listen: string;
   primary: PublicUpstreamConfig;
   compact: PublicCompactConfig;
+  claude: PublicUpstreamConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
   config_path: string;
@@ -107,6 +110,7 @@ export interface RequestLogEntry {
   cached_output_tokens: number | null;
   total_tokens: number | null;
   upstream_host: string;
+  user_agent: string | null;
   request_id: string;
   error_summary: string | null;
 }
@@ -116,6 +120,7 @@ export interface HostLogCount {
   total: number;
   primary: number;
   compact: number;
+  claude: number;
 }
 
 export interface RequestLogPage {
@@ -139,6 +144,11 @@ export interface HealthResponse {
     host: string | null;
   } & PublicCredentialState;
   compact: {
+    status: "configured" | "invalid";
+    base_url: string;
+    host: string | null;
+  } & PublicCredentialState;
+  claude: {
     status: "configured" | "invalid";
     base_url: string;
     host: string | null;

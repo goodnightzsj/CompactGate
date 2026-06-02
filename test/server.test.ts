@@ -27,16 +27,20 @@ interface CaptureFixtureRecord {
   target_model: string | null;
   compact_bridge_replacements: number;
   incoming_request: {
+    headers: Record<string, string | string[]>;
     body: {
       text: string;
     };
   };
   upstream_request: {
+    headers: Record<string, string | string[]>;
     body: {
       text: string;
     };
   };
   upstream_response: {
+    headers: Record<string, string | string[]>;
+    status: number;
     body: {
       text: string;
     };
@@ -290,7 +294,10 @@ describe("CompactGate HTTP server", () => {
     await fetch(`${app.url}/v1/responses/compact`, {
       method: "POST",
       body: JSON.stringify({ model: "gpt-5.4", input: "sensitive prompt" }),
-      headers: { "content-type": "application/json" }
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "CompactGateTest/1.0"
+      }
     });
 
     const response = await fetch(`${app.url}/api/logs/recent`);
@@ -301,7 +308,8 @@ describe("CompactGate HTTP server", () => {
       route: "compact",
       status: 200,
       source_model: "gpt-5.4",
-      target_model: "gpt-5.4-openai-compact"
+      target_model: "gpt-5.4-openai-compact",
+      user_agent: "CompactGateTest/1.0"
     });
     expect(serialized).not.toContain("sensitive prompt");
   });
@@ -541,6 +549,160 @@ describe("CompactGate HTTP server", () => {
     expect(captures[0].incoming_request.body.text).toContain("capture me fully");
     expect(captures[0].upstream_request.body.text).toContain("capture me fully");
     expect(captures[0].upstream_response.body.text).toContain("PRIMARY_CAPTURE_REPLY");
+  });
+
+  it("proxies Claude requests, records Anthropic usage, and redacts captured credentials", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    setEnv("COMPACTGATE_CAPTURE_DIR", captureDir);
+
+    const captured: { current: CapturedRequest | null } = { current: null };
+    const claude = await startClaudeUpstream(async (req, res) => {
+      captured.current = {
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(
+        `event: message_start\ndata: ${JSON.stringify({
+          type: "message_start",
+          message: {
+            usage: {
+              input_tokens: 42,
+              cache_read_input_tokens: 30,
+              cache_creation_input_tokens: 4,
+              output_tokens: 1
+            }
+          }
+        })}\n\n`
+      );
+      res.end(
+        `event: message_delta\ndata: ${JSON.stringify({
+          type: "message_delta",
+          usage: { output_tokens: 7 }
+        })}\n\n`
+      );
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        base_url: claude.url,
+        api_key: "saved-claude-token"
+      }
+    });
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        stream: true,
+        messages: [{ role: "user", content: "capture claude" }]
+      }),
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01",
+        authorization: "Bearer client-token"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-route")).toBe("claude");
+    expect(await response.text()).toContain("message_start");
+    assertCaptured(captured.current);
+    expect(captured.current.url).toBe("/v1/messages?beta=true");
+    expect(captured.current.headers.authorization).toBe("Bearer saved-claude-token");
+    expect(captured.current.headers["x-api-key"]).toBe("saved-claude-token");
+    expect(captured.current.headers["anthropic-api-key"]).toBe("saved-claude-token");
+    expect(captured.current.body).toContain("capture claude");
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "claude",
+      endpoint: "/messages",
+      request_type: "stream",
+      source_model: "claude-opus-4-8",
+      target_model: "claude-opus-4-8",
+      input_tokens: 42,
+      output_tokens: 7,
+      cached_input_tokens: 34,
+      total_tokens: 49
+    });
+
+    const captures = await waitForCaptureRecords(captureDir, 1);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({
+      route: "claude",
+      source_model: "claude-opus-4-8",
+      target_model: "claude-opus-4-8"
+    });
+    expect(captures[0].upstream_request.headers.authorization).toBe("[redacted]");
+    expect(captures[0].upstream_request.headers["x-api-key"]).toBe("[redacted]");
+    expect(captures[0].upstream_request.headers["anthropic-api-key"]).toBe("[redacted]");
+    expect(captures[0].incoming_request.headers.authorization).toBe("[redacted]");
+    expect(JSON.stringify(captures[0])).not.toContain("saved-claude-token");
+    expect(JSON.stringify(captures[0])).not.toContain("client-token");
+  });
+
+  it("logs and captures Claude requests when the client disconnects before upstream completes", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    setEnv("COMPACTGATE_CAPTURE_DIR", captureDir);
+
+    let markUpstreamReceived: () => void = () => {};
+    const upstreamReceived = new Promise<void>((resolve) => {
+      markUpstreamReceived = resolve;
+    });
+    const claude = await startClaudeUpstream(async (req, res) => {
+      await captureBody(req);
+      markUpstreamReceived();
+      res.writeHead(200, { "content-type": "text/event-stream" });
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        base_url: claude.url,
+        api_key: "saved-claude-token"
+      }
+    });
+
+    const request = http.request(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" }
+    });
+    const requestClosed = new Promise<void>((resolve) => {
+      request.once("close", resolve);
+    });
+    request.on("error", () => undefined);
+
+    request.end(
+      JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: "disconnect claude" }]
+      })
+    );
+    await upstreamReceived;
+    request.destroy();
+    await requestClosed;
+
+    const entry = await waitForLogEntry(app.url, (candidate) => candidate.route === "claude");
+    expect(entry).toMatchObject({
+      route: "claude",
+      status: 502,
+      endpoint: "/messages",
+      source_model: "claude-opus-4-8",
+      target_model: "claude-opus-4-8",
+      error_summary: "Client disconnected before upstream response completed."
+    });
+
+    const captures = await waitForCaptureRecords(captureDir, 1);
+    expect(captures).toHaveLength(1);
+    expect(captures[0]).toMatchObject({
+      route: "claude",
+      source_model: "claude-opus-4-8",
+      target_model: "claude-opus-4-8"
+    });
+    expect(captures[0].upstream_response.status).toBe(502);
+    expect(JSON.stringify(captures[0])).not.toContain("saved-claude-token");
   });
 
   it("replaces split-mode compaction items with assistant summaries for the primary upstream", async () => {
@@ -957,6 +1119,21 @@ async function startUpstream(handler: (req: IncomingMessage, res: ServerResponse
   };
 }
 
+async function startClaudeUpstream(handler: (req: IncomingMessage, res: ServerResponse) => void) {
+  const server = http.createServer(handler);
+  await listen(server);
+  trackServer(server);
+  const address = server.address();
+
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+
+  return {
+    url: `http://127.0.0.1:${address.port}`
+  };
+}
+
 function trackServer(server: http.Server): () => Promise<void> {
   let closed = false;
 
@@ -1010,6 +1187,28 @@ async function sendCompactRequest(baseUrl: string, model: string) {
 
 async function fetchRecentLogs(baseUrl: string) {
   return (await fetchLogPage(baseUrl)).logs;
+}
+
+async function waitForLogEntry(
+  baseUrl: string,
+  predicate: (entry: RequestLogEntry) => boolean
+) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const match = (await fetchRecentLogs(baseUrl)).find(predicate);
+    if (match) {
+      return match;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  const logs = await fetchRecentLogs(baseUrl);
+  const match = logs.find(predicate);
+  if (!match) {
+    throw new Error("Expected log entry was not recorded.");
+  }
+
+  return match;
 }
 
 async function fetchLogPage(baseUrl: string, query = "") {

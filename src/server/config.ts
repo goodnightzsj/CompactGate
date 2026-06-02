@@ -24,9 +24,15 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     model_template: "{model}-openai-compact",
     model_override: ""
   },
+  claude: {
+    base_url: "https://api.anthropic.com",
+    api_key: "",
+    api_key_env: "ANTHROPIC_AUTH_TOKEN"
+  },
   timeouts: {
     primary_ms: 120_000,
-    compact_ms: 900_000
+    compact_ms: 900_000,
+    claude_ms: 900_000
   },
   logging: {
     redact_body: true,
@@ -95,6 +101,7 @@ export class ConfigStore {
     const config = this.get();
     const primaryCredential = resolveRouteCredential("primary", config);
     const compactCredential = resolveRouteCredential("compact", config);
+    const claudeCredential = resolveRouteCredential("claude", config);
 
     return {
       primary: {
@@ -121,6 +128,16 @@ export class ConfigStore {
         model_override: config.compact.model_override,
         active_credential_scope: compactCredential.activeCredentialScope
       },
+      claude: {
+        base_url: config.claude.base_url,
+        api_key_env: config.claude.api_key_env,
+        host: safeHost(config.claude.base_url),
+        stored_api_key: directApiKeyConfigured(config.claude.api_key),
+        api_key_configured: claudeCredential.apiKeyConfigured,
+        api_key_source: claudeCredential.apiKeySource,
+        active_api_key_env: claudeCredential.activeApiKeyEnv,
+        active_credential_scope: claudeCredential.activeCredentialScope
+      },
       listen: config.listen,
       timeouts: config.timeouts,
       logging: config.logging,
@@ -144,8 +161,10 @@ export function validateConfig(config: CompactGateConfig): void {
   validateListen(config.listen);
   validateBaseUrl(config.primary.base_url, "primary.base_url");
   validateBaseUrl(config.compact.base_url, "compact.base_url");
+  validateBaseUrl(config.claude.base_url, "claude.base_url");
   validateEnvName(config.primary.api_key_env, "primary.api_key_env");
   validateEnvName(config.compact.api_key_env, "compact.api_key_env");
+  validateEnvName(config.claude.api_key_env, "claude.api_key_env");
   validateUpstreamMode(config.compact.upstream_mode);
   validateModelMode(config.compact.model_mode);
 
@@ -166,6 +185,10 @@ export function validateConfig(config: CompactGateConfig): void {
 
   if (!Number.isInteger(config.timeouts.compact_ms) || config.timeouts.compact_ms <= 0) {
     throw new ConfigError("timeouts.compact_ms must be a positive integer.");
+  }
+
+  if (!Number.isInteger(config.timeouts.claude_ms) || config.timeouts.claude_ms <= 0) {
+    throw new ConfigError("timeouts.claude_ms must be a positive integer.");
   }
 
   if (
@@ -261,9 +284,15 @@ function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig
         base.compact.model_override
       )
     },
+    claude: {
+      base_url: readString(readChild(patchRecord.claude).base_url, base.claude.base_url),
+      api_key: readSensitiveString(readChild(patchRecord.claude).api_key, base.claude.api_key),
+      api_key_env: readString(readChild(patchRecord.claude).api_key_env, base.claude.api_key_env)
+    },
     timeouts: {
       primary_ms: readNumber(readChild(patchRecord.timeouts).primary_ms, base.timeouts.primary_ms),
-      compact_ms: readNumber(readChild(patchRecord.timeouts).compact_ms, base.timeouts.compact_ms)
+      compact_ms: readNumber(readChild(patchRecord.timeouts).compact_ms, base.timeouts.compact_ms),
+      claude_ms: readNumber(readChild(patchRecord.timeouts).claude_ms, base.timeouts.claude_ms)
     },
     logging: {
       redact_body: readBoolean(readChild(patchRecord.logging).redact_body, base.logging.redact_body),
