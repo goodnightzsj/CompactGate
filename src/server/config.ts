@@ -222,8 +222,7 @@ export class ConfigStore {
     const now = new Date().toISOString();
     const profileConfig = updateScopedProfileConfig(profile.config, patch, scope);
     validateProfileConfig(profileConfig, scope);
-
-    this.current = withProfileScope(this.current, scope, {
+    const nextScopeState = {
       profiles: existingProfiles.map((item) =>
         item.id === profileId
           ? {
@@ -235,7 +234,16 @@ export class ConfigStore {
           : cloneProfile(item)
       ),
       active_profile_id: scopeState.active_profile_id ?? null
-    });
+    };
+
+    const nextConfig = withProfileScope(this.current, scope, nextScopeState);
+    this.current =
+      scopeState.active_profile_id === profileId
+        ? {
+            ...nextConfig,
+            ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
+          }
+        : nextConfig;
     validateConfig(this.current);
     await this.save();
     return this.get();

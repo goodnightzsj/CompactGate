@@ -785,6 +785,51 @@ describe("CompactGate HTTP server", () => {
     expect(preview.target_model).toBe("profile-api-compact-model");
     expect(preview.upstream_host).toBe("127.0.0.1:56002");
 
+    const activeCodexUpdateResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "codex",
+        profile_id: profileId,
+        config: {
+          primary: { base_url: "http://127.0.0.1:56015/v1" },
+          compact: { model_override: "profile-api-active-update-model" },
+          claude: {
+            primary: { base_url: "http://127.0.0.1:56998" }
+          }
+        }
+      })
+    });
+    const activeCodexUpdatedConfig = (await activeCodexUpdateResponse.json()) as PublicConfig;
+
+    expect(activeCodexUpdateResponse.status).toBe(200);
+    expect(activeCodexUpdatedConfig.primary.base_url).toBe("http://127.0.0.1:56015/v1");
+    expect(activeCodexUpdatedConfig.compact.model_override).toBe("profile-api-active-update-model");
+    expect(activeCodexUpdatedConfig.claude.primary.base_url).toBe("http://127.0.0.1:56013");
+
+    const activeClaudeUpdateResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "claude",
+        profile_id: claudeProfileId,
+        config: {
+          claude: {
+            primary: { base_url: "http://127.0.0.1:56016" },
+            compact: { base_url: "http://127.0.0.1:56017", upstream_mode: "primary" }
+          },
+          primary: { base_url: "http://127.0.0.1:56999/v1" }
+        }
+      })
+    });
+    const activeClaudeUpdatedConfig = (await activeClaudeUpdateResponse.json()) as PublicConfig;
+
+    expect(activeClaudeUpdateResponse.status).toBe(200);
+    expect(activeClaudeUpdatedConfig.primary.base_url).toBe("http://127.0.0.1:56015/v1");
+    expect(activeClaudeUpdatedConfig.claude.primary.base_url).toBe("http://127.0.0.1:56016");
+    expect(activeClaudeUpdatedConfig.claude.compact.base_url).toBe("http://127.0.0.1:56017");
+    expect(activeClaudeUpdatedConfig.claude.compact.upstream_mode).toBe("primary");
+
     const patchResponse = await fetch(`${app.url}/api/config`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -1140,7 +1185,7 @@ describe("CompactGate HTTP server", () => {
       input_tokens: 42,
       output_tokens: 7,
       cached_input_tokens: 34,
-      total_tokens: 49
+      total_tokens: 83
     });
 
     const captures = await waitForCaptureRecords(captureDir, 1);
@@ -1158,7 +1203,7 @@ describe("CompactGate HTTP server", () => {
     expect(JSON.stringify(captures[0])).not.toContain("client-token");
   });
 
-  it("keeps Claude Code manual compact summaries on the Claude primary route", async () => {
+  it("keeps Claude Code manual compact requests on the Claude primary route without a prior arm", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -1202,7 +1247,7 @@ describe("CompactGate HTTP server", () => {
       "Include the full context needed to continue.",
       "</summary>"
     ].join("\n");
-    const compactResponse = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+    const response = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
       method: "POST",
       body: JSON.stringify({
         model: "claude-opus-4-8",
@@ -1218,11 +1263,11 @@ describe("CompactGate HTTP server", () => {
         "anthropic-version": "2023-06-01"
       }
     });
-    expect(compactResponse.status).toBe(200);
-    expect(compactResponse.headers.get("x-compactgate-route")).toBe("claude");
-    expect(compactResponse.headers.get("x-compactgate-claude-route")).toBe("primary");
-    expect(compactResponse.headers.get("x-compactgate-claude-retry")).toBeNull();
-    await compactResponse.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-route")).toBe("claude");
+    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(response.headers.get("x-compactgate-claude-retry")).toBeNull();
+    await response.text();
 
     expect(primaryRequests).toHaveLength(1);
     expect(compactRequests).toHaveLength(0);
@@ -1238,7 +1283,7 @@ describe("CompactGate HTTP server", () => {
     });
   });
 
-  it("does not auto-compact Claude primary failures before the reconnect threshold", async () => {
+  it("routes one manual Claude compact request to compact after a large AnyRouter reconnect", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -1248,13 +1293,8 @@ describe("CompactGate HTTP server", () => {
         headers: req.headers,
         body: await captureBody(req)
       });
-
-      res.writeHead(503, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          error: { type: "overloaded_error", message: "primary route overloaded" }
-        })
-      );
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_OK" }] }));
     });
     const claudeCompact = await startClaudeUpstream(async (req, res) => {
       compactRequests.push({
@@ -1264,554 +1304,44 @@ describe("CompactGate HTTP server", () => {
         body: await captureBody(req)
       });
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [{ type: "text", text: "SUMMARY FROM CLAUDE COMPACT" }],
-          usage: { input_tokens: 17, output_tokens: 19 }
-        })
-      );
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT_OK" }] }));
     });
+    setEnv("COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES", "256");
     const app = await startApp(undefined, undefined, {
       claude: {
         primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "split"
-        }
-      }
-    });
-
-    const response = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        metadata: { reconnect_count: 4 },
-        messages: [{ role: "user", content: "original context that primary cannot handle" }]
-      }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
-    });
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get("x-compactgate-route")).toBe("claude");
-    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
-    expect(response.headers.get("x-compactgate-claude-retry")).toBeNull();
-    expect(await response.text()).toContain("primary route overloaded");
-
-    expect(primaryRequests).toHaveLength(1);
-    expect(compactRequests).toHaveLength(0);
-    expect(primaryRequests[0].headers["anthropic-api-key"]).toBe("saved-claude-primary-token");
-    expect(primaryRequests[0].body).toContain("original context that primary cannot handle");
-
-    const [entry] = await fetchRecentLogs(app.url);
-    expect(entry).toMatchObject({
-      route: "claude",
-      status: 503,
-      upstream_host: new URL(claudePrimary.url).host
-    });
-  });
-
-  it("does not auto-compact Claude requests with non-exact reconnect count fields", async () => {
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY" }] }));
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "SUMMARY" }] }));
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "split"
-        }
-      }
-    });
-
-    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        metadata: { reconnect: { count: 5 } },
-        messages: [{ role: "user", content: "do not auto compact" }]
-      }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-compactgate-claude-retry")).toBeNull();
-    expect(primaryRequests).toHaveLength(1);
-    expect(compactRequests).toHaveLength(0);
-  });
-
-  it("does not auto-compact oversized normal Claude requests", async () => {
-    setEnv("COMPACTGATE_CLAUDE_AUTO_COMPACT_BYTES", "256");
-
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [
-            {
-              type: "text",
-              text: "UNCOMPACTED_PRIMARY_OK"
-            }
-          ],
-          usage: { input_tokens: 3, output_tokens: 29 }
-        })
-      );
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, {
-        "content-type": "application/json",
-        "content-encoding": "gzip"
-      });
-      res.end(
-        gzipSync(JSON.stringify({
-          type: "message",
-          content: [{ type: "thinking", thinking: "SIZE SUMMARY FROM CLAUDE COMPACT" }],
-          usage: { input_tokens: 31, output_tokens: 37 }
-        }))
-      );
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "split"
-        }
-      }
-    });
-
-    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        messages: [{ role: "user", content: "large context ".repeat(80) }]
-      }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
-    });
-    const body = await response.text();
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
-    expect(response.headers.get("x-compactgate-claude-retry")).toBeNull();
-    expect(body).toContain("UNCOMPACTED_PRIMARY_OK");
-
-    expect(primaryRequests).toHaveLength(1);
-    expect(compactRequests).toHaveLength(0);
-    expect(primaryRequests[0].body).toContain("large context");
-  });
-
-  it("auto-compacts Claude reconnect requests at count 5 and reuses persisted summaries", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-app-"));
-    cleanup.push(() => rm(dir, { recursive: true, force: true }));
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      const body = await captureBody(req);
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body
-      });
-
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [
-            {
-              type: "text",
-              text: body.includes("PERSISTED SUMMARY FROM CLAUDE COMPACT")
-                ? `RETRIED_WITH_SUMMARY_${primaryRequests.length}`
-                : "UNCOMPACTED_SHOULD_NOT_RETURN"
-            }
-          ],
-          usage: { input_tokens: 41, output_tokens: 43 }
-        })
-      );
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [{ type: "text", text: "PERSISTED SUMMARY FROM CLAUDE COMPACT" }],
-          usage: { input_tokens: 47, output_tokens: 53 }
-        })
-      );
-    });
-    const configPatch = {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "split"
-        }
-      }
-    };
-    const requestBody = JSON.stringify({
-      model: "claude-opus-4-8",
-      metadata: { reconnect_count: 5 },
-      messages: [{ role: "user", content: "persisted large context ".repeat(80) }]
-    });
-    const headers = {
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    };
-
-    const firstApp = await startAppInDir(dir, undefined, undefined, configPatch);
-    const firstResponse = await fetch(`${firstApp.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: requestBody,
-      headers
-    });
-    const firstBody = await firstResponse.text();
-
-    expect(firstResponse.status).toBe(200);
-    expect(firstResponse.headers.get("x-compactgate-claude-retry")).toBe("compacted");
-    expect(firstResponse.headers.get("x-compactgate-claude-retry-reason")).toBe("reconnect");
-    expect(firstResponse.headers.get("x-compactgate-claude-summary")).toBe("generated");
-    expect(firstBody).toContain("RETRIED_WITH_SUMMARY_1");
-    expect(primaryRequests).toHaveLength(1);
-    expect(compactRequests).toHaveLength(1);
-    expect(compactRequests[0].body).toContain("persisted large context");
-    expect(primaryRequests[0].body).toContain("PERSISTED SUMMARY FROM CLAUDE COMPACT");
-    expect(primaryRequests[0].body).not.toContain("persisted large context");
-
-    await firstApp.close();
-
-    const restartedApp = await startAppInDir(dir, undefined, undefined, configPatch);
-    const secondResponse = await fetch(`${restartedApp.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: requestBody,
-      headers
-    });
-    const secondBody = await secondResponse.text();
-
-    expect(secondResponse.status).toBe(200);
-    expect(secondResponse.headers.get("x-compactgate-claude-retry")).toBe("compacted");
-    expect(secondResponse.headers.get("x-compactgate-claude-retry-reason")).toBe("reconnect");
-    expect(secondResponse.headers.get("x-compactgate-claude-summary")).toBe("cached");
-    expect(secondBody).toContain("RETRIED_WITH_SUMMARY_2");
-    expect(primaryRequests).toHaveLength(2);
-    expect(compactRequests).toHaveLength(1);
-    expect(primaryRequests[1].body).toContain("PERSISTED SUMMARY FROM CLAUDE COMPACT");
-    expect(primaryRequests[1].body).not.toContain("persisted large context");
-  });
-
-  it("reuses a cached Claude prefix summary and preserves new tail messages", async () => {
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      const body = await captureBody(req);
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY" }] }));
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [{ type: "text", text: "PREFIX SUMMARY" }]
-        })
-      );
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "split"
-        }
-      }
-    });
-    const headers = {
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    };
-
-    const firstResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        metadata: { reconnect_count: 5 },
-        messages: [{ role: "user", content: "shared prefix context" }]
-      }),
-      headers
-    });
-    await firstResponse.text();
-
-    const secondResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-opus-4-8",
-        metadata: { reconnect_count: 5 },
-        messages: [
-          { role: "user", content: "shared prefix context" },
-          { role: "user", content: "new tail message" }
-        ]
-      }),
-      headers
-    });
-    await secondResponse.text();
-
-    expect(firstResponse.headers.get("x-compactgate-claude-summary")).toBe("generated");
-    expect(secondResponse.headers.get("x-compactgate-claude-summary")).toBe("cached");
-    expect(compactRequests).toHaveLength(1);
-    expect(primaryRequests).toHaveLength(2);
-    expect(primaryRequests[1].body).toContain("PREFIX SUMMARY");
-    expect(primaryRequests[1].body).toContain("new tail message");
-    expect(primaryRequests[1].body).not.toContain("shared prefix context");
-  });
-
-  it("uses the configured Claude compact summary model without rewriting the primary retry model", async () => {
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_AFTER_SUMMARY" }] }));
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          type: "message",
-          content: [{ type: "text", text: "SUMMARY USING COMPACT MODEL" }]
-        })
-      );
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
+          base_url: `${claudePrimary.url}/anyrouter`,
           api_key: "saved-claude-primary-token"
         },
         compact: {
           base_url: claudeCompact.url,
           api_key: "saved-claude-compact-token",
           upstream_mode: "split",
-          model_override: "claude-summary-model"
+          model_override: "claude-compact-manual"
         }
       }
     });
 
-    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    };
+    const armingResponse = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
       method: "POST",
       body: JSON.stringify({
-        model: "claude-original-model",
-        metadata: { reconnect_count: 5 },
-        messages: [{ role: "user", content: "context for compact model override" }]
+        model: "claude-primary-model",
+        metadata: { reconnect_count: 3 },
+        messages: [{ role: "user", content: "large AnyRouter context ".repeat(40) }]
       }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
+      headers
     });
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-compactgate-claude-summary")).toBe("generated");
-    expect(compactRequests).toHaveLength(1);
+    expect(armingResponse.status).toBe(200);
+    expect(armingResponse.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(await armingResponse.text()).toContain("PRIMARY_OK");
     expect(primaryRequests).toHaveLength(1);
-    expect(JSON.parse(compactRequests[0].body).model).toBe("claude-summary-model");
-    expect(JSON.parse(primaryRequests[0].body).model).toBe("claude-original-model");
-    expect(primaryRequests[0].body).toContain("SUMMARY USING COMPACT MODEL");
-  });
-
-  it("can reuse the Claude primary upstream for compact summary generation", async () => {
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      const body = await captureBody(req);
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      if (body.includes("Your task is to create a detailed summary")) {
-        res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY ROUTE SUMMARY" }] }));
-        return;
-      }
-
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY RETRY" }] }));
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT" }] }));
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token",
-          upstream_mode: "primary"
-        }
-      }
-    });
-
-    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
-      method: "POST",
-      body: JSON.stringify({
-        model: "claude-original-model",
-        metadata: { reconnect_count: 5 },
-        messages: [{ role: "user", content: "context for primary-mode compact" }]
-      }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("x-compactgate-claude-summary")).toBe("generated");
-    expect(primaryRequests).toHaveLength(2);
     expect(compactRequests).toHaveLength(0);
+    expect(primaryRequests[0].url).toBe("/anyrouter/v1/messages?beta=true");
     expect(primaryRequests[0].headers["anthropic-api-key"]).toBe("saved-claude-primary-token");
-    expect(primaryRequests[0].body).toContain("Your task is to create a detailed summary");
-    expect(primaryRequests[1].body).toContain("PRIMARY ROUTE SUMMARY");
-  });
-
-  it("does not route Claude manual compact prompts to the compact route", async () => {
-    const primaryRequests: CapturedRequest[] = [];
-    const compactRequests: CapturedRequest[] = [];
-    const claudePrimary = await startClaudeUpstream(async (req, res) => {
-      primaryRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY" }] }));
-    });
-    const claudeCompact = await startClaudeUpstream(async (req, res) => {
-      compactRequests.push({
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      });
-      res.writeHead(502, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: { type: "bad_gateway", message: "compact failed" } }));
-    });
-    const app = await startApp(undefined, undefined, {
-      claude: {
-        primary: {
-          base_url: claudePrimary.url,
-          api_key: "saved-claude-primary-token"
-        },
-        compact: {
-          base_url: claudeCompact.url,
-          api_key: "saved-claude-compact-token"
-        }
-      }
-    });
 
     const manualCompactPrompt = [
       "Your task is to create a detailed summary of the conversation so far.",
@@ -1820,26 +1350,313 @@ describe("CompactGate HTTP server", () => {
       "Summarize the previous context.",
       "</summary>"
     ].join("\n");
-    const response = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+    const compactResponse = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-original-manual",
+        messages: [{ role: "user", content: [{ type: "text", text: manualCompactPrompt }] }]
+      }),
+      headers
+    });
+
+    expect(compactResponse.status).toBe(200);
+    expect(compactResponse.headers.get("x-compactgate-claude-route")).toBe("compact");
+    expect(compactResponse.headers.get("x-compactgate-claude-retry")).toBeNull();
+    expect(await compactResponse.text()).toContain("COMPACT_OK");
+    expect(primaryRequests).toHaveLength(1);
+    expect(compactRequests).toHaveLength(1);
+    expect(compactRequests[0].url).toBe("/v1/messages?beta=true");
+    expect(compactRequests[0].headers["anthropic-api-key"]).toBe("saved-claude-compact-token");
+    expect(JSON.parse(compactRequests[0].body).model).toBe("claude-compact-manual");
+    expect(compactRequests[0].body).toContain("Your task is to create a detailed summary");
+
+    const secondCompactResponse = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-original-manual",
+        messages: [{ role: "user", content: [{ type: "text", text: manualCompactPrompt }] }]
+      }),
+      headers
+    });
+
+    expect(secondCompactResponse.status).toBe(200);
+    expect(secondCompactResponse.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(await secondCompactResponse.text()).toContain("PRIMARY_OK");
+    expect(primaryRequests).toHaveLength(2);
+    expect(compactRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[1].body).model).toBe("claude-original-manual");
+  });
+
+  it("does not arm manual Claude compact routing when reconnect count is below threshold", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const claudePrimary = await startClaudeUpstream(async (req, res) => {
+      primaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_OK" }] }));
+    });
+    const claudeCompact = await startClaudeUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT_OK" }] }));
+    });
+    setEnv("COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES", "128");
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claudePrimary.url}/anyrouter`,
+          api_key: "saved-claude-primary-token"
+        },
+        compact: {
+          base_url: claudeCompact.url,
+          api_key: "saved-claude-compact-token",
+          upstream_mode: "split"
+        }
+      }
+    });
+
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    };
+    const armingResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-primary-model",
+        metadata: { reconnect_count: 2 },
+        messages: [{ role: "user", content: "large AnyRouter context ".repeat(40) }]
+      }),
+      headers
+    });
+    await armingResponse.text();
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
       method: "POST",
       body: JSON.stringify({
         model: "claude-opus-4-8",
-        messages: [{ role: "user", content: [{ type: "text", text: manualCompactPrompt }] }]
+        messages: [{ role: "user", content: [{ type: "text", text: claudeManualCompactPrompt() }] }]
       }),
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      }
+      headers
     });
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
-    expect(response.headers.get("x-compactgate-claude-retry")).toBeNull();
-    expect(await response.text()).toContain("PRIMARY");
-    expect(primaryRequests).toHaveLength(1);
+    expect(primaryRequests).toHaveLength(2);
     expect(compactRequests).toHaveLength(0);
-    expect(primaryRequests[0].headers["anthropic-api-key"]).toBe("saved-claude-primary-token");
-    expect(primaryRequests[0].body).toContain("Your task is to create a detailed summary");
+  });
+
+  it("does not arm manual Claude compact routing when the AnyRouter reconnect body is below size threshold", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const claudePrimary = await startClaudeUpstream(async (req, res) => {
+      primaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_OK" }] }));
+    });
+    const claudeCompact = await startClaudeUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT_OK" }] }));
+    });
+    setEnv("COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES", "10000");
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claudePrimary.url}/anyrouter`,
+          api_key: "saved-claude-primary-token"
+        },
+        compact: {
+          base_url: claudeCompact.url,
+          api_key: "saved-claude-compact-token",
+          upstream_mode: "split"
+        }
+      }
+    });
+
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    };
+    const armingResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-primary-model",
+        metadata: { reconnect_count: 3 },
+        messages: [{ role: "user", content: "small context" }]
+      }),
+      headers
+    });
+    await armingResponse.text();
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: [{ type: "text", text: claudeManualCompactPrompt() }] }]
+      }),
+      headers
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(primaryRequests).toHaveLength(2);
+    expect(compactRequests).toHaveLength(0);
+  });
+
+  it("does not arm manual Claude compact routing for non-AnyRouter Claude upstreams", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const claudePrimary = await startClaudeUpstream(async (req, res) => {
+      primaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_OK" }] }));
+    });
+    const claudeCompact = await startClaudeUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT_OK" }] }));
+    });
+    setEnv("COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES", "128");
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: claudePrimary.url,
+          api_key: "saved-claude-primary-token"
+        },
+        compact: {
+          base_url: claudeCompact.url,
+          api_key: "saved-claude-compact-token",
+          upstream_mode: "split"
+        }
+      }
+    });
+
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    };
+    const armingResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-primary-model",
+        metadata: { reconnect_count: 3 },
+        messages: [{ role: "user", content: "large non AnyRouter context ".repeat(40) }]
+      }),
+      headers
+    });
+    await armingResponse.text();
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: [{ type: "text", text: claudeManualCompactPrompt() }] }]
+      }),
+      headers
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(primaryRequests).toHaveLength(2);
+    expect(compactRequests).toHaveLength(0);
+  });
+
+  it("does not arm manual Claude compact routing from non-exact reconnect fields", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const claudePrimary = await startClaudeUpstream(async (req, res) => {
+      primaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "PRIMARY_OK" }] }));
+    });
+    const claudeCompact = await startClaudeUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "COMPACT_OK" }] }));
+    });
+    setEnv("COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES", "128");
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claudePrimary.url}/anyrouter`,
+          api_key: "saved-claude-primary-token"
+        },
+        compact: {
+          base_url: claudeCompact.url,
+          api_key: "saved-claude-compact-token",
+          upstream_mode: "split"
+        }
+      }
+    });
+
+    const headers = {
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    };
+    const armingResponse = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-primary-model",
+        metadata: { reconnect: { count: 5 } },
+        messages: [{ role: "user", content: "large AnyRouter context ".repeat(40) }]
+      }),
+      headers
+    });
+    await armingResponse.text();
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: [{ type: "text", text: claudeManualCompactPrompt() }] }]
+      }),
+      headers
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
+    expect(primaryRequests).toHaveLength(2);
+    expect(compactRequests).toHaveLength(0);
   });
 
   it("uses an HTTP CONNECT proxy for HTTPS Claude upstream requests", async () => {
@@ -2680,6 +2497,16 @@ async function waitForCaptureRecords(dir: string, minCount: number) {
 function setEnv(key: string, value: string) {
   process.env[key] = value;
   cleanupEnvKeys.add(key);
+}
+
+function claudeManualCompactPrompt() {
+  return [
+    "Your task is to create a detailed summary of the conversation so far.",
+    "CRITICAL: Respond with TEXT ONLY.",
+    "<summary>",
+    "Summarize the previous context.",
+    "</summary>"
+  ].join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

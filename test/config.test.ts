@@ -276,6 +276,85 @@ describe("ConfigStore", () => {
     expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
   });
 
+  it("syncs runtime config when updating active scoped profiles", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.saveProfile("codex", "Codex active", {
+      primary: { base_url: "http://127.0.0.1:9801/v1" },
+      compact: {
+        base_url: "http://127.0.0.1:9802/v1",
+        model_mode: "custom",
+        model_override: "codex-active-model"
+      }
+    });
+    await store.saveProfile("codex", "Codex inactive", {
+      primary: { base_url: "http://127.0.0.1:9811/v1" },
+      compact: { base_url: "http://127.0.0.1:9812/v1" }
+    });
+    await store.saveProfile("claude", "Claude active", {
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9821" },
+        compact: { base_url: "http://127.0.0.1:9822", upstream_mode: "primary" }
+      }
+    });
+
+    const saved = store.get();
+    const codexActiveId = saved.profile_scopes?.codex?.profiles?.find((profile) => profile.name === "Codex active")?.id ?? "";
+    const codexInactiveId = saved.profile_scopes?.codex?.profiles?.find((profile) => profile.name === "Codex inactive")?.id ?? "";
+    const claudeActiveId = saved.profile_scopes?.claude?.profiles?.find((profile) => profile.name === "Claude active")?.id ?? "";
+    expect(codexActiveId).toBeTruthy();
+    expect(codexInactiveId).toBeTruthy();
+    expect(claudeActiveId).toBeTruthy();
+
+    await store.applyProfile("codex", codexActiveId);
+    await store.applyProfile("claude", claudeActiveId);
+    await store.updateProfile("codex", codexActiveId, "Codex active", {
+      primary: { base_url: "http://127.0.0.1:9901/v1" },
+      compact: { model_override: "codex-updated-model" },
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9998" }
+      }
+    });
+
+    let updated = store.get();
+    expect(updated.primary.base_url).toBe("http://127.0.0.1:9901/v1");
+    expect(updated.compact.model_override).toBe("codex-updated-model");
+    expect(updated.claude.primary.base_url).toBe("http://127.0.0.1:9821");
+    expect(updated.profile_scopes?.codex?.active_profile_id).toBe(codexActiveId);
+    expect(updated.profile_scopes?.claude?.active_profile_id).toBe(claudeActiveId);
+
+    await store.updateProfile("claude", claudeActiveId, "Claude active", {
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9921" },
+        compact: { base_url: "http://127.0.0.1:9922", upstream_mode: "split" }
+      },
+      primary: { base_url: "http://127.0.0.1:9999/v1" }
+    });
+
+    updated = store.get();
+    expect(updated.primary.base_url).toBe("http://127.0.0.1:9901/v1");
+    expect(updated.claude.primary.base_url).toBe("http://127.0.0.1:9921");
+    expect(updated.claude.compact.base_url).toBe("http://127.0.0.1:9922");
+    expect(updated.claude.compact.upstream_mode).toBe("split");
+
+    await store.updateProfile("codex", codexInactiveId, "Codex inactive", {
+      primary: { base_url: "http://127.0.0.1:9931/v1" },
+      compact: { model_override: "inactive-updated-model" }
+    });
+
+    updated = store.get();
+    expect(updated.primary.base_url).toBe("http://127.0.0.1:9901/v1");
+    expect(updated.compact.model_override).toBe("codex-updated-model");
+    expect(
+      updated.profile_scopes?.codex?.profiles?.find((profile) => profile.id === codexInactiveId)?.config
+    ).toMatchObject({
+      primary: { base_url: "http://127.0.0.1:9931/v1" },
+      compact: { model_override: "inactive-updated-model" }
+    });
+  });
+
   it("migrates legacy combined profiles into scoped fragments and dedupes Claude profiles", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
     cleanupPaths.push(dir);

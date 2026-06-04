@@ -2195,12 +2195,17 @@ h3 {
 
 .profile-item-actions .solid-button,
 .profile-item-actions .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
   min-height: 38px;
   padding: 0.55rem 0.72rem;
   font-size: 0.78rem;
   line-height: 1.22;
-  white-space: normal;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-danger-button {

@@ -13,7 +13,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import type {
   CompactGateConfig,
@@ -28,11 +28,6 @@ import type {
   StudioSnapshotEvent
 } from "../shared/types.js";
 import { CompactionBridgeStore } from "./compaction-bridge.js";
-import {
-  type ClaudeSummaryRecord,
-  ClaudeSummaryStore,
-  resolveClaudeSummaryDatabasePath
-} from "./claude-summary-store.js";
 import { ConfigError, ConfigStore } from "./config.js";
 import { resolveRouteCredential } from "./credentials.js";
 import {
@@ -85,27 +80,13 @@ const STATIC_MIME_TYPES: Record<string, string> = {
 };
 
 const ANTHROPIC_PROXY_PREFIX = "/anthropic";
-const CLAUDE_AUTO_COMPACT_SUMMARY_TOKENS = 512;
-const CLAUDE_RECONNECT_AUTO_COMPACT_MIN_COUNT = 5;
+const CLAUDE_ANYROUTER_COMPACT_MIN_RECONNECT_COUNT = 3;
+const DEFAULT_CLAUDE_ANYROUTER_COMPACT_MIN_BODY_BYTES = 1_101_329;
 
 type ClaudeSubRoute = "primary" | "compact";
-type ClaudeRetryReason = "none" | "reconnect";
 
-interface ClaudeSummaryContext {
-  cacheKey: string;
-  messageCount: number;
-  sourceModel: string | null;
-}
-
-interface ClaudeRetryAttempt {
-  result: BufferedUpstreamResult;
-  upstream: URL;
-  requestHeaders: Record<string, string>;
-  requestBody: Buffer;
-}
-
-interface GeneratedClaudeRetryAttempt extends ClaudeRetryAttempt {
-  summary: string;
+interface ClaudeManualCompactRoutingState {
+  armed: boolean;
 }
 
 let cachedHttpsProxyAgentKey: string | null = null;
@@ -124,10 +105,6 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
 
 function createDebugCaptureWriter(): DebugCaptureWriter {
   return DebugCaptureWriter.fromEnv();
-}
-
-function createClaudeSummaryStore(configStore: ConfigStore): ClaudeSummaryStore {
-  return new ClaudeSummaryStore(resolveClaudeSummaryDatabasePath(configStore.getConfigPath()));
 }
 
 interface StudioSseClient {
@@ -212,9 +189,9 @@ export function createCompactGateApp(
   logger = createRequestLogger(configStore),
   captureWriter = createDebugCaptureWriter(),
   compactionBridge = new CompactionBridgeStore(),
-  claudeSummaryStore = createClaudeSummaryStore(configStore),
   studioEvents = new StudioEventBroadcaster()
 ): CompactGateApp {
+  const claudeManualCompactRouting: ClaudeManualCompactRoutingState = { armed: false };
   return {
     handler: (req, res) => {
       void routeRequest(
@@ -224,8 +201,8 @@ export function createCompactGateApp(
         logger,
         captureWriter,
         compactionBridge,
-        claudeSummaryStore,
-        studioEvents
+        studioEvents,
+        claudeManualCompactRouting
       );
     }
   };
@@ -236,7 +213,6 @@ export function createCompactGateServer(
   logger = createRequestLogger(configStore),
   captureWriter = createDebugCaptureWriter(),
   compactionBridge = new CompactionBridgeStore(),
-  claudeSummaryStore = createClaudeSummaryStore(configStore),
   studioEvents = new StudioEventBroadcaster()
 ): http.Server {
   const app = createCompactGateApp(
@@ -244,13 +220,11 @@ export function createCompactGateServer(
     logger,
     captureWriter,
     compactionBridge,
-    claudeSummaryStore,
     studioEvents
   );
   const server = http.createServer(app.handler);
   server.once("close", () => {
     logger.close();
-    claudeSummaryStore.close();
     studioEvents.close();
   });
   return server;
@@ -263,8 +237,8 @@ async function routeRequest(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
-  claudeSummaryStore: ClaudeSummaryStore,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  claudeManualCompactRouting: ClaudeManualCompactRoutingState
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://compactgate.local");
 
@@ -282,8 +256,8 @@ async function routeRequest(
         configStore,
         logger,
         captureWriter,
-        claudeSummaryStore,
-        studioEvents
+        studioEvents,
+        claudeManualCompactRouting
       );
       return;
     }
@@ -534,8 +508,8 @@ async function proxyClaudeRequest(
   configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
-  claudeSummaryStore: ClaudeSummaryStore,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  claudeManualCompactRouting: ClaudeManualCompactRoutingState
 ): Promise<void> {
   const startedAt = performance.now();
   const config = configStore.get();
@@ -545,7 +519,6 @@ async function proxyClaudeRequest(
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
   let claudeRoute: ClaudeSubRoute = "primary";
   let responseClaudeRoute: ClaudeSubRoute = "primary";
-  let retryReason: ClaudeRetryReason = "none";
   let requestHeaders: Record<string, string> = {};
   let upstreamBody: Buffer = Buffer.alloc(0);
   let status = 502;
@@ -557,6 +530,7 @@ async function proxyClaudeRequest(
   let requestType: RequestTransport = "http";
   let firstTokenMs: number | null = null;
   let sourceModel: string | null = null;
+  let targetModel: string | null = null;
   let usage: TokenUsageMetrics = emptyUsageMetrics();
 
   try {
@@ -564,94 +538,30 @@ async function proxyClaudeRequest(
     requestMetadata = extractRequestMetadata(upstreamPath, rawBody);
     requestType = requestMetadata.requestType;
     sourceModel = extractSourceModel(rawBody);
-    claudeRoute = "primary";
-    upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
-    upstreamBody = rawBody;
+    const isManualCompact = isClaudeManualCompactRequest(upstreamPath, rawBody);
+    const shouldRouteManualCompactToCompact = isManualCompact && claudeManualCompactRouting.armed;
+    if (isManualCompact) {
+      claudeManualCompactRouting.armed = false;
+    } else if (shouldArmClaudeManualCompactRouting(config, upstreamPath, rawBody)) {
+      claudeManualCompactRouting.armed = true;
+    }
+
+    claudeRoute = shouldRouteManualCompactToCompact ? "compact" : "primary";
+    targetModel = claudeRoute === "compact"
+      ? readStringField(config.claude.compact.model_override) ?? sourceModel
+      : sourceModel;
+    upstream = buildClaudeUpstreamUrl(
+      claudeRoute === "compact" ? claudeCompactUpstreamBaseUrl(config) : config.claude.primary.base_url,
+      upstreamPath,
+      url.search
+    );
+    upstreamBody = claudeRoute === "compact"
+      ? rewriteClaudeManualCompactBody(rawBody, config.claude.compact.model_override)
+      : rawBody;
     const auth = resolveClaudeCredential(claudeRoute, config);
     requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
-    const canAutoCompactRetry =
-      shouldConsiderClaudeAutoCompact(upstreamPath, rawBody);
-    const summaryContext = canAutoCompactRetry
-      ? buildClaudeSummaryContext(rawBody, sourceModel)
-      : null;
 
     let finalResult: BufferedUpstreamResult | null = null;
-    const cachedSummary =
-      canAutoCompactRetry && summaryContext
-        ? claudeSummaryStore.get(summaryContext.cacheKey) ??
-          findCachedClaudePrefixSummary(claudeSummaryStore, rawBody, sourceModel)
-        : null;
-
-    if (cachedSummary) {
-      retryReason = "reconnect";
-      const retry = await retryClaudePrimaryWithSummary({
-        req,
-        res,
-        config,
-        upstreamPath,
-        search: url.search,
-        startedAt,
-        originalBody: rawBody,
-        summary: cachedSummary.summary,
-        summarizedMessageCount: cachedSummary.messageCount
-      });
-      if (retry) {
-        const retryResult = retry.result;
-        finalResult = retryResult;
-        upstream = retry.upstream;
-        requestHeaders = retry.requestHeaders;
-        upstreamBody = retry.requestBody;
-        responseClaudeRoute = "primary";
-        copyResponseHeaders(retryResult.responseHeaders, res);
-        res.setHeader("x-compactgate-route", route);
-        res.setHeader("x-compactgate-claude-route", responseClaudeRoute);
-        res.setHeader("x-compactgate-claude-retry", "compacted");
-        res.setHeader("x-compactgate-claude-retry-reason", retryReason);
-        res.setHeader("x-compactgate-claude-summary", "cached");
-        res.setHeader("x-compactgate-request-id", requestId);
-        res.writeHead(retryResult.status);
-        res.end(retryResult.responseBody);
-      }
-    }
-
-    if (!finalResult && canAutoCompactRetry) {
-      retryReason = "reconnect";
-      const retry = await retryClaudeWithCompactSummary({
-        req,
-        res,
-        config,
-        upstreamPath,
-        search: url.search,
-        startedAt,
-        originalBody: rawBody,
-        sourceModel,
-        originalErrorSummary: null,
-        requestId
-      });
-      if (retry) {
-        if (summaryContext) {
-          claudeSummaryStore.put({
-            ...summaryContext,
-            summary: retry.summary
-          });
-        }
-        const retryResult = retry.result;
-        finalResult = retryResult;
-        upstream = retry.upstream;
-        requestHeaders = retry.requestHeaders;
-        upstreamBody = retry.requestBody;
-        responseClaudeRoute = "primary";
-        copyResponseHeaders(retryResult.responseHeaders, res);
-        res.setHeader("x-compactgate-route", route);
-        res.setHeader("x-compactgate-claude-route", responseClaudeRoute);
-        res.setHeader("x-compactgate-claude-retry", "compacted");
-        res.setHeader("x-compactgate-claude-retry-reason", retryReason);
-        res.setHeader("x-compactgate-claude-summary", "generated");
-        res.setHeader("x-compactgate-request-id", requestId);
-        res.writeHead(retryResult.status);
-        res.end(retryResult.responseBody);
-      }
-    }
 
     if (!finalResult) {
       const result = await sendBufferedUpstreamRequest({
@@ -662,7 +572,7 @@ async function proxyClaudeRequest(
         timeoutMs: config.timeouts.claude_ms,
         timeoutMessage: "Claude upstream request timed out.",
         requestHeaders,
-        body: rawBody,
+        body: upstreamBody,
         extraResponseHeaders: {
           "x-compactgate-route": route,
           "x-compactgate-claude-route": claudeRoute,
@@ -722,7 +632,7 @@ async function proxyClaudeRequest(
       upstreamHost: upstream.host,
       requestId,
       sourceModel,
-      targetModel: sourceModel,
+      targetModel,
       firstTokenMs,
       usage,
       errorSummary
@@ -738,7 +648,7 @@ async function proxyClaudeRequest(
       upstream_url: upstream.toString(),
       upstream_host: upstream.host,
       source_model: sourceModel,
-      target_model: sourceModel,
+      target_model: targetModel,
       compact_bridge_replacements: 0,
       incoming_request: {
         headers: serializeHeaders(req.headers),
@@ -1636,9 +1546,21 @@ function claudeCompactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.claude.compact.base_url;
 }
 
-function shouldConsiderClaudeAutoCompact(requestPath: string, rawBody: Buffer): boolean {
+function shouldArmClaudeManualCompactRouting(
+  config: CompactGateConfig,
+  requestPath: string,
+  rawBody: Buffer
+): boolean {
+  if (!isClaudeAnyRouterPrimary(config)) {
+    return false;
+  }
+
   const endpoint = endpointFromPath(requestPath);
   if (endpoint !== "/messages") {
+    return false;
+  }
+
+  if (rawBody.byteLength < claudeAnyRouterCompactMinBodyBytes()) {
     return false;
   }
 
@@ -1648,7 +1570,60 @@ function shouldConsiderClaudeAutoCompact(requestPath: string, rawBody: Buffer): 
   }
 
   const reconnectCount = readClaudeReconnectCount(parsed);
-  return reconnectCount !== null && reconnectCount >= CLAUDE_RECONNECT_AUTO_COMPACT_MIN_COUNT;
+  return reconnectCount !== null && reconnectCount >= CLAUDE_ANYROUTER_COMPACT_MIN_RECONNECT_COUNT;
+}
+
+function isClaudeAnyRouterPrimary(config: CompactGateConfig): boolean {
+  try {
+    const baseUrl = new URL(config.claude.primary.base_url);
+    const marker = `${baseUrl.hostname} ${baseUrl.pathname}`.toLowerCase();
+    return marker.includes("anyrouter");
+  } catch {
+    return false;
+  }
+}
+
+function claudeAnyRouterCompactMinBodyBytes(): number {
+  const rawValue = process.env.COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES;
+  const parsed = rawValue ? Number.parseInt(rawValue, 10) : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_CLAUDE_ANYROUTER_COMPACT_MIN_BODY_BYTES;
+  }
+
+  return parsed;
+}
+
+function isClaudeManualCompactRequest(requestPath: string, rawBody: Buffer): boolean {
+  if (endpointFromPath(requestPath) !== "/messages") {
+    return false;
+  }
+
+  const parsed = parseJsonRecord(rawBody);
+  if (!parsed || !Array.isArray(parsed.messages)) {
+    return false;
+  }
+
+  const text = collectTextContent(parsed.messages).toLowerCase();
+  return text.includes("your task is to create a detailed summary of the conversation so far") &&
+    text.includes("critical: respond with text only") &&
+    text.includes("<summary>");
+}
+
+function rewriteClaudeManualCompactBody(rawBody: Buffer, compactModelOverride: string): Buffer {
+  const model = readStringField(compactModelOverride);
+  if (!model) {
+    return rawBody;
+  }
+
+  const parsed = parseJsonRecord(rawBody);
+  if (!parsed) {
+    return rawBody;
+  }
+
+  return Buffer.from(JSON.stringify({
+    ...parsed,
+    model
+  }));
 }
 
 function readClaudeReconnectCount(value: unknown, depth = 0): number | null {
@@ -1689,312 +1664,33 @@ function maxNumbers(values: Array<number | null>): number | null {
   return numbers.length > 0 ? Math.max(...numbers) : null;
 }
 
-function buildClaudeSummaryContext(
-  rawBody: Buffer,
-  sourceModel: string | null,
-  messageLimit?: number
-): ClaudeSummaryContext | null {
-  const parsed = parseJsonRecord(rawBody);
-  if (!parsed || !Array.isArray(parsed.messages)) {
-    return null;
-  }
-
-  const messages = typeof messageLimit === "number"
-    ? parsed.messages.slice(0, messageLimit)
-    : parsed.messages;
-  if (messages.length === 0) {
-    return null;
-  }
-
-  const model = readStringField(parsed.model) ?? sourceModel;
-  const context = {
-    version: 1,
-    model,
-    system: parsed.system ?? null,
-    messages,
-    tools: parsed.tools ?? null,
-    tool_choice: parsed.tool_choice ?? null
-  };
-  const digest = createHash("sha256")
-    .update(stableJsonStringify(context))
-    .digest("hex");
-
-  return {
-    cacheKey: `claude-summary-v1:${digest}`,
-    messageCount: messages.length,
-    sourceModel: model
-  };
-}
-
-function findCachedClaudePrefixSummary(
-  claudeSummaryStore: ClaudeSummaryStore,
-  rawBody: Buffer,
-  sourceModel: string | null
-): ClaudeSummaryRecord | null {
-  const parsed = parseJsonRecord(rawBody);
-  if (!parsed || !Array.isArray(parsed.messages) || parsed.messages.length < 2) {
-    return null;
-  }
-
-  for (let count = parsed.messages.length - 1; count >= 1; count -= 1) {
-    const prefixContext = buildClaudeSummaryContext(rawBody, sourceModel, count);
-    if (!prefixContext) {
-      continue;
-    }
-
-    const cached = claudeSummaryStore.get(prefixContext.cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-
-  return null;
-}
-
-async function retryClaudePrimaryWithSummary({
-  req,
-  res,
-  config,
-  upstreamPath,
-  search,
-  startedAt,
-  originalBody,
-  summary,
-  summarizedMessageCount
-}: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  config: CompactGateConfig;
-  upstreamPath: string;
-  search: string;
-  startedAt: number;
-  originalBody: Buffer;
-  summary: string;
-  summarizedMessageCount?: number;
-}): Promise<ClaudeRetryAttempt | null> {
-  const retryBody = buildClaudeRetryBody(originalBody, summary, summarizedMessageCount);
-  if (!retryBody) {
-    return null;
-  }
-
-  const primaryUpstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, search);
-  const primaryHeaders = buildAnthropicUpstreamHeaders(
-    req.headers,
-    resolveClaudeCredential("primary", config).apiKey
-  );
-  const retryResult = await sendBufferedUpstreamRequest({
-    req,
-    res,
-    upstream: primaryUpstream,
-    startedAt,
-    timeoutMs: config.timeouts.claude_ms,
-    timeoutMessage: "Claude primary retry request timed out.",
-    requestHeaders: primaryHeaders,
-    body: retryBody,
-    extraResponseHeaders: {},
-    writeResponse: false
-  });
-
-  return {
-    result: retryResult,
-    upstream: primaryUpstream,
-    requestHeaders: primaryHeaders,
-    requestBody: retryBody
-  };
-}
-
-async function retryClaudeWithCompactSummary({
-  req,
-  res,
-  config,
-  upstreamPath,
-  search,
-  startedAt,
-  originalBody,
-  sourceModel,
-  originalErrorSummary,
-  requestId
-}: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  config: CompactGateConfig;
-  upstreamPath: string;
-  search: string;
-  startedAt: number;
-  originalBody: Buffer;
-  sourceModel: string | null;
-  originalErrorSummary: string | null;
-  requestId: string;
-}): Promise<GeneratedClaudeRetryAttempt | null> {
-  const compactBody = buildClaudeAutoCompactBody(
-    originalBody,
-    sourceModel,
-    originalErrorSummary,
-    config.claude.compact.model_override
-  );
-  if (!compactBody) {
-    return null;
-  }
-
-  const compactUpstream = buildClaudeUpstreamUrl(claudeCompactUpstreamBaseUrl(config), upstreamPath, search);
-  const compactHeaders = buildAnthropicUpstreamHeaders(
-    req.headers,
-    resolveClaudeCredential("compact", config).apiKey
-  );
-  const compactResult = await sendBufferedUpstreamRequest({
-    req,
-    res,
-    upstream: compactUpstream,
-    startedAt,
-    timeoutMs: config.timeouts.claude_ms,
-    timeoutMessage: "Claude compact retry request timed out.",
-    requestHeaders: compactHeaders,
-    body: compactBody,
-    extraResponseHeaders: {},
-    writeResponse: false
-  });
-
-  if (compactResult.status >= 400) {
-    return null;
-  }
-
-  const summary = extractClaudeSummaryText(compactResult.responseBody);
-  if (!summary) {
-    return null;
-  }
-
-  const retry = await retryClaudePrimaryWithSummary({
-    req,
-    res,
-    config,
-    upstreamPath,
-    search,
-    startedAt,
-    originalBody,
-    summary
-  });
-  if (!retry) {
-    return null;
-  }
-
-  return {
-    ...retry,
-    summary
-  };
-}
-
-function buildClaudeAutoCompactBody(
-  originalBody: Buffer,
-  sourceModel: string | null,
-  originalErrorSummary: string | null,
-  compactModelOverride: string
-): Buffer | null {
-  const parsed = parseJsonRecord(originalBody);
-  if (!parsed || !Array.isArray(parsed.messages)) {
-    return null;
-  }
-
-  const transcript = stringifyForClaudeSummary(parsed.messages);
-  const system = stringifyForClaudeSummary(parsed.system);
-  const model = readStringField(compactModelOverride) ?? sourceModel ?? readStringField(parsed.model) ?? "claude";
-  const prompt = [
-    "Your task is to create a detailed summary of the conversation so far.",
-    "CRITICAL: Respond with TEXT ONLY.",
-    "The proxy will use your response as replacement context for a retry to the primary Claude route.",
-    originalErrorSummary ? `Primary route error before compaction: ${originalErrorSummary}` : "",
-    system ? `<system>\n${system}\n</system>` : "",
-    `<conversation>\n${transcript}\n</conversation>`,
-    "<summary>"
-  ].filter((line) => line.length > 0).join("\n\n");
-
-  return Buffer.from(JSON.stringify({
-    model,
-    max_tokens: CLAUDE_AUTO_COMPACT_SUMMARY_TOKENS,
-    messages: [{ role: "user", content: prompt }]
-  }));
-}
-
-function buildClaudeRetryBody(
-  originalBody: Buffer,
-  summary: string,
-  summarizedMessageCount?: number
-): Buffer | null {
-  const parsed = parseJsonRecord(originalBody);
-  if (!parsed) {
-    return null;
-  }
-
-  const originalMessages = Array.isArray(parsed.messages) ? parsed.messages : [];
-  const preservedTail = typeof summarizedMessageCount === "number"
-    ? originalMessages.slice(Math.max(0, summarizedMessageCount))
-    : [];
-
-  const retryBody = {
-    ...parsed,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: [
-              "Continue from this compacted conversation summary.",
-              "",
-              summary
-            ].join("\n")
-          }
-        ]
-      },
-      ...preservedTail
-    ]
-  };
-
-  return Buffer.from(JSON.stringify(retryBody));
-}
-
-function extractClaudeSummaryText(responseBody: Buffer): string | null {
-  const parsed = parseJsonRecord(responseBody);
-  if (!parsed) {
-    return null;
-  }
-
-  const text = extractClaudeResponseTextContent(parsed.content);
-  return text.trim().length > 0 ? text.trim() : null;
-}
-
-function stringifyForClaudeSummary(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
 function readStringField(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function extractClaudeResponseTextContent(value: unknown): string {
+function collectTextContent(value: unknown, depth = 0): string {
+  if (depth > 10) {
+    return "";
+  }
+
   if (typeof value === "string") {
     return value;
   }
 
   if (!Array.isArray(value)) {
-    return "";
+    if (!isRecord(value)) {
+      return "";
+    }
+
+    return Object.entries(value)
+      .filter(([key]) => key !== "encrypted_content")
+      .map(([, child]) => collectTextContent(child, depth + 1))
+      .filter((item) => item.length > 0)
+      .join("\n");
   }
 
   return value
-    .map((item) => {
-      if (!isRecord(item)) {
-        return "";
-      }
-
-      if (typeof item.text === "string") {
-        return item.text;
-      }
-
-      return typeof item.thinking === "string" ? item.thinking : "";
-    })
+    .map((item) => collectTextContent(item, depth + 1))
     .filter((item) => item.length > 0)
     .join("\n");
 }
@@ -2244,29 +1940,6 @@ function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null {
       return null;
     }
   }
-}
-
-function stableJsonStringify(value: unknown): string {
-  return JSON.stringify(sortJsonValue(value));
-}
-
-function sortJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => sortJsonValue(item));
-  }
-
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    const child = value[key];
-    if (child !== undefined) {
-      sorted[key] = sortJsonValue(child);
-    }
-  }
-  return sorted;
 }
 
 function looksLikeGzip(buffer: Buffer): boolean {

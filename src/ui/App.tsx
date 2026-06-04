@@ -1235,7 +1235,7 @@ function HealthPage({
             route="compact"
             credentialScope="claude_compact"
             badgeLabel="Claude 压缩"
-          summary="仅用于 reconnect 自动摘要生成"
+            summary="仅用于已授权的下一次手动 compact"
             upstream={health?.claude.compact}
           />
       </section>
@@ -1426,8 +1426,8 @@ function RouteBoard({
             <div>
               <h3>Claude / Anthropic 兼容入口</h3>
               <p>
-                流量进入 <code>/anthropic</code> 后剥离前缀。手动 <code>/compact</code> 仍走主槽位，只有结构化
-                reconnect 计数达到 5 才触发自动摘要。
+                流量进入 <code>/anthropic</code> 后剥离前缀。手动 <code>/compact</code> 默认仍走主槽位；只有
+                AnyRouter 大请求在结构化 reconnect 计数达到 3 后，才授权下一次手动 compact 走压缩槽位。
               </p>
             </div>
           </div>
@@ -1439,9 +1439,9 @@ function RouteBoard({
               <strong>Claude 主槽位</strong>
             </div>
             <div className="route-rule-row">
-              <code>reconnect_count &gt;= 5</code>
-              <span>自动</span>
-              <strong>先摘要再回主槽位</strong>
+              <code>AnyRouter + reconnect_count &gt;= 3</code>
+              <span>授权</span>
+              <strong>下一次手动 compact</strong>
             </div>
           </div>
 
@@ -1449,28 +1449,28 @@ function RouteBoard({
             <div className="route-slot claude-slot">
               <span>Claude primary</span>
               <strong>{claudePrimaryHost}</strong>
-              <small>普通 Messages 与压缩后重试都回到这里</small>
+              <small>普通 Messages 与未授权手动 compact 都走这里</small>
             </div>
             <div className="route-slot compact-slot">
               <span>Claude compact</span>
               <strong>{claudeCompactTarget}</strong>
-              <small>{claudeCompactMode === "split" ? "独立摘要上游与密钥" : "复用 Claude 主上游与主密钥"}</small>
+              <small>{claudeCompactMode === "split" ? "独立手动 compact 上游与密钥" : "复用 Claude 主上游与主密钥"}</small>
             </div>
           </div>
 
-          <div className="auto-compact-loop" aria-label="Claude 自动压缩流程">
+          <div className="auto-compact-loop" aria-label="Claude 手动 compact 授权流程">
             <div>
               <span>触发</span>
               <p>
-                仅当 Claude Messages 请求里出现结构化 reconnect 计数，并且计数达到 <code>5</code> 或更高时触发。
-                普通大请求体、手动 <code>/compact</code> 文本和 primary 错误不会自动切到压缩槽位。
+                仅当 Claude 主路由指向 AnyRouter、Messages 请求体足够大，并且结构化 reconnect 计数达到
+                <code>3</code> 或更高时授权。普通大请求体、非 AnyRouter 上游和 primary 错误不会自动切到压缩槽位。
               </p>
             </div>
             <ol>
-              <li>命中 SQLite summary cache 时直接重试。</li>
-              <li>未命中时调用 Claude compact 生成 summary 并缓存。</li>
-              <li>携带 summary 重试 Claude primary。</li>
-              <li>最终响应仍来自 Claude primary。</li>
+              <li>满足条件的 reconnect 请求仍发送到 Claude primary。</li>
+              <li>代理只记录一次性授权，不生成 summary，也不重试当前请求。</li>
+              <li>下一次识别到 Claude Code 手动 compact prompt 时发送到 Claude compact。</li>
+              <li>授权被消费后，后续手动 compact 继续回到 Claude primary。</li>
             </ol>
           </div>
         </article>
@@ -1585,6 +1585,8 @@ function ProfileScopeCard({
           {profiles.map((profile) => {
             const isActive = profile.id === scopeState.active_profile_id;
             const isSelected = profile.id === selectedProfileId;
+            const updateLabel = isActive ? "保存并应用" : "保存档案";
+            const busyUpdateLabel = isActive ? "应用中..." : "保存中...";
             const cardClassName = [
               "profile-item",
               isActive ? "is-active" : "",
@@ -1635,7 +1637,7 @@ function ProfileScopeCard({
                       void onUpdateProfile(scope, profile.id);
                     }}
                   >
-                    {profileState === "updating" && isSelected ? "保存中..." : "保存到此档案"}
+                    {profileState === "updating" && isSelected ? busyUpdateLabel : updateLabel}
                   </button>
                   <button
                     className="ghost-button"
@@ -1893,7 +1895,7 @@ function ConfigPanel({
               <span className="route-chip claude">Claude</span>
               <div>
                 <h3 id="claude-route-config-title">Claude 路由</h3>
-                <p>Messages 走主路由；reconnect 自动摘要才使用压缩路由。</p>
+                <p>Messages 走主路由；只有已授权的下一次手动 compact 才使用压缩路由。</p>
               </div>
             </div>
 
@@ -1943,8 +1945,8 @@ function ConfigPanel({
                 baseUrlLabel="Claude 压缩路由 Base URL"
                 baseUrlHint={
                   form.claudeCompactUpstreamMode === "split"
-                    ? "仅在结构化 reconnect 计数达到 5 后，用于生成自动压缩摘要。"
-                    : "当前复用 Claude 主路由，这个地址会保留但暂不参与摘要请求。"
+                    ? "仅在 AnyRouter 大 reconnect 请求授权后，用于下一次手动 compact。"
+                    : "当前复用 Claude 主路由，这个地址会保留但暂不参与手动 compact 分流。"
                 }
                 apiKeyLabel="Claude 压缩路由 API Key"
                 apiKeyHint={
@@ -1952,7 +1954,7 @@ function ConfigPanel({
                     ? "保存后会删除当前已保存的 Claude 压缩路由密钥。"
                     : form.claudeCompactUpstreamMode === "split"
                       ? directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)
-                      : "当前 Claude compact 摘要请求复用主路由认证；这里的密钥会在切回独立分流后生效。"
+                      : "当前 Claude compact 分流复用主路由认证；这里的密钥会在切回独立分流后生效。"
                 }
                 baseUrl={form.claudeCompactBaseUrl}
                 apiKey={form.claudeCompactApiKey}
@@ -1980,17 +1982,17 @@ function ConfigPanel({
                 }
               />
 
-              <section className="route-config-card tone-compact" aria-label="Claude 压缩摘要模型">
+              <section className="route-config-card tone-compact" aria-label="Claude 手动 compact 模型">
                 <div className="route-config-card-head">
-                  <h4>Claude 摘要模型</h4>
+                  <h4>Claude 手动 compact 模型</h4>
                   <span className="route-chip compact">可选</span>
                 </div>
                 <Field
-                  label="Claude 压缩摘要模型"
-                  hint="留空会把原请求模型透传给摘要上游；填写后只改摘要请求，不改主路由重试模型。"
+                  label="Claude 手动 compact 模型"
+                  hint="留空会把原请求模型透传给 compact 上游；填写后只改被授权的手动 compact 请求。"
                 >
                   <input
-                    aria-label="Claude 压缩摘要模型"
+                    aria-label="Claude 手动 compact 模型"
                     value={form.claudeCompactModelOverride}
                     placeholder={config?.claude.compact.model_override || "例如 claude-sonnet-4-6"}
                     onChange={(event) =>
@@ -2053,7 +2055,7 @@ function ConfigPanel({
             <span className="mode-card-title">Claude Compact 上游模式</span>
             <p>
               {form.claudeCompactUpstreamMode === "split" ? "独立分流：" : "复用主上游："}
-              自动摘要请求
+              已授权的手动 compact 请求
               {form.claudeCompactUpstreamMode === "split"
                 ? " 使用 Claude 压缩路由 Base URL 与 API Key。"
                 : " 发送到 Claude 主路由，并复用 Claude 主路由密钥。"}
@@ -2542,7 +2544,7 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
             </div>
             <div>
               <span>总 Token</span>
-              <strong>{formatMetricNumber(entry.total_tokens)}</strong>
+              <strong>{formatMetricNumber(displayTotalTokens(entry))}</strong>
             </div>
           </div>
           <dl className="log-detail-grid">
@@ -2853,7 +2855,7 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
     >
-      <span className="token-total-pill">总 {formatMetricNumber(entry.total_tokens)}</span>
+      <span className="token-total-pill">总 {formatMetricNumber(displayTotalTokens(entry))}</span>
       {placement &&
         createPortal(
           <span
@@ -2885,7 +2887,7 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
             </span>
             <span className="token-tooltip-total">
               <em>总 Token</em>
-              <b>{formatMetricNumber(entry.total_tokens)}</b>
+              <b>{formatMetricNumber(displayTotalTokens(entry))}</b>
             </span>
           </span>,
           document.body
@@ -3424,15 +3426,61 @@ function uncachedInputTokens(entry: RequestLogEntry): number | null {
     return null;
   }
 
+  if (hasAdditiveCachedInput(entry)) {
+    return entry.input_tokens ?? 0;
+  }
+
   return Math.max(0, (entry.input_tokens ?? 0) - (entry.cached_input_tokens ?? 0));
 }
 
 function formatCacheHitRate(entry: RequestLogEntry): string {
-  if (!entry.input_tokens || entry.cached_input_tokens === null) {
+  if (entry.cached_input_tokens === null) {
     return "-";
   }
 
-  return `${Math.round((entry.cached_input_tokens / entry.input_tokens) * 100)}%`;
+  const denominator = hasAdditiveCachedInput(entry)
+    ? entry.cached_input_tokens + (entry.input_tokens ?? 0)
+    : entry.input_tokens;
+  if (!denominator) {
+    return "-";
+  }
+
+  return `${Math.min(100, Math.round((entry.cached_input_tokens / denominator) * 100))}%`;
+}
+
+function displayTotalTokens(entry: RequestLogEntry): number | null {
+  const inputTokens = entry.input_tokens ?? 0;
+  const outputTokens = entry.output_tokens ?? 0;
+  const cachedInputTokens = entry.cached_input_tokens ?? 0;
+  const cachedOutputTokens = entry.cached_output_tokens ?? 0;
+  const hasAnyToken =
+    entry.input_tokens !== null ||
+    entry.output_tokens !== null ||
+    entry.cached_input_tokens !== null ||
+    entry.cached_output_tokens !== null ||
+    entry.total_tokens !== null;
+
+  if (!hasAnyToken) {
+    return null;
+  }
+
+  const floor = inputTokens +
+    outputTokens +
+    (hasAdditiveCachedInput(entry) ? cachedInputTokens : 0) +
+    (hasAdditiveCachedOutput(entry) ? cachedOutputTokens : 0);
+  return Math.max(entry.total_tokens ?? 0, floor);
+}
+
+function hasAdditiveCachedInput(entry: RequestLogEntry): boolean {
+  return entry.cached_input_tokens !== null &&
+    entry.input_tokens !== null &&
+    entry.cached_input_tokens > entry.input_tokens;
+}
+
+function hasAdditiveCachedOutput(entry: RequestLogEntry): boolean {
+  return entry.cached_output_tokens !== null &&
+    entry.output_tokens !== null &&
+    entry.cached_output_tokens > entry.output_tokens;
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -15,6 +15,8 @@ export interface TokenUsageMetrics {
   cachedInputTokens: number | null;
   cachedOutputTokens: number | null;
   totalTokens: number | null;
+  additiveCachedInputTokens?: boolean;
+  additiveCachedOutputTokens?: boolean;
 }
 
 const EMPTY_USAGE: TokenUsageMetrics = {
@@ -133,16 +135,26 @@ function mergeUsage(
   const outputTokens = next.outputTokens ?? previous.outputTokens;
   const cachedInputTokens = next.cachedInputTokens ?? previous.cachedInputTokens;
   const cachedOutputTokens = next.cachedOutputTokens ?? previous.cachedOutputTokens;
-  const derivedTotal =
-    inputTokens !== null || outputTokens !== null ? (inputTokens ?? 0) + (outputTokens ?? 0) : null;
-  const explicitTotal = pickUsableTotal(next.totalTokens, previous.totalTokens, derivedTotal);
+  const additiveCachedInputTokens = Boolean(next.additiveCachedInputTokens || previous.additiveCachedInputTokens);
+  const additiveCachedOutputTokens = Boolean(next.additiveCachedOutputTokens || previous.additiveCachedOutputTokens);
+  const totalFloor = usageTotalFloor({
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    cachedOutputTokens,
+    additiveCachedInputTokens,
+    additiveCachedOutputTokens
+  });
+  const explicitTotal = pickUsableTotal(next.totalTokens, previous.totalTokens, totalFloor);
 
   return {
     inputTokens,
     outputTokens,
     cachedInputTokens,
     cachedOutputTokens,
-    totalTokens: explicitTotal ?? derivedTotal
+    totalTokens: explicitTotal ?? totalFloor,
+    additiveCachedInputTokens,
+    additiveCachedOutputTokens
   };
 }
 
@@ -183,32 +195,64 @@ function extractUsageFromJsonText(text: string): TokenUsageMetrics | null {
 function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics {
   const inputTokens = readNumber(usage.input_tokens) ?? readNumber(usage.prompt_tokens);
   const outputTokens = readNumber(usage.output_tokens) ?? readNumber(usage.completion_tokens);
+  const additiveCachedInputTokens = sumNullableNumbers(
+    readNumber(usage.cache_read_input_tokens),
+    readNumber(usage.cache_creation_input_tokens)
+  );
+  const additiveCachedOutputTokens = readNumber(usage.cache_read_output_tokens);
   const cachedInputTokens =
     readNestedNumber(usage.input_tokens_details, "cached_tokens") ??
     readNestedNumber(usage.prompt_tokens_details, "cached_tokens") ??
     readNumber(usage.cached_tokens) ??
-    sumNullableNumbers(
-      readNumber(usage.cache_read_input_tokens),
-      readNumber(usage.cache_creation_input_tokens)
-    );
+    additiveCachedInputTokens;
   const cachedOutputTokens =
     readNestedNumber(usage.output_tokens_details, "cached_tokens") ??
     readNestedNumber(usage.completion_tokens_details, "cached_tokens") ??
     readNumber(usage.cached_output_tokens) ??
-    readNumber(usage.cache_read_output_tokens);
-  const totalTokens =
-    readNumber(usage.total_tokens) ??
-    (inputTokens !== null || outputTokens !== null
-      ? (inputTokens ?? 0) + (outputTokens ?? 0)
-      : null);
+    additiveCachedOutputTokens;
+  const inputCacheIsAdditive = additiveCachedInputTokens !== null;
+  const outputCacheIsAdditive = additiveCachedOutputTokens !== null;
+  const totalFloor = usageTotalFloor({
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    cachedOutputTokens,
+    additiveCachedInputTokens: inputCacheIsAdditive,
+    additiveCachedOutputTokens: outputCacheIsAdditive
+  });
+  const explicitTotal = readNumber(usage.total_tokens);
+  const totalTokens = explicitTotal !== null && totalFloor !== null
+    ? Math.max(explicitTotal, totalFloor)
+    : explicitTotal ?? totalFloor;
 
   return {
     inputTokens,
     outputTokens,
     cachedInputTokens,
     cachedOutputTokens,
-    totalTokens
+    totalTokens,
+    additiveCachedInputTokens: inputCacheIsAdditive,
+    additiveCachedOutputTokens: outputCacheIsAdditive
   };
+}
+
+function usageTotalFloor(usage: Pick<
+  TokenUsageMetrics,
+  "inputTokens" | "outputTokens" | "cachedInputTokens" | "cachedOutputTokens" | "additiveCachedInputTokens" | "additiveCachedOutputTokens"
+>): number | null {
+  if (
+    usage.inputTokens === null &&
+    usage.outputTokens === null &&
+    usage.cachedInputTokens === null &&
+    usage.cachedOutputTokens === null
+  ) {
+    return null;
+  }
+
+  return (usage.inputTokens ?? 0) +
+    (usage.outputTokens ?? 0) +
+    (usage.additiveCachedInputTokens ? usage.cachedInputTokens ?? 0 : 0) +
+    (usage.additiveCachedOutputTokens ? usage.cachedOutputTokens ?? 0 : 0);
 }
 
 function sumNullableNumbers(left: number | null, right: number | null): number | null {
@@ -278,6 +322,11 @@ function extractReasoningEffort(parsed: Record<string, unknown> | null): string 
   }
 
   if (isRecord(parsed.thinking)) {
+    const visibleEffort = readThinkingEffort(parsed.thinking);
+    if (visibleEffort) {
+      return visibleEffort;
+    }
+
     const type = readTrimmedString(parsed.thinking.type) ?? "";
     const budget = typeof parsed.thinking.budget_tokens === "number" ? parsed.thinking.budget_tokens : null;
     const display = readTrimmedString(parsed.thinking.display);
@@ -474,14 +523,36 @@ function describeThinking(value: unknown): string | null {
     return null;
   }
 
+  const effort = readThinkingEffort(value);
   const type = readTrimmedString(value.type);
   const budget = readNumber(value.budget_tokens);
   const display = readTrimmedString(value.display);
   return joinSummaryParts([
-    type ? `thinking ${type}` : "thinking yes",
+    effort ? `thinking ${effort}` : type ? `thinking ${type}` : "thinking yes",
     budget !== null ? `budget ${budget}` : null,
     display ? `display ${display}` : null
   ]);
+}
+
+function readThinkingEffort(value: Record<string, unknown>): string | null {
+  return readKnownThinkingLevel(value.effort) ??
+    readKnownThinkingLevel(value.level) ??
+    readKnownThinkingLevel(value.mode);
+}
+
+function readKnownThinkingLevel(value: unknown): string | null {
+  const text = readTrimmedString(value)?.toLowerCase();
+  if (
+    text === "low" ||
+    text === "medium" ||
+    text === "high" ||
+    text === "xhigh" ||
+    text === "max"
+  ) {
+    return text;
+  }
+
+  return null;
 }
 
 function decodeResponseText(buffer: Buffer): string | null {
