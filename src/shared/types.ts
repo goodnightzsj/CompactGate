@@ -3,6 +3,7 @@ export type ProviderFamily = "openai" | "claude";
 export type LogStatusKind = "normal" | "error";
 export type CredentialScope = "primary" | "compact" | "claude" | "claude_primary" | "claude_compact";
 export type CredentialSource = "config" | "env" | "missing";
+export type ConfigProfileScope = "codex" | "claude";
 export type RequestTransport = "http" | "stream";
 
 export type CompactModelMode = "linked" | "custom";
@@ -51,30 +52,58 @@ export interface CompactGateRuntimeConfig {
   logging: LoggingConfig;
 }
 
+export interface SavedCodexProfileConfig {
+  primary: UpstreamConfig;
+  compact: CompactConfig;
+}
+
+export interface SavedClaudeProfileConfig {
+  claude: ClaudeConfig;
+}
+
+export type SavedConfigProfileConfig =
+  | SavedCodexProfileConfig
+  | SavedClaudeProfileConfig
+  | CompactGateRuntimeConfig;
+
 export interface SavedConfigProfile {
   id: string;
   name: string;
   created_at: string;
   updated_at: string;
-  config: CompactGateRuntimeConfig;
+  config: SavedConfigProfileConfig;
 }
 
-export interface CompactGateConfig extends CompactGateRuntimeConfig {
+export interface SavedConfigProfileScopeState {
   profiles?: SavedConfigProfile[];
   active_profile_id?: string | null;
 }
 
+export interface SavedConfigProfileScopes {
+  codex?: SavedConfigProfileScopeState;
+  claude?: SavedConfigProfileScopeState;
+}
+
+export interface CompactGateConfig extends CompactGateRuntimeConfig {
+  /** @deprecated Legacy combined profiles. Loaded as both codex and claude profile scopes. */
+  profiles?: SavedConfigProfile[];
+  /** @deprecated Legacy combined active profile. Loaded as both codex and claude active profile IDs. */
+  active_profile_id?: string | null;
+  profile_scopes?: SavedConfigProfileScopes;
+}
+
 export interface PublicConfigProfile {
   id: string;
+  scope: ConfigProfileScope;
   name: string;
   created_at: string;
   updated_at: string;
-  primary_host: string;
-  compact_host: string;
-  claude_primary_host: string;
-  claude_compact_host: string;
-  compact_upstream_mode: CompactUpstreamMode;
-  claude_compact_upstream_mode: CompactUpstreamMode;
+  primary_host: string | null;
+  compact_host: string | null;
+  claude_primary_host: string | null;
+  claude_compact_host: string | null;
+  compact_upstream_mode: CompactUpstreamMode | null;
+  claude_compact_upstream_mode: CompactUpstreamMode | null;
   stored_api_key_count: number;
 }
 
@@ -106,6 +135,16 @@ export interface PublicClaudeConfig {
   compact: PublicUpstreamConfig & { upstream_mode: CompactUpstreamMode; model_override: string };
 }
 
+export interface PublicConfigProfileScopeState {
+  profiles: PublicConfigProfile[];
+  active_profile_id: string | null;
+}
+
+export interface PublicConfigProfileScopes {
+  codex: PublicConfigProfileScopeState;
+  claude: PublicConfigProfileScopeState;
+}
+
 export interface PublicConfig {
   listen: string;
   primary: PublicUpstreamConfig;
@@ -113,8 +152,11 @@ export interface PublicConfig {
   claude: PublicClaudeConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
+  /** @deprecated Use profile_scopes.codex. */
   profiles: PublicConfigProfile[];
+  /** @deprecated Use profile_scopes.codex.active_profile_id. */
   active_profile_id: string | null;
+  profile_scopes: PublicConfigProfileScopes;
   config_path: string;
   last_saved_at: string | null;
 }

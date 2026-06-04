@@ -17,6 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import type {
   CompactGateConfig,
+  ConfigProfileScope,
   HealthResponse,
   LogStatusKind,
   RequestLogEntry,
@@ -322,9 +323,16 @@ async function handleApi(
 
   if (req.method === "GET" && url.pathname === "/api/config/profiles") {
     const publicConfig = configStore.toPublicConfig();
+    const requestedScope = url.searchParams.get("scope");
+    if (requestedScope === "codex" || requestedScope === "claude") {
+      sendJson(res, 200, publicConfig.profile_scopes[requestedScope]);
+      return;
+    }
+
     sendJson(res, 200, {
       profiles: publicConfig.profiles,
-      active_profile_id: publicConfig.active_profile_id
+      active_profile_id: publicConfig.active_profile_id,
+      profile_scopes: publicConfig.profile_scopes
     });
     return;
   }
@@ -350,7 +358,7 @@ async function handleApi(
     }
 
     const profilePatch = Object.hasOwn(body, "config") ? body.config : {};
-    await configStore.saveProfile(body.name, profilePatch);
+    await configStore.saveProfile(readProfileScope(body, url), body.name, profilePatch);
     studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
     sendJson(res, 200, configStore.toPublicConfig());
     return;
@@ -369,6 +377,7 @@ async function handleApi(
 
     const profilePatch = Object.hasOwn(body, "config") ? body.config : {};
     await configStore.updateProfile(
+      readProfileScope(body, url),
       profileId,
       typeof body.name === "string" ? body.name : undefined,
       profilePatch
@@ -390,6 +399,7 @@ async function handleApi(
     }
 
     await configStore.duplicateProfile(
+      readProfileScope(body, url),
       profileId,
       typeof body.name === "string" ? body.name : undefined
     );
@@ -409,7 +419,7 @@ async function handleApi(
       throw new ConfigError("config profile delete requires a profile id.");
     }
 
-    await configStore.deleteProfile(profileId);
+    await configStore.deleteProfile(readProfileScope(body, url), profileId);
     studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
     sendJson(res, 200, configStore.toPublicConfig());
     return;
@@ -426,7 +436,7 @@ async function handleApi(
       throw new ConfigError("config profile apply requires a profile id.");
     }
 
-    await configStore.applyProfile(profileId);
+    await configStore.applyProfile(readProfileScope(body, url), profileId);
     logger.resize(configStore.get().logging.keep_recent);
     studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
     sendJson(res, 200, configStore.toPublicConfig());
@@ -2272,6 +2282,14 @@ function resolvePublicDir(): string {
   ];
 
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+function readProfileScope(body: Record<string, unknown>, url: URL): ConfigProfileScope {
+  const value = typeof body.scope === "string" ? body.scope : url.searchParams.get("scope") ?? "codex";
+  if (value !== "codex" && value !== "claude") {
+    throw new ConfigError("config profile scope must be codex or claude.");
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

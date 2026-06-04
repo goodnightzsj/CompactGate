@@ -689,13 +689,15 @@ describe("CompactGate HTTP server", () => {
     expect(saveResponse.status).toBe(200);
     expect(savedConfig.profiles).toHaveLength(1);
     expect(savedConfig.profiles[0]).toMatchObject({
+      scope: "codex",
       name: "Profile API",
       primary_host: "127.0.0.1:56001",
       compact_host: "127.0.0.1:56002",
-      claude_primary_host: "127.0.0.1:56003",
-      claude_compact_host: "127.0.0.1:56004",
+      claude_primary_host: null,
+      claude_compact_host: null,
       compact_upstream_mode: "split",
-      stored_api_key_count: 4
+      claude_compact_upstream_mode: null,
+      stored_api_key_count: 2
     });
     expect(savedConfig.active_profile_id).toBeNull();
     expect(JSON.stringify(savedConfig)).not.toContain("profile-api-primary-key");
@@ -727,8 +729,48 @@ describe("CompactGate HTTP server", () => {
     expect(appliedConfig.primary.base_url).toBe("http://127.0.0.1:56001/v1");
     expect(appliedConfig.compact.base_url).toBe("http://127.0.0.1:56002/v1");
     expect(appliedConfig.compact.model_override).toBe("profile-api-compact-model");
-    expect(appliedConfig.claude.compact.base_url).toBe("http://127.0.0.1:56004");
+    expect(appliedConfig.claude.compact.base_url).toBe("https://api.anthropic.com");
     expect(JSON.stringify(appliedConfig)).not.toContain("profile-api-primary-key");
+
+    const claudeSaveResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "claude",
+        name: "Claude Profile API",
+        config: {
+          claude: {
+            primary: { base_url: "http://127.0.0.1:56013" },
+            compact: { base_url: "http://127.0.0.1:56014", upstream_mode: "split" }
+          }
+        }
+      })
+    });
+    const claudeSavedConfig = (await claudeSaveResponse.json()) as PublicConfig;
+    const claudeProfileId = claudeSavedConfig.profile_scopes.claude.profiles[0].id;
+    expect(claudeSavedConfig.profile_scopes.claude.profiles[0]).toMatchObject({
+      scope: "claude",
+      primary_host: null,
+      compact_host: null,
+      claude_primary_host: "127.0.0.1:56013",
+      claude_compact_host: "127.0.0.1:56014",
+      compact_upstream_mode: null,
+      claude_compact_upstream_mode: "split"
+    });
+
+    const claudeApplyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "claude", profile_id: claudeProfileId })
+    });
+    const claudeAppliedConfig = (await claudeApplyResponse.json()) as PublicConfig;
+
+    expect(claudeApplyResponse.status).toBe(200);
+    expect(claudeAppliedConfig.primary.base_url).toBe("http://127.0.0.1:56001/v1");
+    expect(claudeAppliedConfig.claude.primary.base_url).toBe("http://127.0.0.1:56013");
+    expect(claudeAppliedConfig.claude.compact.base_url).toBe("http://127.0.0.1:56014");
+    expect(claudeAppliedConfig.profile_scopes.codex.active_profile_id).toBe(profileId);
+    expect(claudeAppliedConfig.profile_scopes.claude.active_profile_id).toBe(claudeProfileId);
 
     const previewResponse = await fetch(`${app.url}/api/test-route`, {
       method: "POST",

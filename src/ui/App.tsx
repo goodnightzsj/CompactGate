@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { PROVIDER_LABELS, ROUTE_META, routeLabel, routeProvider } from "../shared/route-meta.js";
 import type {
   CompactGateConfig,
+  ConfigProfileScope,
   CredentialScope,
   CredentialSource,
   HostLogCount,
@@ -88,6 +89,7 @@ type HealthRouteCredentialConfig =
   | HealthResponse["claude"]["compact"];
 
 type PublicConfigProfile = PublicConfig["profiles"][number];
+type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
 
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
 const ALL_HOSTS_FILTER = "__all_hosts__";
@@ -114,11 +116,16 @@ function App() {
   const [profileName, setProfileName] = useState("");
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [profileState, setProfileState] = useState<ProfileActionState>("idle");
+  const [claudeProfileName, setClaudeProfileName] = useState("");
+  const [selectedClaudeProfileId, setSelectedClaudeProfileId] = useState("");
+  const [claudeProfileState, setClaudeProfileState] = useState<ProfileActionState>("idle");
   const [pageError, setPageError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
-  const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<PublicConfigProfile | null>(null);
+  const [claudeProfileError, setClaudeProfileError] = useState<string | null>(null);
+  const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<ProfileDeleteCandidate | null>(null);
   const profileNameHydratedRef = useRef(false);
+  const claudeProfileNameHydratedRef = useRef(false);
   const [logError, setLogError] = useState<string | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
@@ -172,12 +179,25 @@ function App() {
       return;
     }
 
+    const codexProfiles = profileScopeState(config, "codex").profiles;
+    const claudeProfiles = profileScopeState(config, "claude").profiles;
+    const activeCodexProfileId = profileScopeState(config, "codex").active_profile_id;
+    const activeClaudeProfileId = profileScopeState(config, "claude").active_profile_id;
+
     setSelectedProfileId((previous) => {
-      if (previous && config.profiles.some((profile) => profile.id === previous)) {
+      if (previous && codexProfiles.some((profile) => profile.id === previous)) {
         return previous;
       }
 
-      return config.active_profile_id ?? config.profiles[0]?.id ?? "";
+      return activeCodexProfileId ?? codexProfiles[0]?.id ?? "";
+    });
+
+    setSelectedClaudeProfileId((previous) => {
+      if (previous && claudeProfiles.some((profile) => profile.id === previous)) {
+        return previous;
+      }
+
+      return activeClaudeProfileId ?? claudeProfiles[0]?.id ?? "";
     });
   }, [config]);
 
@@ -186,8 +206,9 @@ function App() {
       return;
     }
 
-    const initialProfileId = config.active_profile_id ?? config.profiles[0]?.id ?? "";
-    const initialProfile = config.profiles.find((profile) => profile.id === initialProfileId);
+    const scope = profileScopeState(config, "codex");
+    const initialProfileId = scope.active_profile_id ?? scope.profiles[0]?.id ?? "";
+    const initialProfile = scope.profiles.find((profile) => profile.id === initialProfileId);
     if (!initialProfile) {
       return;
     }
@@ -195,6 +216,23 @@ function App() {
     profileNameHydratedRef.current = true;
     setSelectedProfileId(initialProfile.id);
     setProfileName(initialProfile.name);
+  }, [config]);
+
+  useEffect(() => {
+    if (!config || claudeProfileNameHydratedRef.current) {
+      return;
+    }
+
+    const scope = profileScopeState(config, "claude");
+    const initialProfileId = scope.active_profile_id ?? scope.profiles[0]?.id ?? "";
+    const initialProfile = scope.profiles.find((profile) => profile.id === initialProfileId);
+    if (!initialProfile) {
+      return;
+    }
+
+    claudeProfileNameHydratedRef.current = true;
+    setSelectedClaudeProfileId(initialProfile.id);
+    setClaudeProfileName(initialProfile.name);
   }, [config]);
 
   useEffect(() => {
@@ -417,212 +455,251 @@ function App() {
     }
   }
 
-  async function saveConfigProfile() {
-    const trimmedName = profileName.trim();
+  function scopedProfileAccessors(scope: ConfigProfileScope) {
+    return scope === "codex"
+      ? {
+          name: profileName,
+          selectedId: selectedProfileId,
+          setName: setProfileName,
+          setSelectedId: setSelectedProfileId,
+          state: profileState,
+          setState: setProfileState,
+          setError: setProfileError
+        }
+      : {
+          name: claudeProfileName,
+          selectedId: selectedClaudeProfileId,
+          setName: setClaudeProfileName,
+          setSelectedId: setSelectedClaudeProfileId,
+          state: claudeProfileState,
+          setState: setClaudeProfileState,
+          setError: setClaudeProfileError
+        };
+  }
+
+  async function saveConfigProfile(scope: ConfigProfileScope = "codex") {
+    const accessors = scopedProfileAccessors(scope);
+    const trimmedName = accessors.name.trim();
     if (!trimmedName) {
-      setProfileState("error");
-      setProfileError("请先填写配置档案名称。");
+      accessors.setState("error");
+      accessors.setError("请先填写配置档案名称。");
       return;
     }
 
-    setProfileState("saving");
-    setProfileError(null);
+    accessors.setState("saving");
+    accessors.setError(null);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config/profiles", {
         method: "POST",
         body: JSON.stringify({
+          scope,
           name: trimmedName,
           config: formToPatch(form)
         })
       });
-      const savedProfile = [...nextConfig.profiles]
+      const nextScope = profileScopeState(nextConfig, scope);
+      const savedProfile = [...nextScope.profiles]
         .reverse()
         .find((profile) => profile.name === trimmedName);
 
       setConfig(nextConfig);
-      setSelectedProfileId(savedProfile?.id ?? nextConfig.active_profile_id ?? "");
-      setProfileName(savedProfile?.name ?? trimmedName);
-      setProfileState("saved");
-      window.setTimeout(() => setProfileState("idle"), 1600);
+      accessors.setSelectedId(savedProfile?.id ?? nextScope.active_profile_id ?? "");
+      accessors.setName(savedProfile?.name ?? trimmedName);
+      accessors.setState("saved");
+      window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {
-      setProfileState("error");
-      setProfileError(errorSummary(error));
+      accessors.setState("error");
+      accessors.setError(errorSummary(error));
     }
   }
 
-  async function applySelectedProfile(profileId = selectedProfileId) {
-    if (!profileId) {
-      setProfileState("error");
-      setProfileError("请先选择一个已保存的配置档案。");
+  async function applySelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
+    const accessors = scopedProfileAccessors(scope);
+    const targetProfileId = profileId ?? accessors.selectedId;
+    if (!targetProfileId) {
+      accessors.setState("error");
+      accessors.setError("请先选择一个已保存的配置档案。");
       return;
     }
 
-    setProfileState("applying");
-    setProfileError(null);
+    accessors.setState("applying");
+    accessors.setError(null);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config/profiles/apply", {
         method: "POST",
         body: JSON.stringify({
-          profile_id: profileId
+          scope,
+          profile_id: targetProfileId
         })
       });
       const nextHealth = await api<HealthResponse>("/api/health", {
         method: "GET"
       });
+      const nextScope = profileScopeState(nextConfig, scope);
+      const nextActiveProfileId = nextScope.active_profile_id ?? targetProfileId;
 
       setConfig(nextConfig);
       setHealth(nextHealth);
       setForm(formFromConfig(nextConfig));
-      setSelectedProfileId(nextConfig.active_profile_id ?? profileId);
-      setProfileName(
-        nextConfig.profiles.find((profile) => profile.id === (nextConfig.active_profile_id ?? profileId))
-          ?.name ?? ""
-      );
+      accessors.setSelectedId(nextActiveProfileId);
+      accessors.setName(nextScope.profiles.find((profile) => profile.id === nextActiveProfileId)?.name ?? "");
       setSaveError(null);
       setSaveState("saved");
-      setProfileState("applied");
+      accessors.setState("applied");
       window.setTimeout(() => {
         setSaveState("idle");
-        setProfileState("idle");
+        accessors.setState("idle");
       }, 1600);
     } catch (error) {
-      setProfileState("error");
-      setProfileError(errorSummary(error));
+      accessors.setState("error");
+      accessors.setError(errorSummary(error));
     }
   }
 
-  async function updateSelectedProfile(profileId = selectedProfileId) {
-    if (!profileId) {
-      setProfileState("error");
-      setProfileError("请先选择一个已保存的配置档案。");
+  async function updateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
+    const accessors = scopedProfileAccessors(scope);
+    const targetProfileId = profileId ?? accessors.selectedId;
+    if (!targetProfileId) {
+      accessors.setState("error");
+      accessors.setError("请先选择一个已保存的配置档案。");
       return;
     }
 
-    const currentProfile = config?.profiles.find((profile) => profile.id === profileId) ?? null;
-    const trimmedName =
-      profileId === selectedProfileId ? profileName.trim() : currentProfile?.name ?? "";
-    setProfileState("updating");
-    setProfileError(null);
+    const scopeState = config ? profileScopeState(config, scope) : null;
+    const currentProfile = scopeState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
+    const trimmedName = targetProfileId === accessors.selectedId ? accessors.name.trim() : currentProfile?.name ?? "";
+    accessors.setState("updating");
+    accessors.setError(null);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config/profiles", {
         method: "PATCH",
         body: JSON.stringify({
-          profile_id: profileId,
+          scope,
+          profile_id: targetProfileId,
           ...(trimmedName ? { name: trimmedName } : {}),
           config: formToPatch(form)
         })
       });
+      const nextScope = profileScopeState(nextConfig, scope);
 
       setConfig(nextConfig);
-      setSelectedProfileId(profileId);
-      setProfileName(nextConfig.profiles.find((profile) => profile.id === profileId)?.name ?? trimmedName);
-      setProfileState("updated");
-      window.setTimeout(() => setProfileState("idle"), 1600);
+      accessors.setSelectedId(targetProfileId);
+      accessors.setName(nextScope.profiles.find((profile) => profile.id === targetProfileId)?.name ?? trimmedName);
+      accessors.setState("updated");
+      window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {
-      setProfileState("error");
-      setProfileError(errorSummary(error));
+      accessors.setState("error");
+      accessors.setError(errorSummary(error));
     }
   }
 
-  async function duplicateSelectedProfile(profileId = selectedProfileId) {
-    const sourceProfile = config?.profiles.find((profile) => profile.id === profileId) ?? null;
+  async function duplicateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
+    const accessors = scopedProfileAccessors(scope);
+    const targetProfileId = profileId ?? accessors.selectedId;
+    const scopeState = config ? profileScopeState(config, scope) : null;
+    const sourceProfile = scopeState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
     if (!sourceProfile) {
-      setProfileState("error");
-      setProfileError("请先选择一个已保存的配置档案。");
+      accessors.setState("error");
+      accessors.setError("请先选择一个已保存的配置档案。");
       return;
     }
 
-    const copyName =
-      profileId === selectedProfileId && profileName.trim()
-        ? profileName.trim()
-        : `${sourceProfile.name} copy`;
-    setProfileState("duplicating");
-    setProfileError(null);
+    const copyName = targetProfileId === accessors.selectedId && accessors.name.trim()
+      ? accessors.name.trim()
+      : `${sourceProfile.name} copy`;
+    accessors.setState("duplicating");
+    accessors.setError(null);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config/profiles/duplicate", {
         method: "POST",
         body: JSON.stringify({
-          profile_id: profileId,
+          scope,
+          profile_id: targetProfileId,
           name: copyName
         })
       });
-      const copiedProfile = [...nextConfig.profiles]
+      const nextScope = profileScopeState(nextConfig, scope);
+      const copiedProfile = [...nextScope.profiles]
         .reverse()
         .find((profile) => profile.name === copyName);
 
       setConfig(nextConfig);
-      setSelectedProfileId(copiedProfile?.id ?? profileId);
-      setProfileName(copiedProfile?.name ?? copyName);
-      setProfileState("duplicated");
-      window.setTimeout(() => setProfileState("idle"), 1600);
+      accessors.setSelectedId(copiedProfile?.id ?? targetProfileId);
+      accessors.setName(copiedProfile?.name ?? copyName);
+      accessors.setState("duplicated");
+      window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {
-      setProfileState("error");
-      setProfileError(errorSummary(error));
+      accessors.setState("error");
+      accessors.setError(errorSummary(error));
     }
   }
 
-  function requestDeleteSelectedProfile(profileId = selectedProfileId) {
-    if (!profileId) {
-      setProfileState("error");
-      setProfileError("请先选择一个已保存的配置档案。");
+  function requestDeleteSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
+    const accessors = scopedProfileAccessors(scope);
+    const targetProfileId = profileId ?? accessors.selectedId;
+    if (!targetProfileId) {
+      accessors.setState("error");
+      accessors.setError("请先选择一个已保存的配置档案。");
       return;
     }
 
-    const profile = config?.profiles.find((item) => item.id === profileId);
+    const profile = config ? profileScopeState(config, scope).profiles.find((item) => item.id === targetProfileId) : null;
     if (!profile) {
-      setProfileState("error");
-      setProfileError("没有找到要删除的配置档案。");
+      accessors.setState("error");
+      accessors.setError("没有找到要删除的配置档案。");
       return;
     }
 
-    setSelectedProfileId(profile.id);
-    setProfileError(null);
-    setProfileDeleteCandidate(profile);
+    accessors.setSelectedId(profile.id);
+    accessors.setError(null);
+    setProfileDeleteCandidate({ scope, profile });
   }
 
   async function confirmDeleteSelectedProfile() {
-    const profile = profileDeleteCandidate;
-    if (!profile) {
+    const candidate = profileDeleteCandidate;
+    if (!candidate) {
       return;
     }
 
-    setProfileState("deleting");
-    setProfileError(null);
+    const accessors = scopedProfileAccessors(candidate.scope);
+    accessors.setState("deleting");
+    accessors.setError(null);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config/profiles", {
         method: "DELETE",
         body: JSON.stringify({
-          profile_id: profile.id
+          scope: candidate.scope,
+          profile_id: candidate.profile.id
         })
       });
+      const nextScope = profileScopeState(nextConfig, candidate.scope);
 
       setConfig(nextConfig);
-      const nextSelectedProfileId = nextConfig.active_profile_id ?? nextConfig.profiles[0]?.id ?? "";
-      setSelectedProfileId(nextSelectedProfileId);
-      setProfileName(
-        nextConfig.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? ""
-      );
+      const nextSelectedProfileId = nextScope.active_profile_id ?? nextScope.profiles[0]?.id ?? "";
+      accessors.setSelectedId(nextSelectedProfileId);
+      accessors.setName(nextScope.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? "");
       setProfileDeleteCandidate(null);
-      setProfileState("deleted");
-      window.setTimeout(() => setProfileState("idle"), 1600);
+      accessors.setState("deleted");
+      window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {
-      setProfileState("error");
-      setProfileError(errorSummary(error));
+      accessors.setState("error");
+      accessors.setError(errorSummary(error));
     }
   }
 
-  function selectConfigProfile(profileId: string) {
-    const profile = config?.profiles.find((item) => item.id === profileId) ?? null;
-    setSelectedProfileId(profileId);
-    setProfileError(null);
+  function selectConfigProfile(scope: ConfigProfileScope, profileId: string) {
+    const accessors = scopedProfileAccessors(scope);
+    const profile = config ? profileScopeState(config, scope).profiles.find((item) => item.id === profileId) : null;
+    accessors.setSelectedId(profileId);
+    accessors.setError(null);
 
-    if (profile && profileId !== selectedProfileId) {
-      setProfileName(profile.name);
+    if (profile && profileId !== accessors.selectedId) {
+      accessors.setName(profile.name);
     }
   }
 
@@ -779,10 +856,15 @@ function App() {
               selectedProfileId={selectedProfileId}
               profileState={profileState}
               profileError={profileError}
+              claudeProfileName={claudeProfileName}
+              selectedClaudeProfileId={selectedClaudeProfileId}
+              claudeProfileState={claudeProfileState}
+              claudeProfileError={claudeProfileError}
               hasPendingChanges={hasPendingChanges}
               onCurrentModelChange={setCurrentModel}
               onFormChange={setForm}
               onProfileNameChange={setProfileName}
+              onClaudeProfileNameChange={setClaudeProfileName}
               onSelectedProfileChange={selectConfigProfile}
               onSaveProfile={saveConfigProfile}
               onApplyProfile={applySelectedProfile}
@@ -830,8 +912,8 @@ function App() {
 
       {profileDeleteCandidate && (
         <ConfirmProfileDeleteDialog
-          profile={profileDeleteCandidate}
-          isDeleting={profileState === "deleting"}
+          profile={profileDeleteCandidate.profile}
+          isDeleting={(profileDeleteCandidate.scope === "codex" ? profileState : claudeProfileState) === "deleting"}
           onCancel={() => setProfileDeleteCandidate(null)}
           onConfirm={confirmDeleteSelectedProfile}
         />
@@ -1418,6 +1500,189 @@ function RouteBoard({
   );
 }
 
+
+function ProfileScopeCard({
+  scope,
+  title,
+  eyebrow,
+  description,
+  emptyTitle,
+  emptyDescription,
+  config,
+  profileName,
+  selectedProfileId,
+  profileState,
+  profileError,
+  onProfileNameChange,
+  onSelectedProfileChange,
+  onSaveProfile,
+  onApplyProfile,
+  onUpdateProfile,
+  onDuplicateProfile,
+  onDeleteProfile
+}: {
+  scope: ConfigProfileScope;
+  title: string;
+  eyebrow: string;
+  description: string;
+  emptyTitle: string;
+  emptyDescription: string;
+  config: PublicConfig | null;
+  profileName: string;
+  selectedProfileId: string;
+  profileState: ProfileActionState;
+  profileError: string | null;
+  onProfileNameChange: (name: string) => void;
+  onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
+  onSaveProfile: (scope: ConfigProfileScope) => void | Promise<void>;
+  onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+}) {
+  const titleId = `${scope}-profile-card-title`;
+  const scopeState = config ? profileScopeState(config, scope) : { profiles: [], active_profile_id: null };
+  const profiles = scopeState.profiles;
+  const activeProfile = profiles.find((profile) => profile.id === scopeState.active_profile_id) ?? null;
+  const profileBusy = isProfileActionBusy(profileState);
+  const scopeLabel = scope === "codex" ? "Codex" : "Claude";
+
+  return (
+    <section className={`profile-card profile-card-${scope}`} aria-labelledby={titleId}>
+      <div className="profile-card-copy">
+        <p className="eyebrow">{eyebrow}</p>
+        <h3 id={titleId}>{title}</h3>
+        <p>{description}</p>
+      </div>
+
+      <div className="profile-card-controls">
+        <Field label={`${scopeLabel} 档案名称`} hint="选择档案后可改名并保存。">
+          <input
+            aria-label={`${scopeLabel} 档案名称`}
+            value={profileName}
+            onChange={(event) => onProfileNameChange(event.target.value)}
+            placeholder="选择档案后可在这里改名"
+          />
+        </Field>
+
+        <button
+          className="ghost-button profile-save-button"
+          type="button"
+          disabled={profileBusy}
+          onClick={() => void onSaveProfile(scope)}
+        >
+          {profileState === "saving" ? "正在保存档案..." : `保存当前 ${scopeLabel} 草稿为档案`}
+        </button>
+      </div>
+
+      {profiles.length === 0 ? (
+        <div className="profile-empty-card">
+          <strong>{emptyTitle}</strong>
+          <span>{emptyDescription}</span>
+        </div>
+      ) : (
+        <div className="profile-list" aria-label={`已保存 ${scopeLabel} 配置档案`}>
+          {profiles.map((profile) => {
+            const isActive = profile.id === scopeState.active_profile_id;
+            const isSelected = profile.id === selectedProfileId;
+            const cardClassName = [
+              "profile-item",
+              isActive ? "is-active" : "",
+              isSelected ? "is-selected" : ""
+            ].filter(Boolean).join(" ");
+
+            return (
+              <article key={profile.id} className={cardClassName}>
+                <span className="profile-item-handle" aria-hidden="true">≡</span>
+                <button
+                  className="profile-item-main"
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => onSelectedProfileChange(scope, profile.id)}
+                >
+                  <span className="profile-item-icon" aria-hidden="true">
+                    {profile.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="profile-item-copy">
+                    <span className="profile-item-kicker">
+                      {isActive ? "当前运行时" : isSelected ? "已选中" : "可选档案"}
+                    </span>
+                    <strong>{profile.name}</strong>
+                    <small>{profileSummary(profile)}</small>
+                    <span>更新于 {formatClock(profile.updated_at)}</span>
+                  </span>
+                </button>
+
+                <div className="profile-item-actions">
+                  <button
+                    className="solid-button profile-apply-button"
+                    type="button"
+                    disabled={profileBusy || isActive}
+                    data-active-disabled={isActive ? "true" : undefined}
+                    onClick={() => {
+                      onSelectedProfileChange(scope, profile.id);
+                      void onApplyProfile(scope, profile.id);
+                    }}
+                  >
+                    {profileState === "applying" && isSelected ? "应用中..." : "应用"}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={profileBusy}
+                    onClick={() => {
+                      onSelectedProfileChange(scope, profile.id);
+                      void onUpdateProfile(scope, profile.id);
+                    }}
+                  >
+                    {profileState === "updating" && isSelected ? "保存中..." : "保存到此档案"}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={profileBusy}
+                    onClick={() => {
+                      onSelectedProfileChange(scope, profile.id);
+                      void onDuplicateProfile(scope, profile.id);
+                    }}
+                  >
+                    {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
+                  </button>
+                  <button
+                    className="ghost-button profile-danger-button"
+                    type="button"
+                    disabled={profileBusy}
+                    onClick={() => {
+                      onSelectedProfileChange(scope, profile.id);
+                      void onDeleteProfile(scope, profile.id);
+                    }}
+                  >
+                    {profileState === "deleting" && isSelected ? "删除中..." : "删除"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="profile-card-status" aria-live="polite">
+        <span>
+          当前 {scopeLabel} 运行时档案：
+          <strong>{activeProfile?.name ?? "未绑定档案"}</strong>
+        </span>
+        <span>
+          已保存：
+          <strong>{profiles.length}</strong>
+        </span>
+        <span>{profileActionLabel(profileState)}</span>
+      </div>
+
+      {profileError && <p className="error-note">{profileError}</p>}
+    </section>
+  );
+}
+
 function ConfigPanel({
   config,
   form,
@@ -1429,10 +1694,15 @@ function ConfigPanel({
   selectedProfileId,
   profileState,
   profileError,
+  claudeProfileName,
+  selectedClaudeProfileId,
+  claudeProfileState,
+  claudeProfileError,
   hasPendingChanges,
   onCurrentModelChange,
   onFormChange,
   onProfileNameChange,
+  onClaudeProfileNameChange,
   onSelectedProfileChange,
   onSaveProfile,
   onApplyProfile,
@@ -1453,24 +1723,25 @@ function ConfigPanel({
   selectedProfileId: string;
   profileState: ProfileActionState;
   profileError: string | null;
+  claudeProfileName: string;
+  selectedClaudeProfileId: string;
+  claudeProfileState: ProfileActionState;
+  claudeProfileError: string | null;
   hasPendingChanges: boolean;
   onCurrentModelChange: (model: string) => void;
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
   onProfileNameChange: (name: string) => void;
-  onSelectedProfileChange: (profileId: string) => void;
-  onSaveProfile: () => void | Promise<void>;
-  onApplyProfile: (profileId?: string) => void | Promise<void>;
-  onUpdateProfile: (profileId?: string) => void | Promise<void>;
-  onDuplicateProfile: (profileId?: string) => void | Promise<void>;
-  onDeleteProfile: (profileId?: string) => void | Promise<void>;
+  onClaudeProfileNameChange: (name: string) => void;
+  onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
+  onSaveProfile: (scope: ConfigProfileScope) => void | Promise<void>;
+  onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
-  const profiles = config?.profiles ?? [];
-  const activeProfile = profiles.find((profile) => profile.id === config?.active_profile_id) ?? null;
-  const profileBusy = isProfileActionBusy(profileState);
-
   return (
     <section className="panel live-config" aria-labelledby="live-config-title">
       <div className="section-heading">
@@ -1480,140 +1751,47 @@ function ConfigPanel({
 
       <form className="control-stack" onSubmit={onSubmit}>
 
-        <section className="profile-card" aria-labelledby="profile-card-title">
-          <div className="profile-card-copy">
-            <p className="eyebrow">Config Profiles</p>
-            <h3 id="profile-card-title">配置档案</h3>
-            <p>保存、复制或应用当前路由草稿；不会修改全局 Claude / Codex 配置。</p>
-          </div>
+        <ProfileScopeCard
+          scope="codex"
+          title="Codex 配置档案"
+          eyebrow="Codex Profiles"
+          description="保存、复制或应用 Codex 主路由与 compact 草稿；不会改动 Claude 档案。"
+          emptyTitle="还没有保存的 Codex 档案"
+          emptyDescription="填写名称后保存当前 Codex 草稿，就会在这里出现可应用的档案卡片。"
+          config={config}
+          profileName={profileName}
+          selectedProfileId={selectedProfileId}
+          profileState={profileState}
+          profileError={profileError}
+          onProfileNameChange={onProfileNameChange}
+          onSelectedProfileChange={onSelectedProfileChange}
+          onSaveProfile={onSaveProfile}
+          onApplyProfile={onApplyProfile}
+          onUpdateProfile={onUpdateProfile}
+          onDuplicateProfile={onDuplicateProfile}
+          onDeleteProfile={onDeleteProfile}
+        />
 
-          <div className="profile-card-controls">
-            <Field
-              label="档案名称"
-              hint="选择档案后可改名并保存。"
-            >
-              <input
-                aria-label="档案名称"
-                value={profileName}
-                onChange={(event) => onProfileNameChange(event.target.value)}
-                placeholder="选择档案后可在这里改名"
-              />
-            </Field>
-
-            <button
-              className="ghost-button profile-save-button"
-              type="button"
-              disabled={profileBusy}
-              onClick={() => void onSaveProfile()}
-            >
-              {profileState === "saving" ? "正在保存档案..." : "保存当前草稿为档案"}
-            </button>
-          </div>
-
-          {profiles.length === 0 ? (
-            <div className="profile-empty-card">
-              <strong>还没有保存的配置档案</strong>
-              <span>填写名称后保存当前草稿，就会在这里出现可应用的档案卡片。</span>
-            </div>
-          ) : (
-            <div className="profile-list" aria-label="已保存配置档案">
-              {profiles.map((profile) => {
-                const isActive = profile.id === config?.active_profile_id;
-                const isSelected = profile.id === selectedProfileId;
-                const cardClassName = [
-                  "profile-item",
-                  isActive ? "is-active" : "",
-                  isSelected ? "is-selected" : ""
-                ].filter(Boolean).join(" ");
-
-                return (
-                  <article key={profile.id} className={cardClassName}>
-                    <span className="profile-item-handle" aria-hidden="true">≡</span>
-                    <button
-                      className="profile-item-main"
-                      type="button"
-                      aria-pressed={isSelected}
-                      onClick={() => onSelectedProfileChange(profile.id)}
-                    >
-                      <span className="profile-item-icon" aria-hidden="true">
-                        {profile.name.slice(0, 1).toUpperCase()}
-                      </span>
-                      <span className="profile-item-copy">
-                        <span className="profile-item-kicker">
-                          {isActive ? "当前运行时" : isSelected ? "已选中" : "可选档案"}
-                        </span>
-                        <strong>{profile.name}</strong>
-                        <small>{profileSummary(profile)}</small>
-                        <span>更新于 {formatClock(profile.updated_at)}</span>
-                      </span>
-                    </button>
-
-                    <div className="profile-item-actions">
-                      <button
-                        className="solid-button"
-                        type="button"
-                        disabled={profileBusy || isActive}
-                        onClick={() => {
-                          onSelectedProfileChange(profile.id);
-                          void onApplyProfile(profile.id);
-                        }}
-                      >
-                        {profileState === "applying" && isSelected ? "应用中..." : "应用"}
-                      </button>
-                      <button
-                        className="ghost-button"
-                        type="button"
-                        disabled={profileBusy}
-                        onClick={() => {
-                          onSelectedProfileChange(profile.id);
-                          void onUpdateProfile(profile.id);
-                        }}
-                      >
-                        {profileState === "updating" && isSelected ? "保存中..." : "保存到此档案"}
-                      </button>
-                      <button
-                        className="ghost-button"
-                        type="button"
-                        disabled={profileBusy}
-                        onClick={() => {
-                          onSelectedProfileChange(profile.id);
-                          void onDuplicateProfile(profile.id);
-                        }}
-                      >
-                        {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
-                      </button>
-                      <button
-                        className="ghost-button profile-danger-button"
-                        type="button"
-                        disabled={profileBusy}
-                        onClick={() => {
-                          onSelectedProfileChange(profile.id);
-                          void onDeleteProfile(profile.id);
-                        }}
-                      >
-                        {profileState === "deleting" && isSelected ? "删除中..." : "删除"}
-                      </button>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="profile-card-status" aria-live="polite">
-            <span>
-              当前运行时档案：
-              <strong>{activeProfile?.name ?? "未绑定档案"}</strong>
-            </span>
-            <span>
-              已保存：
-              <strong>{profiles.length}</strong>
-            </span>
-            <span>{profileActionLabel(profileState)}</span>
-          </div>
-
-          {profileError && <p className="error-note">{profileError}</p>}
-        </section>
+        <ProfileScopeCard
+          scope="claude"
+          title="Claude 配置档案"
+          eyebrow="Claude Profiles"
+          description="保存、复制或应用 Claude primary / compact 草稿；不会改动 Codex 档案。"
+          emptyTitle="还没有保存的 Claude 档案"
+          emptyDescription="填写名称后保存当前 Claude 草稿，就会在这里出现可应用的档案卡片。"
+          config={config}
+          profileName={claudeProfileName}
+          selectedProfileId={selectedClaudeProfileId}
+          profileState={claudeProfileState}
+          profileError={claudeProfileError}
+          onProfileNameChange={onClaudeProfileNameChange}
+          onSelectedProfileChange={onSelectedProfileChange}
+          onSaveProfile={onSaveProfile}
+          onApplyProfile={onApplyProfile}
+          onUpdateProfile={onUpdateProfile}
+          onDuplicateProfile={onDuplicateProfile}
+          onDeleteProfile={onDeleteProfile}
+        />
 
         <div className="route-config-grid">
           <section className="route-config-group" aria-labelledby="codex-route-config-title">
@@ -3011,7 +3189,8 @@ function applyDraftToConfigExport(
     timeouts: { ...config.timeouts },
     logging: { ...config.logging },
     profiles: config.profiles,
-    active_profile_id: config.active_profile_id
+    active_profile_id: config.active_profile_id,
+    profile_scopes: config.profile_scopes
   };
 
   applyApiKeyDraft(next.primary, form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey);
@@ -3330,17 +3509,31 @@ function compactModeLabel(mode: "split" | "primary"): string {
   return mode === "split" ? "独立分流" : "复用主上游";
 }
 
+
+function profileScopeState(config: PublicConfig, scope: ConfigProfileScope) {
+  return config.profile_scopes?.[scope] ?? {
+    profiles: scope === "codex" ? config.profiles : [],
+    active_profile_id: scope === "codex" ? config.active_profile_id : null
+  };
+}
+
 function profileSummary(profile: PublicConfig["profiles"][number]): string {
   const secretCopy =
     profile.stored_api_key_count > 0
       ? `含 ${profile.stored_api_key_count} 个直填密钥`
       : "仅保存 URL 和环境变量引用";
 
+  if (profile.scope === "claude") {
+    return [
+      `Claude ${profile.claude_primary_host ?? "未配置"} / ${profile.claude_compact_host ?? "未配置"}`,
+      `Claude compact ${compactModeLabel(profile.claude_compact_upstream_mode ?? "primary")}`,
+      secretCopy
+    ].join("；");
+  }
+
   return [
-    `Codex ${profile.primary_host} / ${profile.compact_host}`,
-    `Claude ${profile.claude_primary_host} / ${profile.claude_compact_host}`,
-    `Codex compact ${compactModeLabel(profile.compact_upstream_mode)}`,
-    `Claude compact ${compactModeLabel(profile.claude_compact_upstream_mode)}`,
+    `Codex ${profile.primary_host ?? "未配置"} / ${profile.compact_host ?? "未配置"}`,
+    `Codex compact ${compactModeLabel(profile.compact_upstream_mode ?? "primary")}`,
     secretCopy
   ].join("；");
 }

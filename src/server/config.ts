@@ -5,9 +5,15 @@ import type {
   CompactGateRuntimeConfig,
   CompactModelMode,
   CompactUpstreamMode,
+  ConfigProfileScope,
   PublicConfig,
   PublicConfigProfile,
-  SavedConfigProfile
+  SavedClaudeProfileConfig,
+  SavedCodexProfileConfig,
+  SavedConfigProfile,
+  SavedConfigProfileConfig,
+  SavedConfigProfileScopeState,
+  SavedConfigProfileScopes
 } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
 
@@ -49,6 +55,16 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
   logging: {
     redact_body: true,
     keep_recent: 200
+  },
+  profile_scopes: {
+    codex: {
+      profiles: [],
+      active_profile_id: null
+    },
+    claude: {
+      profiles: [],
+      active_profile_id: null
+    }
   }
 };
 
@@ -74,10 +90,13 @@ export class ConfigStore {
   static async load(configPath: string): Promise<ConfigStore> {
     const resolvedPath = path.resolve(configPath);
     let config = DEFAULT_CONFIG;
+    let shouldPersistNormalizedProfiles = false;
 
     try {
       const raw = await fs.readFile(resolvedPath, "utf8");
-      config = mergeConfig(DEFAULT_CONFIG, JSON.parse(raw));
+      const parsed = JSON.parse(raw);
+      config = mergeConfig(DEFAULT_CONFIG, parsed);
+      shouldPersistNormalizedProfiles = shouldPersistProfileNormalization(parsed);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -86,7 +105,11 @@ export class ConfigStore {
     }
 
     validateConfig(config);
-    return new ConfigStore(resolvedPath, config);
+    const store = new ConfigStore(resolvedPath, config);
+    if (shouldPersistNormalizedProfiles) {
+      await store.save();
+    }
+    return store;
   }
 
   get(): CompactGateConfig {
@@ -102,9 +125,12 @@ export class ConfigStore {
       throw new ConfigError("Config patch must be a JSON object.");
     }
 
+    const merged = mergeConfig(this.current, patch);
     const next = {
-      ...mergeConfig(this.current, patch),
-      active_profile_id: null
+      ...merged,
+      profiles: undefined,
+      active_profile_id: null,
+      profile_scopes: clearActiveProfileIds(merged.profile_scopes)
     };
     validateConfig(next);
     this.current = next;
@@ -112,7 +138,16 @@ export class ConfigStore {
     return this.get();
   }
 
-  async saveProfile(name: string, patch: unknown): Promise<CompactGateConfig> {
+  async saveProfile(
+    scopeOrName: ConfigProfileScope | string,
+    nameOrPatch: string | unknown,
+    maybePatch?: unknown
+  ): Promise<CompactGateConfig> {
+    const { scope, name, patch } = normalizeProfileOperationArgs(scopeOrName, nameOrPatch, maybePatch);
+    return this.saveScopedProfile(scope, name, patch);
+  }
+
+  private async saveScopedProfile(scope: ConfigProfileScope, name: string, patch: unknown): Promise<CompactGateConfig> {
     if (!isRecord(patch)) {
       throw new ConfigError("Profile config patch must be a JSON object.");
     }
@@ -123,34 +158,46 @@ export class ConfigStore {
     }
 
     const now = new Date().toISOString();
-    const profileConfig = mergeRuntimeConfig(this.current, patch);
-    validateRuntimeConfig(profileConfig);
+    const profileConfig = createScopedProfileConfig(this.current, patch, scope);
+    validateProfileConfig(profileConfig, scope);
 
-    const existingProfiles = this.current.profiles ?? [];
+    const scopeState = getProfileScopeState(this.current, scope);
+    const existingProfiles = scopeState.profiles ?? [];
     const existing = existingProfiles.find((profile) => profile.name === trimmedName);
     const nextProfile: SavedConfigProfile = {
-      id: existing?.id ?? createProfileId(trimmedName, now),
+      id: existing?.id ?? createProfileId(`${scope}-${trimmedName}`, now),
       name: trimmedName,
       created_at: existing?.created_at ?? now,
       updated_at: now,
-      config: cloneRuntimeConfig(profileConfig)
+      config: cloneProfileConfig(profileConfig)
     };
 
-    this.current = {
-      ...cloneRuntimeConfig(this.current),
+    this.current = withProfileScope(this.current, scope, {
       profiles: [
-        ...existingProfiles.filter((profile) => profile.id !== nextProfile.id),
+        ...existingProfiles.filter((profile) => profile.id !== nextProfile.id).map(cloneProfile),
         nextProfile
       ],
-      active_profile_id: this.current.active_profile_id ?? null
-    };
+      active_profile_id: scopeState.active_profile_id ?? null
+    });
     validateConfig(this.current);
     await this.save();
     return this.get();
   }
 
-  async updateProfile(profileId: string, name: string | undefined, patch: unknown): Promise<CompactGateConfig> {
-    const existingProfiles = this.current.profiles ?? [];
+  async updateProfile(
+    scopeOrProfileId: ConfigProfileScope | string,
+    profileIdOrName: string | undefined,
+    nameOrPatch?: string | unknown,
+    maybePatch?: unknown
+  ): Promise<CompactGateConfig> {
+    const { scope, profileId, name, patch } = normalizeProfileMutationArgs(
+      scopeOrProfileId,
+      profileIdOrName,
+      nameOrPatch,
+      maybePatch
+    );
+    const scopeState = getProfileScopeState(this.current, scope);
+    const existingProfiles = scopeState.profiles ?? [];
     const profile = existingProfiles.find((item) => item.id === profileId);
     if (!profile) {
       throw new ConfigError("Profile not found.");
@@ -173,30 +220,35 @@ export class ConfigStore {
     }
 
     const now = new Date().toISOString();
-    const profileConfig = mergeRuntimeConfig(profile.config, patch);
-    validateRuntimeConfig(profileConfig);
+    const profileConfig = updateScopedProfileConfig(profile.config, patch, scope);
+    validateProfileConfig(profileConfig, scope);
 
-    this.current = {
-      ...cloneRuntimeConfig(this.current),
+    this.current = withProfileScope(this.current, scope, {
       profiles: existingProfiles.map((item) =>
         item.id === profileId
           ? {
               ...item,
               name: trimmedName,
               updated_at: now,
-              config: cloneRuntimeConfig(profileConfig)
+              config: cloneProfileConfig(profileConfig)
             }
           : cloneProfile(item)
       ),
-      active_profile_id: this.current.active_profile_id ?? null
-    };
+      active_profile_id: scopeState.active_profile_id ?? null
+    });
     validateConfig(this.current);
     await this.save();
     return this.get();
   }
 
-  async duplicateProfile(profileId: string, name: string | undefined): Promise<CompactGateConfig> {
-    const existingProfiles = this.current.profiles ?? [];
+  async duplicateProfile(
+    scopeOrProfileId: ConfigProfileScope | string,
+    profileIdOrName?: string,
+    maybeName?: string
+  ): Promise<CompactGateConfig> {
+    const { scope, profileId, name } = normalizeProfileIdNameArgs(scopeOrProfileId, profileIdOrName, maybeName);
+    const scopeState = getProfileScopeState(this.current, scope);
+    const existingProfiles = scopeState.profiles ?? [];
     const profile = existingProfiles.find((item) => item.id === profileId);
     if (!profile) {
       throw new ConfigError("Profile not found.");
@@ -213,56 +265,64 @@ export class ConfigStore {
     }
 
     const nextProfile: SavedConfigProfile = {
-      id: createProfileId(trimmedName, now),
+      id: createProfileId(`${scope}-${trimmedName}`, now),
       name: trimmedName,
       created_at: now,
       updated_at: now,
-      config: cloneRuntimeConfig(profile.config)
+      config: cloneProfileConfig(profile.config)
     };
 
-    this.current = {
-      ...cloneRuntimeConfig(this.current),
+    this.current = withProfileScope(this.current, scope, {
       profiles: [...existingProfiles.map(cloneProfile), nextProfile],
-      active_profile_id: this.current.active_profile_id ?? null
-    };
+      active_profile_id: scopeState.active_profile_id ?? null
+    });
     validateConfig(this.current);
     await this.save();
     return this.get();
   }
 
-  async deleteProfile(profileId: string): Promise<CompactGateConfig> {
-    const existingProfiles = this.current.profiles ?? [];
+  async deleteProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
+    const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
+    const scopeState = getProfileScopeState(this.current, scope);
+    const existingProfiles = scopeState.profiles ?? [];
     const profile = existingProfiles.find((item) => item.id === profileId);
     if (!profile) {
       throw new ConfigError("Profile not found.");
     }
 
-    this.current = {
-      ...cloneRuntimeConfig(this.current),
+    this.current = withProfileScope(this.current, scope, {
       profiles: existingProfiles.filter((item) => item.id !== profileId).map(cloneProfile),
       active_profile_id:
-        this.current.active_profile_id === profileId
+        scopeState.active_profile_id === profileId
           ? null
-          : this.current.active_profile_id ?? null
-    };
+          : scopeState.active_profile_id ?? null
+    });
     validateConfig(this.current);
     await this.save();
     return this.get();
   }
 
-  async applyProfile(profileId: string): Promise<CompactGateConfig> {
-    const profile = (this.current.profiles ?? []).find((item) => item.id === profileId);
+  async applyProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
+    const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
+    const scopeState = getProfileScopeState(this.current, scope);
+    const profile = (scopeState.profiles ?? []).find((item) => item.id === profileId);
     if (!profile) {
       throw new ConfigError("Profile not found.");
     }
 
-    const nextRuntime = cloneRuntimeConfig(profile.config);
+    const nextRuntime = mergeRuntimeForProfileScope(this.current, profile.config, scope);
     validateRuntimeConfig(nextRuntime);
-    this.current = {
-      ...nextRuntime,
-      profiles: this.current.profiles ?? [],
-      active_profile_id: profile.id
-    };
+    this.current = withProfileScope(
+      {
+        ...nextRuntime,
+        profile_scopes: this.current.profile_scopes
+      },
+      scope,
+      {
+        profiles: scopeState.profiles ?? [],
+        active_profile_id: profile.id
+      }
+    );
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -327,8 +387,12 @@ export class ConfigStore {
       listen: config.listen,
       timeouts: config.timeouts,
       logging: config.logging,
-      profiles: (config.profiles ?? []).map(toPublicProfile),
-      active_profile_id: config.active_profile_id ?? null,
+      profiles: getProfileScopeState(config, "codex").profiles.map((profile) => toPublicProfile(profile, "codex")),
+      active_profile_id: getProfileScopeState(config, "codex").active_profile_id ?? null,
+      profile_scopes: {
+        codex: publicProfileScope(config, "codex"),
+        claude: publicProfileScope(config, "claude")
+      },
       config_path: this.configPath,
       last_saved_at: this.lastSavedAt
     };
@@ -348,23 +412,23 @@ export class ConfigStore {
 export function validateConfig(config: CompactGateConfig): void {
   validateRuntimeConfig(config);
 
-  for (const profile of config.profiles ?? []) {
-    if (profile.id.trim().length === 0) {
-      throw new ConfigError("profile.id is required.");
+  for (const scope of PROFILE_SCOPES) {
+    const state = getProfileScopeState(config, scope);
+    for (const profile of state.profiles) {
+      if (profile.id.trim().length === 0) {
+        throw new ConfigError("profile.id is required.");
+      }
+
+      if (profile.name.trim().length === 0) {
+        throw new ConfigError("profile.name is required.");
+      }
+
+      validateProfileConfig(profile.config, scope);
     }
 
-    if (profile.name.trim().length === 0) {
-      throw new ConfigError("profile.name is required.");
+    if (state.active_profile_id && !state.profiles.some((profile) => profile.id === state.active_profile_id)) {
+      throw new ConfigError(`${scope}.active_profile_id must reference an existing profile.`);
     }
-
-    validateRuntimeConfig(profile.config);
-  }
-
-  if (
-    config.active_profile_id &&
-    !(config.profiles ?? []).some((profile) => profile.id === config.active_profile_id)
-  ) {
-    throw new ConfigError("active_profile_id must reference an existing profile.");
   }
 }
 
@@ -477,14 +541,13 @@ function validateUpstreamMode(value: string): asserts value is CompactUpstreamMo
 function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig {
   const patchRecord = isRecord(patch) ? patch : {};
   const runtime = mergeRuntimeConfig(base, patchRecord);
+  const profileScopes = mergeProfileScopes(base, patchRecord);
 
   return {
     ...runtime,
-    profiles: mergeProfiles(base.profiles ?? [], patchRecord.profiles),
-    active_profile_id: readActiveProfileId(
-      patchRecord.active_profile_id,
-      base.active_profile_id ?? null
-    )
+    profiles: undefined,
+    active_profile_id: profileScopes.codex?.active_profile_id ?? null,
+    profile_scopes: profileScopes
   };
 }
 
@@ -585,6 +648,73 @@ function mergeClaudeCompactConfig(
   };
 }
 
+function mergeRuntimeForProfileScope(
+  current: CompactGateRuntimeConfig,
+  profile: SavedConfigProfileConfig,
+  scope: ConfigProfileScope
+): CompactGateRuntimeConfig {
+  const profileRuntime = profileConfigToRuntime(profile);
+
+  if (scope === "codex") {
+    return {
+      ...cloneRuntimeConfig(current),
+      primary: { ...profileRuntime.primary },
+      compact: { ...profileRuntime.compact }
+    };
+  }
+
+  return {
+    ...cloneRuntimeConfig(current),
+    claude: {
+      primary: { ...profileRuntime.claude.primary },
+      compact: { ...profileRuntime.claude.compact }
+    }
+  };
+}
+
+function createScopedProfileConfig(
+  current: CompactGateRuntimeConfig,
+  patch: unknown,
+  scope: ConfigProfileScope
+): SavedConfigProfileConfig {
+  return extractScopedProfileConfig(mergeRuntimeConfig(current, patch), scope);
+}
+
+function updateScopedProfileConfig(
+  current: SavedConfigProfileConfig,
+  patch: unknown,
+  scope: ConfigProfileScope
+): SavedConfigProfileConfig {
+  return extractScopedProfileConfig(mergeRuntimeConfig(profileConfigToRuntime(current), patch), scope);
+}
+
+function extractScopedProfileConfig(
+  runtime: CompactGateRuntimeConfig,
+  scope: ConfigProfileScope
+): SavedCodexProfileConfig | SavedClaudeProfileConfig {
+  if (scope === "codex") {
+    return {
+      primary: { ...runtime.primary },
+      compact: { ...runtime.compact }
+    };
+  }
+
+  return {
+    claude: {
+      primary: { ...runtime.claude.primary },
+      compact: { ...runtime.claude.compact }
+    }
+  };
+}
+
+function profileConfigToRuntime(config: SavedConfigProfileConfig): CompactGateRuntimeConfig {
+  return mergeRuntimeConfig(DEFAULT_CONFIG, config);
+}
+
+function validateProfileConfig(config: SavedConfigProfileConfig, scope: ConfigProfileScope): void {
+  validateRuntimeConfig(profileConfigToRuntime(extractScopedProfileConfig(profileConfigToRuntime(config), scope)));
+}
+
 function cloneConfig(config: CompactGateConfig): CompactGateConfig {
   return JSON.parse(JSON.stringify(config)) as CompactGateConfig;
 }
@@ -600,7 +730,228 @@ function cloneRuntimeConfig(config: CompactGateRuntimeConfig): CompactGateRuntim
   })) as CompactGateRuntimeConfig;
 }
 
+function cloneProfileConfig(config: SavedConfigProfileConfig): SavedConfigProfileConfig {
+  return JSON.parse(JSON.stringify(config)) as SavedConfigProfileConfig;
+}
+
+function shouldPersistProfileNormalization(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (Array.isArray(value.profiles)) {
+    return true;
+  }
+
+  const profileScopes = readChild(value.profile_scopes);
+  return (
+    profileScopeNeedsNormalization(readChild(profileScopes.codex), "codex") ||
+    profileScopeNeedsNormalization(readChild(profileScopes.claude), "claude")
+  );
+}
+
+function profileScopeNeedsNormalization(
+  value: Record<string, unknown>,
+  scope: ConfigProfileScope
+): boolean {
+  if (!Array.isArray(value.profiles)) {
+    return false;
+  }
+
+  return value.profiles.some((profile) => {
+    if (!isRecord(profile) || !isRecord(profile.config)) {
+      return false;
+    }
+
+    if (scope === "codex") {
+      return (
+        Object.hasOwn(profile.config, "claude") ||
+        Object.hasOwn(profile.config, "listen") ||
+        Object.hasOwn(profile.config, "timeouts") ||
+        Object.hasOwn(profile.config, "logging")
+      );
+    }
+
+    return (
+      Object.hasOwn(profile.config, "primary") ||
+      Object.hasOwn(profile.config, "compact") ||
+      Object.hasOwn(profile.config, "listen") ||
+      Object.hasOwn(profile.config, "timeouts") ||
+      Object.hasOwn(profile.config, "logging")
+    );
+  });
+}
+
+
+const PROFILE_SCOPES: ConfigProfileScope[] = ["codex", "claude"];
+
+function normalizeProfileOperationArgs(
+  scopeOrName: ConfigProfileScope | string,
+  nameOrPatch: string | unknown,
+  maybePatch?: unknown
+): { scope: ConfigProfileScope; name: string; patch: unknown } {
+  if (isProfileScope(scopeOrName) && typeof nameOrPatch === "string") {
+    return { scope: scopeOrName, name: nameOrPatch, patch: maybePatch ?? {} };
+  }
+
+  return { scope: "codex", name: scopeOrName, patch: nameOrPatch ?? {} };
+}
+
+function normalizeProfileMutationArgs(
+  scopeOrProfileId: ConfigProfileScope | string,
+  profileIdOrName: string | undefined,
+  nameOrPatch?: string | unknown,
+  maybePatch?: unknown
+): { scope: ConfigProfileScope; profileId: string; name: string | undefined; patch: unknown } {
+  if (isProfileScope(scopeOrProfileId)) {
+    return {
+      scope: scopeOrProfileId,
+      profileId: profileIdOrName ?? "",
+      name: typeof nameOrPatch === "string" ? nameOrPatch : undefined,
+      patch: maybePatch ?? (typeof nameOrPatch === "string" ? {} : nameOrPatch ?? {})
+    };
+  }
+
+  return {
+    scope: "codex",
+    profileId: scopeOrProfileId,
+    name: profileIdOrName,
+    patch: nameOrPatch ?? {}
+  };
+}
+
+function normalizeProfileIdNameArgs(
+  scopeOrProfileId: ConfigProfileScope | string,
+  profileIdOrName?: string,
+  maybeName?: string
+): { scope: ConfigProfileScope; profileId: string; name: string | undefined } {
+  if (isProfileScope(scopeOrProfileId)) {
+    return { scope: scopeOrProfileId, profileId: profileIdOrName ?? "", name: maybeName };
+  }
+
+  return { scope: "codex", profileId: scopeOrProfileId, name: profileIdOrName };
+}
+
+function normalizeProfileIdArgs(
+  scopeOrProfileId: ConfigProfileScope | string,
+  maybeProfileId?: string
+): { scope: ConfigProfileScope; profileId: string } {
+  if (isProfileScope(scopeOrProfileId)) {
+    return { scope: scopeOrProfileId, profileId: maybeProfileId ?? "" };
+  }
+
+  return { scope: "codex", profileId: scopeOrProfileId };
+}
+
+function isProfileScope(value: string): value is ConfigProfileScope {
+  return value === "codex" || value === "claude";
+}
+
+function getProfileScopeState(
+  config: CompactGateConfig,
+  scope: ConfigProfileScope
+): { profiles: SavedConfigProfile[]; active_profile_id: string | null } {
+  const scoped = config.profile_scopes?.[scope];
+  return {
+    profiles: (scoped?.profiles ?? []).map(cloneProfile),
+    active_profile_id: scoped?.active_profile_id ?? null
+  };
+}
+
+function withProfileScope(
+  config: CompactGateConfig,
+  scope: ConfigProfileScope,
+  state: SavedConfigProfileScopeState
+): CompactGateConfig {
+  const previousScopes = config.profile_scopes ?? {};
+  const nextScopes: SavedConfigProfileScopes = {
+    codex: cloneProfileScope(previousScopes.codex),
+    claude: cloneProfileScope(previousScopes.claude)
+  };
+  nextScopes[scope] = cloneProfileScope(state);
+
+  return {
+    ...cloneRuntimeConfig(config),
+    profiles: undefined,
+    active_profile_id: nextScopes.codex?.active_profile_id ?? null,
+    profile_scopes: nextScopes
+  };
+}
+
+function cloneProfileScope(state: SavedConfigProfileScopeState | undefined): SavedConfigProfileScopeState {
+  return {
+    profiles: (state?.profiles ?? []).map(cloneProfile),
+    active_profile_id: state?.active_profile_id ?? null
+  };
+}
+
+function clearActiveProfileIds(scopes: SavedConfigProfileScopes | undefined): SavedConfigProfileScopes {
+  return {
+    codex: {
+      profiles: (scopes?.codex?.profiles ?? []).map(cloneProfile),
+      active_profile_id: null
+    },
+    claude: {
+      profiles: (scopes?.claude?.profiles ?? []).map(cloneProfile),
+      active_profile_id: null
+    }
+  };
+}
+
+function mergeProfileScopes(base: CompactGateConfig, patchRecord: Record<string, unknown>): SavedConfigProfileScopes {
+  const baseScopes = base.profile_scopes;
+  const legacyActive = readActiveProfileId(patchRecord.active_profile_id, base.active_profile_id ?? null);
+  const legacySource = Array.isArray(patchRecord.profiles) ? patchRecord.profiles : base.profiles;
+  const legacyMigration = migrateLegacyProfiles(legacySource, legacyActive);
+  const patchScopes = readChild(patchRecord.profile_scopes);
+
+  return {
+    codex: mergeProfileScopeState(
+      "codex",
+      baseScopes?.codex,
+      readChild(patchScopes.codex),
+      legacyMigration.codexProfiles,
+      legacyMigration.codexActiveProfileId
+    ),
+    claude: mergeProfileScopeState(
+      "claude",
+      baseScopes?.claude,
+      readChild(patchScopes.claude),
+      legacyMigration.claudeProfiles,
+      legacyMigration.claudeActiveProfileId
+    )
+  };
+}
+
+function mergeProfileScopeState(
+  scope: ConfigProfileScope,
+  baseState: SavedConfigProfileScopeState | undefined,
+  patchState: Record<string, unknown>,
+  legacyProfiles: SavedConfigProfile[],
+  legacyActive: string | null
+): SavedConfigProfileScopeState {
+  const baseProfiles = baseState?.profiles ?? [];
+  const hasPatchProfiles = Array.isArray(patchState.profiles);
+  const fallbackProfiles = legacyProfiles.length > 0 && baseProfiles.length === 0 ? legacyProfiles : baseProfiles;
+  const fallbackActive = legacyProfiles.length > 0 && baseProfiles.length === 0
+    ? legacyActive
+    : baseState?.active_profile_id ?? null;
+  return {
+    profiles: hasPatchProfiles ? mergeProfiles(scope, fallbackProfiles, patchState.profiles) : fallbackProfiles.map(cloneProfile),
+    active_profile_id: readActiveProfileId(patchState.active_profile_id, fallbackActive)
+  };
+}
+
+function publicProfileScope(config: CompactGateConfig, scope: ConfigProfileScope) {
+  const state = getProfileScopeState(config, scope);
+  return {
+    profiles: state.profiles.map((profile) => toPublicProfile(profile, scope)),
+    active_profile_id: state.active_profile_id
+  };
+}
+
 function mergeProfiles(
+  scope: ConfigProfileScope,
   baseProfiles: SavedConfigProfile[],
   value: unknown
 ): SavedConfigProfile[] {
@@ -609,11 +960,68 @@ function mergeProfiles(
   }
 
   return value
-    .map((item) => readProfile(item))
+    .map((item) => readProfile(item, scope))
     .filter((item): item is SavedConfigProfile => item !== null);
 }
 
-function readProfile(value: unknown): SavedConfigProfile | null {
+function migrateLegacyProfiles(
+  value: unknown,
+  activeProfileId: string | null
+): {
+  codexProfiles: SavedConfigProfile[];
+  codexActiveProfileId: string | null;
+  claudeProfiles: SavedConfigProfile[];
+  claudeActiveProfileId: string | null;
+} {
+  if (!Array.isArray(value)) {
+    return {
+      codexProfiles: [],
+      codexActiveProfileId: null,
+      claudeProfiles: [],
+      claudeActiveProfileId: null
+    };
+  }
+
+  const codexProfiles = value
+    .map((item) => readProfile(item, "codex"))
+    .filter((item): item is SavedConfigProfile => item !== null);
+  const claudeProfiles: SavedConfigProfile[] = [];
+  const claudeConfigProfileIds = new Map<string, string>();
+  let claudeActiveProfileId: string | null = null;
+
+  for (const item of value) {
+    const profile = readProfile(item, "claude");
+    if (!profile) {
+      continue;
+    }
+
+    const configKey = JSON.stringify(profile.config);
+    const existingProfileId = claudeConfigProfileIds.get(configKey);
+    if (existingProfileId) {
+      if (profile.id === activeProfileId) {
+        claudeActiveProfileId = existingProfileId;
+      }
+      continue;
+    }
+
+    claudeConfigProfileIds.set(configKey, profile.id);
+    claudeProfiles.push(profile);
+    if (profile.id === activeProfileId) {
+      claudeActiveProfileId = profile.id;
+    }
+  }
+
+  return {
+    codexProfiles,
+    codexActiveProfileId: activeProfileId && codexProfiles.some((profile) => profile.id === activeProfileId)
+      ? activeProfileId
+      : null,
+    claudeProfiles,
+    claudeActiveProfileId
+  };
+}
+
+function readProfile(value: unknown, scope: ConfigProfileScope): SavedConfigProfile | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -624,7 +1032,7 @@ function readProfile(value: unknown): SavedConfigProfile | null {
     return null;
   }
 
-  const config = mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config));
+  const config = extractScopedProfileConfig(mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config)), scope);
   return {
     id,
     name,
@@ -640,7 +1048,7 @@ function cloneProfile(profile: SavedConfigProfile): SavedConfigProfile {
     name: profile.name,
     created_at: profile.created_at,
     updated_at: profile.updated_at,
-    config: cloneRuntimeConfig(profile.config)
+    config: cloneProfileConfig(profile.config)
   };
 }
 
@@ -661,24 +1069,26 @@ function createProfileId(name: string, isoTime: string): string {
   return `${slug}-${Date.parse(isoTime).toString(36)}`;
 }
 
-function toPublicProfile(profile: SavedConfigProfile): PublicConfigProfile {
+function toPublicProfile(profile: SavedConfigProfile, scope: ConfigProfileScope): PublicConfigProfile {
+  const runtime = profileConfigToRuntime(profile.config);
+  const codexProfile = scope === "codex";
+  const storedApiKeys = codexProfile
+    ? [runtime.primary.api_key, runtime.compact.api_key]
+    : [runtime.claude.primary.api_key, runtime.claude.compact.api_key];
+
   return {
     id: profile.id,
+    scope,
     name: profile.name,
     created_at: profile.created_at,
     updated_at: profile.updated_at,
-    primary_host: safeHost(profile.config.primary.base_url),
-    compact_host: safeHost(profile.config.compact.base_url),
-    claude_primary_host: safeHost(profile.config.claude.primary.base_url),
-    claude_compact_host: safeHost(profile.config.claude.compact.base_url),
-    compact_upstream_mode: profile.config.compact.upstream_mode,
-    claude_compact_upstream_mode: profile.config.claude.compact.upstream_mode,
-    stored_api_key_count: [
-      profile.config.primary.api_key,
-      profile.config.compact.api_key,
-      profile.config.claude.primary.api_key,
-      profile.config.claude.compact.api_key
-    ].filter(directApiKeyConfigured).length
+    primary_host: codexProfile ? safeHost(runtime.primary.base_url) : null,
+    compact_host: codexProfile ? safeHost(runtime.compact.base_url) : null,
+    claude_primary_host: codexProfile ? null : safeHost(runtime.claude.primary.base_url),
+    claude_compact_host: codexProfile ? null : safeHost(runtime.claude.compact.base_url),
+    compact_upstream_mode: codexProfile ? runtime.compact.upstream_mode : null,
+    claude_compact_upstream_mode: codexProfile ? null : runtime.claude.compact.upstream_mode,
+    stored_api_key_count: storedApiKeys.filter(directApiKeyConfigured).length
   };
 }
 

@@ -145,32 +145,33 @@ describe("ConfigStore", () => {
         }
       }
     });
-    const profileId = saved.profiles?.[0]?.id;
+    const profileId = saved.profile_scopes?.codex?.profiles?.[0]?.id;
     expect(profileId).toBeTruthy();
 
     const publicConfig = store.toPublicConfig();
     expect(publicConfig.profiles).toHaveLength(1);
     expect(publicConfig.profiles[0]).toMatchObject({
       id: profileId,
+      scope: "codex",
       name: "Local split",
       primary_host: "127.0.0.1:9201",
       compact_host: "127.0.0.1:9202",
-      claude_primary_host: "127.0.0.1:9203",
-      claude_compact_host: "127.0.0.1:9204",
+      claude_primary_host: null,
+      claude_compact_host: null,
       compact_upstream_mode: "split",
-      claude_compact_upstream_mode: "primary",
-      stored_api_key_count: 4
+      claude_compact_upstream_mode: null,
+      stored_api_key_count: 2
     });
     expect(JSON.stringify(publicConfig)).not.toContain("profile-primary-key");
     expect(JSON.stringify(publicConfig)).not.toContain("profile-claude-compact-key");
 
     await store.applyProfile(profileId ?? "");
     const applied = store.get();
-    expect(applied.active_profile_id).toBe(profileId);
+    expect(applied.profile_scopes?.codex?.active_profile_id).toBe(profileId);
     expect(applied.primary.base_url).toBe("http://127.0.0.1:9201/v1");
     expect(applied.primary.api_key).toBe("profile-primary-key");
     expect(applied.compact.model_override).toBe("profile-compact-model");
-    expect(applied.claude.compact.base_url).toBe("http://127.0.0.1:9204");
+    expect(applied.claude.compact.base_url).toBe("https://api.anthropic.com");
 
     await store.patch({
       primary: {
@@ -179,14 +180,19 @@ describe("ConfigStore", () => {
     });
     const patched = store.get();
     expect(patched.active_profile_id).toBeNull();
-    expect(patched.profiles).toHaveLength(1);
-    expect(patched.profiles?.[0]?.config.primary.api_key).toBe("profile-primary-key");
+    expect(patched.profile_scopes?.codex?.profiles).toHaveLength(1);
+    const patchedCodexConfig = patched.profile_scopes?.codex?.profiles?.[0]?.config;
+    expect(patchedCodexConfig).toMatchObject({
+      primary: { api_key: "profile-primary-key" },
+      compact: { api_key: "profile-compact-key" }
+    });
+    expect(patchedCodexConfig).not.toHaveProperty("claude");
 
     const duplicated = await store.duplicateProfile(profileId ?? "", "Local split copy");
-    const duplicateId = duplicated.profiles?.find((profile) => profile.name === "Local split copy")?.id;
+    const duplicateId = duplicated.profile_scopes?.codex?.profiles?.find((profile) => profile.name === "Local split copy")?.id;
     expect(duplicateId).toBeTruthy();
     expect(duplicateId).not.toBe(profileId);
-    expect(duplicated.profiles).toHaveLength(2);
+    expect(duplicated.profile_scopes?.codex?.profiles).toHaveLength(2);
 
     await store.updateProfile(profileId ?? "", "Local split updated", {
       primary: {
@@ -197,17 +203,141 @@ describe("ConfigStore", () => {
       }
     });
     const updated = store.get();
-    const updatedProfile = updated.profiles?.find((profile) => profile.id === profileId);
+    const updatedProfile = updated.profile_scopes?.codex?.profiles?.find((profile) => profile.id === profileId);
     expect(updatedProfile?.name).toBe("Local split updated");
-    expect(updatedProfile?.config.primary.base_url).toBe("http://127.0.0.1:9401/v1");
-    expect(updatedProfile?.config.primary.api_key).toBe("profile-primary-key");
-    expect(updatedProfile?.config.compact.model_override).toBe("updated-profile-compact-model");
+    expect(updatedProfile?.config).toMatchObject({
+      primary: {
+        base_url: "http://127.0.0.1:9401/v1",
+        api_key: "profile-primary-key"
+      },
+      compact: {
+        model_override: "updated-profile-compact-model"
+      }
+    });
+    expect(updatedProfile?.config).not.toHaveProperty("claude");
 
     await store.deleteProfile(profileId ?? "");
     const deleted = store.get();
-    expect(deleted.profiles).toHaveLength(1);
-    expect(deleted.profiles?.[0]?.id).toBe(duplicateId);
-    expect(deleted.active_profile_id).toBeNull();
+    expect(deleted.profile_scopes?.codex?.profiles).toHaveLength(1);
+    expect(deleted.profile_scopes?.codex?.profiles?.[0]?.id).toBe(duplicateId);
+    expect(deleted.profile_scopes?.codex?.active_profile_id).toBeNull();
     expect(JSON.stringify(store.toPublicConfig())).not.toContain("profile-primary-key");
   });
+
+  it("keeps Codex and Claude config profiles independent", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.saveProfile("codex", "Codex only", {
+      primary: { base_url: "http://127.0.0.1:9501/v1" },
+      compact: { base_url: "http://127.0.0.1:9502/v1" }
+    });
+    await store.saveProfile("claude", "Claude only", {
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9503" },
+        compact: { base_url: "http://127.0.0.1:9504", upstream_mode: "split" }
+      }
+    });
+
+    const saved = store.get();
+    const codexId = saved.profile_scopes?.codex?.profiles?.[0]?.id ?? "";
+    const claudeId = saved.profile_scopes?.claude?.profiles?.[0]?.id ?? "";
+    expect(codexId).toBeTruthy();
+    expect(claudeId).toBeTruthy();
+    expect(saved.profile_scopes?.codex?.profiles?.[0]?.config).toMatchObject({
+      primary: { base_url: "http://127.0.0.1:9501/v1" },
+      compact: { base_url: "http://127.0.0.1:9502/v1" }
+    });
+    expect(saved.profile_scopes?.codex?.profiles?.[0]?.config).not.toHaveProperty("claude");
+    expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).toMatchObject({
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9503" },
+        compact: { base_url: "http://127.0.0.1:9504" }
+      }
+    });
+    expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("primary");
+    expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("compact");
+
+    await store.applyProfile("codex", codexId);
+    let applied = store.get();
+    expect(applied.primary.base_url).toBe("http://127.0.0.1:9501/v1");
+    expect(applied.compact.base_url).toBe("http://127.0.0.1:9502/v1");
+    expect(applied.claude.primary.base_url).toBe("https://api.anthropic.com");
+    expect(applied.profile_scopes?.codex?.active_profile_id).toBe(codexId);
+    expect(applied.profile_scopes?.claude?.active_profile_id).toBeNull();
+
+    await store.applyProfile("claude", claudeId);
+    applied = store.get();
+    expect(applied.primary.base_url).toBe("http://127.0.0.1:9501/v1");
+    expect(applied.claude.primary.base_url).toBe("http://127.0.0.1:9503");
+    expect(applied.claude.compact.base_url).toBe("http://127.0.0.1:9504");
+    expect(applied.profile_scopes?.codex?.active_profile_id).toBe(codexId);
+    expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
+  });
+
+  it("migrates legacy combined profiles into scoped fragments and dedupes Claude profiles", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const configPath = path.join(dir, "compactgate.json");
+    await writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          profiles: [
+            {
+              id: "one",
+              name: "One",
+              created_at: "2026-01-01T00:00:00.000Z",
+              updated_at: "2026-01-01T00:00:00.000Z",
+              config: {
+                primary: { base_url: "http://127.0.0.1:9601/v1" },
+                compact: { base_url: "http://127.0.0.1:9602/v1" },
+                claude: {
+                  primary: { base_url: "http://127.0.0.1:9603" },
+                  compact: { base_url: "http://127.0.0.1:9604", upstream_mode: "split" }
+                }
+              }
+            },
+            {
+              id: "two",
+              name: "Two",
+              created_at: "2026-01-02T00:00:00.000Z",
+              updated_at: "2026-01-02T00:00:00.000Z",
+              config: {
+                primary: { base_url: "http://127.0.0.1:9701/v1" },
+                compact: { base_url: "http://127.0.0.1:9702/v1" },
+                claude: {
+                  primary: { base_url: "http://127.0.0.1:9603" },
+                  compact: { base_url: "http://127.0.0.1:9604", upstream_mode: "split" }
+                }
+              }
+            }
+          ],
+          active_profile_id: "two"
+        },
+        null,
+        2
+      )
+    );
+
+    const store = await ConfigStore.load(configPath);
+    const migrated = store.get();
+
+    expect(migrated.profile_scopes?.codex?.profiles).toHaveLength(2);
+    expect(migrated.profile_scopes?.claude?.profiles).toHaveLength(1);
+    expect(migrated.profile_scopes?.codex?.active_profile_id).toBe("two");
+    expect(migrated.profile_scopes?.claude?.active_profile_id).toBe("one");
+    expect(migrated.profile_scopes?.codex?.profiles?.[0]?.config).not.toHaveProperty("claude");
+    expect(migrated.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("primary");
+    expect(migrated.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("compact");
+    expect(migrated.profile_scopes?.claude?.profiles?.[0]?.config).toMatchObject({
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9603" },
+        compact: { base_url: "http://127.0.0.1:9604", upstream_mode: "split" }
+      }
+    });
+  });
+
 });
