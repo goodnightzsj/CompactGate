@@ -1,12 +1,16 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { routeProvider } from "../shared/route-meta.js";
 import type {
   HostLogCount,
+  LogStatusKind,
+  ProviderLogCounts,
   RequestLogEntry,
   RequestLogPage,
   RequestTransport,
-  RouteKind
+  RouteKind,
+  StatusLogCounts
 } from "../shared/types.js";
 
 const LOG_TABLE_SQL = `
@@ -19,6 +23,7 @@ const LOG_TABLE_SQL = `
     endpoint TEXT NOT NULL DEFAULT '',
     request_type TEXT NOT NULL DEFAULT 'http',
     reasoning_effort TEXT,
+    request_summary TEXT,
     source_model TEXT,
     target_model TEXT,
     status INTEGER NOT NULL,
@@ -45,6 +50,7 @@ const RECENT_LOG_FIELDS = `
   endpoint,
   request_type,
   reasoning_effort,
+  request_summary,
   source_model,
   target_model,
   status,
@@ -65,6 +71,8 @@ const MIGRATION_COLUMNS: Record<string, string> = {
   endpoint: "TEXT NOT NULL DEFAULT ''",
   request_type: "TEXT NOT NULL DEFAULT 'http'",
   reasoning_effort: "TEXT",
+  request_summary: "TEXT",
+  error_summary: "TEXT",
   first_token_ms: "INTEGER",
   input_tokens: "INTEGER",
   output_tokens: "INTEGER",
@@ -76,18 +84,19 @@ const MIGRATION_COLUMNS: Record<string, string> = {
 
 interface LogPageOptions {
   route?: RouteKind;
+  status?: LogStatusKind;
   host?: string;
   limit: number;
   offset: number;
 }
 
-export function resolveLogDatabasePath(configPath: string, overridePath?: string): string {
-  if (overridePath && overridePath.trim().length > 0) {
-    return path.resolve(overridePath);
-  }
-
+export function resolveDefaultLogDatabasePath(configPath: string): string {
   const configBaseName = path.basename(configPath, path.extname(configPath));
-  return path.join(path.dirname(configPath), `${configBaseName}-logs.sqlite`);
+  return path.resolve(path.dirname(configPath), `${configBaseName}-logs.sqlite`);
+}
+
+export function resolveLogDatabasePath(configPath: string): string {
+  return resolveDefaultLogDatabasePath(configPath);
 }
 
 export class RequestLogger {
@@ -95,11 +104,13 @@ export class RequestLogger {
 
   private readonly db: DatabaseSync;
 
+  private readonly databasePath: string;
+
   private closed = false;
 
   constructor(
     private keepRecent: number,
-    private readonly databasePath: string
+    databasePath: string
   ) {
     const resolvedPath = path.resolve(databasePath);
     mkdirSync(path.dirname(resolvedPath), { recursive: true });
@@ -115,6 +126,10 @@ export class RequestLogger {
   resize(keepRecent: number): void {
     this.keepRecent = keepRecent;
     this.reloadRecent();
+  }
+
+  getDatabasePath(): string {
+    return this.databasePath;
   }
 
   add(entry: RequestLogEntry): void {
@@ -135,6 +150,7 @@ export class RequestLogger {
               endpoint,
               request_type,
               reasoning_effort,
+              request_summary,
               source_model,
               target_model,
               status,
@@ -149,7 +165,7 @@ export class RequestLogger {
               user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -160,6 +176,7 @@ export class RequestLogger {
           entry.endpoint,
           entry.request_type,
           entry.reasoning_effort,
+          entry.request_summary,
           entry.source_model,
           entry.target_model,
           entry.status,
@@ -213,7 +230,8 @@ export class RequestLogger {
     const allTotal = readCount(
       this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
     );
-    const counts = this.counts();
+    const counts = this.routeCounts(options);
+    const statusCounts = this.statusCounts(options);
 
     return {
       logs,
@@ -223,7 +241,9 @@ export class RequestLogger {
       all_total: allTotal,
       has_more: offset + logs.length < total,
       counts,
-      host_counts: this.hostCounts()
+      provider_counts: providerCountsFromRouteCounts(counts),
+      status_counts: statusCounts,
+      host_counts: this.hostCounts(options)
     };
   }
 
@@ -266,16 +286,18 @@ export class RequestLogger {
     }
   }
 
-  private counts(): Record<"all" | RouteKind, number> {
+  private routeCounts(options: Pick<LogPageOptions, "status" | "host">): Record<"all" | RouteKind, number> {
+    const where = buildWhereClause({ status: options.status, host: options.host });
     const rows = this.db
       .prepare(
         `
           SELECT route, COUNT(*) AS count
           FROM request_logs
+          ${where.sql}
           GROUP BY route
         `
       )
-      .all() as Array<Record<string, unknown>>;
+      .all(...where.params) as Array<Record<string, unknown>>;
     const counts = {
       all: 0,
       primary: 0,
@@ -293,7 +315,38 @@ export class RequestLogger {
     return counts;
   }
 
-  private hostCounts(): HostLogCount[] {
+  private statusCounts(options: Pick<LogPageOptions, "route" | "host">): StatusLogCounts {
+    const where = buildWhereClause({ route: options.route, host: options.host });
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            CASE WHEN status >= 400 OR error_summary IS NOT NULL THEN 'error' ELSE 'normal' END AS status_kind,
+            COUNT(*) AS count
+          FROM request_logs
+          ${where.sql}
+          GROUP BY status_kind
+        `
+      )
+      .all(...where.params) as Array<Record<string, unknown>>;
+    const counts: StatusLogCounts = {
+      all: 0,
+      normal: 0,
+      error: 0
+    };
+
+    for (const row of rows) {
+      const status = normalizeLogStatus(row.status_kind);
+      const count = readCount(row);
+      counts[status] = count;
+      counts.all += count;
+    }
+
+    return counts;
+  }
+
+  private hostCounts(options: Pick<LogPageOptions, "route" | "status">): HostLogCount[] {
+    const where = buildWhereClause({ route: options.route, status: options.status });
     const rows = this.db
       .prepare(
         `
@@ -304,11 +357,12 @@ export class RequestLogger {
             SUM(CASE WHEN route = 'compact' THEN 1 ELSE 0 END) AS compact_count,
             SUM(CASE WHEN route = 'claude' THEN 1 ELSE 0 END) AS claude_count
           FROM request_logs
+          ${where.sql}
           GROUP BY upstream_host
           ORDER BY total DESC, upstream_host ASC
         `
       )
-      .all() as Array<Record<string, unknown>>;
+      .all(...where.params) as Array<Record<string, unknown>>;
 
     return rows.map((row) => ({
       host: String(row.host),
@@ -320,7 +374,23 @@ export class RequestLogger {
   }
 }
 
-function buildWhereClause(options: Pick<LogPageOptions, "route" | "host">): {
+function providerCountsFromRouteCounts(
+  counts: Record<"all" | RouteKind, number>
+): ProviderLogCounts {
+  const providerCounts: ProviderLogCounts = {
+    all: counts.all,
+    openai: 0,
+    claude: 0
+  };
+
+  for (const route of ["primary", "compact", "claude"] as const) {
+    providerCounts[routeProvider(route)] += counts[route];
+  }
+
+  return providerCounts;
+}
+
+function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host">): {
   sql: string;
   params: Array<RouteKind | string>;
 } {
@@ -330,6 +400,12 @@ function buildWhereClause(options: Pick<LogPageOptions, "route" | "host">): {
   if (options.route) {
     conditions.push("route = ?");
     params.push(options.route);
+  }
+
+  if (options.status === "normal") {
+    conditions.push("status < 400 AND error_summary IS NULL");
+  } else if (options.status === "error") {
+    conditions.push("(status >= 400 OR error_summary IS NOT NULL)");
   }
 
   if (options.host) {
@@ -352,6 +428,7 @@ function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     endpoint: readEndpoint(row.endpoint, String(row.path)),
     request_type: readRequestTransport(row.request_type),
     reasoning_effort: readNullableString(row.reasoning_effort),
+    request_summary: readNullableString(row.request_summary),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
     status: Number(row.status),
@@ -367,6 +444,10 @@ function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary)
   };
+}
+
+function normalizeLogStatus(value: unknown): LogStatusKind {
+  return value === "error" ? "error" : "normal";
 }
 
 function normalizeRoute(value: unknown): RouteKind {

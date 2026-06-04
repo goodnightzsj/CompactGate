@@ -1,30 +1,57 @@
 import React, { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { PROVIDER_LABELS, ROUTE_META, routeLabel, routeProvider } from "../shared/route-meta.js";
 import type {
   CompactGateConfig,
+  CredentialScope,
   CredentialSource,
   HostLogCount,
   HealthResponse,
+  LogStatusKind,
+  ProviderLogCounts,
   PublicConfig,
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
   RoutePreviewResponse,
   StudioLogEvent,
-  StudioSnapshotEvent
+  StudioSnapshotEvent,
+  StatusLogCounts
 } from "../shared/types.js";
 import "./styles.css";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+type ThemeMode = "auto" | "light" | "dark";
+type ProfileActionState =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "updating"
+  | "updated"
+  | "duplicating"
+  | "duplicated"
+  | "deleting"
+  | "deleted"
+  | "applying"
+  | "applied"
+  | "error";
 
 type ConfigFormState = {
-  primaryBaseUrl: string;
-  primaryApiKey: string;
-  clearPrimaryApiKey: boolean;
-  compactBaseUrl: string;
-  compactApiKey: string;
-  clearCompactApiKey: boolean;
+  codexPrimaryBaseUrl: string;
+  codexPrimaryApiKey: string;
+  clearCodexPrimaryApiKey: boolean;
+  codexCompactBaseUrl: string;
+  codexCompactApiKey: string;
+  clearCodexCompactApiKey: boolean;
+  claudePrimaryBaseUrl: string;
+  claudePrimaryApiKey: string;
+  clearClaudePrimaryApiKey: boolean;
+  claudeCompactBaseUrl: string;
+  claudeCompactApiKey: string;
+  clearClaudeCompactApiKey: boolean;
+  claudeCompactModelOverride: string;
+  claudeCompactUpstreamMode: "split" | "primary";
   upstreamMode: "split" | "primary";
   modelMode: "linked" | "custom";
   modelTemplate: string;
@@ -45,11 +72,26 @@ interface SelectOption {
   label: string;
   count: number;
   meta?: string;
-  tone?: RouteKind;
+  tone?: string;
 }
+
+type PublicRouteCredentialConfig =
+  | PublicConfig["primary"]
+  | PublicConfig["compact"]
+  | PublicConfig["claude"]["primary"]
+  | PublicConfig["claude"]["compact"];
+
+type HealthRouteCredentialConfig =
+  | HealthResponse["primary"]
+  | HealthResponse["compact"]
+  | HealthResponse["claude"]["primary"]
+  | HealthResponse["claude"]["compact"];
+
+type PublicConfigProfile = PublicConfig["profiles"][number];
 
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
 const ALL_HOSTS_FILTER = "__all_hosts__";
+const ALL_STATUS_FILTER = "__all_status__";
 const DEFAULT_LOG_PAGE_LIMIT = 200;
 const TOKEN_TOOLTIP_WIDTH = 350;
 const TOKEN_TOOLTIP_ESTIMATED_HEIGHT = 216;
@@ -60,6 +102,7 @@ function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [logPage, setLogPage] = useState<RequestLogPage>(() => emptyLogPage(DEFAULT_LOG_PAGE_LIMIT));
   const [routeFilter, setRouteFilter] = useState<"all" | RouteKind>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | LogStatusKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
   const [form, setForm] = useState<ConfigFormState>(emptyForm());
   const [currentModel, setCurrentModel] = useState("gpt-5.5");
@@ -68,14 +111,22 @@ function App() {
   const [preview, setPreview] = useState<RoutePreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [profileName, setProfileName] = useState("");
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [profileState, setProfileState] = useState<ProfileActionState>("idle");
   const [pageError, setPageError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<PublicConfigProfile | null>(null);
+  const profileNameHydratedRef = useRef(false);
   const [logError, setLogError] = useState<string | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
   const [isRefreshingHealth, setIsRefreshingHealth] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredThemeMode());
 
   const deferredFilter = useDeferredValue(routeFilter);
+  const deferredStatusFilter = useDeferredValue(statusFilter);
   const deferredHostFilter = useDeferredValue(hostFilter);
   const logs = logPage.logs;
   const latestLog = logs[0] ?? null;
@@ -93,6 +144,58 @@ function App() {
     () => buildHostFilterOptions(logPage.host_counts, hostFilter),
     [logPage.host_counts, hostFilter]
   );
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+
+    function applyTheme() {
+      const resolvedTheme = themeMode === "auto" ? (media.matches ? "dark" : "light") : themeMode;
+      root.dataset.themeMode = themeMode;
+      root.dataset.theme = resolvedTheme;
+      root.style.colorScheme = resolvedTheme;
+      window.localStorage.setItem("compactgate-theme-mode", themeMode);
+    }
+
+    applyTheme();
+
+    if (themeMode !== "auto") {
+      return undefined;
+    }
+
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+
+    setSelectedProfileId((previous) => {
+      if (previous && config.profiles.some((profile) => profile.id === previous)) {
+        return previous;
+      }
+
+      return config.active_profile_id ?? config.profiles[0]?.id ?? "";
+    });
+  }, [config]);
+
+  useEffect(() => {
+    if (!config || profileNameHydratedRef.current) {
+      return;
+    }
+
+    const initialProfileId = config.active_profile_id ?? config.profiles[0]?.id ?? "";
+    const initialProfile = config.profiles.find((profile) => profile.id === initialProfileId);
+    if (!initialProfile) {
+      return;
+    }
+
+    profileNameHydratedRef.current = true;
+    setSelectedProfileId(initialProfile.id);
+    setProfileName(initialProfile.name);
+  }, [config]);
 
   useEffect(() => {
     let cancelled = false;
@@ -150,6 +253,7 @@ function App() {
       try {
         const nextPage = await fetchLogPage({
           route: deferredFilter,
+          status: deferredStatusFilter,
           host: deferredHostFilter,
           limit: logPageLimit,
           offset: 0
@@ -175,7 +279,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [deferredFilter, deferredHostFilter, hasConfig, logPageLimit, pageMode]);
+  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, hasConfig, logPageLimit, pageMode]);
 
   useEffect(() => {
     if (pageMode !== "studio") {
@@ -188,6 +292,7 @@ function App() {
         try {
           const nextPage = await fetchLogPage({
             route: deferredFilter,
+            status: deferredStatusFilter,
             host: deferredHostFilter,
             limit: logPageLimit,
             offset: 0
@@ -210,7 +315,11 @@ function App() {
         const snapshot = JSON.parse(event.data) as StudioSnapshotEvent;
         setConfig(snapshot.config);
         setHealth(snapshot.health);
-        if (routeFilter === "all" && hostFilter === ALL_HOSTS_FILTER) {
+        if (
+          routeFilter === "all" &&
+          statusFilter === "all" &&
+          hostFilter === ALL_HOSTS_FILTER
+        ) {
           setLogPage((previous) => mergeSnapshotLogPage(previous, snapshot.log_page));
         }
         setLogError(null);
@@ -222,7 +331,7 @@ function App() {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
         setLogPage((previous) =>
-          mergeLiveLogPage(previous, payload.entry, routeFilter, hostFilter)
+          mergeLiveLogPage(previous, payload.entry, routeFilter, statusFilter, hostFilter)
         );
         setLogError(null);
       } catch (error) {
@@ -245,7 +354,16 @@ function App() {
       stream.removeEventListener("error", handleError as EventListener);
       stream.close();
     };
-  }, [deferredFilter, deferredHostFilter, logPageLimit, routeFilter, hostFilter, pageMode]);
+  }, [
+    deferredFilter,
+    deferredStatusFilter,
+    deferredHostFilter,
+    logPageLimit,
+    routeFilter,
+    statusFilter,
+    hostFilter,
+    pageMode
+  ]);
 
   useEffect(() => {
     if (pageMode !== "health" && pageMode !== "studio") {
@@ -296,6 +414,215 @@ function App() {
     } catch (error) {
       setSaveState("error");
       setSaveError(errorSummary(error));
+    }
+  }
+
+  async function saveConfigProfile() {
+    const trimmedName = profileName.trim();
+    if (!trimmedName) {
+      setProfileState("error");
+      setProfileError("请先填写配置档案名称。");
+      return;
+    }
+
+    setProfileState("saving");
+    setProfileError(null);
+
+    try {
+      const nextConfig = await api<PublicConfig>("/api/config/profiles", {
+        method: "POST",
+        body: JSON.stringify({
+          name: trimmedName,
+          config: formToPatch(form)
+        })
+      });
+      const savedProfile = [...nextConfig.profiles]
+        .reverse()
+        .find((profile) => profile.name === trimmedName);
+
+      setConfig(nextConfig);
+      setSelectedProfileId(savedProfile?.id ?? nextConfig.active_profile_id ?? "");
+      setProfileName(savedProfile?.name ?? trimmedName);
+      setProfileState("saved");
+      window.setTimeout(() => setProfileState("idle"), 1600);
+    } catch (error) {
+      setProfileState("error");
+      setProfileError(errorSummary(error));
+    }
+  }
+
+  async function applySelectedProfile(profileId = selectedProfileId) {
+    if (!profileId) {
+      setProfileState("error");
+      setProfileError("请先选择一个已保存的配置档案。");
+      return;
+    }
+
+    setProfileState("applying");
+    setProfileError(null);
+
+    try {
+      const nextConfig = await api<PublicConfig>("/api/config/profiles/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          profile_id: profileId
+        })
+      });
+      const nextHealth = await api<HealthResponse>("/api/health", {
+        method: "GET"
+      });
+
+      setConfig(nextConfig);
+      setHealth(nextHealth);
+      setForm(formFromConfig(nextConfig));
+      setSelectedProfileId(nextConfig.active_profile_id ?? profileId);
+      setProfileName(
+        nextConfig.profiles.find((profile) => profile.id === (nextConfig.active_profile_id ?? profileId))
+          ?.name ?? ""
+      );
+      setSaveError(null);
+      setSaveState("saved");
+      setProfileState("applied");
+      window.setTimeout(() => {
+        setSaveState("idle");
+        setProfileState("idle");
+      }, 1600);
+    } catch (error) {
+      setProfileState("error");
+      setProfileError(errorSummary(error));
+    }
+  }
+
+  async function updateSelectedProfile(profileId = selectedProfileId) {
+    if (!profileId) {
+      setProfileState("error");
+      setProfileError("请先选择一个已保存的配置档案。");
+      return;
+    }
+
+    const currentProfile = config?.profiles.find((profile) => profile.id === profileId) ?? null;
+    const trimmedName =
+      profileId === selectedProfileId ? profileName.trim() : currentProfile?.name ?? "";
+    setProfileState("updating");
+    setProfileError(null);
+
+    try {
+      const nextConfig = await api<PublicConfig>("/api/config/profiles", {
+        method: "PATCH",
+        body: JSON.stringify({
+          profile_id: profileId,
+          ...(trimmedName ? { name: trimmedName } : {}),
+          config: formToPatch(form)
+        })
+      });
+
+      setConfig(nextConfig);
+      setSelectedProfileId(profileId);
+      setProfileName(nextConfig.profiles.find((profile) => profile.id === profileId)?.name ?? trimmedName);
+      setProfileState("updated");
+      window.setTimeout(() => setProfileState("idle"), 1600);
+    } catch (error) {
+      setProfileState("error");
+      setProfileError(errorSummary(error));
+    }
+  }
+
+  async function duplicateSelectedProfile(profileId = selectedProfileId) {
+    const sourceProfile = config?.profiles.find((profile) => profile.id === profileId) ?? null;
+    if (!sourceProfile) {
+      setProfileState("error");
+      setProfileError("请先选择一个已保存的配置档案。");
+      return;
+    }
+
+    const copyName =
+      profileId === selectedProfileId && profileName.trim()
+        ? profileName.trim()
+        : `${sourceProfile.name} copy`;
+    setProfileState("duplicating");
+    setProfileError(null);
+
+    try {
+      const nextConfig = await api<PublicConfig>("/api/config/profiles/duplicate", {
+        method: "POST",
+        body: JSON.stringify({
+          profile_id: profileId,
+          name: copyName
+        })
+      });
+      const copiedProfile = [...nextConfig.profiles]
+        .reverse()
+        .find((profile) => profile.name === copyName);
+
+      setConfig(nextConfig);
+      setSelectedProfileId(copiedProfile?.id ?? profileId);
+      setProfileName(copiedProfile?.name ?? copyName);
+      setProfileState("duplicated");
+      window.setTimeout(() => setProfileState("idle"), 1600);
+    } catch (error) {
+      setProfileState("error");
+      setProfileError(errorSummary(error));
+    }
+  }
+
+  function requestDeleteSelectedProfile(profileId = selectedProfileId) {
+    if (!profileId) {
+      setProfileState("error");
+      setProfileError("请先选择一个已保存的配置档案。");
+      return;
+    }
+
+    const profile = config?.profiles.find((item) => item.id === profileId);
+    if (!profile) {
+      setProfileState("error");
+      setProfileError("没有找到要删除的配置档案。");
+      return;
+    }
+
+    setSelectedProfileId(profile.id);
+    setProfileError(null);
+    setProfileDeleteCandidate(profile);
+  }
+
+  async function confirmDeleteSelectedProfile() {
+    const profile = profileDeleteCandidate;
+    if (!profile) {
+      return;
+    }
+
+    setProfileState("deleting");
+    setProfileError(null);
+
+    try {
+      const nextConfig = await api<PublicConfig>("/api/config/profiles", {
+        method: "DELETE",
+        body: JSON.stringify({
+          profile_id: profile.id
+        })
+      });
+
+      setConfig(nextConfig);
+      const nextSelectedProfileId = nextConfig.active_profile_id ?? nextConfig.profiles[0]?.id ?? "";
+      setSelectedProfileId(nextSelectedProfileId);
+      setProfileName(
+        nextConfig.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? ""
+      );
+      setProfileDeleteCandidate(null);
+      setProfileState("deleted");
+      window.setTimeout(() => setProfileState("idle"), 1600);
+    } catch (error) {
+      setProfileState("error");
+      setProfileError(errorSummary(error));
+    }
+  }
+
+  function selectConfigProfile(profileId: string) {
+    const profile = config?.profiles.find((item) => item.id === profileId) ?? null;
+    setSelectedProfileId(profileId);
+    setProfileError(null);
+
+    if (profile && profileId !== selectedProfileId) {
+      setProfileName(profile.name);
     }
   }
 
@@ -378,6 +705,7 @@ function App() {
     try {
       const nextPage = await fetchLogPage({
         route: routeFilter,
+        status: statusFilter,
         host: hostFilter,
         limit: logPageLimit,
         offset: logPage.logs.length
@@ -409,6 +737,8 @@ function App() {
         health={health}
         saveState={saveState}
         hasPendingChanges={hasPendingChanges}
+        themeMode={themeMode}
+        onThemeModeChange={setThemeMode}
         onExport={exportConfig}
       />
 
@@ -416,12 +746,7 @@ function App() {
 
       <CommandDeck
         config={config}
-        health={health}
-        currentModel={currentModel}
-        compactModel={effectiveCompactModel}
-        compactMode={form.upstreamMode}
         activeRoute={activeRoute}
-        latestLog={latestLog}
         logs={logs}
       />
 
@@ -431,15 +756,15 @@ function App() {
           currentModel={currentModel}
           compactModel={effectiveCompactModel}
           compactMode={form.upstreamMode}
+          claudeCompactMode={form.claudeCompactUpstreamMode}
           activeRoute={activeRoute}
           latestLog={latestLog}
         />
 
         <section className="operator-stage" aria-labelledby="operator-stage-title">
-          <div className="operator-stage-head">
-            <p className="eyebrow">Advanced Controls</p>
-            <h2 id="operator-stage-title">设置分流，再预览结果。</h2>
-            <p>先调整 Compact 目标，再用预览面板确认这条请求会怎么命中。</p>
+          <div className="operator-stage-head compact-heading">
+            <p className="eyebrow">Controls</p>
+            <h2 id="operator-stage-title">Config / Preview</h2>
           </div>
 
           <div className="operator-grid">
@@ -450,9 +775,20 @@ function App() {
               linkedCompactModel={linkedCompactModel}
               saveState={saveState}
               saveError={saveError}
+              profileName={profileName}
+              selectedProfileId={selectedProfileId}
+              profileState={profileState}
+              profileError={profileError}
               hasPendingChanges={hasPendingChanges}
               onCurrentModelChange={setCurrentModel}
               onFormChange={setForm}
+              onProfileNameChange={setProfileName}
+              onSelectedProfileChange={selectConfigProfile}
+              onSaveProfile={saveConfigProfile}
+              onApplyProfile={applySelectedProfile}
+              onUpdateProfile={updateSelectedProfile}
+              onDuplicateProfile={duplicateSelectedProfile}
+              onDeleteProfile={requestDeleteSelectedProfile}
               onUnlockCompactModel={unlockCompactModel}
               onRestoreLinkedMode={restoreLinkedMode}
               onSubmit={saveConfig}
@@ -473,6 +809,8 @@ function App() {
         <LogsPanel
           logs={logs}
           logCounts={logCounts}
+          providerCounts={logPage.provider_counts}
+          statusCounts={logPage.status_counts}
           totalLogCount={logPage.total}
           allLogCount={logPage.all_total}
           hostOptions={hostOptions}
@@ -480,162 +818,119 @@ function App() {
           isLoadingLogs={isLoadingLogs}
           isLoadingMoreLogs={isLoadingMoreLogs}
           routeFilter={routeFilter}
+          statusFilter={statusFilter}
           hostFilter={hostFilter}
           onRouteFilterChange={setRouteFilter}
+          onStatusFilterChange={setStatusFilter}
           onHostFilterChange={setHostFilter}
           onLoadMore={loadMoreLogs}
           error={logError}
         />
       </section>
+
+      {profileDeleteCandidate && (
+        <ConfirmProfileDeleteDialog
+          profile={profileDeleteCandidate}
+          isDeleting={profileState === "deleting"}
+          onCancel={() => setProfileDeleteCandidate(null)}
+          onConfirm={confirmDeleteSelectedProfile}
+        />
+      )}
     </main>
+  );
+}
+
+function ConfirmProfileDeleteDialog({
+  profile,
+  isDeleting,
+  onCancel,
+  onConfirm
+}: {
+  profile: PublicConfigProfile;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return createPortal(
+    <div className="confirm-overlay" role="presentation">
+      <section
+        className="confirm-panel"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-profile-delete-title"
+        aria-describedby="confirm-profile-delete-desc"
+      >
+        <span className="confirm-icon" aria-hidden="true">!</span>
+        <div className="confirm-copy">
+          <p className="eyebrow">Delete Profile</p>
+          <h2 id="confirm-profile-delete-title">删除配置档案“{profile.name}”？</h2>
+          <p id="confirm-profile-delete-desc">
+            这个操作只会删除 CompactGate 内保存的档案，不会删除当前运行时配置，也不会改动全局 Claude 或 Codex 配置文件。
+          </p>
+        </div>
+        <div className="confirm-actions">
+          <button className="ghost-button" type="button" disabled={isDeleting} onClick={onCancel}>
+            取消
+          </button>
+          <button
+            className="solid-button danger-solid-button"
+            type="button"
+            disabled={isDeleting}
+            onClick={() => void onConfirm()}
+          >
+            {isDeleting ? "删除中..." : "确认删除"}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body
   );
 }
 
 function CommandDeck({
   config,
-  health,
-  currentModel,
-  compactModel,
-  compactMode,
   activeRoute,
-  latestLog,
   logs
 }: {
   config: PublicConfig | null;
-  health: HealthResponse | null;
-  currentModel: string;
-  compactModel: string;
-  compactMode: "split" | "primary";
   activeRoute: RouteKind;
-  latestLog: RequestLogEntry | null;
   logs: RequestLogEntry[];
 }) {
   const listen = config?.listen ?? "127.0.0.1:7865";
-  const primaryHost = config?.primary.host ?? "primary.example";
-  const compactHost = config?.compact.host ?? "compact.example";
-  const compactTarget = compactMode === "split" ? compactHost : `${primaryHost} / 复用`;
-  const primaryHealth = upstreamHealthBadge(health?.primary);
-  const compactHealth = upstreamHealthBadge(health?.compact);
   const compactHits = logs.filter((entry) => entry.route === "compact").length;
   const primaryHits = logs.filter((entry) => entry.route === "primary").length;
-  const latestSeen = latestLog ? formatClock(latestLog.time) : "等待首个采样";
-  const latestPath = latestLog?.path ?? "/v1/responses/compact";
-  const latestLatency = latestLog ? `${latestLog.duration_ms}ms` : "未采样";
+  const claudeHits = logs.filter((entry) => entry.route === "claude").length;
 
   return (
-    <section className={`command-deck route-${activeRoute}`} aria-labelledby="command-deck-title">
-      <div className="deck-copy">
-        <p className="eyebrow">Codex Compact Gate</p>
-        <h2 id="command-deck-title">智能拦截 Compact 请求</h2>
-        <p className="deck-lead">
-          接入本地代理后，Compact 会自动分流到指定上游；其余请求继续直通，不改现有路径。
-        </p>
-        <div className="deck-story" aria-label="CompactGate 价值说明">
-          <article className="deck-story-card">
-            <span>边界</span>
-            <strong>只拦 Compact。</strong>
-            <small>普通请求继续直通，不打断现有工作流。</small>
-          </article>
-          <article className="deck-story-card">
-            <span>机制</span>
-            <strong>命中后改写目标模型。</strong>
-            <small>分流、联动和热加载只发生在这条通道。</small>
-          </article>
-          <article className="deck-story-card">
-            <span>证据</span>
-            <strong>命中结果立即回显。</strong>
-            <small>路径、模型、状态码和最近流量都会显示出来。</small>
-          </article>
+    <section className={`command-deck operator-ribbon route-${activeRoute}`} aria-labelledby="command-deck-title">
+      <div className="ribbon-title">
+        <p className="eyebrow">Operator Workspace</p>
+        <h2 id="command-deck-title">CompactGate</h2>
+      </div>
+
+      <div className="ribbon-endpoints" aria-label="Local proxy endpoints">
+        <div className="endpoint-tile">
+          <span>OpenAI</span>
+          <code>http://{listen}/v1</code>
         </div>
-        <div className="deck-actions">
-          <a className="solid-button" href="#live-config-title">
-            设置分流
-          </a>
-          <a className="ghost-button" href="#route-board-title">
-            查看路由
-          </a>
-        </div>
-        <div className="deck-subsystems" aria-label="Compact 请求处理链">
-          <span>只拦 Compact</span>
-          <span>普通请求继续直通</span>
-          <span>模型与命中实时回显</span>
+        <div className="endpoint-tile is-claude">
+          <span>Claude</span>
+          <code>http://{listen}/anthropic</code>
         </div>
       </div>
 
-      <div className="deck-monitor" aria-label="CompactGate 运行信号面板">
-        <div className="deck-monitor-head">
-          <div>
-            <p className="eyebrow">Signal Board</p>
-            <h3>流量监控看板</h3>
-          </div>
-          <div className={`deck-monitor-badge route-${activeRoute}`}>
-            <span>当前焦点</span>
-            <strong>{routeLabel(activeRoute)}</strong>
-          </div>
+      <div className="ribbon-traffic" aria-label="Recent traffic counters">
+        <div className="traffic-chip tone-primary">
+          <span>codex</span>
+          <strong>{primaryHits}</strong>
         </div>
-
-        <div className="deck-lane" aria-label="CompactGate 当前路由概览">
-          <div className="deck-endpoint">
-            <span>Codex base_url</span>
-            <code>http://{listen}/v1</code>
-          </div>
-          <div className="deck-pulse" aria-hidden="true">
-            <span />
-          </div>
-          <div className="deck-endpoint is-active">
-            <span>当前观察通道</span>
-            <strong>{routeLabel(activeRoute)}</strong>
-          </div>
+        <div className="traffic-chip tone-compact">
+          <span>compact</span>
+          <strong>{compactHits}</strong>
         </div>
-
-        <div className="deck-readouts">
-          <DeckReadout
-            label="主上游"
-            value={primaryHost}
-            state={primaryHealth.label}
-            tone={primaryHealth.tone}
-          />
-          <DeckReadout
-            label="Compact 目标"
-            value={compactTarget}
-            state={compactModeLabel(compactMode)}
-            tone="compact"
-          />
-          <DeckReadout
-            label="模型映射"
-            value={`${currentModel} -> ${compactModel}`}
-            state="运行时推导"
-            tone="primary"
-          />
-          <DeckReadout
-            label="最近请求"
-            value={formatLatestLogStatus(latestLog, "等待 Codex 请求")}
-            state={compactHealth.tone === "good" ? "健康检查正常" : `Compact ${compactHealth.label}`}
-            tone={compactHealth.tone}
-          />
-        </div>
-
-        <div className="deck-signal-grid">
-          <article className="deck-signal-card tone-compact">
-            <span>Compact 命中</span>
-            <strong>{compactHits}</strong>
-            <small>最近 {logs.length} 条请求里的独立接管次数</small>
-          </article>
-          <article className="deck-signal-card tone-primary">
-            <span>普通直通</span>
-            <strong>{primaryHits}</strong>
-            <small>普通 /v1 继续走原路径，没有被 Compact 规则接管</small>
-          </article>
-          <article className="deck-signal-card tone-neutral">
-            <span>最近路径</span>
-            <strong title={latestPath}>{latestPath}</strong>
-            <small>最近一次采样耗时 {latestLatency}</small>
-          </article>
-          <article className="deck-signal-card tone-neutral">
-            <span>最近采样</span>
-            <strong>{latestSeen}</strong>
-            <small>{latestLog ? `状态 ${latestLog.status}` : "等待 Codex 发来第一条请求"}</small>
-          </article>
+        <div className="traffic-chip tone-claude">
+          <span>claude</span>
+          <strong>{claudeHits}</strong>
         </div>
       </div>
     </section>
@@ -651,7 +946,7 @@ function DeckReadout({
   label: string;
   value: string;
   state: string;
-  tone: "primary" | "compact" | HealthTone;
+  tone: "primary" | "compact" | "claude" | HealthTone;
 }) {
   return (
     <div className={`deck-readout tone-${tone}`}>
@@ -667,12 +962,16 @@ function TopBar({
   health,
   saveState,
   hasPendingChanges,
+  themeMode,
+  onThemeModeChange,
   onExport
 }: {
   config: PublicConfig | null;
   health: HealthResponse | null;
   saveState: SaveState;
   hasPendingChanges: boolean;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
   onExport: () => void | Promise<void>;
 }) {
   const primaryStatus = upstreamHealthBadge(health?.primary);
@@ -691,14 +990,15 @@ function TopBar({
       </div>
 
       <div className="status-strip" aria-label="CompactGate 状态">
-        <StatusPill label="主上游" status={primaryStatus} />
-        <StatusPill label="压缩上游" status={compactStatus} />
+        <StatusPill label="Codex 主" status={primaryStatus} />
+        <StatusPill label="Codex 压缩" status={compactStatus} />
         <span className={`save-meter ${hasPendingChanges ? "is-dirty" : ""}`}>
           {saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}
         </span>
       </div>
 
       <div className="toolbar">
+        <ThemeModeSwitch value={themeMode} onChange={onThemeModeChange} />
         <a className="ghost-button" href="/health">
           健康检查
         </a>
@@ -710,6 +1010,36 @@ function TopBar({
         </a>
       </div>
     </header>
+  );
+}
+
+function ThemeModeSwitch({
+  value,
+  onChange
+}: {
+  value: ThemeMode;
+  onChange: (mode: ThemeMode) => void;
+}) {
+  const options: Array<{ value: ThemeMode; label: string }> = [
+    { value: "auto", label: "自动" },
+    { value: "light", label: "浅色" },
+    { value: "dark", label: "深色" }
+  ];
+
+  return (
+    <div className="theme-switch" role="group" aria-label="主题模式">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={value === option.value ? "is-selected" : ""}
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -795,17 +1125,37 @@ function HealthPage({
 
       <section className="health-grid">
         <HealthEndpointCard
-          title="主上游 API"
+          title="Codex 主路由"
           route="primary"
-          summary="处理普通 /v1 请求"
+          credentialScope="primary"
+          badgeLabel="Codex 主"
+          summary="处理普通 OpenAI 兼容 /v1 请求"
           upstream={health?.primary}
         />
         <HealthEndpointCard
-          title="Compact 目标"
+          title="Codex 压缩路由"
           route="compact"
+          credentialScope="compact"
+          badgeLabel="Codex 压缩"
           summary="处理 /v1/responses/compact"
           upstream={health?.compact}
         />
+        <HealthEndpointCard
+          title="Claude 主路由"
+          route="claude"
+          credentialScope="claude_primary"
+          badgeLabel="Claude 主"
+          summary="处理普通 Anthropic Messages 请求"
+          upstream={health?.claude.primary}
+        />
+          <HealthEndpointCard
+            title="Claude 压缩路由"
+            route="compact"
+            credentialScope="claude_compact"
+            badgeLabel="Claude 压缩"
+          summary="仅用于 reconnect 自动摘要生成"
+            upstream={health?.claude.compact}
+          />
       </section>
 
       <section className="health-detail-grid">
@@ -849,13 +1199,17 @@ function HealthPage({
 function HealthEndpointCard({
   title,
   route,
+  credentialScope,
+  badgeLabel,
   summary,
   upstream
 }: {
   title: string;
   route: RouteKind;
+  credentialScope: CredentialScope;
+  badgeLabel: string;
   summary: string;
-  upstream: HealthResponse["primary"] | HealthResponse["compact"] | null | undefined;
+  upstream: HealthRouteCredentialConfig | null | undefined;
 }) {
   const status = upstreamHealthBadge(upstream);
 
@@ -866,7 +1220,7 @@ function HealthEndpointCard({
           <p className="eyebrow">{title}</p>
           <h2>{upstream?.host ?? "等待健康数据"}</h2>
         </div>
-        <span className={`route-chip ${route}`}>{routeLabel(route)}</span>
+        <span className={`route-chip ${route}`}>{badgeLabel}</span>
       </div>
 
       <p className="health-card-copy">{summary}</p>
@@ -894,13 +1248,13 @@ function HealthEndpointCard({
         </div>
         <div className="health-kv">
           <span>当前读取</span>
-          <strong>{activeCredentialLabel(route, upstream)}</strong>
+          <strong>{activeCredentialLabel(credentialScope, upstream)}</strong>
         </div>
       </div>
 
       <div className={`health-flag ${upstream?.api_key_configured ? "is-good" : "is-warn"}`}>
         <span className="health-led" aria-hidden="true" />
-        {credentialFlagCopy(route, upstream)}
+        {credentialFlagCopy(credentialScope, upstream)}
       </div>
     </section>
   );
@@ -911,6 +1265,7 @@ function RouteBoard({
   currentModel,
   compactModel,
   compactMode,
+  claudeCompactMode,
   activeRoute,
   latestLog
 }: {
@@ -918,63 +1273,125 @@ function RouteBoard({
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
+  claudeCompactMode: "split" | "primary";
   activeRoute: RouteKind;
   latestLog: RequestLogEntry | null;
 }) {
+  const listen = config?.listen ?? "127.0.0.1:7865";
   const primaryHost = config?.primary.host ?? "primary.example";
   const compactHost = config?.compact.host ?? "compact.example";
   const compactTarget = compactMode === "split" ? compactHost : primaryHost;
+  const claudePrimaryHost = config?.claude.primary.host ?? "api.anthropic.com";
+  const claudeCompactHost = config?.claude.compact.host ?? "api.anthropic.com";
+  const claudeCompactTarget = claudeCompactMode === "split" ? claudeCompactHost : claudePrimaryHost;
 
   return (
     <section className={`route-board is-${activeRoute}`} aria-labelledby="route-board-title">
       <div className="section-heading">
         <p className="eyebrow">Route Board</p>
-        <h2 id="route-board-title">一眼确认 Codex 的 Compact 请求会被送去哪里。</h2>
+        <h2 id="route-board-title">运行时分流规则，而不是页面筛选器。</h2>
       </div>
 
-      <div className="route-canvas">
-        <div className="node codex-node">
-          <span className="node-label">Codex CLI</span>
-          <strong>{currentModel}</strong>
-          <small>base_url 指向 /v1</small>
-          <em>source</em>
-        </div>
+      <div className="route-switchboard" aria-label="CompactGate 分流规则">
+        <article className="route-rule-card codex-rule">
+          <div className="route-rule-card-head">
+            <span className="route-chip primary">Codex</span>
+            <div>
+              <h3>Codex / OpenAI 兼容入口</h3>
+              <p>
+                客户端指向 <code>http://{listen}/v1</code>。代理只根据路径判断，不读取页面筛选器状态。
+              </p>
+            </div>
+          </div>
 
-        <div className="gate-tower">
-          <span>CompactGate</span>
-          <strong>{config?.listen ?? "127.0.0.1:7865"}</strong>
-          <small>本地代理入口</small>
-          <i aria-hidden="true" />
-        </div>
+          <div className="route-rule-list">
+            <div className={`route-rule-row ${activeRoute === "compact" ? "is-active" : ""}`}>
+              <code>/v1/responses/compact</code>
+              <span>命中</span>
+              <strong>Codex 压缩槽位</strong>
+            </div>
+            <div className={`route-rule-row ${activeRoute === "primary" ? "is-active" : ""}`}>
+              <code>其它 /v1/*</code>
+              <span>命中</span>
+              <strong>Codex 主槽位</strong>
+            </div>
+          </div>
 
-        <div className="route-mobile-branch" aria-hidden="true">
-          <span>Gate 在这里分流</span>
-          <b className="branch-primary">普通</b>
-          <b className="branch-compact">压缩</b>
-        </div>
+          <div className="route-slot-grid">
+            <div className="route-slot primary-slot">
+              <span>Codex primary</span>
+              <strong>{primaryHost}</strong>
+              <small>普通请求直通主上游</small>
+            </div>
+            <div className="route-slot compact-slot">
+              <span>Codex compact</span>
+              <strong>{compactTarget}</strong>
+              <small>{compactMode === "split" ? "独立 Base URL 与密钥" : "复用主上游与主密钥"}</small>
+            </div>
+          </div>
 
-        <div className="node upstream-node primary-node">
-          <span className="node-label">主上游 API</span>
-          <strong>{primaryHost}</strong>
-          <small>普通 /v1 请求</small>
-          <em>/responses</em>
-        </div>
+          <div className="route-model-strip">
+            <span>模型映射</span>
+            <strong title={`${currentModel} -> ${compactModel}`}>
+              <code>{currentModel}</code> {"->"} <code>{compactModel}</code>
+            </strong>
+          </div>
+        </article>
 
-        <div className="node upstream-node compact-node">
-          <span className="node-label">Compact 目标</span>
-          <strong>{compactTarget}</strong>
-          <small>{compactModel}</small>
-          <em>/responses/compact</em>
-        </div>
+        <article className="route-rule-card claude-rule">
+          <div className="route-rule-card-head">
+            <span className="route-chip claude">Claude</span>
+            <div>
+              <h3>Claude / Anthropic 兼容入口</h3>
+              <p>
+                流量进入 <code>/anthropic</code> 后剥离前缀。手动 <code>/compact</code> 仍走主槽位，只有结构化
+                reconnect 计数达到 5 才触发自动摘要。
+              </p>
+            </div>
+          </div>
 
-        <div
-          className={`route-line primary-line ${activeRoute === "primary" ? "is-active" : ""}`}
-          aria-hidden="true"
-        />
-        <div
-          className={`route-line compact-line ${activeRoute === "compact" ? "is-active" : ""}`}
-          aria-hidden="true"
-        />
+          <div className="route-rule-list">
+            <div className={`route-rule-row ${activeRoute === "claude" ? "is-active" : ""}`}>
+              <code>普通 /messages</code>
+              <span>默认</span>
+              <strong>Claude 主槽位</strong>
+            </div>
+            <div className="route-rule-row">
+              <code>reconnect_count &gt;= 5</code>
+              <span>自动</span>
+              <strong>先摘要再回主槽位</strong>
+            </div>
+          </div>
+
+          <div className="route-slot-grid">
+            <div className="route-slot claude-slot">
+              <span>Claude primary</span>
+              <strong>{claudePrimaryHost}</strong>
+              <small>普通 Messages 与压缩后重试都回到这里</small>
+            </div>
+            <div className="route-slot compact-slot">
+              <span>Claude compact</span>
+              <strong>{claudeCompactTarget}</strong>
+              <small>{claudeCompactMode === "split" ? "独立摘要上游与密钥" : "复用 Claude 主上游与主密钥"}</small>
+            </div>
+          </div>
+
+          <div className="auto-compact-loop" aria-label="Claude 自动压缩流程">
+            <div>
+              <span>触发</span>
+              <p>
+                仅当 Claude Messages 请求里出现结构化 reconnect 计数，并且计数达到 <code>5</code> 或更高时触发。
+                普通大请求体、手动 <code>/compact</code> 文本和 primary 错误不会自动切到压缩槽位。
+              </p>
+            </div>
+            <ol>
+              <li>命中 SQLite summary cache 时直接重试。</li>
+              <li>未命中时调用 Claude compact 生成 summary 并缓存。</li>
+              <li>携带 summary 重试 Claude primary。</li>
+              <li>最终响应仍来自 Claude primary。</li>
+            </ol>
+          </div>
+        </article>
       </div>
 
       <div className="route-foot">
@@ -992,6 +1409,10 @@ function RouteBoard({
           <span>Compact 上游模式</span>
           <strong>{compactModeLabel(compactMode)}</strong>
         </div>
+        <div>
+          <span>日志下拉框</span>
+          <strong>只筛选表格，不改变分流</strong>
+        </div>
       </div>
     </section>
   );
@@ -1004,9 +1425,20 @@ function ConfigPanel({
   linkedCompactModel,
   saveState,
   saveError,
+  profileName,
+  selectedProfileId,
+  profileState,
+  profileError,
   hasPendingChanges,
   onCurrentModelChange,
   onFormChange,
+  onProfileNameChange,
+  onSelectedProfileChange,
+  onSaveProfile,
+  onApplyProfile,
+  onUpdateProfile,
+  onDuplicateProfile,
+  onDeleteProfile,
   onUnlockCompactModel,
   onRestoreLinkedMode,
   onSubmit
@@ -1017,154 +1449,398 @@ function ConfigPanel({
   linkedCompactModel: string;
   saveState: SaveState;
   saveError: string | null;
+  profileName: string;
+  selectedProfileId: string;
+  profileState: ProfileActionState;
+  profileError: string | null;
   hasPendingChanges: boolean;
   onCurrentModelChange: (model: string) => void;
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
+  onProfileNameChange: (name: string) => void;
+  onSelectedProfileChange: (profileId: string) => void;
+  onSaveProfile: () => void | Promise<void>;
+  onApplyProfile: (profileId?: string) => void | Promise<void>;
+  onUpdateProfile: (profileId?: string) => void | Promise<void>;
+  onDuplicateProfile: (profileId?: string) => void | Promise<void>;
+  onDeleteProfile: (profileId?: string) => void | Promise<void>;
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
+  const profiles = config?.profiles ?? [];
+  const activeProfile = profiles.find((profile) => profile.id === config?.active_profile_id) ?? null;
+  const profileBusy = isProfileActionBusy(profileState);
+
   return (
     <section className="panel live-config" aria-labelledby="live-config-title">
       <div className="section-heading">
         <p className="eyebrow">Live Config</p>
-        <h2 id="live-config-title">运行时配置，无需重启代理。</h2>
+        <h2 id="live-config-title">Live Config</h2>
       </div>
 
       <form className="control-stack" onSubmit={onSubmit}>
-        <Field label="主上游 Base URL" hint="普通 /v1 请求会转发到这里。">
-          <input
-            aria-label="主上游 Base URL"
-            value={form.primaryBaseUrl}
-            onChange={(event) =>
-              onFormChange((previous) => ({
-                ...previous,
-                primaryBaseUrl: event.target.value
-              }))
-            }
-            spellCheck={false}
-          />
-        </Field>
 
-        <Field
-          label="主上游 API Key"
-          hint={
-            form.clearPrimaryApiKey
-              ? "保存后会删除当前已保存的主上游密钥。"
-              : directApiKeyHint("primary", config?.primary ?? null)
-          }
-        >
-          <input
-            aria-label="主上游 API Key"
-            type="password"
-            autoComplete="off"
-            value={form.primaryApiKey}
-            placeholder={config?.primary.stored_api_key ? "输入新值以覆盖已保存密钥" : "sk-..."}
-            onChange={(event) =>
-              onFormChange((previous) => ({
-                ...previous,
-                primaryApiKey: event.target.value,
-                clearPrimaryApiKey: false
-              }))
-            }
-            spellCheck={false}
-          />
-          {(config?.primary.stored_api_key || form.clearPrimaryApiKey) && (
-            <div className="field-action-row">
-              <button
-                className={`field-inline-button ${form.clearPrimaryApiKey ? "is-danger" : ""}`}
-                type="button"
-                onClick={() =>
-                  onFormChange((previous) => ({
-                    ...previous,
-                    primaryApiKey: "",
-                    clearPrimaryApiKey: !previous.clearPrimaryApiKey
-                  }))
-                }
-              >
-                {form.clearPrimaryApiKey ? "取消清空" : "清空已保存密钥"}
-              </button>
+        <section className="profile-card" aria-labelledby="profile-card-title">
+          <div className="profile-card-copy">
+            <p className="eyebrow">Config Profiles</p>
+            <h3 id="profile-card-title">配置档案</h3>
+            <p>保存、复制或应用当前路由草稿；不会修改全局 Claude / Codex 配置。</p>
+          </div>
+
+          <div className="profile-card-controls">
+            <Field
+              label="档案名称"
+              hint="选择档案后可改名并保存。"
+            >
+              <input
+                aria-label="档案名称"
+                value={profileName}
+                onChange={(event) => onProfileNameChange(event.target.value)}
+                placeholder="选择档案后可在这里改名"
+              />
+            </Field>
+
+            <button
+              className="ghost-button profile-save-button"
+              type="button"
+              disabled={profileBusy}
+              onClick={() => void onSaveProfile()}
+            >
+              {profileState === "saving" ? "正在保存档案..." : "保存当前草稿为档案"}
+            </button>
+          </div>
+
+          {profiles.length === 0 ? (
+            <div className="profile-empty-card">
+              <strong>还没有保存的配置档案</strong>
+              <span>填写名称后保存当前草稿，就会在这里出现可应用的档案卡片。</span>
+            </div>
+          ) : (
+            <div className="profile-list" aria-label="已保存配置档案">
+              {profiles.map((profile) => {
+                const isActive = profile.id === config?.active_profile_id;
+                const isSelected = profile.id === selectedProfileId;
+                const cardClassName = [
+                  "profile-item",
+                  isActive ? "is-active" : "",
+                  isSelected ? "is-selected" : ""
+                ].filter(Boolean).join(" ");
+
+                return (
+                  <article key={profile.id} className={cardClassName}>
+                    <span className="profile-item-handle" aria-hidden="true">≡</span>
+                    <button
+                      className="profile-item-main"
+                      type="button"
+                      aria-pressed={isSelected}
+                      onClick={() => onSelectedProfileChange(profile.id)}
+                    >
+                      <span className="profile-item-icon" aria-hidden="true">
+                        {profile.name.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span className="profile-item-copy">
+                        <span className="profile-item-kicker">
+                          {isActive ? "当前运行时" : isSelected ? "已选中" : "可选档案"}
+                        </span>
+                        <strong>{profile.name}</strong>
+                        <small>{profileSummary(profile)}</small>
+                        <span>更新于 {formatClock(profile.updated_at)}</span>
+                      </span>
+                    </button>
+
+                    <div className="profile-item-actions">
+                      <button
+                        className="solid-button"
+                        type="button"
+                        disabled={profileBusy || isActive}
+                        onClick={() => {
+                          onSelectedProfileChange(profile.id);
+                          void onApplyProfile(profile.id);
+                        }}
+                      >
+                        {profileState === "applying" && isSelected ? "应用中..." : "应用"}
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => {
+                          onSelectedProfileChange(profile.id);
+                          void onUpdateProfile(profile.id);
+                        }}
+                      >
+                        {profileState === "updating" && isSelected ? "保存中..." : "保存到此档案"}
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => {
+                          onSelectedProfileChange(profile.id);
+                          void onDuplicateProfile(profile.id);
+                        }}
+                      >
+                        {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
+                      </button>
+                      <button
+                        className="ghost-button profile-danger-button"
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => {
+                          onSelectedProfileChange(profile.id);
+                          void onDeleteProfile(profile.id);
+                        }}
+                      >
+                        {profileState === "deleting" && isSelected ? "删除中..." : "删除"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
-        </Field>
 
-        <Field
-          label="Compact Base URL"
-          hint={
-            form.upstreamMode === "split"
-              ? "压缩请求会转发到这里。"
-              : "当前复用主上游，这个地址暂不参与转发。"
-          }
-        >
-          <input
-            aria-label="Compact Base URL"
-            value={form.compactBaseUrl}
-            onChange={(event) =>
-              onFormChange((previous) => ({
-                ...previous,
-                compactBaseUrl: event.target.value
-              }))
-            }
-            spellCheck={false}
-          />
-        </Field>
+          <div className="profile-card-status" aria-live="polite">
+            <span>
+              当前运行时档案：
+              <strong>{activeProfile?.name ?? "未绑定档案"}</strong>
+            </span>
+            <span>
+              已保存：
+              <strong>{profiles.length}</strong>
+            </span>
+            <span>{profileActionLabel(profileState)}</span>
+          </div>
 
-        <Field
-          label="Compact API Key"
-          hint={
-            form.clearCompactApiKey
-              ? "保存后会删除当前已保存的 Compact 密钥。"
-              : form.upstreamMode === "split"
-              ? directApiKeyHint("compact", config?.compact ?? null)
-              : "当前 Compact 请求复用主上游认证；这里的密钥会在切回独立分流后生效。留空表示保持现状。"
-          }
-        >
-          <input
-            aria-label="Compact API Key"
-            type="password"
-            autoComplete="off"
-            value={form.compactApiKey}
-            placeholder={config?.compact.stored_api_key ? "输入新值以覆盖已保存密钥" : "sk-..."}
-            onChange={(event) =>
-              onFormChange((previous) => ({
-                ...previous,
-                compactApiKey: event.target.value,
-                clearCompactApiKey: false
-              }))
-            }
-            spellCheck={false}
-          />
-          {(config?.compact.stored_api_key || form.clearCompactApiKey) && (
-            <div className="field-action-row">
-              <button
-                className={`field-inline-button ${form.clearCompactApiKey ? "is-danger" : ""}`}
-                type="button"
-                onClick={() =>
+          {profileError && <p className="error-note">{profileError}</p>}
+        </section>
+
+        <div className="route-config-grid">
+          <section className="route-config-group" aria-labelledby="codex-route-config-title">
+            <div className="route-config-group-head">
+              <span className="route-chip primary">Codex</span>
+              <div>
+                <h3 id="codex-route-config-title">Codex 路由</h3>
+                <p>普通请求走主路由；compact 路径按模式分流。</p>
+              </div>
+            </div>
+
+            <div className="route-config-cards">
+              <RouteCredentialFields
+                title="Codex 主路由"
+                badge="主"
+                tone="primary"
+                baseUrlLabel="Codex 主路由 Base URL"
+                baseUrlHint="普通 /v1 请求会转发到这里。"
+                apiKeyLabel="Codex 主路由 API Key"
+                apiKeyHint={
+                  form.clearCodexPrimaryApiKey
+                    ? "保存后会删除当前已保存的 Codex 主路由密钥。"
+                    : directApiKeyHint("Codex 主路由", config?.primary ?? null)
+                }
+                baseUrl={form.codexPrimaryBaseUrl}
+                apiKey={form.codexPrimaryApiKey}
+                storedApiKey={config?.primary.stored_api_key ?? false}
+                clearApiKey={form.clearCodexPrimaryApiKey}
+                onBaseUrlChange={(value) =>
                   onFormChange((previous) => ({
                     ...previous,
-                    compactApiKey: "",
-                    clearCompactApiKey: !previous.clearCompactApiKey
+                    codexPrimaryBaseUrl: value
                   }))
                 }
-              >
-                {form.clearCompactApiKey ? "取消清空" : "清空已保存密钥"}
-              </button>
+                onApiKeyChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    codexPrimaryApiKey: value,
+                    clearCodexPrimaryApiKey: false
+                  }))
+                }
+                onToggleClearApiKey={() =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    codexPrimaryApiKey: "",
+                    clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey
+                  }))
+                }
+              />
+
+              <RouteCredentialFields
+                title="Codex 压缩路由"
+                badge="压缩"
+                tone="compact"
+                baseUrlLabel="Codex 压缩路由 Base URL"
+                baseUrlHint={
+                  form.upstreamMode === "split"
+                    ? "Codex compact 请求会转发到这里。"
+                    : "当前复用 Codex 主路由，这个地址会保留但暂不参与转发。"
+                }
+                apiKeyLabel="Codex 压缩路由 API Key"
+                apiKeyHint={
+                  form.clearCodexCompactApiKey
+                    ? "保存后会删除当前已保存的 Codex 压缩路由密钥。"
+                    : form.upstreamMode === "split"
+                      ? directApiKeyHint("Codex 压缩路由", config?.compact ?? null)
+                      : "当前 Codex compact 请求复用主路由认证；这里的密钥会在切回独立分流后生效。"
+                }
+                baseUrl={form.codexCompactBaseUrl}
+                apiKey={form.codexCompactApiKey}
+                storedApiKey={config?.compact.stored_api_key ?? false}
+                clearApiKey={form.clearCodexCompactApiKey}
+                onBaseUrlChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    codexCompactBaseUrl: value
+                  }))
+                }
+                onApiKeyChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    codexCompactApiKey: value,
+                    clearCodexCompactApiKey: false
+                  }))
+                }
+                onToggleClearApiKey={() =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    codexCompactApiKey: "",
+                    clearCodexCompactApiKey: !previous.clearCodexCompactApiKey
+                  }))
+                }
+              />
             </div>
-          )}
-        </Field>
+          </section>
+
+          <section className="route-config-group" aria-labelledby="claude-route-config-title">
+            <div className="route-config-group-head">
+              <span className="route-chip claude">Claude</span>
+              <div>
+                <h3 id="claude-route-config-title">Claude 路由</h3>
+                <p>Messages 走主路由；reconnect 自动摘要才使用压缩路由。</p>
+              </div>
+            </div>
+
+            <div className="route-config-cards">
+              <RouteCredentialFields
+                title="Claude 主路由"
+                badge="主"
+                tone="claude"
+                baseUrlLabel="Claude 主路由 Base URL"
+                baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
+                apiKeyLabel="Claude 主路由 API Key"
+                apiKeyHint={
+                  form.clearClaudePrimaryApiKey
+                    ? "保存后会删除当前已保存的 Claude 主路由密钥。"
+                    : directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)
+                }
+                baseUrl={form.claudePrimaryBaseUrl}
+                apiKey={form.claudePrimaryApiKey}
+                storedApiKey={config?.claude.primary.stored_api_key ?? false}
+                clearApiKey={form.clearClaudePrimaryApiKey}
+                onBaseUrlChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudePrimaryBaseUrl: value
+                  }))
+                }
+                onApiKeyChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudePrimaryApiKey: value,
+                    clearClaudePrimaryApiKey: false
+                  }))
+                }
+                onToggleClearApiKey={() =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudePrimaryApiKey: "",
+                    clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey
+                  }))
+                }
+              />
+
+              <RouteCredentialFields
+                title="Claude 压缩路由"
+                badge="压缩"
+                tone="compact"
+                baseUrlLabel="Claude 压缩路由 Base URL"
+                baseUrlHint={
+                  form.claudeCompactUpstreamMode === "split"
+                    ? "仅在结构化 reconnect 计数达到 5 后，用于生成自动压缩摘要。"
+                    : "当前复用 Claude 主路由，这个地址会保留但暂不参与摘要请求。"
+                }
+                apiKeyLabel="Claude 压缩路由 API Key"
+                apiKeyHint={
+                  form.clearClaudeCompactApiKey
+                    ? "保存后会删除当前已保存的 Claude 压缩路由密钥。"
+                    : form.claudeCompactUpstreamMode === "split"
+                      ? directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)
+                      : "当前 Claude compact 摘要请求复用主路由认证；这里的密钥会在切回独立分流后生效。"
+                }
+                baseUrl={form.claudeCompactBaseUrl}
+                apiKey={form.claudeCompactApiKey}
+                storedApiKey={config?.claude.compact.stored_api_key ?? false}
+                clearApiKey={form.clearClaudeCompactApiKey}
+                onBaseUrlChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudeCompactBaseUrl: value
+                  }))
+                }
+                onApiKeyChange={(value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudeCompactApiKey: value,
+                    clearClaudeCompactApiKey: false
+                  }))
+                }
+                onToggleClearApiKey={() =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudeCompactApiKey: "",
+                    clearClaudeCompactApiKey: !previous.clearClaudeCompactApiKey
+                  }))
+                }
+              />
+
+              <section className="route-config-card tone-compact" aria-label="Claude 压缩摘要模型">
+                <div className="route-config-card-head">
+                  <h4>Claude 摘要模型</h4>
+                  <span className="route-chip compact">可选</span>
+                </div>
+                <Field
+                  label="Claude 压缩摘要模型"
+                  hint="留空会把原请求模型透传给摘要上游；填写后只改摘要请求，不改主路由重试模型。"
+                >
+                  <input
+                    aria-label="Claude 压缩摘要模型"
+                    value={form.claudeCompactModelOverride}
+                    placeholder={config?.claude.compact.model_override || "例如 claude-sonnet-4-6"}
+                    onChange={(event) =>
+                      onFormChange((previous) => ({
+                        ...previous,
+                        claudeCompactModelOverride: event.target.value
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </Field>
+              </section>
+            </div>
+          </section>
+        </div>
 
         <div className="mode-card">
           <div>
-            <span className="mode-card-title">Compact 上游模式</span>
+            <span className="mode-card-title">Codex Compact 上游模式</span>
             <p>
               {form.upstreamMode === "split" ? "独立分流：" : "复用主上游："}
               <code>/v1/responses/compact</code>
               {form.upstreamMode === "split"
-                ? " 使用 Compact Base URL 与 Compact API Key。"
-                : " 直接发送到主上游，并复用主上游密钥。"}
+                ? " 使用 Codex 压缩路由 Base URL 与 API Key。"
+                : " 直接发送到 Codex 主路由，并复用 Codex 主路由密钥。"}
             </p>
           </div>
-          <div className="mode-switch" role="group" aria-label="Compact 上游模式">
+          <div className="mode-switch" role="group" aria-label="Codex Compact 上游模式">
             <button
               className={form.upstreamMode === "split" ? "is-selected" : ""}
               type="button"
@@ -1186,6 +1862,47 @@ function ConfigPanel({
                 onFormChange((previous) => ({
                   ...previous,
                   upstreamMode: "primary"
+                }))
+              }
+            >
+              复用主上游
+            </button>
+          </div>
+        </div>
+
+        <div className="mode-card">
+          <div>
+            <span className="mode-card-title">Claude Compact 上游模式</span>
+            <p>
+              {form.claudeCompactUpstreamMode === "split" ? "独立分流：" : "复用主上游："}
+              自动摘要请求
+              {form.claudeCompactUpstreamMode === "split"
+                ? " 使用 Claude 压缩路由 Base URL 与 API Key。"
+                : " 发送到 Claude 主路由，并复用 Claude 主路由密钥。"}
+            </p>
+          </div>
+          <div className="mode-switch" role="group" aria-label="Claude Compact 上游模式">
+            <button
+              type="button"
+              className={form.claudeCompactUpstreamMode === "split" ? "is-selected" : ""}
+              aria-pressed={form.claudeCompactUpstreamMode === "split"}
+              onClick={() =>
+                onFormChange((previous) => ({
+                  ...previous,
+                  claudeCompactUpstreamMode: "split"
+                }))
+              }
+            >
+              独立分流
+            </button>
+            <button
+              type="button"
+              className={form.claudeCompactUpstreamMode === "primary" ? "is-selected" : ""}
+              aria-pressed={form.claudeCompactUpstreamMode === "primary"}
+              onClick={() =>
+                onFormChange((previous) => ({
+                  ...previous,
+                  claudeCompactUpstreamMode: "primary"
                 }))
               }
             >
@@ -1309,11 +2026,11 @@ function InspectorPanel({
     <section className="panel inspector" aria-labelledby="inspector-title">
       <div className="section-heading">
         <p className="eyebrow">Inspector</p>
-        <h2 id="inspector-title">先预览，再交给 Codex。</h2>
+        <h2 id="inspector-title">Route Preview</h2>
       </div>
 
       <form className="control-stack" onSubmit={onSubmit}>
-        <Field label="请求路径" hint="选择常用路径，或直接编辑。">
+        <Field label="请求路径" hint="常用路径或手动输入。">
           <div className="path-presets">
             <button type="button" onClick={() => onPathChange("/v1/responses")}>
               普通响应
@@ -1329,12 +2046,12 @@ function InspectorPanel({
           />
         </Field>
 
-        <Field label="JSON Body" hint="排障只需要 model 和 stream，不需要填 prompt 内容。">
+        <Field label="JSON Body" hint="只填 model / stream 即可。">
           <textarea
             aria-label="JSON Body"
             value={body}
             onChange={(event) => onBodyChange(event.target.value)}
-            rows={7}
+            rows={4}
             spellCheck={false}
           />
         </Field>
@@ -1361,7 +2078,7 @@ function InspectorPanel({
                 <dd>{preview.upstream_host}</dd>
               </div>
               <div>
-            <dt>来源模型</dt>
+                <dt>来源模型</dt>
                 <dd>
                   <code>{preview.source_model ?? "无"}</code>
                 </dd>
@@ -1379,7 +2096,7 @@ function InspectorPanel({
             </p>
           </>
         ) : (
-          <p>预览结果会显示命中通道、上游地址、模型改写和 stream 处理。</p>
+          <p>预览会显示通道、上游、模型与 stream 处理。</p>
         )}
       </div>
     </section>
@@ -1389,6 +2106,8 @@ function InspectorPanel({
 function LogsPanel({
   logs,
   logCounts,
+  providerCounts,
+  statusCounts,
   totalLogCount,
   allLogCount,
   hostOptions,
@@ -1396,14 +2115,18 @@ function LogsPanel({
   isLoadingLogs,
   isLoadingMoreLogs,
   routeFilter,
+  statusFilter,
   hostFilter,
   onRouteFilterChange,
+  onStatusFilterChange,
   onHostFilterChange,
   onLoadMore,
   error
 }: {
   logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
+  providerCounts: ProviderLogCounts;
+  statusCounts: StatusLogCounts;
   totalLogCount: number;
   allLogCount: number;
   hostOptions: HostFilterOption[];
@@ -1411,44 +2134,70 @@ function LogsPanel({
   isLoadingLogs: boolean;
   isLoadingMoreLogs: boolean;
   routeFilter: "all" | RouteKind;
+  statusFilter: "all" | LogStatusKind;
   hostFilter: string;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
+  onStatusFilterChange: (status: "all" | LogStatusKind) => void;
   onHostFilterChange: (host: string) => void;
   onLoadMore: () => void;
   error: string | null;
 }) {
   const routeOptions = buildRouteSelectOptions(logCounts);
-  const hostSelectOptions = buildHostSelectOptions(hostOptions, allLogCount);
+  const statusOptions = buildStatusSelectOptions(statusCounts);
+  const hostSelectOptions = buildHostSelectOptions(hostOptions);
   const visibleLogCount = logs.length;
 
   return (
     <section className="logs-panel" aria-labelledby="logs-title">
       <div className="logs-head">
         <div className="section-heading">
-          <p className="eyebrow">Logs</p>
-          <h2 id="logs-title">最近请求，不记录 prompt/body。</h2>
+          <p className="eyebrow">Traffic</p>
+          <h2 id="logs-title">Request log</h2>
         </div>
         <div className="log-filter-stack">
           <div className="log-select-row">
             <CustomSelect
-              label="通道"
+              label="显示通道"
               value={routeFilter}
               options={routeOptions}
               onChange={(value) => onRouteFilterChange(readRouteFilterValue(value))}
             />
             <CustomSelect
-              label="上游 Host"
+              label="显示状态"
+              value={statusFilter}
+              options={statusOptions}
+              onChange={(value) => onStatusFilterChange(readStatusFilterValue(value))}
+            />
+            <CustomSelect
+              label="显示上游 Host"
               value={hostFilter}
               options={hostSelectOptions}
               onChange={onHostFilterChange}
               wide
             />
           </div>
+          <p className="log-filter-disclaimer">
+            Filters only change this table. Routing stays controlled by request path and proxy config.
+          </p>
           <p className="log-filter-summary" aria-live="polite">
-            当前加载 {visibleLogCount} / {totalLogCount} 条匹配日志；日志库共 {allLogCount} 条。
-            展示分批加载，不会删除历史日志。
+            {visibleLogCount} / {totalLogCount} shown · {allLogCount} stored
           </p>
         </div>
+      </div>
+
+      <div className="provider-summary" aria-label="Provider 日志汇总">
+        <ProviderCountCard
+          label={PROVIDER_LABELS.openai}
+          value={providerCounts.openai}
+          detail={`primary ${logCounts.primary} · compact ${logCounts.compact}`}
+          tone="primary"
+        />
+        <ProviderCountCard
+          label={PROVIDER_LABELS.claude}
+          value={providerCounts.claude}
+          detail={`routed ${logCounts.claude}`}
+          tone="claude"
+        />
       </div>
 
       {error && <p className="error-note">{error}</p>}
@@ -1457,7 +2206,8 @@ function LogsPanel({
         <div className="log-usage-head" aria-hidden="true">
           <span>时间</span>
           <span>模型</span>
-          <span>推理强度</span>
+          <span>状态码</span>
+          <span>模型 / 思考</span>
           <span>端点</span>
           <span>上游 Host</span>
           <span>类型</span>
@@ -1476,8 +2226,8 @@ function LogsPanel({
           </div>
         ) : logs.length === 0 ? (
           <div className="empty-log">
-            <strong>{emptyLogTitle(routeFilter, hostFilter, logCounts.all)}</strong>
-            <span>{emptyLogHint(routeFilter, hostFilter, logCounts.all)}</span>
+            <strong>{emptyLogTitle(routeFilter, statusFilter, hostFilter, allLogCount)}</strong>
+            <span>{emptyLogHint(routeFilter, statusFilter, hostFilter, allLogCount)}</span>
           </div>
         ) : (
           logs.map((entry, index) => (
@@ -1511,6 +2261,26 @@ function LogsPanel({
   );
 }
 
+function ProviderCountCard({
+  label,
+  value,
+  detail,
+  tone
+}: {
+  label: string;
+  value: number;
+  detail: string;
+  tone: "primary" | "claude";
+}) {
+  return (
+    <article className={`provider-card tone-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
+}
+
 function LogRow({ entry }: { entry: RequestLogEntry }) {
   const [expanded, setExpanded] = useState(false);
   const hasError = Boolean(entry.error_summary) || entry.status >= 400;
@@ -1519,36 +2289,54 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
   const targetModel = entry.target_model ?? entry.source_model;
   const hasModelRewrite = Boolean(entry.source_model && targetModel && entry.source_model !== targetModel);
   const userAgent = entry.user_agent ?? "-";
+  const canExpand = hasHiddenLogDetails(entry);
+  const errorCopy = hasError
+    ? entry.error_summary ?? `HTTP ${entry.status} · 上游或代理未提供错误摘要。`
+    : null;
+  const mainContent = (
+    <>
+      <time className="log-time" dateTime={entry.time}>{formatDateTime(entry.time)}</time>
+      <span className="log-model-cell">
+        <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+        <strong>{entry.source_model ?? "-"}</strong>
+        {hasModelRewrite && <small>{"->"} {targetModel}</small>}
+      </span>
+      <span className={`log-status-code is-${logStatusKind(entry)}`}>{entry.status}</span>
+      <span className="log-request-info" title={modelReasoningLabel(entry)}>
+        {modelReasoningLabel(entry)}
+      </span>
+      <code className="log-endpoint">{entry.endpoint}</code>
+      <code className="log-host">{entry.upstream_host}</code>
+      <span className={`transport-pill is-${entry.request_type}`}>
+        {requestTypeLabel(entry.request_type)}
+      </span>
+      <code className="log-user-agent" title={userAgent}>{userAgent}</code>
+      <TokenTooltip entry={entry} />
+      <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
+      <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
+    </>
+  );
 
   return (
-    <article className={`log-row ${hasError ? "has-error" : ""}`}>
-      <button
-        className="log-row-main"
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <time className="log-time" dateTime={entry.time}>{formatDateTime(entry.time)}</time>
-        <span className="log-model-cell">
-          <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-          <strong>{entry.source_model ?? "-"}</strong>
-          {hasModelRewrite && <small>{"->"} {targetModel}</small>}
-        </span>
-        <span className="log-reasoning">{entry.reasoning_effort ?? "-"}</span>
-        <code className="log-endpoint">{entry.endpoint}</code>
-        <code className="log-host">{entry.upstream_host}</code>
-        <span className={`transport-pill is-${entry.request_type}`}>
-          {requestTypeLabel(entry.request_type)}
-        </span>
-        <code className="log-user-agent" title={userAgent}>{userAgent}</code>
-        <TokenTooltip entry={entry} />
-        <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
-        <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
-      </button>
+    <article className={`log-row route-${entry.route} ${hasError ? "has-error" : ""} ${canExpand ? "can-expand" : "is-static"}`}>
+      {canExpand ? (
+        <button
+          className="log-row-main"
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {mainContent}
+        </button>
+      ) : (
+        <div className="log-row-main is-static">{mainContent}</div>
+      )}
 
-      {expanded && (
+      {errorCopy && <p className="log-row-error">{errorCopy}</p>}
+
+      {expanded && canExpand && (
         <div className="log-detail">
-          <p>{entry.error_summary ?? "请求已完成，上游未返回代理层错误。"}</p>
+          <p>{errorCopy ?? "请求已完成，上游未返回代理层错误。"}</p>
           <div className="token-detail-card" aria-label="Token 明细">
             <div>
               <span>输入 Token</span>
@@ -1611,6 +2399,12 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
               </dd>
             </div>
             <div>
+              <dt>请求摘要</dt>
+              <dd>
+                <code>{entry.request_summary ?? "无"}</code>
+              </dd>
+            </div>
+            <div>
               <dt>推理强度</dt>
               <dd>
                 <code>{entry.reasoning_effort ?? "无"}</code>
@@ -1657,17 +2451,47 @@ function CustomSelect({
     options.findIndex((option) => option.value === selected.value)
   );
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties | null>(null);
 
   useEffect(() => {
     if (!open) {
       return;
     }
 
+    updateMenuPlacement();
     window.requestAnimationFrame(() => {
       optionRefs.current[selectedIndex]?.focus();
     });
   }, [open, selectedIndex]);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    }
+
+    function handleReposition() {
+      updateMenuPlacement();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("resize", handleReposition);
+    window.addEventListener("scroll", handleReposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("resize", handleReposition);
+      window.removeEventListener("scroll", handleReposition, true);
+    };
+  }, [open]);
 
   function closeAndFocusTrigger() {
     setOpen(false);
@@ -1678,6 +2502,31 @@ function CustomSelect({
 
   function focusOption(index: number) {
     optionRefs.current[index]?.focus();
+  }
+
+  function updateMenuPlacement() {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const width = wide ? Math.max(rect.width, Math.min(420, window.innerWidth - viewportPadding * 2)) : rect.width;
+    const left = clamp(rect.left, viewportPadding, window.innerWidth - width - viewportPadding);
+    const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const availableAbove = rect.top - viewportPadding;
+    const maxHeight = Math.max(180, Math.min(320, Math.max(availableBelow, availableAbove)));
+    const top = availableBelow >= 190 || availableBelow >= availableAbove
+      ? rect.bottom + 8
+      : Math.max(viewportPadding, rect.top - maxHeight - 8);
+
+    setMenuStyle({
+      left,
+      top,
+      width,
+      maxHeight
+    });
   }
 
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
@@ -1728,14 +2577,7 @@ function CustomSelect({
   }
 
   return (
-    <div
-      className={`custom-select ${wide ? "is-wide" : ""}`}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setOpen(false);
-        }
-      }}
-    >
+    <div className={`custom-select ${wide ? "is-wide" : ""}`}>
       <span className="custom-select-label">{label}</span>
       <button
         ref={triggerRef}
@@ -1755,8 +2597,14 @@ function CustomSelect({
         <span className="custom-select-caret" aria-hidden="true">v</span>
       </button>
 
-      {open && (
-        <div id={listId} className="custom-select-menu" role="listbox">
+      {open && menuStyle && createPortal(
+        <div
+          ref={menuRef}
+          id={listId}
+          className={`custom-select-menu ${wide ? "is-wide" : ""}`}
+          role="listbox"
+          style={menuStyle}
+        >
           {options.map((option, optionIndex) => (
             <button
               key={option.value}
@@ -1782,7 +2630,8 @@ function CustomSelect({
               <span className="custom-select-count">{option.count}</span>
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1849,10 +2698,6 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
               <b>{formatMetricNumber(entry.cached_input_tokens)}</b>
             </span>
             <span className="token-tooltip-row">
-              <em>缓存输出 Token</em>
-              <b>{formatMetricNumber(entry.cached_output_tokens)}</b>
-            </span>
-            <span className="token-tooltip-row">
               <em>未缓存输入</em>
               <b>{formatMetricNumber(uncachedInputTokens(entry))}</b>
             </span>
@@ -1889,6 +2734,79 @@ function Field({
   );
 }
 
+function RouteCredentialFields({
+  title,
+  badge,
+  tone,
+  baseUrlLabel,
+  baseUrlHint,
+  apiKeyLabel,
+  apiKeyHint,
+  baseUrl,
+  apiKey,
+  storedApiKey,
+  clearApiKey,
+  onBaseUrlChange,
+  onApiKeyChange,
+  onToggleClearApiKey
+}: {
+  title: string;
+  badge: string;
+  tone: "primary" | "compact" | "claude";
+  baseUrlLabel: string;
+  baseUrlHint: string;
+  apiKeyLabel: string;
+  apiKeyHint: string;
+  baseUrl: string;
+  apiKey: string;
+  storedApiKey: boolean;
+  clearApiKey: boolean;
+  onBaseUrlChange: (value: string) => void;
+  onApiKeyChange: (value: string) => void;
+  onToggleClearApiKey: () => void;
+}) {
+  return (
+    <section className={`route-config-card tone-${tone}`} aria-label={title}>
+      <div className="route-config-card-head">
+        <h4>{title}</h4>
+        <span className={`route-chip ${tone}`}>{badge}</span>
+      </div>
+
+      <Field label={baseUrlLabel} hint={baseUrlHint}>
+        <input
+          aria-label={baseUrlLabel}
+          value={baseUrl}
+          onChange={(event) => onBaseUrlChange(event.target.value)}
+          spellCheck={false}
+        />
+      </Field>
+
+      <Field label={apiKeyLabel} hint={apiKeyHint}>
+        <input
+          aria-label={apiKeyLabel}
+          type="password"
+          autoComplete="off"
+          value={apiKey}
+          placeholder={storedApiKey ? "输入新值以覆盖已保存密钥" : "sk-..."}
+          onChange={(event) => onApiKeyChange(event.target.value)}
+          spellCheck={false}
+        />
+        {(storedApiKey || clearApiKey) && (
+          <div className="field-action-row">
+            <button
+              className={`field-inline-button ${clearApiKey ? "is-danger" : ""}`}
+              type="button"
+              onClick={onToggleClearApiKey}
+            >
+              {clearApiKey ? "取消清空" : "清空已保存密钥"}
+            </button>
+          </div>
+        )}
+      </Field>
+    </section>
+  );
+}
+
 function credentialSourceLabel(source?: CredentialSource | null): string {
   if (source === "config") {
     return "直填密钥";
@@ -1902,42 +2820,42 @@ function credentialSourceLabel(source?: CredentialSource | null): string {
 }
 
 function activeCredentialLabel(
-  route: RouteKind,
-  upstream?: PublicConfig["primary"] | PublicConfig["compact"] | HealthResponse["primary"] | HealthResponse["compact"] | null
+  scope: CredentialScope,
+  upstream?: PublicRouteCredentialConfig | HealthRouteCredentialConfig | null
 ): string {
   if (!upstream) {
     return "读取中...";
   }
 
   if (upstream.api_key_source === "config") {
-    return upstream.active_credential_scope === route ? "已保存直连密钥" : "复用主上游直连密钥";
+    return upstream.active_credential_scope === scope ? "已保存直连密钥" : "复用主路由直连密钥";
   }
 
   return upstream.active_api_key_env ?? "无";
 }
 
 function credentialFlagCopy(
-  route: RouteKind,
-  upstream?: HealthResponse["primary"] | HealthResponse["compact"] | null
+  scope: CredentialScope,
+  upstream?: HealthRouteCredentialConfig | null
 ): string {
   if (!upstream?.api_key_configured) {
     return "当前没有可用密钥。";
   }
 
   if (upstream.api_key_source === "config") {
-    return upstream.active_credential_scope === route
+    return upstream.active_credential_scope === scope
       ? "当前由已保存的直连密钥注入 Authorization。"
-      : "当前复用主上游里保存的直连密钥。";
+      : "当前复用主路由里保存的直连密钥。";
   }
 
-  return upstream.active_credential_scope === route
+  return upstream.active_credential_scope === scope
     ? `当前读取环境变量 ${upstream.active_api_key_env ?? upstream.api_key_env}。`
-    : `当前复用主上游环境变量 ${upstream.active_api_key_env ?? upstream.api_key_env}。`;
+    : `当前复用主路由环境变量 ${upstream.active_api_key_env ?? upstream.api_key_env}。`;
 }
 
 function directApiKeyHint(
-  route: RouteKind,
-  upstream?: PublicConfig["primary"] | PublicConfig["compact"] | null
+  routeLabelText: string,
+  upstream?: PublicRouteCredentialConfig | null
 ): string {
   if (!upstream) {
     return "保存后会直接写入 compactgate.json。";
@@ -1951,9 +2869,7 @@ function directApiKeyHint(
     return `当前仍在回退环境变量 ${upstream.active_api_key_env ?? upstream.api_key_env}。留空保持回退，输入新值后会改为直填密钥。`;
   }
 
-  return route === "primary"
-    ? "当前还没有主上游密钥；保存后会直接写入 compactgate.json。"
-    : "当前还没有 Compact 密钥；保存后会直接写入 compactgate.json。";
+  return `当前还没有 ${routeLabelText} 密钥；保存后会直接写入 compactgate.json。`;
 }
 
 function StatusPill({ label, status }: { label: string; status: HealthBadge }) {
@@ -1964,14 +2880,31 @@ function StatusPill({ label, status }: { label: string; status: HealthBadge }) {
   );
 }
 
+function readStoredThemeMode(): ThemeMode {
+  try {
+    const value = window.localStorage.getItem("compactgate-theme-mode");
+    return value === "light" || value === "dark" || value === "auto" ? value : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
 function emptyForm(): ConfigFormState {
   return {
-    primaryBaseUrl: "",
-    primaryApiKey: "",
-    clearPrimaryApiKey: false,
-    compactBaseUrl: "",
-    compactApiKey: "",
-    clearCompactApiKey: false,
+    codexPrimaryBaseUrl: "",
+    codexPrimaryApiKey: "",
+    clearCodexPrimaryApiKey: false,
+    codexCompactBaseUrl: "",
+    codexCompactApiKey: "",
+    clearCodexCompactApiKey: false,
+    claudePrimaryBaseUrl: "",
+    claudePrimaryApiKey: "",
+    clearClaudePrimaryApiKey: false,
+    claudeCompactBaseUrl: "",
+    claudeCompactApiKey: "",
+    clearClaudeCompactApiKey: false,
+    claudeCompactModelOverride: "",
+    claudeCompactUpstreamMode: "primary",
     upstreamMode: "split",
     modelMode: "linked",
     modelTemplate: "{model}-openai-compact",
@@ -1981,36 +2914,61 @@ function emptyForm(): ConfigFormState {
 
 function formFromConfig(config: PublicConfig): ConfigFormState {
   return {
-    primaryBaseUrl: config.primary.base_url,
-    primaryApiKey: "",
-    clearPrimaryApiKey: false,
-    compactBaseUrl: config.compact.base_url,
-    compactApiKey: "",
-    clearCompactApiKey: false,
-    upstreamMode: config.compact.upstream_mode,
+    codexPrimaryBaseUrl: config.primary.base_url,
+    codexPrimaryApiKey: "",
+    clearCodexPrimaryApiKey: false,
+    codexCompactBaseUrl: config.compact.base_url,
+    codexCompactApiKey: "",
+    clearCodexCompactApiKey: false,
+    claudePrimaryBaseUrl: config.claude.primary.base_url,
+    claudePrimaryApiKey: "",
+    clearClaudePrimaryApiKey: false,
+    claudeCompactBaseUrl: config.claude.compact.base_url,
+    claudeCompactApiKey: "",
+    clearClaudeCompactApiKey: false,
+    claudeCompactModelOverride: config.claude.compact.model_override,
+    claudeCompactUpstreamMode: readUpstreamMode(config.claude.compact.upstream_mode, "primary"),
+    upstreamMode: readUpstreamMode(config.compact.upstream_mode, "split"),
     modelMode: config.compact.model_mode,
     modelTemplate: config.compact.model_template,
     modelOverride: config.compact.model_override
   };
 }
 
+function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split" | "primary" {
+  return value === "split" || value === "primary" ? value : fallback;
+}
+
 function formToPatch(form: ConfigFormState) {
   const primary = {
-    base_url: form.primaryBaseUrl,
-    ...apiKeyPatch(form.primaryApiKey, form.clearPrimaryApiKey)
+    base_url: form.codexPrimaryBaseUrl,
+    ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey)
   };
   const compact = {
-    base_url: form.compactBaseUrl,
-    ...apiKeyPatch(form.compactApiKey, form.clearCompactApiKey),
+    base_url: form.codexCompactBaseUrl,
+    ...apiKeyPatch(form.codexCompactApiKey, form.clearCodexCompactApiKey),
     upstream_mode: form.upstreamMode,
     model_mode: form.modelMode,
     model_template: form.modelTemplate,
     model_override: form.modelOverride
   };
+  const claude = {
+    primary: {
+      base_url: form.claudePrimaryBaseUrl,
+      ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey)
+    },
+    compact: {
+      base_url: form.claudeCompactBaseUrl,
+      ...apiKeyPatch(form.claudeCompactApiKey, form.clearClaudeCompactApiKey),
+      upstream_mode: form.claudeCompactUpstreamMode,
+      model_override: form.claudeCompactModelOverride
+    }
+  };
 
   return {
     primary,
-    compact
+    compact,
+    claude
   };
 }
 
@@ -2028,35 +2986,58 @@ function applyDraftToConfigExport(
     listen: config.listen,
     primary: {
       ...config.primary,
-      base_url: form.primaryBaseUrl
+      base_url: form.codexPrimaryBaseUrl
     },
     compact: {
       ...config.compact,
-      base_url: form.compactBaseUrl,
+      base_url: form.codexCompactBaseUrl,
       upstream_mode: form.upstreamMode,
       model_mode: form.modelMode,
       model_template: form.modelTemplate,
       model_override: form.modelOverride
     },
-    claude: { ...config.claude },
+    claude: {
+      primary: {
+        ...config.claude.primary,
+        base_url: form.claudePrimaryBaseUrl
+      },
+      compact: {
+        ...config.claude.compact,
+        base_url: form.claudeCompactBaseUrl,
+        upstream_mode: form.claudeCompactUpstreamMode,
+        model_override: form.claudeCompactModelOverride
+      }
+    },
     timeouts: { ...config.timeouts },
-    logging: { ...config.logging }
+    logging: { ...config.logging },
+    profiles: config.profiles,
+    active_profile_id: config.active_profile_id
   };
 
-  applyApiKeyDraft(next.primary, form.primaryApiKey, form.clearPrimaryApiKey);
-  applyApiKeyDraft(next.compact, form.compactApiKey, form.clearCompactApiKey);
+  applyApiKeyDraft(next.primary, form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey);
+  applyApiKeyDraft(next.compact, form.codexCompactApiKey, form.clearCodexCompactApiKey);
+  applyApiKeyDraft(next.claude.primary, form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey);
+  applyApiKeyDraft(next.claude.compact, form.claudeCompactApiKey, form.clearClaudeCompactApiKey);
 
   return next;
 }
 
 function draftComparisonState(form: ConfigFormState) {
   return {
-    primaryBaseUrl: form.primaryBaseUrl,
-    primaryApiKey: normalizedApiKey(form.primaryApiKey),
-    clearPrimaryApiKey: form.clearPrimaryApiKey,
-    compactBaseUrl: form.compactBaseUrl,
-    compactApiKey: normalizedApiKey(form.compactApiKey),
-    clearCompactApiKey: form.clearCompactApiKey,
+    codexPrimaryBaseUrl: form.codexPrimaryBaseUrl,
+    codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),
+    clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
+    codexCompactBaseUrl: form.codexCompactBaseUrl,
+    codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
+    clearCodexCompactApiKey: form.clearCodexCompactApiKey,
+    claudePrimaryBaseUrl: form.claudePrimaryBaseUrl,
+    claudePrimaryApiKey: normalizedApiKey(form.claudePrimaryApiKey),
+    clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
+    claudeCompactBaseUrl: form.claudeCompactBaseUrl,
+    claudeCompactApiKey: normalizedApiKey(form.claudeCompactApiKey),
+    clearClaudeCompactApiKey: form.clearClaudeCompactApiKey,
+    claudeCompactModelOverride: form.claudeCompactModelOverride,
+    claudeCompactUpstreamMode: form.claudeCompactUpstreamMode,
     upstreamMode: form.upstreamMode,
     modelMode: form.modelMode,
     modelTemplate: form.modelTemplate,
@@ -2097,20 +3078,45 @@ function renderLinkedModel(model: string, template: string): string {
   return template.replaceAll("{model}", model || "model");
 }
 
-function routeLabel(route: RouteKind): string {
-  if (route === "primary") {
-    return "普通";
-  }
-
-  return route === "compact" ? "压缩" : "Claude";
-}
-
 function formatLatestLogStatus(entry: RequestLogEntry | null, fallback: string): string {
   return entry ? `${routeLabel(entry.route)} · 状态 ${entry.status}` : fallback;
 }
 
 function requestTypeLabel(type: RequestLogEntry["request_type"]): string {
   return type === "stream" ? "Stream" : "HTTP";
+}
+
+function requestInfoLabel(entry: RequestLogEntry): string {
+  return entry.request_summary ?? "-";
+}
+
+function modelReasoningLabel(entry: RequestLogEntry): string {
+  const model = entry.target_model ?? entry.source_model ?? (entry.route === "claude" ? "Claude" : "model");
+  const reasoning = entry.reasoning_effort ?? "standard";
+  return `${model} · ${reasoning}`;
+}
+
+function logStatusKind(entry: RequestLogEntry): LogStatusKind {
+  return entry.status >= 400 || Boolean(entry.error_summary) ? "error" : "normal";
+}
+
+function hasHiddenLogDetails(entry: RequestLogEntry): boolean {
+  if (logStatusKind(entry) === "normal") {
+    return true;
+  }
+
+  const hasTokenBreakdown =
+    entry.input_tokens !== null ||
+    entry.output_tokens !== null ||
+    entry.cached_input_tokens !== null ||
+    entry.cached_output_tokens !== null;
+  const hasModelRewrite = Boolean(
+    entry.source_model && entry.target_model && entry.source_model !== entry.target_model
+  );
+  const hasRequestContext =
+    Boolean(entry.request_summary) || Boolean(entry.reasoning_effort);
+
+  return hasTokenBreakdown || hasModelRewrite || hasRequestContext;
 }
 
 function buildRouteSelectOptions(logCounts: Record<"all" | RouteKind, number>): SelectOption[] {
@@ -2123,32 +3129,33 @@ function buildRouteSelectOptions(logCounts: Record<"all" | RouteKind, number>): 
     },
     {
       value: "primary",
-      label: "普通",
+      label: ROUTE_META.primary.label,
       count: logCounts.primary,
-      meta: "主上游",
+      meta: ROUTE_META.primary.summary,
       tone: "primary"
     },
     {
       value: "compact",
-      label: "压缩",
+      label: ROUTE_META.compact.label,
       count: logCounts.compact,
-      meta: "Compact",
+      meta: ROUTE_META.compact.summary,
       tone: "compact"
     },
     {
       value: "claude",
-      label: "Claude",
+      label: ROUTE_META.claude.label,
       count: logCounts.claude,
-      meta: "Anthropic",
+      meta: ROUTE_META.claude.summary,
       tone: "claude"
     }
   ];
 }
 
 function buildHostSelectOptions(
-  hostOptions: HostFilterOption[],
-  totalLogCount: number
+  hostOptions: HostFilterOption[]
 ): SelectOption[] {
+  const totalLogCount = hostOptions.reduce((total, option) => total + option.total, 0);
+
   return [
     {
       value: ALL_HOSTS_FILTER,
@@ -2167,8 +3174,37 @@ function buildHostSelectOptions(
   ];
 }
 
+function buildStatusSelectOptions(statusCounts: StatusLogCounts): SelectOption[] {
+  return [
+    {
+      value: "all",
+      label: "全部",
+      count: statusCounts.all,
+      meta: "正常和错误"
+    },
+    {
+      value: "normal",
+      label: "正常",
+      count: statusCounts.normal,
+      meta: "HTTP < 400",
+      tone: "normal"
+    },
+    {
+      value: "error",
+      label: "错误",
+      count: statusCounts.error,
+      meta: "HTTP >= 400 或代理错误",
+      tone: "error"
+    }
+  ];
+}
+
 function readRouteFilterValue(value: string): "all" | RouteKind {
   return value === "primary" || value === "compact" || value === "claude" ? value : "all";
+}
+
+function readStatusFilterValue(value: string): "all" | LogStatusKind {
+  return value === "normal" || value === "error" ? value : "all";
 }
 
 function buildHostFilterOptions(
@@ -2236,21 +3272,47 @@ function formatDurationMs(value: number | null): string {
   return `${(value / 1000).toFixed(2)}s`;
 }
 
-function emptyLogTitle(route: "all" | RouteKind, hostFilter: string, totalLogs: number): string {
+function emptyLogTitle(
+  route: "all" | RouteKind,
+  status: "all" | LogStatusKind,
+  hostFilter: string,
+  totalLogs: number
+): string {
   if (totalLogs === 0) {
     return "还没有请求经过。";
+  }
+
+  if (status === "error") {
+    return "当前筛选条件下没有错误请求。";
+  }
+
+  if (status === "normal") {
+    return "当前筛选条件下没有正常请求。";
   }
 
   if (hostFilter !== ALL_HOSTS_FILTER) {
     return "当前 Host 没有匹配日志。";
   }
 
-  return route === "primary" ? "最近没有普通请求。" : "最近没有压缩请求。";
+  if (route === "all") {
+    return "当前筛选条件下没有匹配日志。";
+  }
+
+  return route === "primary" ? "最近没有普通请求。" : route === "compact" ? "最近没有压缩请求。" : "最近没有 Claude 请求。";
 }
 
-function emptyLogHint(route: "all" | RouteKind, hostFilter: string, totalLogs: number): string {
+function emptyLogHint(
+  route: "all" | RouteKind,
+  status: "all" | LogStatusKind,
+  hostFilter: string,
+  totalLogs: number
+): string {
   if (totalLogs === 0) {
     return "把 Codex 的 base_url 指到 http://127.0.0.1:7865/v1 后，这里会实时出现路由记录。";
+  }
+
+  if (status !== "all") {
+    return "状态、通道和 Host 计数会随其它筛选条件联动；切回“全部状态”可以查看完整匹配集。";
   }
 
   if (hostFilter !== ALL_HOSTS_FILTER) {
@@ -2268,6 +3330,60 @@ function compactModeLabel(mode: "split" | "primary"): string {
   return mode === "split" ? "独立分流" : "复用主上游";
 }
 
+function profileSummary(profile: PublicConfig["profiles"][number]): string {
+  const secretCopy =
+    profile.stored_api_key_count > 0
+      ? `含 ${profile.stored_api_key_count} 个直填密钥`
+      : "仅保存 URL 和环境变量引用";
+
+  return [
+    `Codex ${profile.primary_host} / ${profile.compact_host}`,
+    `Claude ${profile.claude_primary_host} / ${profile.claude_compact_host}`,
+    `Codex compact ${compactModeLabel(profile.compact_upstream_mode)}`,
+    `Claude compact ${compactModeLabel(profile.claude_compact_upstream_mode)}`,
+    secretCopy
+  ].join("；");
+}
+
+function profileActionLabel(state: ProfileActionState): string {
+  switch (state) {
+    case "saving":
+      return "正在保存档案";
+    case "saved":
+      return "档案已保存";
+    case "updating":
+      return "正在更新档案";
+    case "updated":
+      return "档案已更新";
+    case "duplicating":
+      return "正在复制档案";
+    case "duplicated":
+      return "档案已复制";
+    case "deleting":
+      return "正在删除档案";
+    case "deleted":
+      return "档案已删除";
+    case "applying":
+      return "正在应用档案";
+    case "applied":
+      return "档案已应用";
+    case "error":
+      return "档案操作失败";
+    case "idle":
+      return "档案操作就绪";
+  }
+}
+
+function isProfileActionBusy(state: ProfileActionState): boolean {
+  return (
+    state === "saving" ||
+    state === "updating" ||
+    state === "duplicating" ||
+    state === "deleting" ||
+    state === "applying"
+  );
+}
+
 function emptyLogPage(limit: number): RequestLogPage {
   return {
     logs: [],
@@ -2282,17 +3398,29 @@ function emptyLogPage(limit: number): RequestLogPage {
       compact: 0,
       claude: 0
     },
+    provider_counts: {
+      all: 0,
+      openai: 0,
+      claude: 0
+    },
+    status_counts: {
+      all: 0,
+      normal: 0,
+      error: 0
+    },
     host_counts: []
   };
 }
 
 async function fetchLogPage({
   route,
+  status,
   host,
   limit,
   offset
 }: {
   route: "all" | RouteKind;
+  status: "all" | LogStatusKind;
   host: string;
   limit: number;
   offset: number;
@@ -2304,6 +3432,10 @@ async function fetchLogPage({
 
   if (route !== "all") {
     params.set("route", route);
+  }
+
+  if (status !== "all") {
+    params.set("status", status);
   }
 
   if (host !== ALL_HOSTS_FILTER) {
@@ -2339,21 +3471,40 @@ function mergeLiveLogPage(
   previous: RequestLogPage,
   nextEntry: RequestLogEntry,
   routeFilter: "all" | RouteKind,
+  statusFilter: "all" | LogStatusKind,
   hostFilter: string
 ): RequestLogPage {
   const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
-  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, hostFilter);
+  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter);
+  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter);
+  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter);
+  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER);
   const nextLogs = matchesFilter
     ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
     : previous.logs;
+  const nextRouteCounts = incrementRouteCounts(
+    previous.counts,
+    nextEntry.route,
+    duplicate || !matchesRouteCountScope
+  );
 
   return {
     ...previous,
     logs: nextLogs,
     total: previous.total + (matchesFilter && !duplicate ? 1 : 0),
     all_total: previous.all_total + (duplicate ? 0 : 1),
-    counts: incrementRouteCounts(previous.counts, nextEntry.route, duplicate),
-    host_counts: incrementHostCounts(previous.host_counts, nextEntry, duplicate)
+    counts: nextRouteCounts,
+    provider_counts: incrementProviderCounts(
+      previous.provider_counts,
+      nextEntry.route,
+      duplicate || !matchesRouteCountScope
+    ),
+    status_counts: incrementStatusCounts(
+      previous.status_counts,
+      logStatusKind(nextEntry),
+      duplicate || !matchesStatusCountScope
+    ),
+    host_counts: incrementHostCounts(previous.host_counts, nextEntry, duplicate || !matchesHostCountScope)
   };
 }
 
@@ -2376,11 +3527,13 @@ function mergeUniqueLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
 function logEntryMatchesFilter(
   entry: RequestLogEntry,
   routeFilter: "all" | RouteKind,
+  statusFilter: "all" | LogStatusKind,
   hostFilter: string
 ): boolean {
   const routeMatches = routeFilter === "all" || entry.route === routeFilter;
+  const statusMatches = statusFilter === "all" || logStatusKind(entry) === statusFilter;
   const hostMatches = hostFilter === ALL_HOSTS_FILTER || entry.upstream_host === hostFilter;
-  return routeMatches && hostMatches;
+  return routeMatches && statusMatches && hostMatches;
 }
 
 function incrementRouteCounts(
@@ -2396,6 +3549,39 @@ function incrementRouteCounts(
     ...counts,
     all: counts.all + 1,
     [route]: counts[route] + 1
+  };
+}
+
+function incrementProviderCounts(
+  counts: ProviderLogCounts,
+  route: RouteKind,
+  duplicate: boolean
+): ProviderLogCounts {
+  if (duplicate) {
+    return counts;
+  }
+
+  const provider = routeProvider(route);
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [provider]: counts[provider] + 1
+  };
+}
+
+function incrementStatusCounts(
+  counts: StatusLogCounts,
+  status: LogStatusKind,
+  skip: boolean
+): StatusLogCounts {
+  if (skip) {
+    return counts;
+  }
+
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [status]: counts[status] + 1
   };
 }
 
@@ -2434,7 +3620,7 @@ function incrementHostCounts(
 }
 
 function upstreamHealthBadge(
-  upstream?: HealthResponse["primary"] | HealthResponse["compact"] | null
+  upstream?: HealthRouteCredentialConfig | null
 ): HealthBadge {
   if (!upstream) {
     return { label: "读取中", tone: "warn" };
@@ -2459,7 +3645,8 @@ function overallHealthBadge(health: HealthResponse | null): HealthBadge {
   const statuses = [
     upstreamHealthBadge(health.primary),
     upstreamHealthBadge(health.compact),
-    upstreamHealthBadge(health.claude)
+    upstreamHealthBadge(health.claude.primary),
+    upstreamHealthBadge(health.claude.compact)
   ];
 
   if (statuses.some((item) => item.tone === "bad")) {

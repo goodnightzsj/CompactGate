@@ -19,9 +19,10 @@ describe("routing helpers", () => {
 
     expect(result.sourceModel).toBe(sourceModel);
     expect(result.targetModel).toBe(targetModel);
-    expect(result.streamRemoved).toBe(true);
+    expect(result.streamRemoved).toBe(false);
     expect(JSON.parse(result.body.toString("utf8"))).toEqual({
       model: targetModel,
+      stream: true,
       input: "redacted"
     });
   });
@@ -59,7 +60,7 @@ describe("routing helpers", () => {
     expect(preview.source_model).toBe("gpt-5.5");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
     expect(preview.body_rewritten).toBe(true);
-    expect(preview.stream_removed).toBe(true);
+    expect(preview.stream_removed).toBe(false);
   });
 
   it("previews compact routing against primary when upstream mode is primary", () => {

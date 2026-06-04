@@ -46,17 +46,14 @@ export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): 
 
   const sourceModel = model;
   const targetModel = deriveCompactModel(sourceModel, config);
-  const streamRemoved = Object.hasOwn(parsed, "stream");
-
   parsed.model = targetModel;
-  delete parsed.stream;
 
   return {
     sourceModel,
     targetModel,
     body: Buffer.from(JSON.stringify(parsed)),
-    bodyRewritten: sourceModel !== targetModel || streamRemoved,
-    streamRemoved
+    bodyRewritten: sourceModel !== targetModel,
+    streamRemoved: false
   };
 }
 
@@ -117,8 +114,6 @@ export function previewRoute(
 
   const sourceModel = extractModelFromUnknown(body);
   const targetModel = sourceModel ? deriveCompactModel(sourceModel, config) : null;
-  const streamRemoved = isRecord(body) && Object.hasOwn(body, "stream");
-
   return {
     route,
     method,
@@ -127,8 +122,8 @@ export function previewRoute(
     upstream_host: upstream.host,
     source_model: sourceModel,
     target_model: targetModel,
-    body_rewritten: Boolean(sourceModel && sourceModel !== targetModel) || streamRemoved,
-    stream_removed: streamRemoved
+    body_rewritten: Boolean(sourceModel && sourceModel !== targetModel),
+    stream_removed: false
   };
 }
 

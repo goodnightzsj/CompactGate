@@ -1,5 +1,7 @@
 export type RouteKind = "primary" | "compact" | "claude";
-export type CredentialScope = "primary" | "compact" | "claude";
+export type ProviderFamily = "openai" | "claude";
+export type LogStatusKind = "normal" | "error";
+export type CredentialScope = "primary" | "compact" | "claude" | "claude_primary" | "claude_compact";
 export type CredentialSource = "config" | "env" | "missing";
 export type RequestTransport = "http" | "stream";
 
@@ -12,11 +14,21 @@ export interface UpstreamConfig {
   api_key_env: string;
 }
 
+export interface ClaudeCompactConfig extends UpstreamConfig {
+  upstream_mode: CompactUpstreamMode;
+  model_override: string;
+}
+
 export interface CompactConfig extends UpstreamConfig {
   upstream_mode: CompactUpstreamMode;
   model_mode: CompactModelMode;
   model_template: string;
   model_override: string;
+}
+
+export interface ClaudeConfig {
+  primary: UpstreamConfig;
+  compact: ClaudeCompactConfig;
 }
 
 export interface TimeoutConfig {
@@ -30,13 +42,40 @@ export interface LoggingConfig {
   keep_recent: number;
 }
 
-export interface CompactGateConfig {
+export interface CompactGateRuntimeConfig {
   listen: string;
   primary: UpstreamConfig;
   compact: CompactConfig;
-  claude: UpstreamConfig;
+  claude: ClaudeConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
+}
+
+export interface SavedConfigProfile {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  config: CompactGateRuntimeConfig;
+}
+
+export interface CompactGateConfig extends CompactGateRuntimeConfig {
+  profiles?: SavedConfigProfile[];
+  active_profile_id?: string | null;
+}
+
+export interface PublicConfigProfile {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  primary_host: string;
+  compact_host: string;
+  claude_primary_host: string;
+  claude_compact_host: string;
+  compact_upstream_mode: CompactUpstreamMode;
+  claude_compact_upstream_mode: CompactUpstreamMode;
+  stored_api_key_count: number;
 }
 
 export interface PublicCredentialState {
@@ -62,13 +101,20 @@ export interface PublicCompactConfig extends PublicCredentialState {
   model_override: string;
 }
 
+export interface PublicClaudeConfig {
+  primary: PublicUpstreamConfig;
+  compact: PublicUpstreamConfig & { upstream_mode: CompactUpstreamMode; model_override: string };
+}
+
 export interface PublicConfig {
   listen: string;
   primary: PublicUpstreamConfig;
   compact: PublicCompactConfig;
-  claude: PublicUpstreamConfig;
+  claude: PublicClaudeConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
+  profiles: PublicConfigProfile[];
+  active_profile_id: string | null;
   config_path: string;
   last_saved_at: string | null;
 }
@@ -99,6 +145,7 @@ export interface RequestLogEntry {
   endpoint: string;
   request_type: RequestTransport;
   reasoning_effort: string | null;
+  request_summary: string | null;
   source_model: string | null;
   target_model: string | null;
   status: number;
@@ -123,6 +170,9 @@ export interface HostLogCount {
   claude: number;
 }
 
+export type ProviderLogCounts = Record<"all" | ProviderFamily, number>;
+export type StatusLogCounts = Record<"all" | LogStatusKind, number>;
+
 export interface RequestLogPage {
   logs: RequestLogEntry[];
   limit: number;
@@ -131,6 +181,8 @@ export interface RequestLogPage {
   all_total: number;
   has_more: boolean;
   counts: Record<"all" | RouteKind, number>;
+  provider_counts: ProviderLogCounts;
+  status_counts: StatusLogCounts;
   host_counts: HostLogCount[];
 }
 
@@ -149,10 +201,17 @@ export interface HealthResponse {
     host: string | null;
   } & PublicCredentialState;
   claude: {
-    status: "configured" | "invalid";
-    base_url: string;
-    host: string | null;
-  } & PublicCredentialState;
+    primary: {
+      status: "configured" | "invalid";
+      base_url: string;
+      host: string | null;
+    } & PublicCredentialState;
+    compact: {
+      status: "configured" | "invalid";
+      base_url: string;
+      host: string | null;
+    } & PublicCredentialState;
+  };
 }
 
 export interface StudioSnapshotEvent {

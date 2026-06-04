@@ -8,8 +8,12 @@
     "dev": "tsx watch src/server/main.ts",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
     "start": "node dist/server/main.js",
+    "restart": "bash scripts/restart-service.sh",
+    "service:restart": "bash scripts/restart-service.sh",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "stop": "bash scripts/stop-service.sh",
+    "service:stop": "bash scripts/stop-service.sh"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",

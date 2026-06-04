@@ -17,13 +17,12 @@ export function resolveRouteCredential(
   config: CompactGateConfig
 ): ResolvedCredential {
   const activeCredentialScope =
-    route === "compact" && config.compact.upstream_mode === "primary" ? "primary" : route;
-  const activeConfig =
-    activeCredentialScope === "primary"
-      ? config.primary
-      : activeCredentialScope === "compact"
-        ? config.compact
-        : config.claude;
+    route === "compact" && config.compact.upstream_mode === "primary"
+      ? "primary"
+      : route === "claude_compact" && config.claude.compact.upstream_mode === "primary"
+        ? "claude_primary"
+        : route;
+  const activeConfig = configForCredentialScope(activeCredentialScope, config);
   const directApiKey = activeConfig.api_key.trim();
 
   if (directApiKey.length > 0) {
@@ -55,4 +54,21 @@ export function resolveRouteCredential(
     activeApiKeyEnv: envName.length > 0 ? envName : null,
     activeCredentialScope
   };
+}
+
+function configForCredentialScope(
+  scope: CredentialScope,
+  config: CompactGateConfig
+): CompactGateConfig["primary"] {
+  switch (scope) {
+    case "primary":
+      return config.primary;
+    case "compact":
+      return config.compact;
+    case "claude_compact":
+      return config.claude.compact;
+    case "claude":
+    case "claude_primary":
+      return config.claude.primary;
+  }
 }
