@@ -8,6 +8,9 @@ export type RequestTransport = "http" | "stream";
 
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
+export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reasoning" | "subagent";
+
+export type ClaudeModelMap = Record<ClaudeModelMapRole, string>;
 
 export interface UpstreamConfig {
   base_url: string;
@@ -20,6 +23,10 @@ export interface ClaudeCompactConfig extends UpstreamConfig {
   model_override: string;
 }
 
+export interface ClaudePrimaryConfig extends UpstreamConfig {
+  model_override: string;
+}
+
 export interface CompactConfig extends UpstreamConfig {
   upstream_mode: CompactUpstreamMode;
   model_mode: CompactModelMode;
@@ -28,8 +35,9 @@ export interface CompactConfig extends UpstreamConfig {
 }
 
 export interface ClaudeConfig {
-  primary: UpstreamConfig;
+  primary: ClaudePrimaryConfig;
   compact: ClaudeCompactConfig;
+  model_map: ClaudeModelMap;
 }
 
 export interface TimeoutConfig {
@@ -102,6 +110,9 @@ export interface PublicConfigProfile {
   compact_host: string | null;
   claude_primary_host: string | null;
   claude_compact_host: string | null;
+  claude_primary_model_override: string | null;
+  claude_compact_model_override: string | null;
+  claude_model_map: ClaudeModelMap | null;
   compact_upstream_mode: CompactUpstreamMode | null;
   claude_compact_upstream_mode: CompactUpstreamMode | null;
   stored_api_key_count: number;
@@ -131,8 +142,9 @@ export interface PublicCompactConfig extends PublicCredentialState {
 }
 
 export interface PublicClaudeConfig {
-  primary: PublicUpstreamConfig;
+  primary: PublicUpstreamConfig & { model_override: string };
   compact: PublicUpstreamConfig & { upstream_mode: CompactUpstreamMode; model_override: string };
+  model_map: ClaudeModelMap;
 }
 
 export interface PublicConfigProfileScopeState {

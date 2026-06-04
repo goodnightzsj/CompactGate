@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
+  ClaudeModelMap,
+  ClaudeModelMapRole,
   CompactGateConfig,
   CompactGateRuntimeConfig,
   CompactModelMode,
@@ -16,6 +18,26 @@ import type {
   SavedConfigProfileScopes
 } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
+
+const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
+  "default",
+  "opus",
+  "sonnet",
+  "haiku",
+  "reasoning",
+  "subagent"
+];
+
+function emptyClaudeModelMap(): ClaudeModelMap {
+  return {
+    default: "",
+    opus: "",
+    sonnet: "",
+    haiku: "",
+    reasoning: "",
+    subagent: ""
+  };
+}
 
 export const DEFAULT_CONFIG: CompactGateConfig = {
   listen: "127.0.0.1:7865",
@@ -37,7 +59,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     primary: {
       base_url: "https://api.anthropic.com",
       api_key: "",
-      api_key_env: "ANTHROPIC_AUTH_TOKEN"
+      api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      model_override: ""
     },
     compact: {
       base_url: "https://api.anthropic.com",
@@ -45,7 +68,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       api_key_env: "ANTHROPIC_AUTH_TOKEN",
       upstream_mode: "primary",
       model_override: ""
-    }
+    },
+    model_map: emptyClaudeModelMap()
   },
   timeouts: {
     primary_ms: 120_000,
@@ -377,7 +401,8 @@ export class ConfigStore {
           api_key_configured: claudePrimaryCredential.apiKeyConfigured,
           api_key_source: claudePrimaryCredential.apiKeySource,
           active_api_key_env: claudePrimaryCredential.activeApiKeyEnv,
-          active_credential_scope: claudePrimaryCredential.activeCredentialScope
+          active_credential_scope: claudePrimaryCredential.activeCredentialScope,
+          model_override: config.claude.primary.model_override
         },
         compact: {
           base_url: config.claude.compact.base_url,
@@ -390,7 +415,8 @@ export class ConfigStore {
           active_credential_scope: claudeCompactCredential.activeCredentialScope,
           upstream_mode: config.claude.compact.upstream_mode,
           model_override: config.claude.compact.model_override
-        }
+        },
+        model_map: { ...config.claude.model_map }
       },
       listen: config.listen,
       timeouts: config.timeouts,
@@ -450,7 +476,9 @@ function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateEnvName(config.compact.api_key_env, "compact.api_key_env");
   validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
   validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
+  validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
+  validateClaudeModelMap(config.claude.model_map);
   validateUpstreamMode(config.compact.upstream_mode);
   validateUpstreamMode(config.claude.compact.upstream_mode);
   validateModelMode(config.compact.model_mode);
@@ -540,6 +568,12 @@ function validateOptionalModelName(value: string, field: string): void {
   }
 }
 
+function validateClaudeModelMap(modelMap: ClaudeModelMap): void {
+  for (const role of CLAUDE_MODEL_MAP_ROLES) {
+    validateOptionalModelName(modelMap[role] ?? "", `claude.model_map.${role}`);
+  }
+}
+
 function validateUpstreamMode(value: string): asserts value is CompactUpstreamMode {
   if (value !== "split" && value !== "primary") {
     throw new ConfigError("compact.upstream_mode must be split or primary.");
@@ -619,29 +653,83 @@ function mergeClaudeConfig(
 ): CompactGateRuntimeConfig["claude"] {
   const primaryPatch = readChild(patch.primary);
   const compactPatch = readChild(patch.compact);
+  const modelMapPatch = readChild(patch.model_map);
+  const hasModelMapPatch = Object.keys(modelMapPatch).length > 0;
 
   if (Object.keys(primaryPatch).length > 0 || Object.keys(compactPatch).length > 0) {
+    const modelMap = mergeClaudeModelMap(base.model_map, modelMapPatch);
+    if (!hasModelMapPatch && typeof primaryPatch.model_override === "string") {
+      modelMap.default = primaryPatch.model_override.trim();
+    }
     return {
-      primary: mergeUpstreamConfig(base.primary, primaryPatch),
-      compact: mergeClaudeCompactConfig(base.compact, compactPatch)
+      primary: {
+        ...mergeClaudePrimaryConfig(base.primary, primaryPatch),
+        model_override: modelMap.default
+      },
+      compact: mergeClaudeCompactConfig(base.compact, compactPatch),
+      model_map: modelMap
     };
   }
 
   if (Object.hasOwn(patch, "base_url") || Object.hasOwn(patch, "api_key") || Object.hasOwn(patch, "api_key_env")) {
     const legacy = mergeUpstreamConfig(base.primary, patch);
+    const modelMap = mergeClaudeModelMap(base.model_map, modelMapPatch);
     return {
-      primary: legacy,
+      primary: {
+        ...legacy,
+        model_override: modelMap.default
+      },
       compact: {
         ...legacy,
         upstream_mode: base.compact.upstream_mode,
         model_override: base.compact.model_override
-      }
+      },
+      model_map: modelMap
+    };
+  }
+
+  if (hasModelMapPatch) {
+    const modelMap = mergeClaudeModelMap(base.model_map, modelMapPatch);
+    return {
+      primary: {
+        ...base.primary,
+        model_override: modelMap.default
+      },
+      compact: { ...base.compact },
+      model_map: modelMap
     };
   }
 
   return {
-    primary: { ...base.primary },
-    compact: { ...base.compact }
+    primary: {
+      ...base.primary,
+      model_override: base.model_map.default
+    },
+    compact: { ...base.compact },
+    model_map: { ...base.model_map }
+  };
+}
+
+function mergeClaudeModelMap(base: ClaudeModelMap, patch: Record<string, unknown>): ClaudeModelMap {
+  const next: ClaudeModelMap = {
+    ...emptyClaudeModelMap(),
+    ...base
+  };
+
+  for (const role of CLAUDE_MODEL_MAP_ROLES) {
+    next[role] = readString(patch[role], next[role]);
+  }
+
+  return next;
+}
+
+function mergeClaudePrimaryConfig(
+  base: CompactGateRuntimeConfig["claude"]["primary"],
+  patch: Record<string, unknown>
+): CompactGateRuntimeConfig["claude"]["primary"] {
+  return {
+    ...mergeUpstreamConfig(base, patch),
+    model_override: readString(patch.model_override, base.model_override)
   };
 }
 
@@ -675,7 +763,8 @@ function mergeRuntimeForProfileScope(
     ...cloneRuntimeConfig(current),
     claude: {
       primary: { ...profileRuntime.claude.primary },
-      compact: { ...profileRuntime.claude.compact }
+      compact: { ...profileRuntime.claude.compact },
+      model_map: { ...profileRuntime.claude.model_map }
     }
   };
 }
@@ -710,7 +799,8 @@ function extractScopedProfileConfig(
   return {
     claude: {
       primary: { ...runtime.claude.primary },
-      compact: { ...runtime.claude.compact }
+      compact: { ...runtime.claude.compact },
+      model_map: { ...runtime.claude.model_map }
     }
   };
 }
@@ -1094,6 +1184,9 @@ function toPublicProfile(profile: SavedConfigProfile, scope: ConfigProfileScope)
     compact_host: codexProfile ? safeHost(runtime.compact.base_url) : null,
     claude_primary_host: codexProfile ? null : safeHost(runtime.claude.primary.base_url),
     claude_compact_host: codexProfile ? null : safeHost(runtime.claude.compact.base_url),
+    claude_primary_model_override: codexProfile ? null : runtime.claude.primary.model_override,
+    claude_compact_model_override: codexProfile ? null : runtime.claude.compact.model_override,
+    claude_model_map: codexProfile ? null : { ...runtime.claude.model_map },
     compact_upstream_mode: codexProfile ? runtime.compact.upstream_mode : null,
     claude_compact_upstream_mode: codexProfile ? null : runtime.claude.compact.upstream_mode,
     stored_api_key_count: storedApiKeys.filter(directApiKeyConfigured).length

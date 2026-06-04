@@ -87,7 +87,8 @@ describe("ConfigStore", () => {
     expect(config.claude.primary).toEqual({
       base_url: "http://127.0.0.1:9010",
       api_key: "legacy-claude-key",
-      api_key_env: "LEGACY_CLAUDE_KEY"
+      api_key_env: "LEGACY_CLAUDE_KEY",
+      model_override: ""
     });
     expect(config.claude.compact).toEqual({
       ...config.claude.primary,
@@ -95,12 +96,71 @@ describe("ConfigStore", () => {
       model_override: ""
     });
     expect(publicConfig.claude.primary.base_url).toBe("http://127.0.0.1:9010");
+    expect(publicConfig.claude.primary.model_override).toBe("");
     expect(publicConfig.claude.compact.base_url).toBe("http://127.0.0.1:9010");
     expect(publicConfig.claude.compact.upstream_mode).toBe("primary");
     expect(publicConfig.claude.compact.model_override).toBe("");
     expect(publicConfig.claude.primary.stored_api_key).toBe(true);
     expect(publicConfig.claude.compact.stored_api_key).toBe(true);
     expect(JSON.stringify(publicConfig)).not.toContain("legacy-claude-key");
+  });
+
+  it("syncs Claude primary model override with the default model map slot", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const configPath = path.join(dir, "compactgate.json");
+    await writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          claude: {
+            primary: {
+              base_url: "http://127.0.0.1:9011",
+              model_override: "legacy-default-model"
+            }
+          }
+        },
+        null,
+        2
+      )
+    );
+
+    const store = await ConfigStore.load(configPath);
+    let config = store.get();
+    expect(config.claude.primary.model_override).toBe("legacy-default-model");
+    expect(config.claude.model_map).toMatchObject({
+      default: "legacy-default-model",
+      opus: "",
+      sonnet: "",
+      haiku: "",
+      reasoning: "",
+      subagent: ""
+    });
+
+    await store.patch({
+      claude: {
+        model_map: {
+          default: "mapped-default-model",
+          opus: "mapped-opus-model",
+          sonnet: "mapped-sonnet-model",
+          haiku: "mapped-haiku-model",
+          reasoning: "mapped-reasoning-model",
+          subagent: "mapped-subagent-model"
+        }
+      }
+    });
+    config = store.get();
+    expect(config.claude.primary.model_override).toBe("mapped-default-model");
+    expect(config.claude.model_map).toMatchObject({
+      default: "mapped-default-model",
+      opus: "mapped-opus-model",
+      sonnet: "mapped-sonnet-model",
+      haiku: "mapped-haiku-model",
+      reasoning: "mapped-reasoning-model",
+      subagent: "mapped-subagent-model"
+    });
+    expect(store.toPublicConfig().claude.model_map.default).toBe("mapped-default-model");
   });
 
   it("saves and applies named config profiles without exposing stored API keys", async () => {
@@ -235,8 +295,15 @@ describe("ConfigStore", () => {
     });
     await store.saveProfile("claude", "Claude only", {
       claude: {
-        primary: { base_url: "http://127.0.0.1:9503" },
-        compact: { base_url: "http://127.0.0.1:9504", upstream_mode: "split" }
+        primary: {
+          base_url: "http://127.0.0.1:9503",
+          model_override: "claude-profile-primary-model"
+        },
+        compact: {
+          base_url: "http://127.0.0.1:9504",
+          upstream_mode: "split",
+          model_override: "claude-profile-compact-model"
+        }
       }
     });
 
@@ -252,9 +319,19 @@ describe("ConfigStore", () => {
     expect(saved.profile_scopes?.codex?.profiles?.[0]?.config).not.toHaveProperty("claude");
     expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).toMatchObject({
       claude: {
-        primary: { base_url: "http://127.0.0.1:9503" },
-        compact: { base_url: "http://127.0.0.1:9504" }
+        primary: {
+          base_url: "http://127.0.0.1:9503",
+          model_override: "claude-profile-primary-model"
+        },
+        compact: {
+          base_url: "http://127.0.0.1:9504",
+          model_override: "claude-profile-compact-model"
+        }
       }
+    });
+    expect(store.toPublicConfig().profile_scopes.claude.profiles[0]).toMatchObject({
+      claude_primary_model_override: "claude-profile-primary-model",
+      claude_compact_model_override: "claude-profile-compact-model"
     });
     expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("primary");
     expect(saved.profile_scopes?.claude?.profiles?.[0]?.config).not.toHaveProperty("compact");
@@ -271,7 +348,9 @@ describe("ConfigStore", () => {
     applied = store.get();
     expect(applied.primary.base_url).toBe("http://127.0.0.1:9501/v1");
     expect(applied.claude.primary.base_url).toBe("http://127.0.0.1:9503");
+    expect(applied.claude.primary.model_override).toBe("claude-profile-primary-model");
     expect(applied.claude.compact.base_url).toBe("http://127.0.0.1:9504");
+    expect(applied.claude.compact.model_override).toBe("claude-profile-compact-model");
     expect(applied.profile_scopes?.codex?.active_profile_id).toBe(codexId);
     expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
   });

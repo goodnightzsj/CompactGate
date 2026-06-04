@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import type {
+  ClaudeModelMapRole,
   CompactGateConfig,
   ConfigProfileScope,
   HealthResponse,
@@ -438,6 +439,11 @@ async function handleApi(
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/claude/models") {
+    sendJson(res, 200, await fetchClaudeModels(configStore.get()));
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/logs/recent") {
     const route = parseRouteFilter(url.searchParams.get("route"));
     const status = parseStatusFilter(url.searchParams.get("status"));
@@ -549,7 +555,7 @@ async function proxyClaudeRequest(
     claudeRoute = shouldRouteManualCompactToCompact ? "compact" : "primary";
     targetModel = claudeRoute === "compact"
       ? readStringField(config.claude.compact.model_override) ?? sourceModel
-      : sourceModel;
+      : resolveClaudeMappedModel(sourceModel, config) ?? sourceModel;
     upstream = buildClaudeUpstreamUrl(
       claudeRoute === "compact" ? claudeCompactUpstreamBaseUrl(config) : config.claude.primary.base_url,
       upstreamPath,
@@ -557,7 +563,7 @@ async function proxyClaudeRequest(
     );
     upstreamBody = claudeRoute === "compact"
       ? rewriteClaudeManualCompactBody(rawBody, config.claude.compact.model_override)
-      : rawBody;
+      : rewriteClaudeModelBody(rawBody, targetModel ?? "");
     const auth = resolveClaudeCredential(claudeRoute, config);
     requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
 
@@ -1546,6 +1552,52 @@ function claudeCompactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.claude.compact.base_url;
 }
 
+function resolveClaudeMappedModel(
+  sourceModel: string | null,
+  config: CompactGateConfig
+): string | null {
+  const role = classifyClaudeModelRole(sourceModel);
+  const roleTarget = role ? readStringField(config.claude.model_map[role]) : null;
+  if (roleTarget) {
+    return roleTarget;
+  }
+
+  return readStringField(config.claude.model_map.default);
+}
+
+function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole | null {
+  const normalized = sourceModel?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized === "subagent" || normalized.includes("subagent")) {
+    return "subagent";
+  }
+
+  if (normalized === "reasoning" || normalized.includes("reasoning") || normalized.includes("thinking")) {
+    return "reasoning";
+  }
+
+  if (normalized === "haiku" || normalized.includes("haiku")) {
+    return "haiku";
+  }
+
+  if (normalized === "sonnet" || normalized.includes("sonnet")) {
+    return "sonnet";
+  }
+
+  if (normalized === "opus" || normalized === "opusplan" || normalized.includes("opus")) {
+    return "opus";
+  }
+
+  if (normalized === "default" || normalized === "best") {
+    return "default";
+  }
+
+  return null;
+}
+
 function shouldArmClaudeManualCompactRouting(
   config: CompactGateConfig,
   requestPath: string,
@@ -1610,7 +1662,11 @@ function isClaudeManualCompactRequest(requestPath: string, rawBody: Buffer): boo
 }
 
 function rewriteClaudeManualCompactBody(rawBody: Buffer, compactModelOverride: string): Buffer {
-  const model = readStringField(compactModelOverride);
+  return rewriteClaudeModelBody(rawBody, compactModelOverride);
+}
+
+function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): Buffer {
+  const model = readStringField(modelOverride);
   if (!model) {
     return rawBody;
   }
@@ -1624,6 +1680,166 @@ function rewriteClaudeManualCompactBody(rawBody: Buffer, compactModelOverride: s
     ...parsed,
     model
   }));
+}
+
+async function fetchClaudeModels(config: CompactGateConfig): Promise<{
+  models: string[];
+  upstream_host: string;
+  error: string | null;
+}> {
+  const upstreams = buildClaudeModelListUrls(config.claude.primary.base_url);
+  const auth = resolveClaudeCredential("primary", config);
+  const headers = buildAnthropicUpstreamHeaders(
+    {
+      "anthropic-version": "2023-06-01"
+    },
+    auth.apiKey
+  );
+  const errors: string[] = [];
+
+  for (const upstream of upstreams) {
+    try {
+      const body = await requestJson(upstream, headers, config.timeouts.claude_ms);
+      return {
+        models: extractModelIds(body),
+        upstream_host: upstream.host,
+        error: null
+      };
+    } catch (error) {
+      errors.push(`${upstream.pathname}: ${claudeModelFetchError(error)}`);
+
+      if (!shouldTryNextClaudeModelsPath(error)) {
+        break;
+      }
+    }
+  }
+
+  return {
+    models: [],
+    upstream_host: upstreams[0]?.host ?? hostOrNull(config.claude.primary.base_url) ?? "",
+    error: `上游模型列表不可用。已尝试 ${errors.join("；")}`
+  };
+}
+
+function buildClaudeModelListUrls(baseUrl: string): URL[] {
+  const candidates = [
+    buildClaudeUpstreamUrl(baseUrl, "/v1/models"),
+    buildClaudeUpstreamUrl(baseUrl, "/models")
+  ];
+  const rootBase = new URL(baseUrl);
+  rootBase.pathname = "/";
+  rootBase.search = "";
+  rootBase.hash = "";
+  candidates.push(
+    buildClaudeUpstreamUrl(rootBase.toString(), "/v1/models"),
+    buildClaudeUpstreamUrl(rootBase.toString(), "/models")
+  );
+
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = candidate.toString();
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function shouldTryNextClaudeModelsPath(error: unknown): boolean {
+  if (error instanceof UpstreamStatusError) {
+    return error.status === 404 || error.status === 405;
+  }
+
+  return false;
+}
+
+function claudeModelFetchError(error: unknown): string {
+  if (error instanceof UpstreamStatusError) {
+    if (error.status === 401 || error.status === 403) {
+      return `认证失败，状态码 ${error.status}`;
+    }
+
+    return `状态码 ${error.status}`;
+  }
+
+  return summaryForError(error);
+}
+
+function requestJson(
+  upstream: URL,
+  headers: Record<string, string>,
+  timeoutMs: number
+): Promise<unknown> {
+  const client = upstream.protocol === "https:" ? https : http;
+  const requestOptions: RequestOptions = {
+    method: "GET",
+    headers,
+    timeout: timeoutMs
+  };
+  const agent = resolveUpstreamAgent(upstream);
+  if (agent) {
+    requestOptions.agent = agent;
+  }
+
+  return new Promise((resolve, reject) => {
+    const upstreamReq = client.request(upstream, requestOptions, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        const body = Buffer.concat(chunks);
+        const status = response.statusCode ?? 502;
+        if (status >= 400) {
+          reject(new UpstreamStatusError(status, `Claude models request failed with status ${status}.`));
+          return;
+        }
+
+        try {
+          resolve(JSON.parse(body.toString("utf8")) as unknown);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      response.once("error", reject);
+      response.once("aborted", () => reject(new Error("Claude models response aborted before completion.")));
+    });
+
+    upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Claude models request timed out.")));
+    upstreamReq.once("error", reject);
+    upstreamReq.end();
+  });
+}
+
+class UpstreamStatusError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+function extractModelIds(value: unknown): string[] {
+  const models = new Set<string>();
+  const candidates = isRecord(value) && Array.isArray(value.data) ? value.data : Array.isArray(value) ? value : [];
+
+  for (const item of candidates) {
+    if (typeof item === "string") {
+      models.add(item);
+      continue;
+    }
+
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const id = readStringField(item.id) ?? readStringField(item.name) ?? readStringField(item.model);
+    if (id) {
+      models.add(id);
+    }
+  }
+
+  return [...models].sort((left, right) => left.localeCompare(right));
 }
 
 function readClaudeReconnectCount(value: unknown, depth = 0): number | null {

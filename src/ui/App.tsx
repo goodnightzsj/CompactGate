@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { PROVIDER_LABELS, ROUTE_META, routeLabel, routeProvider } from "../shared/route-meta.js";
 import type {
+  ClaudeModelMap,
+  ClaudeModelMapRole,
   CompactGateConfig,
   ConfigProfileScope,
   CredentialScope,
@@ -48,6 +50,7 @@ type ConfigFormState = {
   claudePrimaryBaseUrl: string;
   claudePrimaryApiKey: string;
   clearClaudePrimaryApiKey: boolean;
+  claudeModelMap: ClaudeModelMap;
   claudeCompactBaseUrl: string;
   claudeCompactApiKey: string;
   clearClaudeCompactApiKey: boolean;
@@ -71,7 +74,7 @@ type HostFilterOption = HostLogCount;
 interface SelectOption {
   value: string;
   label: string;
-  count: number;
+  count?: number;
   meta?: string;
   tone?: string;
 }
@@ -90,6 +93,7 @@ type HealthRouteCredentialConfig =
 
 type PublicConfigProfile = PublicConfig["profiles"][number];
 type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
+type ClaudeModelsResponse = { models: string[]; upstream_host: string; error: string | null };
 
 const DEFAULT_BODY = JSON.stringify({ model: "gpt-5.5", stream: true }, null, 2);
 const ALL_HOSTS_FILTER = "__all_hosts__";
@@ -97,6 +101,55 @@ const ALL_STATUS_FILTER = "__all_status__";
 const DEFAULT_LOG_PAGE_LIMIT = 200;
 const TOKEN_TOOLTIP_WIDTH = 350;
 const TOKEN_TOOLTIP_ESTIMATED_HEIGHT = 216;
+const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
+  "default",
+  "opus",
+  "sonnet",
+  "haiku",
+  "reasoning",
+  "subagent"
+];
+const CLAUDE_MODEL_MAP_META: Record<
+  ClaudeModelMapRole,
+  { label: string; source: string; hint: string; official: boolean }
+> = {
+  default: {
+    label: "默认",
+    source: "ANTHROPIC_MODEL / default / best",
+    hint: "普通 Claude Code 会话和无法识别具体角色的请求都会落到这里。",
+    official: true
+  },
+  opus: {
+    label: "Opus 高能力",
+    source: "ANTHROPIC_DEFAULT_OPUS_MODEL / opus / opusplan",
+    hint: "用于高能力模型槽位，Plan Mode 的 Opus 路径也会优先匹配这里。",
+    official: true
+  },
+  sonnet: {
+    label: "Sonnet 均衡",
+    source: "ANTHROPIC_DEFAULT_SONNET_MODEL / sonnet",
+    hint: "用于 Claude Code 的均衡主力模型槽位。",
+    official: true
+  },
+  haiku: {
+    label: "Haiku 快速",
+    source: "ANTHROPIC_DEFAULT_HAIKU_MODEL / haiku",
+    hint: "用于小模型、快速任务和部分后台功能。",
+    official: true
+  },
+  reasoning: {
+    label: "推理",
+    source: "ANTHROPIC_REASONING_MODEL",
+    hint: "cc-switch 兼容槽位；官方 Claude Code 文档未把它列为标准环境变量。",
+    official: false
+  },
+  subagent: {
+    label: "子代理",
+    source: "CLAUDE_CODE_SUBAGENT_MODEL / subagent",
+    hint: "用于子代理和 agent teams；设置为 inherit 的场景建议留空。",
+    official: true
+  }
+};
 
 type StudioPage = "dashboard" | "routes" | "config" | "logs";
 
@@ -442,7 +495,7 @@ function App() {
   }, [latestLog?.source_model]);
 
   useEffect(() => {
-    document.title = pageMode === "health" ? "CompactGate Health" : "CompactGate Studio";
+    document.title = pageMode === "health" ? "CompactGate 健康检查" : "CompactGate 控制台";
   }, [pageMode]);
 
   async function saveConfig(event: React.FormEvent) {
@@ -1233,7 +1286,7 @@ function RoutesPage({
             <div className="route-slot">
               <div className="route-slot-label">压缩路由</div>
               <div className="route-slot-host">{compactTarget}</div>
-              <div className="route-slot-hint">{compactMode === "split" ? "独立 Base URL 与密钥" : "复用主路由"}</div>
+              <div className="route-slot-hint">{compactMode === "split" ? "独立基础地址与密钥" : "复用主路由"}</div>
             </div>
           </div>
 
@@ -1370,7 +1423,7 @@ function ConfigPage({
               />
               <ProfileScopeCard
                 scope="claude" title="Claude 配置档案" eyebrow="Claude"
-                description="保存、复制或应用 Claude primary / compact 草稿，不会改动 Codex 档案。"
+                description="保存、复制或应用 Claude 主路由 / 压缩路由草稿，不会改动 Codex 档案。"
                 emptyTitle="还没有保存的 Claude 档案"
                 emptyDescription="填写名称后保存当前 Claude 草稿，就会在这里出现可应用的档案卡片。"
                 config={config}
@@ -1390,8 +1443,8 @@ function ConfigPage({
               <div className="config-row">
                 <RouteCredentialFields
                   title="Codex 主路由" badge="Codex" tone="primary"
-                  baseUrlLabel="Base URL" baseUrlHint="普通 /v1 请求会转发到这里。"
-                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Codex 主路由", config?.primary ?? null)}
+                  baseUrlLabel="基础地址" baseUrlHint="普通 /v1 请求会转发到这里。"
+                  apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 主路由", config?.primary ?? null)}
                   baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
                   storedApiKey={config?.primary.stored_api_key ?? false}
                   clearApiKey={form.clearCodexPrimaryApiKey}
@@ -1400,9 +1453,9 @@ function ConfigPage({
                   onToggleClearApiKey={() => onFormChange((p) => ({ ...p, codexPrimaryApiKey: "", clearCodexPrimaryApiKey: !p.clearCodexPrimaryApiKey }))}
                 />
                 <RouteCredentialFields
-                  title="Codex 压缩路由" badge="Compact" tone="compact"
-                  baseUrlLabel="Base URL" baseUrlHint={form.upstreamMode === "split" ? "Codex compact 请求会转发到这里。" : "当前复用 Codex 主路由。"}
-                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
+                  title="Codex 压缩路由" badge="压缩" tone="compact"
+                  baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "Codex 压缩请求会转发到这里。" : "当前复用 Codex 主路由。"}
+                  apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
                   baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
                   storedApiKey={config?.compact.stored_api_key ?? false}
                   clearApiKey={form.clearCodexCompactApiKey}
@@ -1414,8 +1467,8 @@ function ConfigPage({
               <div className="config-row">
                 <RouteCredentialFields
                   title="Claude 主路由" badge="Claude" tone="claude"
-                  baseUrlLabel="Base URL" baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
-                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
+                  baseUrlLabel="基础地址" baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
+                  apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
                   baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
                   storedApiKey={config?.claude.primary.stored_api_key ?? false}
                   clearApiKey={form.clearClaudePrimaryApiKey}
@@ -1424,9 +1477,9 @@ function ConfigPage({
                   onToggleClearApiKey={() => onFormChange((p) => ({ ...p, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !p.clearClaudePrimaryApiKey }))}
                 />
                 <RouteCredentialFields
-                  title="Claude 压缩路由" badge="Compact" tone="compact"
-                  baseUrlLabel="Base URL" baseUrlHint="仅在 AnyRouter 大 reconnect 请求授权后使用。"
-                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
+                  title="Claude 压缩路由" badge="压缩" tone="compact"
+                  baseUrlLabel="基础地址" baseUrlHint="仅在 AnyRouter 大 reconnect 请求授权后使用。"
+                  apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
                   baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
                   storedApiKey={config?.claude.compact.stored_api_key ?? false}
                   clearApiKey={form.clearClaudeCompactApiKey}
@@ -1437,14 +1490,14 @@ function ConfigPage({
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
-                  <div className="field-label" style={{ marginBottom: 4 }}>Codex Compact 上游模式</div>
+                  <div className="field-label" style={{ marginBottom: 4 }}>Codex 压缩上游模式</div>
                   <div className="toggle-group">
                     <button className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "split" }))}>独立分流</button>
                     <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "primary" }))}>复用主路由</button>
                   </div>
                 </div>
                 <div>
-                  <div className="field-label" style={{ marginBottom: 4 }}>Claude Compact 上游模式</div>
+                  <div className="field-label" style={{ marginBottom: 4 }}>Claude 压缩上游模式</div>
                   <div className="toggle-group">
                     <button className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
                     <button className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
@@ -1459,13 +1512,25 @@ function ConfigPage({
               <div className="field">
                 <span className="field-label">当前 Codex 模型</span>
                 <input className="input" value={currentModel} onChange={(e) => onCurrentModelChange(e.target.value)} spellCheck={false} />
-                <span className="field-hint">Manually set or auto-learned from the latest request body.</span>
+                <span className="field-hint">可手动输入，也会从最近一次请求体自动学习。</span>
               </div>
+              <ClaudeModelMapEditor
+                modelMap={form.claudeModelMap}
+                onModelMapChange={(role, value) =>
+                  onFormChange((previous) => ({
+                    ...previous,
+                    claudeModelMap: {
+                      ...previous.claudeModelMap,
+                      [role]: value
+                    }
+                  }))
+                }
+              />
               <div>
-                <div className="field-label" style={{ marginBottom: 4 }}>Compact 模型模式</div>
+                <div className="field-label" style={{ marginBottom: 4 }}>压缩模型模式</div>
                 <div className="toggle-group" style={{ marginBottom: 8 }}>
-                  <button className={form.modelMode === "linked" ? "is-active" : ""} onClick={onRestoreLinkedMode}>自动联动</button>
-                  <button className={form.modelMode === "custom" ? "is-active" : ""} onClick={onUnlockCompactModel}>手动指定</button>
+                  <button type="button" className={form.modelMode === "linked" ? "is-active" : ""} onClick={onRestoreLinkedMode}>自动联动</button>
+                  <button type="button" className={form.modelMode === "custom" ? "is-active" : ""} onClick={onUnlockCompactModel}>手动指定</button>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
                   <input
@@ -1475,15 +1540,15 @@ function ConfigPage({
                     onChange={(e) => onFormChange((p) => ({ ...p, modelOverride: e.target.value }))}
                     spellCheck={false}
                   />
-                  <button className="btn btn-sm" onClick={form.modelMode === "linked" ? onUnlockCompactModel : onRestoreLinkedMode}>
+                  <button type="button" className="btn btn-sm" onClick={form.modelMode === "linked" ? onUnlockCompactModel : onRestoreLinkedMode}>
                     {form.modelMode === "linked" ? "解锁" : "恢复联动"}
                   </button>
                 </div>
               </div>
               <div className="field">
-                <span className="field-label">联动模板</span>
+                <span className="field-label">压缩模型联动模板</span>
                 <input className="input" value={form.modelTemplate} onChange={(e) => onFormChange((p) => ({ ...p, modelTemplate: e.target.value }))} spellCheck={false} />
-                <span className="field-hint">{`{model}`} is replaced with the original model name from the request.</span>
+                <span className="field-hint">{`{model}`} 会被替换为请求中的原始模型名。</span>
               </div>
             </div>
           )}
@@ -1493,8 +1558,8 @@ function ConfigPage({
               <div className="field">
                 <span className="field-label">请求路径</span>
                 <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-                  <button className="btn btn-sm" onClick={() => onPathChange("/v1/responses")}>普通响应</button>
-                  <button className="btn btn-sm" onClick={() => onPathChange("/v1/responses/compact")}>Compact</button>
+                  <button type="button" className="btn btn-sm" onClick={() => onPathChange("/v1/responses")}>普通响应</button>
+                  <button type="button" className="btn btn-sm" onClick={() => onPathChange("/v1/responses/compact")}>压缩响应</button>
                 </div>
                 <input className="input" value={previewPath} onChange={(e) => onPathChange(e.target.value)} />
               </div>
@@ -1506,10 +1571,10 @@ function ConfigPage({
               <button className="btn btn-primary" onClick={onPreviewSubmit}>预览路由</button>
               {preview && (
                 <div style={{ padding: "12px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: "0.8rem" }}>
-                  <div><span className="field-hint">Route</span><div><span className={`route-chip ${preview.route}`}>{routeLabel(preview.route)}</span></div></div>
-                  <div><span className="field-hint">Upstream</span><div style={{ fontFamily: "var(--font-mono)", fontSize: "0.78rem" }}>{preview.upstream_host}</div></div>
-                  <div><span className="field-hint">Source model</span><div><code>{preview.source_model ?? "-"}</code></div></div>
-                  <div><span className="field-hint">Target model</span><div><code>{preview.target_model ?? "-"}</code></div></div>
+                  <div><span className="field-hint">路由</span><div><span className={`route-chip ${preview.route}`}>{routeLabel(preview.route)}</span></div></div>
+                  <div><span className="field-hint">上游</span><div style={{ fontFamily: "var(--font-mono)", fontSize: "0.78rem" }}>{preview.upstream_host}</div></div>
+                  <div><span className="field-hint">原始模型</span><div><code>{preview.source_model ?? "-"}</code></div></div>
+                  <div><span className="field-hint">目标模型</span><div><code>{preview.target_model ?? "-"}</code></div></div>
                 </div>
               )}
             </div>
@@ -1525,6 +1590,147 @@ function ConfigPage({
       </div>
     </>
   );
+}
+
+function ClaudeModelMapEditor({
+  modelMap,
+  onModelMapChange
+}: {
+  modelMap: ClaudeModelMap;
+  onModelMapChange: (role: ClaudeModelMapRole, value: string) => void;
+}) {
+  const inputIdPrefix = useId();
+  const [models, setModels] = useState<string[]>([]);
+  const [fetchState, setFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [fetchMeta, setFetchMeta] = useState<string | null>(null);
+
+  async function fetchModels() {
+    setFetchState("loading");
+    setFetchMeta(null);
+
+    try {
+      const payload = await api<ClaudeModelsResponse>("/api/claude/models");
+      setModels(payload.models);
+      setFetchState(payload.error ? "error" : "loaded");
+      setFetchMeta(
+        payload.error
+          ? `${payload.upstream_host}: ${payload.error}`
+          : payload.models.length > 0
+            ? `已从 ${payload.upstream_host} 读取 ${payload.models.length} 个模型。`
+            : `${payload.upstream_host} 没有返回可用模型。`
+      );
+    } catch (error) {
+      setFetchState("error");
+      const message = errorSummary(error);
+      setFetchMeta(
+        message === "API endpoint not found."
+          ? "后端模型接口尚未加载，请重启 CompactGate 服务后重试。"
+          : message
+      );
+    }
+  }
+
+  const normalizedModelMap = normalizeClaudeModelMap(modelMap);
+  const filledCount = CLAUDE_MODEL_MAP_ROLES.filter((role) => normalizedModelMap[role].trim().length > 0).length;
+  const fallbackModel = normalizedModelMap.default.trim();
+  const modelOptions = buildClaudeModelOptions(models);
+
+  return (
+    <section className="claude-model-map-card" aria-labelledby="claude-model-map-title">
+      <div className="claude-model-map-head">
+        <div>
+          <p className="eyebrow">Claude 模型映射</p>
+          <h3 id="claude-model-map-title">Claude 角色模型映射</h3>
+          <p>
+            切换 Claude 配置档案时，这里会覆盖普通会话、Opus、Sonnet、Haiku、推理和子代理的目标模型。
+            未识别的请求会回退到默认槽位。
+          </p>
+        </div>
+        <div className="claude-model-map-actions">
+          <span className="map-counter">{filledCount}/6 已设置</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={fetchState === "loading"}
+            onClick={() => void fetchModels()}
+          >
+            {fetchState === "loading" ? "读取中..." : "拉取模型"}
+          </button>
+        </div>
+      </div>
+
+      {fetchMeta && (
+        <p className={`model-fetch-note ${fetchState === "error" ? "is-error" : ""}`}>{fetchMeta}</p>
+      )}
+
+      <div className="claude-model-map-grid">
+        {CLAUDE_MODEL_MAP_ROLES.map((role) => {
+          const meta = CLAUDE_MODEL_MAP_META[role];
+          const value = normalizedModelMap[role];
+          const inheritsDefault = role !== "default" && value.trim().length === 0 && fallbackModel.length > 0;
+          const selectValue = models.includes(value) ? value : CUSTOM_MODEL_OPTION_VALUE;
+          const inputId = `${inputIdPrefix}-${role}`;
+
+          return (
+            <div key={role} className={`claude-model-map-row ${role === "default" ? "is-default" : ""}`}>
+              <span className="model-role-cell">
+                <label htmlFor={inputId}>{meta.label}</label>
+                <small>{meta.source}</small>
+              </span>
+              <span className="model-kind-cell">
+                <span className={`tag ${meta.official ? "" : "is-compat"}`}>
+                  {meta.official ? "官方" : "兼容"}
+                </span>
+                {inheritsDefault && <span className="tag is-fallback">回退默认</span>}
+              </span>
+              <div className="model-control-cell">
+                <input
+                  id={inputId}
+                  aria-label={`Claude ${meta.label} 模型`}
+                  className="input"
+                  value={value}
+                  placeholder={role === "default" ? "例如 claude-sonnet-4-6" : fallbackModel || "留空则使用默认槽位"}
+                  onChange={(event) => onModelMapChange(role, event.target.value)}
+                  spellCheck={false}
+                />
+                <CustomSelect
+                  label="候选模型"
+                  value={selectValue}
+                  options={modelOptions}
+                  onChange={(nextModel) => {
+                    if (nextModel !== CUSTOM_MODEL_OPTION_VALUE) {
+                      onModelMapChange(role, nextModel);
+                    }
+                  }}
+                  disabled={models.length === 0}
+                  compact
+                  wide
+                />
+              </div>
+              <small className="model-row-hint">{meta.hint}</small>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
+
+function buildClaudeModelOptions(models: string[]): SelectOption[] {
+  return [
+    {
+      value: CUSTOM_MODEL_OPTION_VALUE,
+      label: models.length > 0 ? "手动输入" : "拉取后选择",
+      meta: models.length > 0 ? "保留当前手动填写值" : "先点击上方“拉取模型”"
+    },
+    ...models.map((model) => ({
+      value: model,
+      label: model,
+      meta: "来自当前 Claude 上游"
+    }))
+  ];
 }
 
 /* ═══════════════════════════════════════════════════
@@ -2297,7 +2503,7 @@ function HealthPage({
             CG
           </div>
           <div>
-            <p className="eyebrow">CompactGate Health</p>
+            <p className="eyebrow">CompactGate 健康检查</p>
             <h1>健康检查与上游装配状态</h1>
           </div>
         </div>
@@ -2325,17 +2531,17 @@ function HealthPage({
 
       <section className={`health-hero tone-${overallStatus.tone}`} aria-labelledby="health-title">
         <div className="health-hero-copy">
-          <p className="eyebrow">Live Monitor</p>
+          <p className="eyebrow">实时监控</p>
           <h2 id="health-title">一页看清 CompactGate 是否已经准备好接流量。</h2>
           <p>
-            这个页面专门显示监听地址、上游 URL 合法性和 API Key 注入状态，适合本地联调或快速排障。
+            这个页面专门显示监听地址、上游地址合法性和密钥注入状态，适合本地联调或快速排障。
           </p>
           <div className="health-hero-actions">
             <a className="ghost-button" href="/api/health" target="_blank" rel="noreferrer">
               查看原始响应
             </a>
             <a className="ghost-button" href="/">
-              进入 Studio
+              进入控制台
             </a>
           </div>
         </div>
@@ -2392,7 +2598,7 @@ function HealthPage({
       <section className="health-detail-grid">
         <section className="panel health-notes" aria-labelledby="health-notes-title">
           <div className="section-heading">
-            <p className="eyebrow">Checklist</p>
+            <p className="eyebrow">检查清单</p>
             <h2 id="health-notes-title">如何判断现在能不能接请求</h2>
           </div>
 
@@ -2403,18 +2609,18 @@ function HealthPage({
             </div>
             <div className="health-check-row">
               <span>2</span>
-              <p>上游状态显示“已配置”，说明 Base URL 格式合法。</p>
+              <p>上游状态显示“已配置”，说明基础地址格式合法。</p>
             </div>
             <div className="health-check-row">
               <span>3</span>
-              <p>如果显示“缺密钥”，代理仍能启动，但转发前需要先在 Studio 里直接保存 API Key，或依赖旧配置里的环境变量回退。</p>
+              <p>如果显示“缺密钥”，代理仍能启动，但转发前需要先在控制台里直接保存访问密钥，或依赖旧配置里的环境变量回退。</p>
             </div>
           </div>
         </section>
 
         <section className="panel health-json-panel" aria-labelledby="health-json-title">
           <div className="section-heading">
-            <p className="eyebrow">Payload</p>
+            <p className="eyebrow">响应内容</p>
             <h2 id="health-json-title">原始健康响应</h2>
           </div>
 
@@ -2462,11 +2668,11 @@ function HealthEndpointCard({
           <strong>{status.label}</strong>
         </div>
         <div className="health-kv">
-          <span>Base URL</span>
+          <span>基础地址</span>
           <strong>{upstream?.base_url ?? "读取中..."}</strong>
         </div>
         <div className="health-kv">
-          <span>Host</span>
+          <span>主机</span>
           <strong>{upstream?.host ?? "无"}</strong>
         </div>
         <div className="health-kv">
@@ -3624,25 +3830,25 @@ function LogRow({ entry }: { entry: RequestLogEntry }) {
     : null;
   const mainContent = (
     <>
-      <time className="log-time" dateTime={entry.time}>{formatDateTime(entry.time)}</time>
-      <span className="log-model-cell">
+      <time className="log-time" dateTime={entry.time} data-label="时间">{formatDateTime(entry.time)}</time>
+      <span className="log-model-cell" data-label="模型">
         <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
         <strong>{entry.source_model ?? "-"}</strong>
         {hasModelRewrite && <small>{"->"} {targetModel}</small>}
       </span>
-      <span className={`log-status-code is-${logStatusKind(entry)}`}>{entry.status}</span>
-      <span className="log-request-info" title={modelReasoningLabel(entry)}>
+      <span className={`log-status-code is-${logStatusKind(entry)}`} data-label="状态码">{entry.status}</span>
+      <span className="log-request-info" title={modelReasoningLabel(entry)} data-label="模型 / 思考">
         {modelReasoningLabel(entry)}
       </span>
-      <code className="log-endpoint">{entry.endpoint}</code>
-      <code className="log-host">{entry.upstream_host}</code>
-      <span className={`transport-pill is-${entry.request_type}`}>
+      <code className="log-endpoint" data-label="端点">{entry.endpoint}</code>
+      <code className="log-host" data-label="上游 Host">{entry.upstream_host}</code>
+      <span className={`transport-pill is-${entry.request_type}`} data-label="类型">
         {requestTypeLabel(entry.request_type)}
       </span>
-      <code className="log-user-agent" title={userAgent}>{userAgent}</code>
+      <code className="log-user-agent" title={userAgent} data-label="User Agent">{userAgent}</code>
       <TokenTooltip entry={entry} />
-      <span className="metric-time">{formatDurationMs(entry.first_token_ms)}</span>
-      <span className="metric-time">{formatDurationMs(entry.duration_ms)}</span>
+      <span className="metric-time" data-label="首 Token">{formatDurationMs(entry.first_token_ms)}</span>
+      <span className="metric-time" data-label="耗时">{formatDurationMs(entry.duration_ms)}</span>
     </>
   );
 
@@ -3764,13 +3970,17 @@ function CustomSelect({
   value,
   options,
   onChange,
-  wide = false
+  wide = false,
+  disabled = false,
+  compact = false
 }: {
   label: string;
   value: string;
   options: SelectOption[];
   onChange: (value: string) => void;
   wide?: boolean;
+  disabled?: boolean;
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
@@ -3859,6 +4069,10 @@ function CustomSelect({
   }
 
   function handleTriggerKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (disabled) {
+      return;
+    }
+
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setOpen(true);
@@ -3906,31 +4120,32 @@ function CustomSelect({
   }
 
   return (
-    <div className={`custom-select ${wide ? "is-wide" : ""}`}>
+    <div className={`custom-select ${wide ? "is-wide" : ""} ${compact ? "is-compact" : ""}`}>
       <span className="custom-select-label">{label}</span>
       <button
         ref={triggerRef}
         className="custom-select-trigger"
         type="button"
+        disabled={disabled}
         aria-haspopup="listbox"
+        aria-label={label}
         aria-expanded={open}
         aria-controls={listId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => !disabled && setOpen((value) => !value)}
         onKeyDown={handleTriggerKeyDown}
       >
         <span className="custom-select-copy">
           <strong>{selected.label}</strong>
           {selected.meta && <small>{selected.meta}</small>}
         </span>
-        <span className="custom-select-count">{selected.count}</span>
-        <span className="custom-select-caret" aria-hidden="true">v</span>
+        {typeof selected.count === "number" && <span className="custom-select-count">{selected.count}</span>}
       </button>
 
-      {open && menuStyle && createPortal(
+      {open && !disabled && menuStyle && createPortal(
         <div
           ref={menuRef}
           id={listId}
-          className={`custom-select-menu ${wide ? "is-wide" : ""}`}
+          className={`custom-select-menu ${wide ? "is-wide" : ""} ${compact ? "is-compact" : ""}`}
           role="listbox"
           style={menuStyle}
         >
@@ -3956,7 +4171,7 @@ function CustomSelect({
                 <strong>{option.label}</strong>
                 {option.meta && <small>{option.meta}</small>}
               </span>
-              <span className="custom-select-count">{option.count}</span>
+              {typeof option.count === "number" && <span className="custom-select-count">{option.count}</span>}
             </button>
           ))}
         </div>,
@@ -4000,6 +4215,7 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
     <span
       ref={anchorRef}
       className="token-tooltip"
+      data-label="Token"
       aria-describedby={tooltipId}
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
@@ -4229,6 +4445,7 @@ function emptyForm(): ConfigFormState {
     claudePrimaryBaseUrl: "",
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
+    claudeModelMap: emptyClaudeModelMap(),
     claudeCompactBaseUrl: "",
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
@@ -4252,6 +4469,7 @@ function formFromConfig(config: PublicConfig): ConfigFormState {
     claudePrimaryBaseUrl: config.claude.primary.base_url,
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
+    claudeModelMap: normalizeClaudeModelMap(config.claude.model_map),
     claudeCompactBaseUrl: config.claude.compact.base_url,
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
@@ -4269,6 +4487,7 @@ function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split
 }
 
 function formToPatch(form: ConfigFormState) {
+  const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
   const primary = {
     base_url: form.codexPrimaryBaseUrl,
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey)
@@ -4284,8 +4503,10 @@ function formToPatch(form: ConfigFormState) {
   const claude = {
     primary: {
       base_url: form.claudePrimaryBaseUrl,
-      ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey)
+      ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey),
+      model_override: claudeModelMap.default
     },
+    model_map: claudeModelMap,
     compact: {
       base_url: form.claudeCompactBaseUrl,
       ...apiKeyPatch(form.claudeCompactApiKey, form.clearClaudeCompactApiKey),
@@ -4311,6 +4532,7 @@ function applyDraftToConfigExport(
   config: CompactGateConfig,
   form: ConfigFormState
 ): CompactGateConfig {
+  const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
   const next: CompactGateConfig = {
     listen: config.listen,
     primary: {
@@ -4328,14 +4550,16 @@ function applyDraftToConfigExport(
     claude: {
       primary: {
         ...config.claude.primary,
-        base_url: form.claudePrimaryBaseUrl
+        base_url: form.claudePrimaryBaseUrl,
+        model_override: claudeModelMap.default
       },
       compact: {
         ...config.claude.compact,
         base_url: form.claudeCompactBaseUrl,
         upstream_mode: form.claudeCompactUpstreamMode,
         model_override: form.claudeCompactModelOverride
-      }
+      },
+      model_map: claudeModelMap
     },
     timeouts: { ...config.timeouts },
     logging: { ...config.logging },
@@ -4363,6 +4587,7 @@ function draftComparisonState(form: ConfigFormState) {
     claudePrimaryBaseUrl: form.claudePrimaryBaseUrl,
     claudePrimaryApiKey: normalizedApiKey(form.claudePrimaryApiKey),
     clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
+    claudeModelMap: normalizeClaudeModelMap(form.claudeModelMap),
     claudeCompactBaseUrl: form.claudeCompactBaseUrl,
     claudeCompactApiKey: normalizedApiKey(form.claudeCompactApiKey),
     clearClaudeCompactApiKey: form.clearClaudeCompactApiKey,
@@ -4373,6 +4598,27 @@ function draftComparisonState(form: ConfigFormState) {
     modelTemplate: form.modelTemplate,
     modelOverride: form.modelOverride
   };
+}
+
+function emptyClaudeModelMap(): ClaudeModelMap {
+  return CLAUDE_MODEL_MAP_ROLES.reduce((modelMap, role) => {
+    modelMap[role] = "";
+    return modelMap;
+  }, {} as ClaudeModelMap);
+}
+
+function normalizeClaudeModelMap(value: Partial<ClaudeModelMap> | null | undefined): ClaudeModelMap {
+  const modelMap = emptyClaudeModelMap();
+  if (!value || typeof value !== "object") {
+    return modelMap;
+  }
+
+  for (const role of CLAUDE_MODEL_MAP_ROLES) {
+    const model = value[role];
+    modelMap[role] = typeof model === "string" ? model : "";
+  }
+
+  return modelMap;
 }
 
 function apiKeyPatch(value: string, shouldClear: boolean): { api_key?: string } {
@@ -4721,8 +4967,12 @@ function profileSummary(profile: PublicConfig["profiles"][number]): string {
       : "仅保存 URL 和环境变量引用";
 
   if (profile.scope === "claude") {
+    const primaryModel = profile.claude_primary_model_override?.trim();
+    const compactModel = profile.claude_compact_model_override?.trim();
     return [
       `Claude ${profile.claude_primary_host ?? "未配置"} / ${profile.claude_compact_host ?? "未配置"}`,
+      `主模型 ${primaryModel || "透传"}`,
+      `compact 模型 ${compactModel || "透传"}`,
       `Claude compact ${compactModeLabel(profile.claude_compact_upstream_mode ?? "primary")}`,
       secretCopy
     ].join("；");

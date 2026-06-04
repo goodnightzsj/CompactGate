@@ -1203,6 +1203,242 @@ describe("CompactGate HTTP server", () => {
     expect(JSON.stringify(captures[0])).not.toContain("client-token");
   });
 
+  it("rewrites ordinary Claude request models from the active Claude profile", async () => {
+    const captured: { current: CapturedRequest | null } = { current: null };
+    const claude = await startClaudeUpstream(async (req, res) => {
+      captured.current = {
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
+    });
+    const app = await startApp();
+
+    const saveResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "claude",
+        name: "Claude model profile",
+        config: {
+          claude: {
+            primary: {
+              base_url: claude.url,
+              api_key: "profile-claude-token",
+              model_override: "deepseek-v4-pro[1m]"
+            },
+            compact: {
+              base_url: claude.url,
+              upstream_mode: "primary",
+              model_override: "claude-compact-profile-model"
+            }
+          }
+        }
+      })
+    });
+    const savedConfig = (await saveResponse.json()) as PublicConfig;
+    const profile = savedConfig.profile_scopes.claude.profiles[0];
+
+    expect(saveResponse.status).toBe(200);
+    expect(profile).toMatchObject({
+      scope: "claude",
+      claude_primary_host: new URL(claude.url).host,
+      claude_primary_model_override: "deepseek-v4-pro[1m]",
+      claude_compact_model_override: "claude-compact-profile-model"
+    });
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "claude", profile_id: profile.id })
+    });
+    const appliedConfig = (await applyResponse.json()) as PublicConfig;
+
+    expect(applyResponse.status).toBe(200);
+    expect(appliedConfig.claude.primary.model_override).toBe("deepseek-v4-pro[1m]");
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: "profile model rewrite" }]
+      }),
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-compactgate-claude-route")).toBe("primary");
+    await response.text();
+    assertCaptured(captured.current);
+    expect(captured.current.headers["anthropic-api-key"]).toBe("profile-claude-token");
+    expect(JSON.parse(captured.current.body)).toMatchObject({
+      model: "deepseek-v4-pro[1m]",
+      messages: [{ role: "user", content: "profile model rewrite" }]
+    });
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "claude",
+      source_model: "claude-opus-4-8",
+      target_model: "deepseek-v4-pro[1m]",
+      upstream_host: new URL(claude.url).host
+    });
+  });
+
+  it("rewrites ordinary Claude request models by Claude role mappings", async () => {
+    const captures: CapturedRequest[] = [];
+    const claude = await startClaudeUpstream(async (req, res) => {
+      captures.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: claude.url,
+          api_key: "mapped-claude-token"
+        },
+        model_map: {
+          default: "mapped-default-model",
+          opus: "mapped-opus-model",
+          sonnet: "mapped-sonnet-model",
+          haiku: "mapped-haiku-model",
+          reasoning: "mapped-reasoning-model",
+          subagent: "mapped-subagent-model"
+        }
+      }
+    });
+
+    const cases = [
+      ["claude-opus-4-8", "mapped-opus-model"],
+      ["claude-sonnet-4-6", "mapped-sonnet-model"],
+      ["claude-haiku-4-6", "mapped-haiku-model"],
+      ["reasoning", "mapped-reasoning-model"],
+      ["subagent", "mapped-subagent-model"],
+      ["provider-specific-model", "mapped-default-model"]
+    ] as const;
+
+    for (const [sourceModel, targetModel] of cases) {
+      const response = await fetch(`${app.url}/anthropic/v1/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          model: sourceModel,
+          messages: [{ role: "user", content: `rewrite ${sourceModel}` }]
+        }),
+        headers: {
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01"
+        }
+      });
+
+      expect(response.status).toBe(200);
+      await response.text();
+      const captured = captures.at(-1);
+      expect(captured).toBeTruthy();
+      expect(captured?.headers["anthropic-api-key"]).toBe("mapped-claude-token");
+      expect(JSON.parse(captured?.body ?? "{}")).toMatchObject({
+        model: targetModel,
+        messages: [{ role: "user", content: `rewrite ${sourceModel}` }]
+      });
+    }
+
+    expect(captures).toHaveLength(cases.length);
+    const logs = await fetchRecentLogs(app.url);
+    expect(logs[0]).toMatchObject({
+      route: "claude",
+      source_model: "provider-specific-model",
+      target_model: "mapped-default-model"
+    });
+  });
+
+  it("fetches Claude models from the active Claude upstream", async () => {
+    const claude = await startClaudeUpstream(async (req, res) => {
+      await captureBody(req);
+      expect(req.url).toBe("/v1/models");
+      expect(req.headers["anthropic-api-key"]).toBe("models-token");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: "claude-sonnet-4-6" },
+            { id: "claude-opus-4-8" },
+            { name: "claude-haiku-4-6" }
+          ]
+        })
+      );
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: claude.url,
+          api_key: "models-token"
+        }
+      }
+    });
+
+    const response = await fetch(`${app.url}/api/claude/models`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      models: ["claude-haiku-4-6", "claude-opus-4-8", "claude-sonnet-4-6"],
+      upstream_host: new URL(claude.url).host,
+      error: null
+    });
+  });
+
+  it("falls back across common Claude model list paths", async () => {
+    const requestedUrls: string[] = [];
+    const claude = await startClaudeUpstream(async (req, res) => {
+      requestedUrls.push(req.url ?? "");
+      await captureBody(req);
+      expect(req.headers["anthropic-api-key"]).toBe("fallback-models-token");
+
+      if (req.url !== "/v1/models") {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(["root-claude-opus", { model: "root-claude-sonnet" }]));
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claude.url}/anthropic`,
+          api_key: "fallback-models-token"
+        }
+      }
+    });
+
+    const response = await fetch(`${app.url}/api/claude/models`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(requestedUrls).toEqual([
+      "/anthropic/v1/models",
+      "/anthropic/models",
+      "/v1/models"
+    ]);
+    expect(body).toEqual({
+      models: ["root-claude-opus", "root-claude-sonnet"],
+      upstream_host: new URL(claude.url).host,
+      error: null
+    });
+  });
+
   it("keeps Claude Code manual compact requests on the Claude primary route without a prior arm", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
