@@ -98,8 +98,21 @@ const DEFAULT_LOG_PAGE_LIMIT = 200;
 const TOKEN_TOOLTIP_WIDTH = 350;
 const TOKEN_TOOLTIP_ESTIMATED_HEIGHT = 216;
 
+type StudioPage = "dashboard" | "routes" | "config" | "logs";
+
+function detectPage(): "health" | StudioPage {
+  if (window.location.pathname === "/health") return "health";
+  const hash = window.location.hash.slice(1);
+  if (hash === "routes" || hash === "config" || hash === "logs") return hash;
+  return "dashboard";
+}
+
 function App() {
-  const pageMode = window.location.pathname === "/health" ? "health" : "studio";
+  const pageMode = detectPage();
+  const healthMode = pageMode === "health";
+  const [currentPage, setCurrentPage] = useState<StudioPage>(
+    healthMode ? "dashboard" : pageMode as StudioPage
+  );
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [logPage, setLogPage] = useState<RequestLogPage>(() => emptyLogPage(DEFAULT_LOG_PAGE_LIMIT));
@@ -131,6 +144,7 @@ function App() {
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
   const [isRefreshingHealth, setIsRefreshingHealth] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readStoredThemeMode());
+  const [configTab, setConfigTab] = useState<"profiles" | "routes" | "model" | "preview">("profiles");
 
   const deferredFilter = useDeferredValue(routeFilter);
   const deferredStatusFilter = useDeferredValue(statusFilter);
@@ -279,7 +293,7 @@ function App() {
   }, [pageMode]);
 
   useEffect(() => {
-    if (pageMode !== "studio" || !hasConfig) {
+    if (healthMode || !hasConfig) {
       return;
     }
 
@@ -320,7 +334,7 @@ function App() {
   }, [deferredFilter, deferredStatusFilter, deferredHostFilter, hasConfig, logPageLimit, pageMode]);
 
   useEffect(() => {
-    if (pageMode !== "studio") {
+    if (healthMode) {
       return;
     }
 
@@ -404,7 +418,7 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (pageMode !== "health" && pageMode !== "studio") {
+    if (pageMode !== "health") {
       return;
     }
 
@@ -796,119 +810,119 @@ function App() {
     }
   }
 
-  if (pageMode === "health") {
+  function navigateTo(page: StudioPage) {
+    setCurrentPage(page);
+    window.history.replaceState(null, "", page === "dashboard" ? "/" : `/#${page}`);
+  }
+
+  if (healthMode) {
     return (
-      <HealthPage
-        health={health}
-        error={pageError}
-        isRefreshing={isRefreshingHealth}
-        onRefresh={refreshHealth}
-      />
+      <div className="app-shell">
+        <StudioSidebar currentPage="dashboard" onNavigate={navigateTo} health={health} themeMode={themeMode} onThemeModeChange={setThemeMode} />
+        <main className="main-content">
+          <HealthPage health={health} error={pageError} isRefreshing={isRefreshingHealth} onRefresh={refreshHealth} />
+        </main>
+      </div>
     );
   }
 
   return (
-    <main className="shell">
-      <TopBar
-        config={config}
-        health={health}
-        saveState={saveState}
-        hasPendingChanges={hasPendingChanges}
-        themeMode={themeMode}
-        onThemeModeChange={setThemeMode}
-        onExport={exportConfig}
-      />
+    <div className="app-shell">
+      <StudioSidebar currentPage={currentPage} onNavigate={navigateTo} health={health} themeMode={themeMode} onThemeModeChange={setThemeMode} />
 
-      {pageError && <p className="error-banner">{pageError}</p>}
+      <main className="main-content">
+        {pageError && <div className="error-banner">{pageError}</div>}
 
-      <CommandDeck
-        config={config}
-        activeRoute={activeRoute}
-        logs={logs}
-      />
+        {currentPage === "dashboard" && (
+          <DashboardPage
+            config={config}
+            health={health}
+            logs={logs}
+            logCounts={logCounts}
+            providerCounts={logPage.provider_counts}
+            saveState={saveState}
+            hasPendingChanges={hasPendingChanges}
+            onExport={exportConfig}
+          />
+        )}
 
-      <section className="studio-grid">
-        <RouteBoard
-          config={config}
-          currentModel={currentModel}
-          compactModel={effectiveCompactModel}
-          compactMode={form.upstreamMode}
-          claudeCompactMode={form.claudeCompactUpstreamMode}
-          activeRoute={activeRoute}
-          latestLog={latestLog}
-        />
+        {currentPage === "routes" && (
+          <RoutesPage
+            config={config}
+            currentModel={currentModel}
+            compactModel={effectiveCompactModel}
+            compactMode={form.upstreamMode}
+            claudeCompactMode={form.claudeCompactUpstreamMode}
+            activeRoute={activeRoute}
+            latestLog={latestLog}
+          />
+        )}
 
-        <section className="operator-stage" aria-labelledby="operator-stage-title">
-          <div className="operator-stage-head compact-heading">
-            <p className="eyebrow">Controls</p>
-            <h2 id="operator-stage-title">Config / Preview</h2>
-          </div>
+        {currentPage === "config" && (
+          <ConfigPage
+            config={config}
+            form={form}
+            currentModel={currentModel}
+            linkedCompactModel={linkedCompactModel}
+            saveState={saveState}
+            saveError={saveError}
+            profileName={profileName}
+            selectedProfileId={selectedProfileId}
+            profileState={profileState}
+            profileError={profileError}
+            claudeProfileName={claudeProfileName}
+            selectedClaudeProfileId={selectedClaudeProfileId}
+            claudeProfileState={claudeProfileState}
+            claudeProfileError={claudeProfileError}
+            hasPendingChanges={hasPendingChanges}
+            previewPath={previewPath}
+            previewBody={previewBody}
+            preview={preview}
+            previewError={previewError}
+            configTab={configTab}
+            onConfigTabChange={setConfigTab}
+            onCurrentModelChange={setCurrentModel}
+            onFormChange={setForm}
+            onProfileNameChange={setProfileName}
+            onClaudeProfileNameChange={setClaudeProfileName}
+            onSelectedProfileChange={selectConfigProfile}
+            onSaveProfile={saveConfigProfile}
+            onApplyProfile={applySelectedProfile}
+            onUpdateProfile={updateSelectedProfile}
+            onDuplicateProfile={duplicateSelectedProfile}
+            onDeleteProfile={requestDeleteSelectedProfile}
+            onUnlockCompactModel={unlockCompactModel}
+            onRestoreLinkedMode={restoreLinkedMode}
+            onPathChange={setPreviewPath}
+            onBodyChange={setPreviewBody}
+            onPreviewSubmit={previewRoute}
+            onSaveConfig={saveConfig}
+          />
+        )}
 
-          <div className="operator-grid">
-            <ConfigPanel
-              config={config}
-              form={form}
-              currentModel={currentModel}
-              linkedCompactModel={linkedCompactModel}
-              saveState={saveState}
-              saveError={saveError}
-              profileName={profileName}
-              selectedProfileId={selectedProfileId}
-              profileState={profileState}
-              profileError={profileError}
-              claudeProfileName={claudeProfileName}
-              selectedClaudeProfileId={selectedClaudeProfileId}
-              claudeProfileState={claudeProfileState}
-              claudeProfileError={claudeProfileError}
-              hasPendingChanges={hasPendingChanges}
-              onCurrentModelChange={setCurrentModel}
-              onFormChange={setForm}
-              onProfileNameChange={setProfileName}
-              onClaudeProfileNameChange={setClaudeProfileName}
-              onSelectedProfileChange={selectConfigProfile}
-              onSaveProfile={saveConfigProfile}
-              onApplyProfile={applySelectedProfile}
-              onUpdateProfile={updateSelectedProfile}
-              onDuplicateProfile={duplicateSelectedProfile}
-              onDeleteProfile={requestDeleteSelectedProfile}
-              onUnlockCompactModel={unlockCompactModel}
-              onRestoreLinkedMode={restoreLinkedMode}
-              onSubmit={saveConfig}
-            />
-
-            <InspectorPanel
-              path={previewPath}
-              body={previewBody}
-              preview={preview}
-              error={previewError}
-              onPathChange={setPreviewPath}
-              onBodyChange={setPreviewBody}
-              onSubmit={previewRoute}
-            />
-          </div>
-        </section>
-
-        <LogsPanel
-          logs={logs}
-          logCounts={logCounts}
-          providerCounts={logPage.provider_counts}
-          statusCounts={logPage.status_counts}
-          totalLogCount={logPage.total}
-          allLogCount={logPage.all_total}
-          hostOptions={hostOptions}
-          hasMoreLogs={logPage.has_more}
-          isLoadingLogs={isLoadingLogs}
-          isLoadingMoreLogs={isLoadingMoreLogs}
-          routeFilter={routeFilter}
-          statusFilter={statusFilter}
-          hostFilter={hostFilter}
-          onRouteFilterChange={setRouteFilter}
-          onStatusFilterChange={setStatusFilter}
-          onHostFilterChange={setHostFilter}
-          onLoadMore={loadMoreLogs}
-          error={logError}
-        />
-      </section>
+        {currentPage === "logs" && (
+          <LogsPage
+            logs={logs}
+            logCounts={logCounts}
+            providerCounts={logPage.provider_counts}
+            statusCounts={logPage.status_counts}
+            totalLogCount={logPage.total}
+            allLogCount={logPage.all_total}
+            hostOptions={hostOptions}
+            hasMoreLogs={logPage.has_more}
+            isLoadingLogs={isLoadingLogs}
+            isLoadingMoreLogs={isLoadingMoreLogs}
+            routeFilter={routeFilter}
+            statusFilter={statusFilter}
+            hostFilter={hostFilter}
+            onRouteFilterChange={setRouteFilter}
+            onStatusFilterChange={setStatusFilter}
+            onHostFilterChange={setHostFilter}
+            onLoadMore={loadMoreLogs}
+            error={logError}
+          />
+        )}
+      </main>
 
       {profileDeleteCandidate && (
         <ConfirmProfileDeleteDialog
@@ -918,7 +932,783 @@ function App() {
           onConfirm={confirmDeleteSelectedProfile}
         />
       )}
-    </main>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   Sidebar
+   ═══════════════════════════════════════════════════ */
+function StudioSidebar({
+  currentPage,
+  onNavigate,
+  health,
+  themeMode,
+  onThemeModeChange
+}: {
+  currentPage: StudioPage;
+  onNavigate: (page: StudioPage) => void;
+  health: HealthResponse | null;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
+}) {
+  const primaryStatus = upstreamHealthBadge(health?.primary);
+  const compactStatus = upstreamHealthBadge(health?.compact);
+  const claudePrimaryStatus = upstreamHealthBadge(health?.claude?.primary);
+
+  const navItems: Array<{ page: StudioPage; label: string; icon: string }> = [
+    { page: "dashboard", label: "总览", icon: "◇" },
+    { page: "routes", label: "路由", icon: "⇢" },
+    { page: "config", label: "配置", icon: "⚙" },
+    { page: "logs", label: "日志", icon: "☰" }
+  ];
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <div className="sidebar-mark">CG</div>
+        <h1>CompactGate</h1>
+      </div>
+
+      <nav className="sidebar-nav">
+        {navItems.map((item) => (
+          <button
+            key={item.page}
+            className={`sidebar-nav-item ${currentPage === item.page ? "is-active" : ""}`}
+            onClick={() => onNavigate(item.page)}
+          >
+            <span className="sidebar-nav-icon">{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="sidebar-footer">
+        <div className="sidebar-health">
+          <div className="sidebar-health-row">
+            <span className={`sidebar-health-dot is-${primaryStatus.tone}`} />
+            Codex 主路由
+          </div>
+          <div className="sidebar-health-row">
+            <span className={`sidebar-health-dot is-${compactStatus.tone}`} />
+            Codex 压缩
+          </div>
+          <div className="sidebar-health-row">
+            <span className={`sidebar-health-dot is-${claudePrimaryStatus.tone}`} />
+            Claude 主路由
+          </div>
+        </div>
+
+        <div className="theme-switch">
+          {(["auto", "light", "dark"] as ThemeMode[]).map((mode) => (
+            <button
+              key={mode}
+              className={themeMode === mode ? "is-active" : ""}
+              onClick={() => onThemeModeChange(mode)}
+            >
+              {mode === "auto" ? "自动" : mode === "light" ? "浅色" : "深色"}
+            </button>
+          ))}
+        </div>
+
+        <a className="btn btn-sm btn-ghost" href="/health" style={{ width: "100%", justifyContent: "center" }}>
+          健康检查
+        </a>
+      </div>
+    </aside>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   Dashboard Page
+   ═══════════════════════════════════════════════════ */
+function DashboardPage({
+  config,
+  health,
+  logs,
+  logCounts,
+  providerCounts,
+  saveState,
+  hasPendingChanges,
+  onExport
+}: {
+  config: PublicConfig | null;
+  health: HealthResponse | null;
+  logs: RequestLogEntry[];
+  logCounts: Record<"all" | RouteKind, number>;
+  providerCounts: ProviderLogCounts;
+  saveState: SaveState;
+  hasPendingChanges: boolean;
+  onExport: () => void | Promise<void>;
+}) {
+  const listen = config?.listen ?? "127.0.0.1:7865";
+  const primaryHost = config?.primary.host ?? "-";
+  const compactHost = config?.compact.host ?? "-";
+  const claudeHost = config?.claude.primary.host ?? "-";
+  const codexPrimaryOk = upstreamHealthBadge(health?.primary).tone === "good";
+  const codexCompactOk = upstreamHealthBadge(health?.compact).tone === "good";
+  const claudeOk = upstreamHealthBadge(health?.claude?.primary).tone === "good";
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">总览</p>
+          <h2>CompactGate 控制台</h2>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <span className="status-pill is-good">监听 {listen}</span>
+          <span className="status-pill">
+            {saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}
+          </span>
+          <button className="btn btn-sm" onClick={() => void onExport()}>导出配置</button>
+        </div>
+      </div>
+
+      <div className="dashboard-grid">
+        <div className="stat-card">
+          <div className="stat-card-label">服务端点</div>
+          <div className="endpoint-display">
+            <span className="route-chip codex">OpenAI</span>
+            <code>http://{listen}/v1</code>
+          </div>
+          <div className="endpoint-display">
+            <span className="route-chip claude">Claude</span>
+            <code>http://{listen}/anthropic</code>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-card-label">最近流量</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginTop: 12 }}>
+            <div>
+              <div className="stat-card-value">{logCounts.primary}</div>
+              <div className="stat-card-meta">Codex 主路由</div>
+            </div>
+            <div>
+              <div className="stat-card-value">{logCounts.compact}</div>
+              <div className="stat-card-meta">Compact 压缩</div>
+            </div>
+            <div>
+              <div className="stat-card-value">{logCounts.claude}</div>
+              <div className="stat-card-meta">Claude 路由</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-card-label">上游状态</div>
+          <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Codex 主路由</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{primaryHost}</span>
+              <span className={`status-pill ${codexPrimaryOk ? "is-good" : "is-warn"}`}>{codexPrimaryOk ? "正常" : "异常"}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Codex 压缩</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{compactHost}</span>
+              <span className={`status-pill ${codexCompactOk ? "is-good" : "is-warn"}`}>{codexCompactOk ? "正常" : "异常"}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Claude 主路由</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{claudeHost}</span>
+              <span className={`status-pill ${claudeOk ? "is-good" : "is-warn"}`}>{claudeOk ? "正常" : "异常"}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="stat-card-label">Provider 汇总</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
+            <div>
+              <div className="stat-card-value">{providerCounts.openai}</div>
+              <div className="stat-card-meta">Codex / OpenAI</div>
+            </div>
+            <div>
+              <div className="stat-card-value">{providerCounts.claude}</div>
+              <div className="stat-card-meta">Claude</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <h3>最近请求</h3>
+          <span className="status-pill">{logs.length} 条</span>
+        </div>
+        {logs.length === 0 ? (
+          <div className="empty-state">
+            <strong>暂无请求记录</strong>
+            <span>将 Codex 的 base_url 设置为 http://{listen}/v1 即可看到实时流量。</span>
+          </div>
+        ) : (
+          <div className="log-table">
+            <div className="log-table-body" style={{ maxHeight: "300px" }}>
+              {logs.slice(0, 8).map((entry, i) => (
+                <div key={i} className="log-row">
+                  <span className="log-cell-time">{formatDateTime(entry.time)}</span>
+                  <span className="log-cell-model">{entry.source_model ?? "-"}</span>
+                  <span className={`log-status ${entry.status < 400 ? "is-ok" : "is-err"}`}>{entry.status}</span>
+                  <span className="log-cell-code">{entry.upstream_host}</span>
+                  <span className="log-cell-code">{entry.endpoint}</span>
+                  <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                  <span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span>
+                  <span className="log-cell-time">{formatDurationMs(entry.duration_ms)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   Routes Page
+   ═══════════════════════════════════════════════════ */
+function RoutesPage({
+  config,
+  currentModel,
+  compactModel,
+  compactMode,
+  claudeCompactMode,
+  activeRoute,
+  latestLog
+}: {
+  config: PublicConfig | null;
+  currentModel: string;
+  compactModel: string;
+  compactMode: "split" | "primary";
+  claudeCompactMode: "split" | "primary";
+  activeRoute: RouteKind;
+  latestLog: RequestLogEntry | null;
+}) {
+  const listen = config?.listen ?? "127.0.0.1:7865";
+  const primaryHost = config?.primary.host ?? "primary.example";
+  const compactHost = config?.compact.host ?? "compact.example";
+  const claudePrimaryHost = config?.claude.primary.host ?? "api.anthropic.com";
+  const claudeCompactHost = config?.claude.compact.host ?? "api.anthropic.com";
+  const compactTarget = compactMode === "split" ? compactHost : primaryHost;
+  const claudeCompactTarget = claudeCompactMode === "split" ? claudeCompactHost : claudePrimaryHost;
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">路由规则</p>
+          <h2>分流逻辑</h2>
+        </div>
+        <span className="status-pill">
+          最近命中: {formatLatestLogStatus(latestLog, "等待请求")}
+        </span>
+      </div>
+
+      <div className="routes-layout">
+        <div className="route-rule codex">
+          <span className="route-chip codex" style={{ marginBottom: 8 }}>Codex 通道</span>
+          <h3>OpenAI 兼容入口</h3>
+          <p>请求目标：<code>http://{listen}/v1</code></p>
+
+          <div className="route-mapping">
+            <div className={`route-mapping-row ${activeRoute === "compact" ? "is-active" : ""}`}>
+              <code>/v1/responses/compact</code>
+              <span className="tag">命中</span>
+              <span className="route-chip compact">压缩上游</span>
+            </div>
+            <div className={`route-mapping-row ${activeRoute === "primary" ? "is-active" : ""}`}>
+              <code>其它 /v1/*</code>
+              <span className="tag">默认</span>
+              <span className="route-chip codex">主上游</span>
+            </div>
+          </div>
+
+          <div className="route-slot-info">
+            <div className="route-slot">
+              <div className="route-slot-label">主路由</div>
+              <div className="route-slot-host">{primaryHost}</div>
+              <div className="route-slot-hint">普通请求直通</div>
+            </div>
+            <div className="route-slot">
+              <div className="route-slot-label">压缩路由</div>
+              <div className="route-slot-host">{compactTarget}</div>
+              <div className="route-slot-hint">{compactMode === "split" ? "独立 Base URL 与密钥" : "复用主路由"}</div>
+            </div>
+          </div>
+
+          <div className="route-model-strip" style={{ marginTop: 14, padding: "8px 12px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-mono)", fontSize: "0.78rem", color: "var(--ink)" }}>
+            模型映射：{currentModel} → {compactModel}
+          </div>
+        </div>
+
+        <div className="route-rule claude">
+          <span className="route-chip claude" style={{ marginBottom: 8 }}>Claude 通道</span>
+          <h3>Anthropic 兼容入口</h3>
+          <p>请求目标：<code>http://{listen}/anthropic</code></p>
+
+          <div className="route-mapping">
+            <div className={`route-mapping-row ${activeRoute === "claude" ? "is-active" : ""}`}>
+              <code>普通 /messages</code>
+              <span className="tag">默认</span>
+              <span className="route-chip claude">主上游</span>
+            </div>
+            <div className="route-mapping-row">
+              <code>手动 compact</code>
+              <span className="tag">授权后</span>
+              <span className="route-chip compact">压缩上游</span>
+            </div>
+          </div>
+
+          <div className="route-slot-info">
+            <div className="route-slot">
+              <div className="route-slot-label">主路由</div>
+              <div className="route-slot-host">{claudePrimaryHost}</div>
+              <div className="route-slot-hint">Messages 与未授权 compact</div>
+            </div>
+            <div className="route-slot">
+              <div className="route-slot-label">压缩路由</div>
+              <div className="route-slot-host">{claudeCompactTarget}</div>
+              <div className="route-slot-hint">{claudeCompactMode === "split" ? "独立手动 compact 上游" : "复用主路由"}</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--jade-soft)", borderRadius: "var(--radius-sm)", fontSize: "0.76rem", color: "var(--muted)", lineHeight: 1.6 }}>
+            仅在 AnyRouter reconnect_count ≥ 3 时授权下一次手动 compact 走压缩路由。授权消费后回到主路由。
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   Config Page
+   ═══════════════════════════════════════════════════ */
+function ConfigPage({
+  config, form, currentModel, linkedCompactModel, saveState, saveError,
+  profileName, selectedProfileId, profileState, profileError,
+  claudeProfileName, selectedClaudeProfileId, claudeProfileState, claudeProfileError,
+  hasPendingChanges, previewPath, previewBody, preview, previewError, configTab,
+  onConfigTabChange, onCurrentModelChange, onFormChange,
+  onProfileNameChange, onClaudeProfileNameChange, onSelectedProfileChange,
+  onSaveProfile, onApplyProfile, onUpdateProfile, onDuplicateProfile, onDeleteProfile,
+  onUnlockCompactModel, onRestoreLinkedMode,
+  onPathChange, onBodyChange, onPreviewSubmit, onSaveConfig
+}: {
+  config: PublicConfig | null; form: ConfigFormState; currentModel: string;
+  linkedCompactModel: string; saveState: SaveState; saveError: string | null;
+  profileName: string; selectedProfileId: string; profileState: ProfileActionState;
+  profileError: string | null; claudeProfileName: string; selectedClaudeProfileId: string;
+  claudeProfileState: ProfileActionState; claudeProfileError: string | null;
+  hasPendingChanges: boolean; previewPath: string; previewBody: string;
+  preview: RoutePreviewResponse | null; previewError: string | null; configTab: ConfigTab;
+  onConfigTabChange: (tab: ConfigTab) => void;
+  onCurrentModelChange: (m: string) => void;
+  onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
+  onProfileNameChange: (n: string) => void;
+  onClaudeProfileNameChange: (n: string) => void;
+  onSelectedProfileChange: (s: ConfigProfileScope, id: string) => void;
+  onSaveProfile: (s: ConfigProfileScope) => void | Promise<void>;
+  onApplyProfile: (s: ConfigProfileScope, id?: string) => void | Promise<void>;
+  onUpdateProfile: (s: ConfigProfileScope, id?: string) => void | Promise<void>;
+  onDuplicateProfile: (s: ConfigProfileScope, id?: string) => void | Promise<void>;
+  onDeleteProfile: (s: ConfigProfileScope, id?: string) => void | Promise<void>;
+  onUnlockCompactModel: () => void; onRestoreLinkedMode: () => void;
+  onPathChange: (p: string) => void; onBodyChange: (b: string) => void;
+  onPreviewSubmit: (e: React.FormEvent) => void;
+  onSaveConfig: (e: React.FormEvent) => void;
+}) {
+  const CONFIG_TABS: Array<{ id: ConfigTab; label: string }> = [
+    { id: "profiles", label: "档案" },
+    { id: "routes", label: "路由" },
+    { id: "model", label: "模型" },
+    { id: "preview", label: "预览" }
+  ];
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">配置管理</p>
+          <h2>配置管理</h2>
+        </div>
+        <span className={`status-pill ${hasPendingChanges ? "is-warn" : ""}`}>
+          {saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}
+        </span>
+      </div>
+
+      <div className="config-layout">
+        <div className="config-section">
+          <div className="tab-bar">
+            {CONFIG_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                className={configTab === tab.id ? "is-active" : ""}
+                onClick={() => onConfigTabChange(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {configTab === "profiles" && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <ProfileScopeCard
+                scope="codex" title="Codex 配置档案" eyebrow="Codex"
+                description="保存、复制或应用 Codex 主路由与 compact 草稿，不会改动 Claude 档案。"
+                emptyTitle="还没有保存的 Codex 档案"
+                emptyDescription="填写名称后保存当前 Codex 草稿，就会在这里出现可应用的档案卡片。"
+                config={config}
+                profileName={profileName} selectedProfileId={selectedProfileId}
+                profileState={profileState} profileError={profileError}
+                onProfileNameChange={onProfileNameChange}
+                onSelectedProfileChange={onSelectedProfileChange}
+                onSaveProfile={onSaveProfile} onApplyProfile={onApplyProfile}
+                onUpdateProfile={onUpdateProfile} onDuplicateProfile={onDuplicateProfile}
+                onDeleteProfile={onDeleteProfile}
+              />
+              <ProfileScopeCard
+                scope="claude" title="Claude 配置档案" eyebrow="Claude"
+                description="保存、复制或应用 Claude primary / compact 草稿，不会改动 Codex 档案。"
+                emptyTitle="还没有保存的 Claude 档案"
+                emptyDescription="填写名称后保存当前 Claude 草稿，就会在这里出现可应用的档案卡片。"
+                config={config}
+                profileName={claudeProfileName} selectedProfileId={selectedClaudeProfileId}
+                profileState={claudeProfileState} profileError={claudeProfileError}
+                onProfileNameChange={onClaudeProfileNameChange}
+                onSelectedProfileChange={onSelectedProfileChange}
+                onSaveProfile={onSaveProfile} onApplyProfile={onApplyProfile}
+                onUpdateProfile={onUpdateProfile} onDuplicateProfile={onDuplicateProfile}
+                onDeleteProfile={onDeleteProfile}
+              />
+            </div>
+          )}
+
+          {configTab === "routes" && (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div className="config-row">
+                <RouteCredentialFields
+                  title="Codex 主路由" badge="Codex" tone="primary"
+                  baseUrlLabel="Base URL" baseUrlHint="普通 /v1 请求会转发到这里。"
+                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Codex 主路由", config?.primary ?? null)}
+                  baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
+                  storedApiKey={config?.primary.stored_api_key ?? false}
+                  clearApiKey={form.clearCodexPrimaryApiKey}
+                  onBaseUrlChange={(v) => onFormChange((p) => ({ ...p, codexPrimaryBaseUrl: v }))}
+                  onApiKeyChange={(v) => onFormChange((p) => ({ ...p, codexPrimaryApiKey: v, clearCodexPrimaryApiKey: false }))}
+                  onToggleClearApiKey={() => onFormChange((p) => ({ ...p, codexPrimaryApiKey: "", clearCodexPrimaryApiKey: !p.clearCodexPrimaryApiKey }))}
+                />
+                <RouteCredentialFields
+                  title="Codex 压缩路由" badge="Compact" tone="compact"
+                  baseUrlLabel="Base URL" baseUrlHint={form.upstreamMode === "split" ? "Codex compact 请求会转发到这里。" : "当前复用 Codex 主路由。"}
+                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
+                  baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
+                  storedApiKey={config?.compact.stored_api_key ?? false}
+                  clearApiKey={form.clearCodexCompactApiKey}
+                  onBaseUrlChange={(v) => onFormChange((p) => ({ ...p, codexCompactBaseUrl: v }))}
+                  onApiKeyChange={(v) => onFormChange((p) => ({ ...p, codexCompactApiKey: v, clearCodexCompactApiKey: false }))}
+                  onToggleClearApiKey={() => onFormChange((p) => ({ ...p, codexCompactApiKey: "", clearCodexCompactApiKey: !p.clearCodexCompactApiKey }))}
+                />
+              </div>
+              <div className="config-row">
+                <RouteCredentialFields
+                  title="Claude 主路由" badge="Claude" tone="claude"
+                  baseUrlLabel="Base URL" baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
+                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
+                  baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
+                  storedApiKey={config?.claude.primary.stored_api_key ?? false}
+                  clearApiKey={form.clearClaudePrimaryApiKey}
+                  onBaseUrlChange={(v) => onFormChange((p) => ({ ...p, claudePrimaryBaseUrl: v }))}
+                  onApiKeyChange={(v) => onFormChange((p) => ({ ...p, claudePrimaryApiKey: v, clearClaudePrimaryApiKey: false }))}
+                  onToggleClearApiKey={() => onFormChange((p) => ({ ...p, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !p.clearClaudePrimaryApiKey }))}
+                />
+                <RouteCredentialFields
+                  title="Claude 压缩路由" badge="Compact" tone="compact"
+                  baseUrlLabel="Base URL" baseUrlHint="仅在 AnyRouter 大 reconnect 请求授权后使用。"
+                  apiKeyLabel="API Key" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
+                  baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
+                  storedApiKey={config?.claude.compact.stored_api_key ?? false}
+                  clearApiKey={form.clearClaudeCompactApiKey}
+                  onBaseUrlChange={(v) => onFormChange((p) => ({ ...p, claudeCompactBaseUrl: v }))}
+                  onApiKeyChange={(v) => onFormChange((p) => ({ ...p, claudeCompactApiKey: v, clearClaudeCompactApiKey: false }))}
+                  onToggleClearApiKey={() => onFormChange((p) => ({ ...p, claudeCompactApiKey: "", clearClaudeCompactApiKey: !p.clearClaudeCompactApiKey }))}
+                />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <div className="field-label" style={{ marginBottom: 4 }}>Codex Compact 上游模式</div>
+                  <div className="toggle-group">
+                    <button className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "split" }))}>独立分流</button>
+                    <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "primary" }))}>复用主路由</button>
+                  </div>
+                </div>
+                <div>
+                  <div className="field-label" style={{ marginBottom: 4 }}>Claude Compact 上游模式</div>
+                  <div className="toggle-group">
+                    <button className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
+                    <button className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {configTab === "model" && (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div className="field">
+                <span className="field-label">当前 Codex 模型</span>
+                <input className="input" value={currentModel} onChange={(e) => onCurrentModelChange(e.target.value)} spellCheck={false} />
+                <span className="field-hint">Manually set or auto-learned from the latest request body.</span>
+              </div>
+              <div>
+                <div className="field-label" style={{ marginBottom: 4 }}>Compact 模型模式</div>
+                <div className="toggle-group" style={{ marginBottom: 8 }}>
+                  <button className={form.modelMode === "linked" ? "is-active" : ""} onClick={onRestoreLinkedMode}>自动联动</button>
+                  <button className={form.modelMode === "custom" ? "is-active" : ""} onClick={onUnlockCompactModel}>手动指定</button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+                  <input
+                    className="input"
+                    value={form.modelMode === "linked" ? linkedCompactModel : form.modelOverride}
+                    readOnly={form.modelMode === "linked"}
+                    onChange={(e) => onFormChange((p) => ({ ...p, modelOverride: e.target.value }))}
+                    spellCheck={false}
+                  />
+                  <button className="btn btn-sm" onClick={form.modelMode === "linked" ? onUnlockCompactModel : onRestoreLinkedMode}>
+                    {form.modelMode === "linked" ? "解锁" : "恢复联动"}
+                  </button>
+                </div>
+              </div>
+              <div className="field">
+                <span className="field-label">联动模板</span>
+                <input className="input" value={form.modelTemplate} onChange={(e) => onFormChange((p) => ({ ...p, modelTemplate: e.target.value }))} spellCheck={false} />
+                <span className="field-hint">{`{model}`} is replaced with the original model name from the request.</span>
+              </div>
+            </div>
+          )}
+
+          {configTab === "preview" && (
+            <div style={{ display: "grid", gap: 12 }}>
+              <div className="field">
+                <span className="field-label">请求路径</span>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <button className="btn btn-sm" onClick={() => onPathChange("/v1/responses")}>普通响应</button>
+                  <button className="btn btn-sm" onClick={() => onPathChange("/v1/responses/compact")}>Compact</button>
+                </div>
+                <input className="input" value={previewPath} onChange={(e) => onPathChange(e.target.value)} />
+              </div>
+              <div className="field">
+                <span className="field-label">JSON 请求体</span>
+                <textarea className="textarea" value={previewBody} onChange={(e) => onBodyChange(e.target.value)} rows={4} spellCheck={false} style={{ resize: "vertical" }} />
+              </div>
+              {previewError && <div className="error-banner">{previewError}</div>}
+              <button className="btn btn-primary" onClick={onPreviewSubmit}>预览路由</button>
+              {preview && (
+                <div style={{ padding: "12px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: "0.8rem" }}>
+                  <div><span className="field-hint">Route</span><div><span className={`route-chip ${preview.route}`}>{routeLabel(preview.route)}</span></div></div>
+                  <div><span className="field-hint">Upstream</span><div style={{ fontFamily: "var(--font-mono)", fontSize: "0.78rem" }}>{preview.upstream_host}</div></div>
+                  <div><span className="field-hint">Source model</span><div><code>{preview.source_model ?? "-"}</code></div></div>
+                  <div><span className="field-hint">Target model</span><div><code>{preview.target_model ?? "-"}</code></div></div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          {saveError && <div className="error-banner" style={{ flex: 1 }}>{saveError}</div>}
+          <button className="btn btn-primary" disabled={saveState === "saving"} onClick={onSaveConfig}>
+            {saveButtonLabel(saveState, hasPendingChanges)}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   Logs Page
+   ═══════════════════════════════════════════════════ */
+function LogsPage({
+  logs, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
+  hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
+  routeFilter, statusFilter, hostFilter,
+  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onLoadMore, error
+}: {
+  logs: RequestLogEntry[]; logCounts: Record<"all" | RouteKind, number>;
+  providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
+  totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
+  hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
+  routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string;
+  onRouteFilterChange: (r: "all" | RouteKind) => void;
+  onStatusFilterChange: (s: "all" | LogStatusKind) => void;
+  onHostFilterChange: (h: string) => void;
+  onLoadMore: () => void; error: string | null;
+}) {
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">流量日志</p>
+          <h2>请求日志</h2>
+        </div>
+        <span className="status-pill">
+          显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
+        </span>
+      </div>
+
+      <div className="logs-toolbar">
+        <CustomSelect
+          label="通道"
+          value={routeFilter}
+          options={[
+            { value: "all", label: "全部通道", count: logCounts.all },
+            { value: "primary", label: "Codex 主路由", count: logCounts.primary, meta: "primary", tone: "codex" },
+            { value: "compact", label: "Compact 压缩", count: logCounts.compact, meta: "compact", tone: "compact" },
+            { value: "claude", label: "Claude 路由", count: logCounts.claude, meta: "claude", tone: "claude" }
+          ]}
+          onChange={(v) => onRouteFilterChange(v as "all" | RouteKind)}
+        />
+        <CustomSelect
+          label="状态"
+          value={statusFilter}
+          options={[
+            { value: "all", label: "全部", count: statusCounts.all },
+            { value: "normal", label: "正常", count: statusCounts.normal, tone: "is-ok" },
+            { value: "error", label: "错误", count: statusCounts.error, tone: "is-err" }
+          ]}
+          onChange={(v) => onStatusFilterChange(v as "all" | LogStatusKind)}
+        />
+        <CustomSelect
+          label="上游 Host"
+          value={hostFilter}
+          options={[
+            { value: "__all_hosts__", label: "全部上游", count: allLogCount },
+            ...hostOptions.map((h) => ({ value: h.host, label: h.host, count: h.total }))
+          ]}
+          onChange={onHostFilterChange}
+        />
+        <div style={{ display: "flex", gap: 6, marginLeft: "auto", alignItems: "center" }}>
+          <span className="route-chip codex">{PROVIDER_LABELS.openai}: {providerCounts.openai}</span>
+          <span className="route-chip claude">{PROVIDER_LABELS.claude}: {providerCounts.claude}</span>
+        </div>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+
+      {isLoadingLogs && logs.length === 0 ? (
+        <div className="empty-state"><strong>正在加载日志...</strong></div>
+      ) : logs.length === 0 ? (
+        <div className="empty-state">
+          <strong>暂无请求记录</strong>
+          <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
+        </div>
+      ) : (
+        <div className="log-table">
+          <div className="log-table-header">
+            <span>时间</span><span>模型 / 通道</span><span>状态</span>
+            <span>模型 / 思考</span><span>上游 Host</span><span>端点</span>
+            <span>类型</span><span>User Agent</span><span>Token</span>
+            <span>首 Token</span><span>耗时</span>
+          </div>
+          <div className="log-table-body">
+            {logs.map((entry, i) => {
+              const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
+              const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
+              const hasError = Boolean(entry.error_summary) || entry.status >= 400;
+              return (
+              <React.Fragment key={`${entry.request_id}-${i}`}>
+                <div
+                  className={`log-row ${hasHiddenLogDetails(entry) ? "is-clickable" : ""} ${hasError ? "has-error" : ""}`}
+                  onClick={() => hasHiddenLogDetails(entry) && setExpandedRow(expandedRow === i ? null : i)}
+                >
+                  <span className="log-cell-time">{formatDateTime(entry.time)}</span>
+                  <span className="log-model-cell" title={modelMapping}>
+                    <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                    <strong>{entry.source_model ?? "-"}</strong>
+                    {hasRewrite && <small>→ {entry.target_model}</small>}
+                  </span>
+                  <span className={`log-status ${entry.status < 400 ? "is-ok" : "is-err"}`}>{entry.status}</span>
+                  <span className="log-cell-code" title={modelReasoningLabel(entry)}>{modelReasoningLabel(entry)}</span>
+                  <span className="log-cell-code">{entry.upstream_host}</span>
+                  <span className="log-cell-code">{entry.endpoint}</span>
+                  <span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span>
+                  <span className="log-cell-code" title={entry.user_agent ?? ""} style={{ fontSize: "0.68rem" }}>{(entry.user_agent ?? "-").slice(0, 20)}</span>
+                  <TokenTooltip entry={entry} />
+                  <span className="log-cell-time">{formatDurationMs(entry.first_token_ms)}</span>
+                  <span className="log-cell-time">{formatDurationMs(entry.duration_ms)}</span>
+                </div>
+                {expandedRow === i && (
+                  <div className="log-detail-panel">
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">请求</span>
+                      <span className="log-detail-value">{entry.method} {entry.path}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">请求 ID</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.7rem" }}>{entry.request_id}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">模型映射</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.74rem" }}>{modelMapping}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">上游 / 端点</span>
+                      <span className="log-detail-value">{entry.upstream_host}{entry.endpoint}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">状态 / 类型</span>
+                      <span className="log-detail-value">{entry.status} / {entry.request_type}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">首 Token / 耗时</span>
+                      <span className="log-detail-value">{formatDurationMs(entry.first_token_ms)} / {formatDurationMs(entry.duration_ms)}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">请求摘要</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.72rem" }}>{entry.request_summary ?? "无"}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">推理强度</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.72rem" }}>{entry.reasoning_effort ?? "无"}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">User Agent</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.68rem" }}>{entry.user_agent ?? "-"}</span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">错误信息</span>
+                      <span className="log-detail-value">{entry.error_summary ?? "无"}</span>
+                    </div>
+                    <div className="log-detail-item" style={{ gridColumn: "span 2" }}>
+                      <span className="log-detail-label">Token 明细</span>
+                      <span className="log-detail-value">
+                        输入 {formatMetricNumber(entry.input_tokens)} · 输出 {formatMetricNumber(entry.output_tokens)} · 缓存 {formatMetricNumber(entry.cached_input_tokens)} · 总计 {formatMetricNumber(displayTotalTokens(entry))}
+                      </span>
+                    </div>
+                    <div className="log-detail-item">
+                      <span className="log-detail-label">采样时间</span>
+                      <span className="log-detail-value" style={{ fontSize: "0.74rem" }}>{entry.time}</span>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            )})}
+          </div>
+        </div>
+      )}
+
+      {hasMoreLogs && (
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <button className="btn" onClick={onLoadMore} disabled={isLoadingMoreLogs}>
+            {isLoadingMoreLogs ? "加载中..." : `加载更多 (${logs.length}/${totalLogCount})`}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1046,7 +1836,9 @@ function TopBar({
   hasPendingChanges,
   themeMode,
   onThemeModeChange,
-  onExport
+  onExport,
+  activeRoute,
+  logs
 }: {
   config: PublicConfig | null;
   health: HealthResponse | null;
@@ -1055,20 +1847,41 @@ function TopBar({
   themeMode: ThemeMode;
   onThemeModeChange: (mode: ThemeMode) => void;
   onExport: () => void | Promise<void>;
+  activeRoute: RouteKind;
+  logs: RequestLogEntry[];
 }) {
   const primaryStatus = upstreamHealthBadge(health?.primary);
   const compactStatus = upstreamHealthBadge(health?.compact);
+  const listen = config?.listen ?? "127.0.0.1:7865";
+  const compactHits = logs.filter((entry) => entry.route === "compact").length;
+  const primaryHits = logs.filter((entry) => entry.route === "primary").length;
+  const claudeHits = logs.filter((entry) => entry.route === "claude").length;
 
   return (
     <header className="topbar">
       <div className="brand-lockup">
-        <div className="mark" aria-hidden="true">
-          CG
-        </div>
+        <div className="mark" aria-hidden="true">CG</div>
         <div>
           <p className="eyebrow">CompactGate Studio</p>
           <h1>Codex Compact 控制台</h1>
         </div>
+      </div>
+
+      <div className="topbar-endpoints" aria-label="Local proxy endpoints">
+        <div className="endpoint-chip">
+          <span>OpenAI</span>
+          <code>http://{listen}/v1</code>
+        </div>
+        <div className="endpoint-chip is-claude">
+          <span>Claude</span>
+          <code>http://{listen}/anthropic</code>
+        </div>
+      </div>
+
+      <div className="topbar-traffic" aria-label="Recent traffic">
+        <span className="traffic-dot tone-primary">{primaryHits}</span>
+        <span className="traffic-dot tone-compact">{compactHits}</span>
+        <span className="traffic-dot tone-claude">{claudeHits}</span>
       </div>
 
       <div className="status-strip" aria-label="CompactGate 状态">
@@ -1081,15 +1894,9 @@ function TopBar({
 
       <div className="toolbar">
         <ThemeModeSwitch value={themeMode} onChange={onThemeModeChange} />
-        <a className="ghost-button" href="/health">
-          健康检查
-        </a>
-        <button className="ghost-button" type="button" onClick={() => void onExport()}>
-          导出配置
-        </button>
-        <a className="ghost-button" href="#logs-title">
-          查看日志
-        </a>
+        <a className="ghost-button" href="/health">健康检查</a>
+        <button className="ghost-button" type="button" onClick={() => void onExport()}>导出配置</button>
+        <a className="ghost-button" href="#logs-title">查看日志</a>
       </div>
     </header>
   );
@@ -1122,6 +1929,348 @@ function ThemeModeSwitch({
         </button>
       ))}
     </div>
+  );
+}
+
+type ConfigTab = "profiles" | "routes" | "model" | "preview";
+
+const CONFIG_TABS: Array<{ id: ConfigTab; label: string }> = [
+  { id: "profiles", label: "Profiles" },
+  { id: "routes", label: "Routes" },
+  { id: "model", label: "Model" },
+  { id: "preview", label: "Preview" }
+];
+
+function ConfigDashboard({
+  configTab,
+  onConfigTabChange,
+  config,
+  form,
+  currentModel,
+  linkedCompactModel,
+  saveState,
+  saveError,
+  profileName,
+  selectedProfileId,
+  profileState,
+  profileError,
+  claudeProfileName,
+  selectedClaudeProfileId,
+  claudeProfileState,
+  claudeProfileError,
+  hasPendingChanges,
+  previewPath,
+  previewBody,
+  preview,
+  previewError,
+  onCurrentModelChange,
+  onFormChange,
+  onProfileNameChange,
+  onClaudeProfileNameChange,
+  onSelectedProfileChange,
+  onSaveProfile,
+  onApplyProfile,
+  onUpdateProfile,
+  onDuplicateProfile,
+  onDeleteProfile,
+  onUnlockCompactModel,
+  onRestoreLinkedMode,
+  onPathChange,
+  onBodyChange,
+  onPreviewSubmit,
+  onSaveConfig
+}: {
+  configTab: ConfigTab;
+  onConfigTabChange: (tab: ConfigTab) => void;
+  config: PublicConfig | null;
+  form: ConfigFormState;
+  currentModel: string;
+  linkedCompactModel: string;
+  saveState: SaveState;
+  saveError: string | null;
+  profileName: string;
+  selectedProfileId: string;
+  profileState: ProfileActionState;
+  profileError: string | null;
+  claudeProfileName: string;
+  selectedClaudeProfileId: string;
+  claudeProfileState: ProfileActionState;
+  claudeProfileError: string | null;
+  hasPendingChanges: boolean;
+  previewPath: string;
+  previewBody: string;
+  preview: RoutePreviewResponse | null;
+  previewError: string | null;
+  onCurrentModelChange: (model: string) => void;
+  onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
+  onProfileNameChange: (name: string) => void;
+  onClaudeProfileNameChange: (name: string) => void;
+  onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
+  onSaveProfile: (scope: ConfigProfileScope) => void | Promise<void>;
+  onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onUnlockCompactModel: () => void;
+  onRestoreLinkedMode: () => void;
+  onPathChange: (path: string) => void;
+  onBodyChange: (body: string) => void;
+  onPreviewSubmit: (event: React.FormEvent) => void;
+  onSaveConfig: (event: React.FormEvent) => void;
+}) {
+  return (
+    <section className="panel config-dashboard" aria-labelledby="config-dashboard-title">
+      <div className="section-heading">
+        <p className="eyebrow">Live Config</p>
+        <h2 id="config-dashboard-title">Configuration</h2>
+      </div>
+
+      <div className="config-tab-bar" role="tablist" aria-label="Config sections">
+        {CONFIG_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            role="tab"
+            aria-selected={configTab === tab.id}
+            className={`config-tab ${configTab === tab.id ? "is-active" : ""}`}
+            onClick={() => onConfigTabChange(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="config-tab-content">
+        {configTab === "profiles" && (
+          <div className="control-stack">
+            <ProfileScopeCard
+              scope="codex"
+              title="Codex 配置档案"
+              eyebrow="Codex Profiles"
+              description="保存、复制或应用 Codex 主路由与 compact 草稿；不会改动 Claude 档案。"
+              emptyTitle="还没有保存的 Codex 档案"
+              emptyDescription="填写名称后保存当前 Codex 草稿，就会在这里出现可应用的档案卡片。"
+              config={config}
+              profileName={profileName}
+              selectedProfileId={selectedProfileId}
+              profileState={profileState}
+              profileError={profileError}
+              onProfileNameChange={onProfileNameChange}
+              onSelectedProfileChange={onSelectedProfileChange}
+              onSaveProfile={onSaveProfile}
+              onApplyProfile={onApplyProfile}
+              onUpdateProfile={onUpdateProfile}
+              onDuplicateProfile={onDuplicateProfile}
+              onDeleteProfile={onDeleteProfile}
+            />
+            <ProfileScopeCard
+              scope="claude"
+              title="Claude 配置档案"
+              eyebrow="Claude Profiles"
+              description="保存、复制或应用 Claude primary / compact 草稿；不会改动 Codex 档案。"
+              emptyTitle="还没有保存的 Claude 档案"
+              emptyDescription="填写名称后保存当前 Claude 草稿，就会在这里出现可应用的档案卡片。"
+              config={config}
+              profileName={claudeProfileName}
+              selectedProfileId={selectedClaudeProfileId}
+              profileState={claudeProfileState}
+              profileError={claudeProfileError}
+              onProfileNameChange={onClaudeProfileNameChange}
+              onSelectedProfileChange={onSelectedProfileChange}
+              onSaveProfile={onSaveProfile}
+              onApplyProfile={onApplyProfile}
+              onUpdateProfile={onUpdateProfile}
+              onDuplicateProfile={onDuplicateProfile}
+              onDeleteProfile={onDeleteProfile}
+            />
+          </div>
+        )}
+
+        {configTab === "routes" && (
+          <div className="control-stack">
+            <div className="route-config-grid">
+              <section className="route-config-group" aria-labelledby="codex-route-config-title">
+                <div className="route-config-group-head">
+                  <span className="route-chip primary">Codex</span>
+                  <div>
+                    <h3 id="codex-route-config-title">Codex 路由</h3>
+                    <p>普通请求走主路由；compact 路径按模式分流。</p>
+                  </div>
+                </div>
+                <div className="route-config-cards">
+                  <RouteCredentialFields
+                    title="Codex 主路由" badge="主" tone="primary"
+                    baseUrlLabel="Codex 主路由 Base URL"
+                    baseUrlHint="普通 /v1 请求会转发到这里。"
+                    apiKeyLabel="Codex 主路由 API Key"
+                    apiKeyHint={form.clearCodexPrimaryApiKey ? "保存后会删除当前已保存的 Codex 主路由密钥。" : directApiKeyHint("Codex 主路由", config?.primary ?? null)}
+                    baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
+                    storedApiKey={config?.primary.stored_api_key ?? false}
+                    clearApiKey={form.clearCodexPrimaryApiKey}
+                    onBaseUrlChange={(value) => onFormChange((p) => ({ ...p, codexPrimaryBaseUrl: value }))}
+                    onApiKeyChange={(value) => onFormChange((p) => ({ ...p, codexPrimaryApiKey: value, clearCodexPrimaryApiKey: false }))}
+                    onToggleClearApiKey={() => onFormChange((p) => ({ ...p, codexPrimaryApiKey: "", clearCodexPrimaryApiKey: !p.clearCodexPrimaryApiKey }))}
+                  />
+                  <RouteCredentialFields
+                    title="Codex 压缩路由" badge="压缩" tone="compact"
+                    baseUrlLabel="Codex 压缩路由 Base URL"
+                    baseUrlHint={form.upstreamMode === "split" ? "Codex compact 请求会转发到这里。" : "当前复用 Codex 主路由，这个地址会保留但暂不参与转发。"}
+                    apiKeyLabel="Codex 压缩路由 API Key"
+                    apiKeyHint={form.clearCodexCompactApiKey ? "保存后会删除当前已保存的 Codex 压缩路由密钥。" : form.upstreamMode === "split" ? directApiKeyHint("Codex 压缩路由", config?.compact ?? null) : "当前 Codex compact 请求复用主路由认证；这里的密钥会在切回独立分流后生效。"}
+                    baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
+                    storedApiKey={config?.compact.stored_api_key ?? false}
+                    clearApiKey={form.clearCodexCompactApiKey}
+                    onBaseUrlChange={(value) => onFormChange((p) => ({ ...p, codexCompactBaseUrl: value }))}
+                    onApiKeyChange={(value) => onFormChange((p) => ({ ...p, codexCompactApiKey: value, clearCodexCompactApiKey: false }))}
+                    onToggleClearApiKey={() => onFormChange((p) => ({ ...p, codexCompactApiKey: "", clearCodexCompactApiKey: !p.clearCodexCompactApiKey }))}
+                  />
+                </div>
+              </section>
+
+              <section className="route-config-group" aria-labelledby="claude-route-config-title">
+                <div className="route-config-group-head">
+                  <span className="route-chip claude">Claude</span>
+                  <div>
+                    <h3 id="claude-route-config-title">Claude 路由</h3>
+                    <p>Messages 走主路由；只有已授权的下一次手动 compact 才使用压缩路由。</p>
+                  </div>
+                </div>
+                <div className="route-config-cards">
+                  <RouteCredentialFields
+                    title="Claude 主路由" badge="主" tone="claude"
+                    baseUrlLabel="Claude 主路由 Base URL"
+                    baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
+                    apiKeyLabel="Claude 主路由 API Key"
+                    apiKeyHint={form.clearClaudePrimaryApiKey ? "保存后会删除当前已保存的 Claude 主路由密钥。" : directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
+                    baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
+                    storedApiKey={config?.claude.primary.stored_api_key ?? false}
+                    clearApiKey={form.clearClaudePrimaryApiKey}
+                    onBaseUrlChange={(value) => onFormChange((p) => ({ ...p, claudePrimaryBaseUrl: value }))}
+                    onApiKeyChange={(value) => onFormChange((p) => ({ ...p, claudePrimaryApiKey: value, clearClaudePrimaryApiKey: false }))}
+                    onToggleClearApiKey={() => onFormChange((p) => ({ ...p, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !p.clearClaudePrimaryApiKey }))}
+                  />
+                  <RouteCredentialFields
+                    title="Claude 压缩路由" badge="压缩" tone="compact"
+                    baseUrlLabel="Claude 压缩路由 Base URL"
+                    baseUrlHint={form.claudeCompactUpstreamMode === "split" ? "仅在 AnyRouter 大 reconnect 请求授权后，用于下一次手动 compact。" : "当前复用 Claude 主路由，这个地址会保留但暂不参与手动 compact 分流。"}
+                    apiKeyLabel="Claude 压缩路由 API Key"
+                    apiKeyHint={form.clearClaudeCompactApiKey ? "保存后会删除当前已保存的 Claude 压缩路由密钥。" : form.claudeCompactUpstreamMode === "split" ? directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null) : "当前 Claude compact 分流复用主路由认证；这里的密钥会在切回独立分流后生效。"}
+                    baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
+                    storedApiKey={config?.claude.compact.stored_api_key ?? false}
+                    clearApiKey={form.clearClaudeCompactApiKey}
+                    onBaseUrlChange={(value) => onFormChange((p) => ({ ...p, claudeCompactBaseUrl: value }))}
+                    onApiKeyChange={(value) => onFormChange((p) => ({ ...p, claudeCompactApiKey: value, clearClaudeCompactApiKey: false }))}
+                    onToggleClearApiKey={() => onFormChange((p) => ({ ...p, claudeCompactApiKey: "", clearClaudeCompactApiKey: !p.clearClaudeCompactApiKey }))}
+                  />
+                  <section className="route-config-card tone-compact" aria-label="Claude 手动 compact 模型">
+                    <div className="route-config-card-head">
+                      <h4>Claude 手动 compact 模型</h4>
+                      <span className="route-chip compact">可选</span>
+                    </div>
+                    <Field label="Claude 手动 compact 模型" hint="留空会把原请求模型透传给 compact 上游；填写后只改被授权的手动 compact 请求。">
+                      <input aria-label="Claude 手动 compact 模型" value={form.claudeCompactModelOverride} placeholder={config?.claude.compact.model_override || "例如 claude-sonnet-4-6"} onChange={(e) => onFormChange((p) => ({ ...p, claudeCompactModelOverride: e.target.value }))} spellCheck={false} />
+                    </Field>
+                  </section>
+                </div>
+              </section>
+            </div>
+
+            <div className="mode-card">
+              <div>
+                <span className="mode-card-title">Codex Compact 上游模式</span>
+                <p>{form.upstreamMode === "split" ? "独立分流：" : "复用主上游："}<code>/v1/responses/compact</code>{form.upstreamMode === "split" ? " 使用 Codex 压缩路由 Base URL 与 API Key。" : " 直接发送到 Codex 主路由，并复用 Codex 主路由密钥。"}</p>
+              </div>
+              <div className="mode-switch" role="group" aria-label="Codex Compact 上游模式">
+                <button className={form.upstreamMode === "split" ? "is-selected" : ""} type="button" aria-pressed={form.upstreamMode === "split"} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "split" }))}>独立分流</button>
+                <button className={form.upstreamMode === "primary" ? "is-selected" : ""} type="button" aria-pressed={form.upstreamMode === "primary"} onClick={() => onFormChange((p) => ({ ...p, upstreamMode: "primary" }))}>复用主上游</button>
+              </div>
+            </div>
+
+            <div className="mode-card">
+              <div>
+                <span className="mode-card-title">Claude Compact 上游模式</span>
+                <p>{form.claudeCompactUpstreamMode === "split" ? "独立分流：" : "复用主上游："}已授权的手动 compact 请求{form.claudeCompactUpstreamMode === "split" ? " 使用 Claude 压缩路由 Base URL 与 API Key。" : " 发送到 Claude 主路由，并复用 Claude 主路由密钥。"}</p>
+              </div>
+              <div className="mode-switch" role="group" aria-label="Claude Compact 上游模式">
+                <button type="button" className={form.claudeCompactUpstreamMode === "split" ? "is-selected" : ""} aria-pressed={form.claudeCompactUpstreamMode === "split"} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
+                <button type="button" className={form.claudeCompactUpstreamMode === "primary" ? "is-selected" : ""} aria-pressed={form.claudeCompactUpstreamMode === "primary"} onClick={() => onFormChange((p) => ({ ...p, claudeCompactUpstreamMode: "primary" }))}>复用主上游</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {configTab === "model" && (
+          <div className="control-stack">
+            <Field label="当前 Codex 模型" hint="可手动输入，也会从最近一次请求 body 里自动学习。">
+              <input aria-label="当前 Codex 模型" value={currentModel} onChange={(e) => onCurrentModelChange(e.target.value)} spellCheck={false} />
+            </Field>
+
+            <div className="mode-card compact-model-card">
+              <div>
+                <span className="mode-card-title">Compact 模型模式</span>
+                <p>{form.modelMode === "linked" ? "自动联动当前模型，并套用模板生成 compact 模型。" : "手动覆盖 compact 模型，当前模型变化时不会自动同步。"}</p>
+              </div>
+              <div className="mode-switch" role="group" aria-label="Compact 模型模式">
+                <button className={form.modelMode === "linked" ? "is-selected" : ""} type="button" aria-pressed={form.modelMode === "linked"} onClick={onRestoreLinkedMode}>自动联动</button>
+                <button className={form.modelMode === "custom" ? "is-selected" : ""} type="button" aria-pressed={form.modelMode === "custom"} onClick={onUnlockCompactModel}>手动指定</button>
+              </div>
+            </div>
+
+            <Field label="Compact 模型" hint="自动联动时这里是只读预览。">
+              <div className="compound-input">
+                <input aria-label="Compact 模型" value={form.modelMode === "linked" ? linkedCompactModel : form.modelOverride} readOnly={form.modelMode === "linked"} onChange={(e) => onFormChange((p) => ({ ...p, modelOverride: e.target.value }))} spellCheck={false} />
+                {form.modelMode === "linked" ? <button type="button" onClick={onUnlockCompactModel}>解锁</button> : <button type="button" onClick={onRestoreLinkedMode}>恢复联动</button>}
+              </div>
+            </Field>
+
+            {form.modelMode === "custom" && <p className="inline-warning">Compact 模型已手动覆盖。如果 Codex 切换模型后希望自动推导，请恢复自动联动。</p>}
+
+            <Field label="联动模板" hint="{model} 会被替换为请求里的原始模型名。">
+              <input aria-label="联动模板" value={form.modelTemplate} onChange={(e) => onFormChange((p) => ({ ...p, modelTemplate: e.target.value }))} spellCheck={false} />
+            </Field>
+          </div>
+        )}
+
+        {configTab === "preview" && (
+          <div className="control-stack">
+            <Field label="请求路径" hint="常用路径或手动输入。">
+              <div className="path-presets">
+                <button type="button" onClick={() => onPathChange("/v1/responses")}>普通响应</button>
+                <button type="button" onClick={() => onPathChange("/v1/responses/compact")}>Compact</button>
+              </div>
+              <input aria-label="请求路径" value={previewPath} onChange={(e) => onPathChange(e.target.value)} />
+            </Field>
+            <Field label="JSON Body" hint="只填 model / stream 即可。">
+              <textarea aria-label="JSON Body" value={previewBody} onChange={(e) => onBodyChange(e.target.value)} rows={4} spellCheck={false} />
+            </Field>
+            {previewError && <p className="error-note">{previewError}</p>}
+            <button className="preview-button" type="button" onClick={onPreviewSubmit}>预览路由</button>
+
+            <div className={`preview-readout ${preview ? `route-${preview.route}` : ""}`} aria-live="polite">
+              {preview ? (
+                <>
+                  <dl>
+                    <div><dt>命中通道</dt><dd><span className={`route-chip ${preview.route}`}>{routeLabel(preview.route)}</span></dd></div>
+                    <div><dt>目标上游</dt><dd>{preview.upstream_host}</dd></div>
+                    <div><dt>来源模型</dt><dd><code>{preview.source_model ?? "无"}</code></dd></div>
+                    <div><dt>最终模型</dt><dd><code>{preview.target_model ?? "无"}</code></dd></div>
+                  </dl>
+                  <p>Body 改写：{preview.body_rewritten ? "是" : "否"} · 移除 stream：{preview.stream_removed ? "是" : "否"}</p>
+                </>
+              ) : (
+                <p>预览会显示通道、上游、模型与 stream 处理。</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="config-dashboard-footer">
+        {saveError && <p className="error-note">{saveError}</p>}
+        <button className="apply-button" type="button" disabled={saveState === "saving"} onClick={onSaveConfig}>
+          {saveButtonLabel(saveState, hasPendingChanges)}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -2855,7 +4004,7 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
     >
-      <span className="token-total-pill">总 {formatMetricNumber(displayTotalTokens(entry))}</span>
+      <span className="token-total-pill">{formatMetricNumber(displayTotalTokens(entry))}</span>
       {placement &&
         createPortal(
           <span
