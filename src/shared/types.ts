@@ -209,6 +209,11 @@ export interface RequestLogEntry {
   output_tokens: number | null;
   cached_input_tokens: number | null;
   cached_output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
+  reasoning_tokens: number | null;
+  additive_cached_input_tokens: boolean;
+  additive_cached_output_tokens: boolean;
   total_tokens: number | null;
   upstream_host: string;
   user_agent: string | null;

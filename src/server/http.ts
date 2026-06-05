@@ -702,9 +702,11 @@ async function proxyPrimaryRequest(
   requestId: string,
   startedAt: number
 ): Promise<void> {
-  const route: RouteKind = "primary";
-  const upstream = buildUpstreamUrl(config.primary.base_url, url.pathname, url.search);
-  const auth = resolveRouteCredential("primary", config);
+  let route: RouteKind = "primary";
+  let upstream = buildUpstreamUrl(config.primary.base_url, url.pathname, url.search);
+  let auth = resolveRouteCredential("primary", config);
+  let timeoutMs = config.timeouts.primary_ms;
+  let timeoutMessage = "Primary upstream request timed out.";
   let requestHeaders: Record<string, string> = {};
   let status = 502;
   let errorSummary: string | null = null;
@@ -725,12 +727,24 @@ async function proxyPrimaryRequest(
     requestType = requestMetadata.requestType;
     sourceModel = extractJsonModel(rawBody).sourceModel;
 
-    const bridgeResult =
-      config.compact.upstream_mode === "split"
-        ? compactionBridge.rewritePrimaryBody(rawBody)
-        : { body: rawBody, replacedCompactionCount: 0 };
-    upstreamBody = bridgeResult.body;
-    compactBridgeReplacements = bridgeResult.replacedCompactionCount;
+    const useCompactFollowUp =
+      config.compact.upstream_mode === "split" &&
+      compactionBridge.consumeCompactFollowUp(rawBody);
+    if (useCompactFollowUp) {
+      route = "compact";
+      upstream = buildUpstreamUrl(compactUpstreamBaseUrl(config), url.pathname, url.search);
+      auth = resolveRouteCredential("compact", config);
+      timeoutMs = config.timeouts.compact_ms;
+      timeoutMessage = "Compact upstream request timed out.";
+      upstreamBody = rawBody;
+    } else {
+      const bridgeResult =
+        config.compact.upstream_mode === "split"
+          ? compactionBridge.rewritePrimaryBody(rawBody)
+          : { body: rawBody, replacedCompactionCount: 0 };
+      upstreamBody = bridgeResult.body;
+      compactBridgeReplacements = bridgeResult.replacedCompactionCount;
+    }
     requestHeaders = buildUpstreamHeaders(req.headers, auth.apiKey);
 
     const result = await sendOpenAiUpstreamRequest({
@@ -738,8 +752,8 @@ async function proxyPrimaryRequest(
       res,
       upstream,
       startedAt,
-      timeoutMs: config.timeouts.primary_ms,
-      timeoutMessage: "Primary upstream request timed out.",
+      timeoutMs,
+      timeoutMessage,
       requestHeaders,
       body: upstreamBody,
       extraResponseHeaders: {
@@ -756,6 +770,9 @@ async function proxyPrimaryRequest(
     requestType = responseTransport(responseHeaders) ?? requestType;
     firstTokenMs = result.firstTokenMs;
     usage = extractResponseUsage(responseBody, responseHeaders);
+    if (route === "compact" && status >= 200 && status < 300) {
+      compactionBridge.storeCompactResponse(responseBody, { armFollowUp: false });
+    }
   } catch (error) {
     status = 502;
     errorSummary = summaryForError(error);
@@ -879,7 +896,9 @@ async function proxyCompactRequest(
     firstTokenMs = result.firstTokenMs;
     usage = extractResponseUsage(responseBody, responseHeaders);
     if (status >= 200 && status < 300) {
-      compactionBridge.storeCompactResponse(responseBody);
+      compactionBridge.storeCompactResponse(responseBody, {
+        armFollowUp: config.compact.upstream_mode === "split"
+      });
     }
   } catch (error) {
     status = attemptedUpstream ? 502 : 400;
@@ -1498,6 +1517,11 @@ function addLog(
     output_tokens: input.usage.outputTokens,
     cached_input_tokens: input.usage.cachedInputTokens,
     cached_output_tokens: input.usage.cachedOutputTokens,
+    cache_read_input_tokens: input.usage.cacheReadInputTokens,
+    cache_creation_input_tokens: input.usage.cacheCreationInputTokens,
+    reasoning_tokens: input.usage.reasoningTokens,
+    additive_cached_input_tokens: input.usage.additiveCachedInputTokens === true,
+    additive_cached_output_tokens: input.usage.additiveCachedOutputTokens === true,
     total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
     user_agent: readHeaderString(input.req.headers["user-agent"]),
@@ -1524,6 +1548,9 @@ function emptyUsageMetrics(): TokenUsageMetrics {
     outputTokens: null,
     cachedInputTokens: null,
     cachedOutputTokens: null,
+    cacheReadInputTokens: null,
+    cacheCreationInputTokens: null,
+    reasoningTokens: null,
     totalTokens: null
   };
 }

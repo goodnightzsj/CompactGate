@@ -239,6 +239,8 @@ describe("CompactGate HTTP server", () => {
       output_tokens: 868,
       cached_input_tokens: 28032,
       cached_output_tokens: 120,
+      additive_cached_input_tokens: false,
+      additive_cached_output_tokens: false,
       total_tokens: 64113
     });
     expect(entry.first_token_ms).toEqual(expect.any(Number));
@@ -297,6 +299,8 @@ describe("CompactGate HTTP server", () => {
       output_tokens: 3,
       cached_input_tokens: 4,
       cached_output_tokens: 1,
+      additive_cached_input_tokens: false,
+      additive_cached_output_tokens: false,
       total_tokens: 15
     });
     expect(entry.first_token_ms).toEqual(expect.any(Number));
@@ -1042,6 +1046,83 @@ describe("CompactGate HTTP server", () => {
     });
   });
 
+  it("does not arm compact follow-up routing when compact requests reuse primary", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startUpstream(async (req, res) => {
+      primaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "PRIMARY COMPACT SUMMARY" }]
+            },
+            {
+              type: "compaction",
+              encrypted_content: "PRIMARY_MODE_COMPACT_STATE"
+            }
+          ]
+        })
+      );
+    });
+    const compact = await startUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.end("{}");
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "primary" }
+    });
+
+    const compactResponse = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "primary compact" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(compactResponse.status).toBe(200);
+    await compactResponse.text();
+
+    const followUpBody = JSON.stringify({
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: "PRIMARY_MODE_COMPACT_STATE"
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "after primary compact" }]
+        }
+      ]
+    });
+    const followUpResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: followUpBody,
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(followUpResponse.status).toBe(200);
+    expect(followUpResponse.headers.get("x-compactgate-route")).toBe("primary");
+    await followUpResponse.text();
+    expect(compactRequests).toHaveLength(0);
+    expect(primaryRequests).toHaveLength(2);
+    expect(primaryRequests[1].url).toBe("/v1/responses");
+    expect(JSON.parse(primaryRequests[1].body)).toEqual(JSON.parse(followUpBody));
+  });
+
   it("updates api_key_env names and reports the active credential scope", async () => {
     const app = await startApp(undefined, undefined, {
       compact: {
@@ -1227,9 +1308,9 @@ describe("CompactGate HTTP server", () => {
           type: "message_start",
           message: {
             usage: {
-              input_tokens: 42,
-              cache_read_input_tokens: 30,
-              cache_creation_input_tokens: 4,
+              input_tokens: 0,
+              cache_read_input_tokens: 28_032,
+              cache_creation_input_tokens: 11,
               output_tokens: 1
             }
           }
@@ -1238,7 +1319,15 @@ describe("CompactGate HTTP server", () => {
       res.end(
         `event: message_delta\ndata: ${JSON.stringify({
           type: "message_delta",
-          usage: { output_tokens: 7 }
+          usage: {
+            input_tokens: 0,
+            cache_read_input_tokens: 28_032,
+            cache_creation_input_tokens: 11,
+            output_tokens: 202,
+            output_tokens_details: {
+              reasoning_tokens: 159
+            }
+          }
         })}\n\n`
       );
     });
@@ -1280,10 +1369,15 @@ describe("CompactGate HTTP server", () => {
       request_type: "stream",
       source_model: "claude-opus-4-8",
       target_model: "claude-opus-4-8",
-      input_tokens: 42,
-      output_tokens: 7,
-      cached_input_tokens: 34,
-      total_tokens: 83
+      input_tokens: 0,
+      output_tokens: 202,
+      cached_input_tokens: 28_043,
+      cache_read_input_tokens: 28_032,
+      cache_creation_input_tokens: 11,
+      reasoning_tokens: 159,
+      additive_cached_input_tokens: true,
+      additive_cached_output_tokens: false,
+      total_tokens: 28_245
     });
 
     const captures = await waitForCaptureRecords(captureDir, 1);
@@ -2110,7 +2204,9 @@ describe("CompactGate HTTP server", () => {
     expect(JSON.stringify(captures[0])).not.toContain("saved-claude-token");
   });
 
-  it("replaces split-mode compaction items with assistant summaries for the primary upstream", async () => {
+  it("routes the first split-mode compaction follow-up to compact once then bridges on primary", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
     const primaryCapture: { current: CapturedRequest | null } = { current: null };
     const primary = await startUpstream(async (req, res) => {
       primaryCapture.current = {
@@ -2119,11 +2215,17 @@ describe("CompactGate HTTP server", () => {
         headers: req.headers,
         body: await captureBody(req)
       };
+      primaryRequests.push(primaryCapture.current);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
     const compact = await startUpstream(async (req, res) => {
-      await captureBody(req);
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -2153,27 +2255,44 @@ describe("CompactGate HTTP server", () => {
     expect(compactResponse.status).toBe(200);
     await compactResponse.text();
 
+    const followUpBody = JSON.stringify({
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: "ENCRYPTED_COMPACT_STATE"
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "after compact" }]
+        }
+      ]
+    });
+    const compactFollowUpResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: followUpBody,
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(compactFollowUpResponse.status).toBe(200);
+    expect(compactFollowUpResponse.headers.get("x-compactgate-route")).toBe("compact");
+    await compactFollowUpResponse.text();
+    expect(primaryRequests).toHaveLength(0);
+    expect(compactRequests).toHaveLength(2);
+    expect(compactRequests[1].url).toBe("/v1/responses");
+    expect(JSON.parse(compactRequests[1].body)).toEqual(JSON.parse(followUpBody));
+
     const primaryResponse = await fetch(`${app.url}/v1/responses`, {
       method: "POST",
-      body: JSON.stringify({
-        model: "gpt-5.5",
-        input: [
-          {
-            type: "compaction",
-            encrypted_content: "ENCRYPTED_COMPACT_STATE"
-          },
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "after compact" }]
-          }
-        ]
-      }),
+      body: followUpBody,
       headers: { "content-type": "application/json" }
     });
 
     expect(primaryResponse.status).toBe(200);
+    expect(primaryResponse.headers.get("x-compactgate-route")).toBe("primary");
     assertCaptured(primaryCapture.current);
+    expect(primaryRequests).toHaveLength(1);
 
     const rewrittenBody = JSON.parse(primaryCapture.current.body) as {
       input: Array<Record<string, unknown>>;
@@ -2190,6 +2309,23 @@ describe("CompactGate HTTP server", () => {
         content: [{ type: "input_text", text: "after compact" }]
       }
     ]);
+
+    const page = await fetchLogPage(app.url);
+    expect(page.logs.slice(0, 3).map((entry) => entry.route)).toEqual([
+      "primary",
+      "compact",
+      "compact"
+    ]);
+    expect(page.logs[0]).toMatchObject({
+      route: "primary",
+      endpoint: "/responses",
+      upstream_host: new URL(primary.url).host
+    });
+    expect(page.logs[1]).toMatchObject({
+      route: "compact",
+      endpoint: "/responses",
+      upstream_host: new URL(compact.url).host
+    });
   });
 
   it("synthesizes assistant summaries from readable gzip compaction payloads", async () => {
@@ -2235,26 +2371,38 @@ describe("CompactGate HTTP server", () => {
     expect(compactResponse.status).toBe(200);
     await compactResponse.text();
 
+    const followUpBody = JSON.stringify({
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: summaryText
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "after compact" }]
+        }
+      ]
+    });
+    const compactFollowUpResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: followUpBody,
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(compactFollowUpResponse.status).toBe(200);
+    expect(compactFollowUpResponse.headers.get("x-compactgate-route")).toBe("compact");
+    await compactFollowUpResponse.text();
+
     const primaryResponse = await fetch(`${app.url}/v1/responses`, {
       method: "POST",
-      body: JSON.stringify({
-        model: "gpt-5.5",
-        input: [
-          {
-            type: "compaction",
-            encrypted_content: summaryText
-          },
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "after compact" }]
-          }
-        ]
-      }),
+      body: followUpBody,
       headers: { "content-type": "application/json" }
     });
 
     expect(primaryResponse.status).toBe(200);
+    expect(primaryResponse.headers.get("x-compactgate-route")).toBe("primary");
     assertCaptured(primaryCapture.current);
 
     const rewrittenBody = JSON.parse(primaryCapture.current.body) as {
@@ -2493,6 +2641,9 @@ describe("CompactGate HTTP server", () => {
       output_tokens: null,
       cached_input_tokens: null,
       cached_output_tokens: null,
+      reasoning_tokens: null,
+      additive_cached_input_tokens: false,
+      additive_cached_output_tokens: false,
       total_tokens: null
     });
   });

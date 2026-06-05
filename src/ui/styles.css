@@ -9126,10 +9126,12 @@ a { color: var(--accent); text-decoration: none; }
 /* Log model cell */
 .log-model-cell {
   display: inline-grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 2px;
   min-width: 0;
-  max-inline-size: clamp(16ch, 18vw, 30ch);
+  inline-size: min(100%, clamp(18ch, 18vw, 32ch));
+  max-inline-size: 100%;
   overflow: hidden;
   vertical-align: bottom;
   align-items: center;
@@ -9137,8 +9139,8 @@ a { color: var(--accent); text-decoration: none; }
 
 .log-table .log-model-cell {
   display: inline-grid;
-  justify-items: start;
-  max-inline-size: clamp(16ch, 18vw, 30ch);
+  justify-items: stretch;
+  max-inline-size: 100%;
   overflow: hidden;
   white-space: nowrap;
   word-break: normal;
@@ -9164,6 +9166,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 .log-model-cell small {
+  grid-column: 2;
   font-family: var(--font-mono);
   font-size: 0.66rem;
   color: var(--muted);
@@ -9173,10 +9176,16 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 .log-model-cell .route-chip {
+  grid-row: 1 / span 2;
+  align-self: start;
   width: fit-content;
+  max-inline-size: 8.5ch;
   font-size: 0.6rem;
   height: 16px;
   padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Token tooltip */

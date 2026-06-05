@@ -2065,23 +2065,39 @@ function LogsPage({
                               </div>
                               <div className="log-detail-item">
                                 <span className="log-detail-label">输入 Token</span>
-                                <span className="log-detail-value">{formatMetricNumber(entry.input_tokens)}</span>
+                                <span className="log-detail-value">{formatMetricNumber(displayInputTokens(entry))}</span>
                               </div>
                               <div className="log-detail-item">
                                 <span className="log-detail-label">输出 Token</span>
                                 <span className="log-detail-value">{formatMetricNumber(entry.output_tokens)}</span>
                               </div>
                               <div className="log-detail-item">
-                                <span className="log-detail-label">缓存输入 Token</span>
-                                <span className="log-detail-value">{formatMetricNumber(entry.cached_input_tokens)}</span>
+                                <span className="log-detail-label">{hasAdditiveCachedInput(entry) ? "缓存读取 Token" : "缓存输入 Token"}</span>
+                                <span className="log-detail-value">{formatMetricNumber(cacheReadInputTokens(entry))}</span>
+                              </div>
+                              {hasAdditiveCachedInput(entry) && (
+                                <div className="log-detail-item">
+                                  <span className="log-detail-label">缓存写入 Token</span>
+                                  <span className="log-detail-value">{formatMetricNumber(cacheCreationInputTokens(entry))}</span>
+                                </div>
+                              )}
+                              {hasAdditiveCachedInput(entry) && (
+                                <div className="log-detail-item">
+                                  <span className="log-detail-label">缓存合计 Token</span>
+                                  <span className="log-detail-value">{formatMetricNumber(cachedInputTotalTokens(entry))}</span>
+                                </div>
+                              )}
+                              <div className="log-detail-item">
+                                <span className="log-detail-label">总输入 Token</span>
+                                <span className="log-detail-value">{formatMetricNumber(totalInputTokens(entry))}</span>
                               </div>
                               <div className="log-detail-item">
                                 <span className="log-detail-label">缓存输出 Token</span>
                                 <span className="log-detail-value">{formatMetricNumber(entry.cached_output_tokens)}</span>
                               </div>
                               <div className="log-detail-item">
-                                <span className="log-detail-label">未缓存输入</span>
-                                <span className="log-detail-value">{formatMetricNumber(uncachedInputTokens(entry))}</span>
+                                <span className="log-detail-label">推理 Token</span>
+                                <span className="log-detail-value">{formatMetricNumber(entry.reasoning_tokens)}</span>
                               </div>
                               <div className="log-detail-item">
                                 <span className="log-detail-label">缓存命中率</span>
@@ -3080,19 +3096,29 @@ function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
             <strong className="token-tooltip-title">Token 明细</strong>
             <span className="token-tooltip-row">
               <em>输入 Token</em>
-              <b>{formatMetricNumber(entry.input_tokens)}</b>
+              <b>{formatMetricNumber(displayInputTokens(entry))}</b>
             </span>
             <span className="token-tooltip-row">
               <em>输出 Token</em>
               <b>{formatMetricNumber(entry.output_tokens)}</b>
             </span>
             <span className="token-tooltip-row">
-              <em>缓存输入 Token</em>
-              <b>{formatMetricNumber(entry.cached_input_tokens)}</b>
+              <em>推理 Token</em>
+              <b>{formatMetricNumber(entry.reasoning_tokens)}</b>
             </span>
             <span className="token-tooltip-row">
-              <em>未缓存输入</em>
-              <b>{formatMetricNumber(uncachedInputTokens(entry))}</b>
+              <em>{hasAdditiveCachedInput(entry) ? "缓存读取" : "缓存输入 Token"}</em>
+              <b>{formatMetricNumber(cacheReadInputTokens(entry))}</b>
+            </span>
+            {hasAdditiveCachedInput(entry) && (
+              <span className="token-tooltip-row">
+                <em>缓存写入</em>
+                <b>{formatMetricNumber(cacheCreationInputTokens(entry))}</b>
+              </span>
+            )}
+            <span className="token-tooltip-row">
+              <em>总输入 Token</em>
+              <b>{formatMetricNumber(totalInputTokens(entry))}</b>
             </span>
             <span className="token-tooltip-row">
               <em>缓存命中率</em>
@@ -3668,42 +3694,103 @@ function formatMetricNumber(value: number | null): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function uncachedInputTokens(entry: RequestLogEntry): number | null {
-  if (entry.input_tokens === null && entry.cached_input_tokens === null) {
+function displayInputTokens(entry: RequestLogEntry): number | null {
+  if (entry.input_tokens === null && entry.cache_creation_input_tokens === null) {
     return null;
   }
 
-  if (hasAdditiveCachedInput(entry)) {
-    return entry.input_tokens ?? 0;
+  return hasAdditiveCachedInput(entry)
+    ? (entry.input_tokens ?? 0) + (entry.cache_creation_input_tokens ?? 0)
+    : entry.input_tokens;
+}
+
+function cacheReadInputTokens(entry: RequestLogEntry): number | null {
+  if (entry.cache_read_input_tokens !== null) {
+    return entry.cache_read_input_tokens;
   }
 
-  return Math.max(0, (entry.input_tokens ?? 0) - (entry.cached_input_tokens ?? 0));
+  if (entry.cached_input_tokens === null) {
+    return null;
+  }
+
+  if (!hasAdditiveCachedInput(entry)) {
+    return entry.cached_input_tokens;
+  }
+
+  return Math.max(0, entry.cached_input_tokens - (entry.cache_creation_input_tokens ?? 0));
+}
+
+function cacheCreationInputTokens(entry: RequestLogEntry): number | null {
+  return hasAdditiveCachedInput(entry) ? entry.cache_creation_input_tokens : null;
+}
+
+function cachedInputTotalTokens(entry: RequestLogEntry): number | null {
+  if (entry.cached_input_tokens !== null) {
+    return entry.cached_input_tokens;
+  }
+
+  const cacheReadTokens = entry.cache_read_input_tokens;
+  const cacheCreationTokens = entry.cache_creation_input_tokens;
+  if (cacheReadTokens === null && cacheCreationTokens === null) {
+    return null;
+  }
+
+  return (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0);
+}
+
+function totalInputTokens(entry: RequestLogEntry): number | null {
+  if (
+    entry.input_tokens === null &&
+    entry.cached_input_tokens === null &&
+    entry.cache_read_input_tokens === null &&
+    entry.cache_creation_input_tokens === null
+  ) {
+    return null;
+  }
+
+  return hasAdditiveCachedInput(entry)
+    ? (entry.input_tokens ?? 0) + (cacheReadInputTokens(entry) ?? 0) + (entry.cache_creation_input_tokens ?? 0)
+    : entry.input_tokens;
 }
 
 function formatCacheHitRate(entry: RequestLogEntry): string {
-  if (entry.cached_input_tokens === null) {
+  const cachedInputTokens = hasAdditiveCachedInput(entry)
+    ? cacheReadInputTokens(entry)
+    : entry.cached_input_tokens;
+  if (cachedInputTokens === null) {
     return "-";
   }
 
   const denominator = hasAdditiveCachedInput(entry)
-    ? entry.cached_input_tokens + (entry.input_tokens ?? 0)
+    ? totalInputTokens(entry)
     : entry.input_tokens;
   if (!denominator) {
     return "-";
   }
 
-  return `${Math.min(100, Math.round((entry.cached_input_tokens / denominator) * 100))}%`;
+  const rate = Math.min(100, (cachedInputTokens / denominator) * 100);
+  return `${formatPercentRate(rate)}%`;
+}
+
+function formatPercentRate(value: number): string {
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+
+  return value >= 99 ? value.toFixed(2) : value.toFixed(1);
 }
 
 function displayTotalTokens(entry: RequestLogEntry): number | null {
   const inputTokens = entry.input_tokens ?? 0;
   const outputTokens = entry.output_tokens ?? 0;
-  const cachedInputTokens = entry.cached_input_tokens ?? 0;
+  const cachedInputTokens = cachedInputTotalTokens(entry) ?? 0;
   const cachedOutputTokens = entry.cached_output_tokens ?? 0;
   const hasAnyToken =
     entry.input_tokens !== null ||
     entry.output_tokens !== null ||
     entry.cached_input_tokens !== null ||
+    entry.cache_read_input_tokens !== null ||
+    entry.cache_creation_input_tokens !== null ||
     entry.cached_output_tokens !== null ||
     entry.total_tokens !== null;
 
@@ -3719,15 +3806,16 @@ function displayTotalTokens(entry: RequestLogEntry): number | null {
 }
 
 function hasAdditiveCachedInput(entry: RequestLogEntry): boolean {
-  return entry.cached_input_tokens !== null &&
-    entry.input_tokens !== null &&
-    entry.cached_input_tokens > entry.input_tokens;
+  return entry.additive_cached_input_tokens ||
+    (
+      entry.cached_input_tokens !== null &&
+      entry.input_tokens !== null &&
+      entry.cached_input_tokens > entry.input_tokens
+    );
 }
 
 function hasAdditiveCachedOutput(entry: RequestLogEntry): boolean {
-  return entry.cached_output_tokens !== null &&
-    entry.output_tokens !== null &&
-    entry.cached_output_tokens > entry.output_tokens;
+  return entry.additive_cached_output_tokens;
 }
 
 function clamp(value: number, min: number, max: number): number {

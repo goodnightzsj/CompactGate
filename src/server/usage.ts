@@ -14,6 +14,9 @@ export interface TokenUsageMetrics {
   outputTokens: number | null;
   cachedInputTokens: number | null;
   cachedOutputTokens: number | null;
+  cacheReadInputTokens: number | null;
+  cacheCreationInputTokens: number | null;
+  reasoningTokens: number | null;
   totalTokens: number | null;
   additiveCachedInputTokens?: boolean;
   additiveCachedOutputTokens?: boolean;
@@ -24,6 +27,9 @@ const EMPTY_USAGE: TokenUsageMetrics = {
   outputTokens: null,
   cachedInputTokens: null,
   cachedOutputTokens: null,
+  cacheReadInputTokens: null,
+  cacheCreationInputTokens: null,
+  reasoningTokens: null,
   totalTokens: null
 };
 
@@ -131,12 +137,20 @@ function mergeUsage(
     return next;
   }
 
-  const inputTokens = next.inputTokens ?? previous.inputTokens;
+  const inputTokens = mergeRequestScopedTokens(previous.inputTokens, next.inputTokens);
   const outputTokens = next.outputTokens ?? previous.outputTokens;
-  const cachedInputTokens = next.cachedInputTokens ?? previous.cachedInputTokens;
   const cachedOutputTokens = next.cachedOutputTokens ?? previous.cachedOutputTokens;
+  const cacheReadInputTokens = mergeCacheReadInputTokens(previous, next);
+  const cacheCreationInputTokens = mergeRequestScopedTokens(
+    previous.cacheCreationInputTokens,
+    next.cacheCreationInputTokens
+  );
+  const reasoningTokens = mergeRequestScopedTokens(previous.reasoningTokens, next.reasoningTokens);
   const additiveCachedInputTokens = Boolean(next.additiveCachedInputTokens || previous.additiveCachedInputTokens);
   const additiveCachedOutputTokens = Boolean(next.additiveCachedOutputTokens || previous.additiveCachedOutputTokens);
+  const cachedInputTokens = additiveCachedInputTokens
+    ? sumNullableNumberList([cacheReadInputTokens, cacheCreationInputTokens]) ?? mergeCachedInputTokens(previous, next)
+    : mergeCachedInputTokens(previous, next);
   const totalFloor = usageTotalFloor({
     inputTokens,
     outputTokens,
@@ -152,10 +166,83 @@ function mergeUsage(
     outputTokens,
     cachedInputTokens,
     cachedOutputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    reasoningTokens,
     totalTokens: explicitTotal ?? totalFloor,
     additiveCachedInputTokens,
     additiveCachedOutputTokens
   };
+}
+
+function mergeRequestScopedTokens(previous: number | null, next: number | null): number | null {
+  if (next === null) {
+    return previous;
+  }
+
+  if (previous === null) {
+    return next;
+  }
+
+  return next === 0 && previous > 0 ? previous : next;
+}
+
+function mergeCacheReadInputTokens(
+  previous: TokenUsageMetrics,
+  next: TokenUsageMetrics
+): number | null {
+  if (next.cacheReadInputTokens === null) {
+    return previous.cacheReadInputTokens;
+  }
+
+  if (previous.cacheReadInputTokens === null) {
+    return next.cacheReadInputTokens;
+  }
+
+  const previousNonReadInputTokens = (previous.inputTokens ?? 0) + (previous.cacheCreationInputTokens ?? 0);
+  const nextCollapsedInputIntoCache =
+    previousNonReadInputTokens > 0 &&
+    next.inputTokens === 0 &&
+    previous.additiveCachedInputTokens === true &&
+    next.additiveCachedInputTokens === true &&
+    next.cacheReadInputTokens === previous.cacheReadInputTokens + previousNonReadInputTokens;
+
+  if (nextCollapsedInputIntoCache) {
+    return previous.cacheReadInputTokens;
+  }
+
+  return next.cacheReadInputTokens === 0 && previous.cacheReadInputTokens > 0
+    ? previous.cacheReadInputTokens
+    : next.cacheReadInputTokens;
+}
+
+function mergeCachedInputTokens(
+  previous: TokenUsageMetrics,
+  next: TokenUsageMetrics
+): number | null {
+  if (next.cachedInputTokens === null) {
+    return previous.cachedInputTokens;
+  }
+
+  if (previous.cachedInputTokens === null) {
+    return next.cachedInputTokens;
+  }
+
+  const previousInputTokens = previous.inputTokens ?? 0;
+  const nextCollapsedInputIntoCache =
+    previousInputTokens > 0 &&
+    next.inputTokens === 0 &&
+    previous.additiveCachedInputTokens === true &&
+    next.additiveCachedInputTokens === true &&
+    next.cachedInputTokens === previous.cachedInputTokens + previousInputTokens;
+
+  if (nextCollapsedInputIntoCache) {
+    return previous.cachedInputTokens;
+  }
+
+  return next.cachedInputTokens === 0 && previous.cachedInputTokens > 0
+    ? previous.cachedInputTokens
+    : next.cachedInputTokens;
 }
 
 function pickUsableTotal(
@@ -195,10 +282,16 @@ function extractUsageFromJsonText(text: string): TokenUsageMetrics | null {
 function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics {
   const inputTokens = readNumber(usage.input_tokens) ?? readNumber(usage.prompt_tokens);
   const outputTokens = readNumber(usage.output_tokens) ?? readNumber(usage.completion_tokens);
-  const additiveCachedInputTokens = sumNullableNumbers(
-    readNumber(usage.cache_read_input_tokens),
-    readNumber(usage.cache_creation_input_tokens)
-  );
+  const reasoningTokens = readReasoningTokens(usage);
+  const cacheReadInputTokens = readNumber(usage.cache_read_input_tokens);
+  const cacheCreationInputTokens = sumNullableNumberList([
+    readNumber(usage.cache_creation_input_tokens),
+    readAnthropicCacheCreationInputTokens(usage.cache_creation)
+  ]);
+  const additiveCachedInputTokens = sumNullableNumberList([
+    cacheReadInputTokens,
+    cacheCreationInputTokens
+  ]);
   const additiveCachedOutputTokens = readNumber(usage.cache_read_output_tokens);
   const cachedInputTokens =
     readNestedNumber(usage.input_tokens_details, "cached_tokens") ??
@@ -230,6 +323,9 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
     outputTokens,
     cachedInputTokens,
     cachedOutputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    reasoningTokens,
     totalTokens,
     additiveCachedInputTokens: inputCacheIsAdditive,
     additiveCachedOutputTokens: outputCacheIsAdditive
@@ -255,12 +351,33 @@ function usageTotalFloor(usage: Pick<
     (usage.additiveCachedOutputTokens ? usage.cachedOutputTokens ?? 0 : 0);
 }
 
-function sumNullableNumbers(left: number | null, right: number | null): number | null {
-  if (left === null && right === null) {
+function sumNullableNumberList(values: Array<number | null>): number | null {
+  if (values.every((value) => value === null)) {
     return null;
   }
 
-  return (left ?? 0) + (right ?? 0);
+  return values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+function readAnthropicCacheCreationInputTokens(value: unknown): number | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return sumNullableNumberList([
+    readNumber(value.ephemeral_5m_input_tokens),
+    readNumber(value.ephemeral_1h_input_tokens)
+  ]);
+}
+
+function readReasoningTokens(usage: Record<string, unknown>): number | null {
+  return readNestedNumber(usage.output_tokens_details, "reasoning_tokens") ??
+    readNestedNumber(usage.completion_tokens_details, "reasoning_tokens") ??
+    readNestedNumber(usage.output_tokens_details, "thinking_tokens") ??
+    readNestedNumber(usage.completion_tokens_details, "thinking_tokens") ??
+    readNumber(usage.reasoning_output_tokens) ??
+    readNumber(usage.reasoning_tokens) ??
+    readNumber(usage.thinking_tokens);
 }
 
 function findUsageRecord(value: unknown, depth = 0): Record<string, unknown> | null {

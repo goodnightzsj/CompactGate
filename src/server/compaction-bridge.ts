@@ -8,7 +8,10 @@ export interface PrimaryBridgeResult {
 export class CompactionBridgeStore {
   private readonly fallbackItemsByEncryptedContent = new Map<string, unknown[]>();
 
-  storeCompactResponse(responseBody: Buffer): void {
+  private readonly pendingCompactFollowUps = new Set<string>();
+
+  storeCompactResponse(responseBody: Buffer, options: { armFollowUp?: boolean } = {}): void {
+    const armFollowUp = options.armFollowUp ?? true;
     const parsed = parseJsonRecord(responseBody);
     const output = Array.isArray(parsed?.output) ? parsed.output : null;
 
@@ -21,6 +24,10 @@ export class CompactionBridgeStore {
         continue;
       }
 
+      if (armFollowUp) {
+        this.pendingCompactFollowUps.add(item.encrypted_content);
+      }
+
       const fallbackItems = extractFallbackItems(output, item);
       if (fallbackItems.length === 0) {
         continue;
@@ -31,6 +38,26 @@ export class CompactionBridgeStore {
         deepCloneJsonArray(fallbackItems)
       );
     }
+  }
+
+  consumeCompactFollowUp(rawBody: Buffer): boolean {
+    const parsed = parseJsonRecord(rawBody);
+    const input = Array.isArray(parsed?.input) ? parsed.input : null;
+
+    if (!input) {
+      return false;
+    }
+
+    for (const item of input) {
+      if (!isCompactionItem(item) || !this.pendingCompactFollowUps.has(item.encrypted_content)) {
+        continue;
+      }
+
+      this.pendingCompactFollowUps.delete(item.encrypted_content);
+      return true;
+    }
+
+    return false;
   }
 
   rewritePrimaryBody(rawBody: Buffer): PrimaryBridgeResult {

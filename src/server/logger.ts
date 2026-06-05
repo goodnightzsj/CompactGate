@@ -33,6 +33,11 @@ const LOG_TABLE_SQL = `
     output_tokens INTEGER,
     cached_input_tokens INTEGER,
     cached_output_tokens INTEGER,
+    cache_read_input_tokens INTEGER,
+    cache_creation_input_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    additive_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    additive_cached_output_tokens INTEGER NOT NULL DEFAULT 0,
     total_tokens INTEGER,
     upstream_host TEXT NOT NULL,
     user_agent TEXT,
@@ -60,6 +65,11 @@ const RECENT_LOG_FIELDS = `
   output_tokens,
   cached_input_tokens,
   cached_output_tokens,
+  cache_read_input_tokens,
+  cache_creation_input_tokens,
+  reasoning_tokens,
+  additive_cached_input_tokens,
+  additive_cached_output_tokens,
   total_tokens,
   upstream_host,
   user_agent,
@@ -78,6 +88,11 @@ const MIGRATION_COLUMNS: Record<string, string> = {
   output_tokens: "INTEGER",
   cached_input_tokens: "INTEGER",
   cached_output_tokens: "INTEGER",
+  cache_read_input_tokens: "INTEGER",
+  cache_creation_input_tokens: "INTEGER",
+  reasoning_tokens: "INTEGER",
+  additive_cached_input_tokens: "INTEGER NOT NULL DEFAULT 0",
+  additive_cached_output_tokens: "INTEGER NOT NULL DEFAULT 0",
   total_tokens: "INTEGER",
   user_agent: "TEXT"
 };
@@ -160,12 +175,17 @@ export class RequestLogger {
               output_tokens,
               cached_input_tokens,
               cached_output_tokens,
+              cache_read_input_tokens,
+              cache_creation_input_tokens,
+              reasoning_tokens,
+              additive_cached_input_tokens,
+              additive_cached_output_tokens,
               total_tokens,
               upstream_host,
               user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -186,6 +206,11 @@ export class RequestLogger {
           entry.output_tokens,
           entry.cached_input_tokens,
           entry.cached_output_tokens,
+          entry.cache_read_input_tokens,
+          entry.cache_creation_input_tokens,
+          entry.reasoning_tokens,
+          entry.additive_cached_input_tokens ? 1 : 0,
+          entry.additive_cached_output_tokens ? 1 : 0,
           entry.total_tokens,
           entry.upstream_host,
           entry.user_agent,
@@ -438,6 +463,11 @@ function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     output_tokens: readNullableNumber(row.output_tokens),
     cached_input_tokens: readNullableNumber(row.cached_input_tokens),
     cached_output_tokens: readNullableNumber(row.cached_output_tokens),
+    cache_read_input_tokens: readNullableNumber(row.cache_read_input_tokens),
+    cache_creation_input_tokens: readNullableNumber(row.cache_creation_input_tokens),
+    reasoning_tokens: readNullableNumber(row.reasoning_tokens),
+    additive_cached_input_tokens: readBoolean(row.additive_cached_input_tokens),
+    additive_cached_output_tokens: readBoolean(row.additive_cached_output_tokens),
     total_tokens: readNullableNumber(row.total_tokens),
     upstream_host: String(row.upstream_host),
     user_agent: readNullableString(row.user_agent),
@@ -477,6 +507,10 @@ function readNullableNumber(value: unknown): number | null {
 
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === "1";
 }
 
 function readRequestTransport(value: unknown): RequestTransport {
