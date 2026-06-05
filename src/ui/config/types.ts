@@ -1,0 +1,46 @@
+import type { ClaudeModelMap, ConfigProfileScope, PublicConfig } from "../../shared/types.js";
+
+export type SaveState = "idle" | "saving" | "saved" | "error";
+
+export type ProfileActionState =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "updating"
+  | "updated"
+  | "reordering"
+  | "reordered"
+  | "duplicating"
+  | "duplicated"
+  | "deleting"
+  | "deleted"
+  | "applying"
+  | "applied"
+  | "error";
+
+export type ConfigFormState = {
+  codexPrimaryBaseUrl: string;
+  codexPrimaryApiKey: string;
+  clearCodexPrimaryApiKey: boolean;
+  codexCompactBaseUrl: string;
+  codexCompactApiKey: string;
+  clearCodexCompactApiKey: boolean;
+  claudePrimaryBaseUrl: string;
+  claudePrimaryApiKey: string;
+  clearClaudePrimaryApiKey: boolean;
+  claudeModelMap: ClaudeModelMap;
+  claudeCompactBaseUrl: string;
+  claudeCompactApiKey: string;
+  clearClaudeCompactApiKey: boolean;
+  claudeCompactModelOverride: string;
+  claudeCompactUpstreamMode: "split" | "primary";
+  upstreamMode: "split" | "primary";
+  modelMode: "linked" | "custom";
+  modelTemplate: string;
+  modelOverride: string;
+};
+
+export type ConfigTab = "profiles" | "routes" | "model" | "preview";
+export type PublicConfigProfile = PublicConfig["profiles"][number];
+export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
+export type ProfileDropPosition = "before" | "after";

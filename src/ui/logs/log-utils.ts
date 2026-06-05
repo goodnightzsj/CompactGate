@@ -1,0 +1,410 @@
+import { routeProvider } from "../../shared/route-meta.js";
+import type {
+  HostLogCount,
+  LogStatusKind,
+  ProviderLogCounts,
+  RequestLogEntry,
+  RequestLogPage,
+  RouteKind,
+  StatusLogCounts
+} from "../../shared/types.js";
+import { api } from "../shared/api.js";
+
+export type HostFilterOption = HostLogCount;
+
+export const ALL_HOSTS_FILTER = "__all_hosts__";
+export const DEFAULT_LOG_PAGE_LIMIT = 200;
+
+export function modelReasoningLabel(entry: RequestLogEntry): string {
+  const model = entry.target_model ?? entry.source_model ?? (entry.route === "claude" ? "Claude" : "model");
+  const reasoning = entry.reasoning_effort ?? "standard";
+  return `${model}\u2009·\u2009${reasoning}`;
+}
+
+export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
+  return entry.status >= 400 || Boolean(entry.error_summary) ? "error" : "normal";
+}
+
+export function buildHostFilterOptions(
+  hostCounts: HostLogCount[],
+  selectedHost: string
+): HostFilterOption[] {
+  const options = hostCounts.map((option) => ({ ...option }));
+
+  if (selectedHost !== ALL_HOSTS_FILTER && !options.some((option) => option.host === selectedHost)) {
+    options.push({
+      host: selectedHost,
+      total: 0,
+      primary: 0,
+      compact: 0,
+      claude: 0
+    });
+  }
+
+  return options.sort((left, right) => {
+    if (right.total !== left.total) {
+      return right.total - left.total;
+    }
+
+    return left.host.localeCompare(right.host);
+  });
+}
+
+export function displayInputTokens(entry: RequestLogEntry): number | null {
+  if (entry.input_tokens === null && entry.cache_creation_input_tokens === null) {
+    return null;
+  }
+
+  return hasAdditiveCachedInput(entry)
+    ? (entry.input_tokens ?? 0) + (entry.cache_creation_input_tokens ?? 0)
+    : entry.input_tokens;
+}
+
+export function cacheReadInputTokens(entry: RequestLogEntry): number | null {
+  if (entry.cache_read_input_tokens !== null) {
+    return entry.cache_read_input_tokens;
+  }
+
+  if (entry.cached_input_tokens === null) {
+    return null;
+  }
+
+  if (!hasAdditiveCachedInput(entry)) {
+    return entry.cached_input_tokens;
+  }
+
+  return Math.max(0, entry.cached_input_tokens - (entry.cache_creation_input_tokens ?? 0));
+}
+
+export function cacheCreationInputTokens(entry: RequestLogEntry): number | null {
+  return hasAdditiveCachedInput(entry) ? entry.cache_creation_input_tokens : null;
+}
+
+export function cachedInputTotalTokens(entry: RequestLogEntry): number | null {
+  if (entry.cached_input_tokens !== null) {
+    return entry.cached_input_tokens;
+  }
+
+  const cacheReadTokens = entry.cache_read_input_tokens;
+  const cacheCreationTokens = entry.cache_creation_input_tokens;
+  if (cacheReadTokens === null && cacheCreationTokens === null) {
+    return null;
+  }
+
+  return (cacheReadTokens ?? 0) + (cacheCreationTokens ?? 0);
+}
+
+export function totalInputTokens(entry: RequestLogEntry): number | null {
+  if (
+    entry.input_tokens === null &&
+    entry.cached_input_tokens === null &&
+    entry.cache_read_input_tokens === null &&
+    entry.cache_creation_input_tokens === null
+  ) {
+    return null;
+  }
+
+  return hasAdditiveCachedInput(entry)
+    ? (entry.input_tokens ?? 0) + (cacheReadInputTokens(entry) ?? 0) + (entry.cache_creation_input_tokens ?? 0)
+    : entry.input_tokens;
+}
+
+export function formatCacheHitRate(entry: RequestLogEntry): string {
+  const cachedInputTokens = hasAdditiveCachedInput(entry)
+    ? cacheReadInputTokens(entry)
+    : entry.cached_input_tokens;
+  if (cachedInputTokens === null) {
+    return "-";
+  }
+
+  const denominator = hasAdditiveCachedInput(entry)
+    ? totalInputTokens(entry)
+    : entry.input_tokens;
+  if (!denominator) {
+    return "-";
+  }
+
+  const rate = Math.min(100, (cachedInputTokens / denominator) * 100);
+  return `${formatPercentRate(rate)}%`;
+}
+
+function formatPercentRate(value: number): string {
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+
+  return value >= 99 ? value.toFixed(2) : value.toFixed(1);
+}
+
+export function displayTotalTokens(entry: RequestLogEntry): number | null {
+  const inputTokens = entry.input_tokens ?? 0;
+  const outputTokens = entry.output_tokens ?? 0;
+  const cachedInputTokens = cachedInputTotalTokens(entry) ?? 0;
+  const cachedOutputTokens = entry.cached_output_tokens ?? 0;
+  const hasAnyToken =
+    entry.input_tokens !== null ||
+    entry.output_tokens !== null ||
+    entry.cached_input_tokens !== null ||
+    entry.cache_read_input_tokens !== null ||
+    entry.cache_creation_input_tokens !== null ||
+    entry.cached_output_tokens !== null ||
+    entry.total_tokens !== null;
+
+  if (!hasAnyToken) {
+    return null;
+  }
+
+  const floor = inputTokens +
+    outputTokens +
+    (hasAdditiveCachedInput(entry) ? cachedInputTokens : 0) +
+    (hasAdditiveCachedOutput(entry) ? cachedOutputTokens : 0);
+  return Math.max(entry.total_tokens ?? 0, floor);
+}
+
+export function hasAdditiveCachedInput(entry: RequestLogEntry): boolean {
+  return entry.additive_cached_input_tokens ||
+    (
+      entry.cached_input_tokens !== null &&
+      entry.input_tokens !== null &&
+      entry.cached_input_tokens > entry.input_tokens
+    );
+}
+
+export function hasAdditiveCachedOutput(entry: RequestLogEntry): boolean {
+  return entry.additive_cached_output_tokens;
+}
+
+export function emptyLogPage(limit: number): RequestLogPage {
+  return {
+    logs: [],
+    limit,
+    offset: 0,
+    total: 0,
+    all_total: 0,
+    has_more: false,
+    counts: {
+      all: 0,
+      primary: 0,
+      compact: 0,
+      claude: 0
+    },
+    provider_counts: {
+      all: 0,
+      openai: 0,
+      claude: 0
+    },
+    status_counts: {
+      all: 0,
+      normal: 0,
+      error: 0
+    },
+    host_counts: []
+  };
+}
+
+export async function fetchLogPage({
+  route,
+  status,
+  host,
+  limit,
+  offset
+}: {
+  route: "all" | RouteKind;
+  status: "all" | LogStatusKind;
+  host: string;
+  limit: number;
+  offset: number;
+}): Promise<RequestLogPage> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset)
+  });
+
+  if (route !== "all") {
+    params.set("route", route);
+  }
+
+  if (status !== "all") {
+    params.set("status", status);
+  }
+
+  if (host !== ALL_HOSTS_FILTER) {
+    params.set("host", host);
+  }
+
+  return api<RequestLogPage>(`/api/logs/recent?${params.toString()}`);
+}
+
+export function appendLogPage(previous: RequestLogPage, nextPage: RequestLogPage): RequestLogPage {
+  return {
+    ...nextPage,
+    offset: 0,
+    logs: mergeUniqueLogs([...previous.logs, ...nextPage.logs])
+  };
+}
+
+export function mergeSnapshotLogPage(
+  previous: RequestLogPage,
+  snapshotPage: RequestLogPage
+): RequestLogPage {
+  const logs = mergeUniqueLogs([...snapshotPage.logs, ...previous.logs]);
+
+  return {
+    ...snapshotPage,
+    offset: 0,
+    logs,
+    has_more: logs.length < snapshotPage.total
+  };
+}
+
+export function mergeLiveLogPage(
+  previous: RequestLogPage,
+  nextEntry: RequestLogEntry,
+  routeFilter: "all" | RouteKind,
+  statusFilter: "all" | LogStatusKind,
+  hostFilter: string
+): RequestLogPage {
+  const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
+  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter);
+  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter);
+  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter);
+  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER);
+  const nextLogs = matchesFilter
+    ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
+    : previous.logs;
+  const nextRouteCounts = incrementRouteCounts(
+    previous.counts,
+    nextEntry.route,
+    duplicate || !matchesRouteCountScope
+  );
+
+  return {
+    ...previous,
+    logs: nextLogs,
+    total: previous.total + (matchesFilter && !duplicate ? 1 : 0),
+    all_total: previous.all_total + (duplicate ? 0 : 1),
+    counts: nextRouteCounts,
+    provider_counts: incrementProviderCounts(
+      previous.provider_counts,
+      nextEntry.route,
+      duplicate || !matchesRouteCountScope
+    ),
+    status_counts: incrementStatusCounts(
+      previous.status_counts,
+      logStatusKind(nextEntry),
+      duplicate || !matchesStatusCountScope
+    ),
+    host_counts: incrementHostCounts(previous.host_counts, nextEntry, duplicate || !matchesHostCountScope)
+  };
+}
+
+function mergeUniqueLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
+  const seen = new Set<string>();
+  const next: RequestLogEntry[] = [];
+
+  for (const entry of logs) {
+    if (seen.has(entry.request_id)) {
+      continue;
+    }
+
+    seen.add(entry.request_id);
+    next.push(entry);
+  }
+
+  return next;
+}
+
+function logEntryMatchesFilter(
+  entry: RequestLogEntry,
+  routeFilter: "all" | RouteKind,
+  statusFilter: "all" | LogStatusKind,
+  hostFilter: string
+): boolean {
+  const routeMatches = routeFilter === "all" || entry.route === routeFilter;
+  const statusMatches = statusFilter === "all" || logStatusKind(entry) === statusFilter;
+  const hostMatches = hostFilter === ALL_HOSTS_FILTER || entry.upstream_host === hostFilter;
+  return routeMatches && statusMatches && hostMatches;
+}
+
+function incrementRouteCounts(
+  counts: Record<"all" | RouteKind, number>,
+  route: RouteKind,
+  duplicate: boolean
+): Record<"all" | RouteKind, number> {
+  if (duplicate) {
+    return counts;
+  }
+
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [route]: counts[route] + 1
+  };
+}
+
+function incrementProviderCounts(
+  counts: ProviderLogCounts,
+  route: RouteKind,
+  duplicate: boolean
+): ProviderLogCounts {
+  if (duplicate) {
+    return counts;
+  }
+
+  const provider = routeProvider(route);
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [provider]: counts[provider] + 1
+  };
+}
+
+function incrementStatusCounts(
+  counts: StatusLogCounts,
+  status: LogStatusKind,
+  skip: boolean
+): StatusLogCounts {
+  if (skip) {
+    return counts;
+  }
+
+  return {
+    ...counts,
+    all: counts.all + 1,
+    [status]: counts[status] + 1
+  };
+}
+
+function incrementHostCounts(
+  hostCounts: HostLogCount[],
+  entry: RequestLogEntry,
+  duplicate: boolean
+): HostLogCount[] {
+  if (duplicate) {
+    return hostCounts;
+  }
+
+  const next = hostCounts.map((option) => ({ ...option }));
+  const existing = next.find((option) => option.host === entry.upstream_host);
+
+  if (existing) {
+    existing.total += 1;
+    existing[entry.route] += 1;
+  } else {
+    next.push({
+      host: entry.upstream_host,
+      total: 1,
+      primary: entry.route === "primary" ? 1 : 0,
+      compact: entry.route === "compact" ? 1 : 0,
+      claude: entry.route === "claude" ? 1 : 0
+    });
+  }
+
+  return next.sort((left, right) => {
+    if (right.total !== left.total) {
+      return right.total - left.total;
+    }
+
+    return left.host.localeCompare(right.host);
+  });
+}
