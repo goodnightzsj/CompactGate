@@ -2,7 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import net from "node:net";
 import type { Duplex } from "node:stream";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
@@ -119,6 +119,50 @@ describe("CompactGate HTTP server", () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe("ok");
+  });
+
+  it("serves static assets without falling back missing files to the SPA index", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-static-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    await mkdir(path.join(dir, "dist/public/assets"), { recursive: true });
+    await writeFile(
+      path.join(dir, "dist/public/index.html"),
+      '<!doctype html><script type="module" src="/assets/app.js"></script><div id="root"></div>'
+    );
+    await writeFile(path.join(dir, "dist/public/assets/app.js"), "console.log('ok');");
+
+    const previousCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const app = await startAppInDir(dir);
+
+      const indexResponse = await fetch(`${app.url}/`);
+      expect(indexResponse.status).toBe(200);
+      expect(indexResponse.headers.get("cache-control")).toBe("no-cache");
+      expect(await indexResponse.text()).toContain("/assets/app.js");
+
+      const assetResponse = await fetch(`${app.url}/assets/app.js`);
+      expect(assetResponse.status).toBe(200);
+      expect(assetResponse.headers.get("cache-control")).toBe(
+        "public, max-age=31536000, immutable"
+      );
+      expect(await assetResponse.text()).toBe("console.log('ok');");
+
+      const missingAssetResponse = await fetch(`${app.url}/assets/missing.js`);
+      expect(missingAssetResponse.status).toBe(404);
+      expect(await missingAssetResponse.json()).toEqual({ error: "File not found." });
+
+      const missingExtensionlessAssetResponse = await fetch(`${app.url}/assets/missing`);
+      expect(missingExtensionlessAssetResponse.status).toBe(404);
+      expect(await missingExtensionlessAssetResponse.json()).toEqual({ error: "File not found." });
+
+      const routeResponse = await fetch(`${app.url}/config/profiles`);
+      expect(routeResponse.status).toBe(200);
+      expect(routeResponse.headers.get("cache-control")).toBe("no-cache");
+      expect(await routeResponse.text()).toContain("/assets/app.js");
+    } finally {
+      process.chdir(previousCwd);
+    }
   });
 
   it("streams snapshot and pushed log events over SSE", async () => {
@@ -868,8 +912,15 @@ describe("CompactGate HTTP server", () => {
     const patchedConfig = (await patchResponse.json()) as PublicConfig;
 
     expect(patchResponse.status).toBe(200);
-    expect(patchedConfig.active_profile_id).toBeNull();
+    expect(patchedConfig.active_profile_id).toBe(profileId);
+    expect(patchedConfig.profile_scopes.codex.active_profile_id).toBe(profileId);
+    expect(patchedConfig.profile_scopes.claude.active_profile_id).toBe(claudeProfileId);
+    expect(patchedConfig.primary.base_url).toBe("http://127.0.0.1:56005/v1");
     expect(patchedConfig.profiles).toHaveLength(1);
+    expect(patchedConfig.profiles[0]).toMatchObject({
+      id: profileId,
+      primary_host: "127.0.0.1:56005"
+    });
     expect(JSON.stringify(patchedConfig)).not.toContain("profile-api-primary-key");
 
     const updateResponse = await fetch(`${app.url}/api/config/profiles`, {

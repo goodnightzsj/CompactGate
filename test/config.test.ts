@@ -239,11 +239,15 @@ describe("ConfigStore", () => {
       }
     });
     const patched = store.get();
-    expect(patched.active_profile_id).toBeNull();
+    expect(patched.active_profile_id).toBe(profileId);
+    expect(patched.profile_scopes?.codex?.active_profile_id).toBe(profileId);
     expect(patched.profile_scopes?.codex?.profiles).toHaveLength(1);
     const patchedCodexConfig = patched.profile_scopes?.codex?.profiles?.[0]?.config;
     expect(patchedCodexConfig).toMatchObject({
-      primary: { api_key: "profile-primary-key" },
+      primary: {
+        base_url: "http://127.0.0.1:9301/v1",
+        api_key: "profile-primary-key"
+      },
       compact: { api_key: "profile-compact-key" }
     });
     expect(patchedCodexConfig).not.toHaveProperty("claude");

@@ -32,7 +32,16 @@ export async function serveStatic(
   const safeRelativePath = requested.replace(/^\/+/, "");
   const filePath = path.resolve(publicDir, safeRelativePath);
   const fallbackPath = path.resolve(publicDir, "index.html");
-  const targetPath = filePath.startsWith(publicDir) && existsSync(filePath) ? filePath : fallbackPath;
+  const existingFilePath = isWithinDirectory(publicDir, filePath) && existsSync(filePath)
+    ? filePath
+    : null;
+  const shouldFallbackToIndex = existingFilePath === null && isFrontendRoute(pathname);
+  const targetPath = existingFilePath ?? (shouldFallbackToIndex ? fallbackPath : null);
+
+  if (targetPath === null) {
+    sendJson(res, 404, { error: "File not found." });
+    return;
+  }
 
   if (!existsSync(targetPath)) {
     sendJson(res, 200, {
@@ -54,6 +63,7 @@ export async function serveStatic(
     STATIC_MIME_TYPES[path.extname(targetPath)] ?? "application/octet-stream"
   );
   res.setHeader("content-length", String(stat.size));
+  res.setHeader("cache-control", cacheControlForTarget(targetPath, fallbackPath));
 
   if (req.method === "HEAD") {
     res.end();
@@ -72,4 +82,23 @@ function resolvePublicDir(): string {
   ];
 
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
+function isWithinDirectory(directory: string, filePath: string): boolean {
+  const relativePath = path.relative(directory, filePath);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+}
+
+function isFrontendRoute(pathname: string): boolean {
+  return pathname === "/" || (!pathname.startsWith("/assets/") && path.extname(pathname) === "");
+}
+
+function cacheControlForTarget(targetPath: string, fallbackPath: string): string {
+  if (targetPath === fallbackPath) {
+    return "no-cache";
+  }
+
+  return targetPath.includes(`${path.sep}assets${path.sep}`)
+    ? "public, max-age=31536000, immutable"
+    : "no-cache";
 }

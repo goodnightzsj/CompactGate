@@ -150,12 +150,11 @@ export class ConfigStore {
     }
 
     const merged = mergeConfig(this.current, patch);
-    const next = {
+    const next = syncActiveProfilesFromRuntime({
       ...merged,
       profiles: undefined,
-      active_profile_id: null,
-      profile_scopes: clearActiveProfileIds(merged.profile_scopes)
-    };
+      active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
+    });
     validateConfig(next);
     this.current = next;
     await this.save();
@@ -1030,17 +1029,45 @@ function cloneProfileScope(state: SavedConfigProfileScopeState | undefined): Sav
   };
 }
 
-function clearActiveProfileIds(scopes: SavedConfigProfileScopes | undefined): SavedConfigProfileScopes {
-  return {
-    codex: {
-      profiles: (scopes?.codex?.profiles ?? []).map(cloneProfile),
+function syncActiveProfilesFromRuntime(config: CompactGateConfig): CompactGateConfig {
+  const now = new Date().toISOString();
+  return syncActiveProfileScopeFromRuntime(
+    syncActiveProfileScopeFromRuntime(config, "codex", now),
+    "claude",
+    now
+  );
+}
+
+function syncActiveProfileScopeFromRuntime(
+  config: CompactGateConfig,
+  scope: ConfigProfileScope,
+  updatedAt: string
+): CompactGateConfig {
+  const scopeState = getProfileScopeState(config, scope);
+  const activeProfileId = scopeState.active_profile_id;
+  if (!activeProfileId) {
+    return withProfileScope(config, scope, {
+      profiles: scopeState.profiles,
       active_profile_id: null
-    },
-    claude: {
-      profiles: (scopes?.claude?.profiles ?? []).map(cloneProfile),
-      active_profile_id: null
-    }
-  };
+    });
+  }
+
+  const runtimeProfileConfig = extractScopedProfileConfig(config, scope);
+  validateProfileConfig(runtimeProfileConfig, scope);
+  const profiles = scopeState.profiles.map((profile) =>
+    profile.id === activeProfileId
+      ? {
+          ...profile,
+          updated_at: updatedAt,
+          config: cloneProfileConfig(runtimeProfileConfig)
+        }
+      : cloneProfile(profile)
+  );
+
+  return withProfileScope(config, scope, {
+    profiles,
+    active_profile_id: activeProfileId
+  });
 }
 
 function mergeProfileScopes(base: CompactGateConfig, patchRecord: Record<string, unknown>): SavedConfigProfileScopes {

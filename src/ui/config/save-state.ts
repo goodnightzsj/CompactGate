@@ -21,14 +21,22 @@ export function saveLabel(state: SaveState, hasPendingChanges: boolean, savedAt?
   return savedAt ? `已保存 ${formatClock(savedAt)}` : "使用默认配置";
 }
 
-export function saveButtonLabel(state: SaveState, hasPendingChanges: boolean): string {
+export function saveButtonLabel(
+  state: SaveState,
+  hasPendingChanges: boolean,
+  savesActiveProfiles = false
+): string {
   if (state === "saving") {
-    return "正在应用配置...";
+    return savesActiveProfiles ? "正在保存并应用..." : "正在应用配置...";
   }
 
   if (state === "saved") {
-    return "已应用";
+    return savesActiveProfiles ? "已保存并应用" : "已应用";
   }
 
-  return hasPendingChanges ? "应用更改" : "重新应用配置";
+  if (hasPendingChanges) {
+    return savesActiveProfiles ? "保存到当前档案并应用" : "应用更改";
+  }
+
+  return savesActiveProfiles ? "重新保存并应用" : "重新应用配置";
 }

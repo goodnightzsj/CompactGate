@@ -70,6 +70,7 @@ export function ConfigPage({
     { id: "model", label: "模型" },
     { id: "preview", label: "预览" }
   ];
+  const applyTarget = activeProfileApplyTarget(config);
 
   return (
     <>
@@ -98,7 +99,7 @@ export function ConfigPage({
           </div>
 
           {configTab === "profiles" && (
-            <div style={{ display: "grid", gap: 16 }}>
+            <div className="profile-scope-grid">
               <ProfileScopeCard
                 scope="codex" title="Codex 配置档案" eyebrow="Codex"
                 description="保存、复制或应用 Codex 主路由与 compact 草稿，不会改动 Claude 档案。"
@@ -275,10 +276,11 @@ export function ConfigPage({
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {saveError && <div className="error-banner" style={{ flex: 1 }}>{saveError}</div>}
+          <span className="field-hint" style={{ flex: "1 1 260px" }}>{applyTarget.hint}</span>
           <button className="btn btn-primary" disabled={saveState === "saving"} onClick={onSaveConfig}>
-            {saveButtonLabel(saveState, hasPendingChanges)}
+            {saveButtonLabel(saveState, hasPendingChanges, applyTarget.savesActiveProfiles)}
           </button>
         </div>
       </div>
@@ -425,6 +427,42 @@ function buildClaudeModelOptions(models: string[]): SelectOption[] {
       meta: "来自当前 Claude 上游"
     }))
   ];
+}
+
+function activeProfileApplyTarget(config: PublicConfig | null): {
+  savesActiveProfiles: boolean;
+  hint: string;
+} {
+  if (!config) {
+    return {
+      savesActiveProfiles: false,
+      hint: "配置加载完成后会显示本次应用会写入哪里。"
+    };
+  }
+
+  const activeProfileLabels = (["codex", "claude"] as ConfigProfileScope[])
+    .map((scope) => {
+      const scopeState = profileScopeState(config, scope);
+      const activeProfile = scopeState.profiles.find((profile) => profile.id === scopeState.active_profile_id);
+      if (!activeProfile) {
+        return null;
+      }
+
+      return `${scope === "codex" ? "Codex" : "Claude"} 档案「${activeProfile.name}」`;
+    })
+    .filter((label): label is string => label !== null);
+
+  if (activeProfileLabels.length === 0) {
+    return {
+      savesActiveProfiles: false,
+      hint: "只写入当前运行时；没有绑定档案时不会更新已保存档案。"
+    };
+  }
+
+  return {
+    savesActiveProfiles: true,
+    hint: `会同步更新运行时和 ${activeProfileLabels.join("、")}。`
+  };
 }
 
 function ProfileScopeCard({
@@ -698,6 +736,13 @@ function ProfileScopeCard({
           className="ghost-button profile-save-button"
           type="button"
           disabled={profileBusy}
+          title={
+            saveWillApply
+              ? "保存当前草稿到当前运行时档案，并立即更新运行时。"
+              : namedProfile
+                ? "覆盖同名档案；不会切换当前运行时。"
+                : "创建新档案；不会自动切换当前运行时。"
+          }
           onClick={() => void onSaveProfile(scope)}
         >
           {saveButtonText}
@@ -776,6 +821,7 @@ function ProfileScopeCard({
                     type="button"
                     disabled={profileBusy || isActive}
                     data-active-disabled={isActive ? "true" : undefined}
+                    title="把这个已保存档案加载到当前运行时；不会保存当前草稿。"
                     onClick={() => {
                       onSelectedProfileChange(scope, profile.id);
                       void onApplyProfile(scope, profile.id);
@@ -787,6 +833,11 @@ function ProfileScopeCard({
                     className="ghost-button"
                     type="button"
                     disabled={profileBusy}
+                    title={
+                      isActive
+                        ? "保存当前草稿到这个档案，并立即更新运行时。"
+                        : "保存当前草稿到这个档案；不会切换当前运行时。"
+                    }
                     onClick={() => {
                       onSelectedProfileChange(scope, profile.id);
                       void onUpdateProfile(scope, profile.id);
