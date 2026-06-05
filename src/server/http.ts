@@ -64,14 +64,6 @@ import {
 } from "./upstream-client.js";
 
 const ANTHROPIC_PROXY_PREFIX = "/anthropic";
-const CLAUDE_ANYROUTER_COMPACT_MIN_RECONNECT_COUNT = 3;
-const DEFAULT_CLAUDE_ANYROUTER_COMPACT_MIN_BODY_BYTES = 1_101_329;
-
-type ClaudeSubRoute = "primary" | "compact";
-
-interface ClaudeManualCompactRoutingState {
-  armed: boolean;
-}
 
 export interface CompactGateApp {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -95,7 +87,6 @@ export function createCompactGateApp(
   compactionBridge = new CompactionBridgeStore(),
   studioEvents = new StudioEventBroadcaster()
 ): CompactGateApp {
-  const claudeManualCompactRouting: ClaudeManualCompactRoutingState = { armed: false };
   return {
     handler: (req, res) => {
       void routeRequest(
@@ -105,8 +96,7 @@ export function createCompactGateApp(
         logger,
         captureWriter,
         compactionBridge,
-        studioEvents,
-        claudeManualCompactRouting
+        studioEvents
       );
     }
   };
@@ -141,8 +131,7 @@ async function routeRequest(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
-  studioEvents: StudioEventBroadcaster,
-  claudeManualCompactRouting: ClaudeManualCompactRoutingState
+  studioEvents: StudioEventBroadcaster
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://compactgate.local");
 
@@ -160,8 +149,7 @@ async function routeRequest(
         configStore,
         logger,
         captureWriter,
-        studioEvents,
-        claudeManualCompactRouting
+        studioEvents
       );
       return;
     }
@@ -238,8 +226,7 @@ async function proxyClaudeRequest(
   configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
-  studioEvents: StudioEventBroadcaster,
-  claudeManualCompactRouting: ClaudeManualCompactRoutingState
+  studioEvents: StudioEventBroadcaster
 ): Promise<void> {
   const startedAt = performance.now();
   const config = configStore.get();
@@ -247,8 +234,6 @@ async function proxyClaudeRequest(
   const requestId = randomUUID();
   const upstreamPath = stripAnthropicProxyPrefix(url.pathname);
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
-  let claudeRoute: ClaudeSubRoute = "primary";
-  let responseClaudeRoute: ClaudeSubRoute = "primary";
   let requestHeaders: Record<string, string> = {};
   let upstreamBody: Buffer = Buffer.alloc(0);
   let status = 502;
@@ -268,27 +253,10 @@ async function proxyClaudeRequest(
     requestMetadata = extractRequestMetadata(upstreamPath, rawBody);
     requestType = requestMetadata.requestType;
     sourceModel = extractSourceModel(rawBody);
-    const isManualCompact = isClaudeManualCompactRequest(upstreamPath, rawBody);
-    const shouldRouteManualCompactToCompact = isManualCompact && claudeManualCompactRouting.armed;
-    if (isManualCompact) {
-      claudeManualCompactRouting.armed = false;
-    } else if (shouldArmClaudeManualCompactRouting(config, upstreamPath, rawBody)) {
-      claudeManualCompactRouting.armed = true;
-    }
-
-    claudeRoute = shouldRouteManualCompactToCompact ? "compact" : "primary";
-    targetModel = claudeRoute === "compact"
-      ? readStringField(config.claude.compact.model_override) ?? sourceModel
-      : resolveClaudeMappedModel(sourceModel, config) ?? sourceModel;
-    upstream = buildClaudeUpstreamUrl(
-      claudeRoute === "compact" ? claudeCompactUpstreamBaseUrl(config) : config.claude.primary.base_url,
-      upstreamPath,
-      url.search
-    );
-    upstreamBody = claudeRoute === "compact"
-      ? rewriteClaudeManualCompactBody(rawBody, config.claude.compact.model_override)
-      : rewriteClaudeModelBody(rawBody, targetModel ?? "");
-    const auth = resolveClaudeCredential(claudeRoute, config);
+    targetModel = resolveClaudeMappedModel(sourceModel, config) ?? sourceModel;
+    upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
+    upstreamBody = rewriteClaudeModelBody(rawBody, targetModel ?? "");
+    const auth = resolveClaudeCredential(config);
     requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
 
     let finalResult: BufferedUpstreamResult | null = null;
@@ -305,7 +273,7 @@ async function proxyClaudeRequest(
         body: upstreamBody,
         extraResponseHeaders: {
           "x-compactgate-route": route,
-          "x-compactgate-claude-route": claudeRoute,
+          "x-compactgate-claude-route": "primary",
           "x-compactgate-request-id": requestId
         },
         writeResponse: true
@@ -323,10 +291,9 @@ async function proxyClaudeRequest(
     let completedResult = finalResult;
 
     if (!res.headersSent) {
-      responseClaudeRoute = claudeRoute;
       copyResponseHeaders(completedResult.responseHeaders, res);
       res.setHeader("x-compactgate-route", route);
-      res.setHeader("x-compactgate-claude-route", responseClaudeRoute);
+      res.setHeader("x-compactgate-claude-route", "primary");
       res.setHeader("x-compactgate-request-id", requestId);
       res.writeHead(completedResult.status);
       res.end(completedResult.responseBody);
@@ -769,14 +736,8 @@ function buildClaudeUpstreamUrl(baseUrl: string, requestPath: string, search = "
   return base;
 }
 
-function resolveClaudeCredential(route: ClaudeSubRoute, config: CompactGateConfig) {
-  return resolveRouteCredential(route === "compact" ? "claude_compact" : "claude_primary", config);
-}
-
-function claudeCompactUpstreamBaseUrl(config: CompactGateConfig): string {
-  return config.claude.compact.upstream_mode === "primary"
-    ? config.claude.primary.base_url
-    : config.claude.compact.base_url;
+function resolveClaudeCredential(config: CompactGateConfig) {
+  return resolveRouteCredential("claude_primary", config);
 }
 
 function resolveClaudeMappedModel(
@@ -825,73 +786,6 @@ function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole
   return null;
 }
 
-function shouldArmClaudeManualCompactRouting(
-  config: CompactGateConfig,
-  requestPath: string,
-  rawBody: Buffer
-): boolean {
-  if (!isClaudeAnyRouterPrimary(config)) {
-    return false;
-  }
-
-  const endpoint = endpointFromPath(requestPath);
-  if (endpoint !== "/messages") {
-    return false;
-  }
-
-  if (rawBody.byteLength < claudeAnyRouterCompactMinBodyBytes()) {
-    return false;
-  }
-
-  const parsed = parseJsonRecord(rawBody);
-  if (!parsed || !Array.isArray(parsed.messages)) {
-    return false;
-  }
-
-  const reconnectCount = readClaudeReconnectCount(parsed);
-  return reconnectCount !== null && reconnectCount >= CLAUDE_ANYROUTER_COMPACT_MIN_RECONNECT_COUNT;
-}
-
-function isClaudeAnyRouterPrimary(config: CompactGateConfig): boolean {
-  try {
-    const baseUrl = new URL(config.claude.primary.base_url);
-    const marker = `${baseUrl.hostname} ${baseUrl.pathname}`.toLowerCase();
-    return marker.includes("anyrouter");
-  } catch {
-    return false;
-  }
-}
-
-function claudeAnyRouterCompactMinBodyBytes(): number {
-  const rawValue = process.env.COMPACTGATE_CLAUDE_ANYROUTER_COMPACT_BYTES;
-  const parsed = rawValue ? Number.parseInt(rawValue, 10) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    return DEFAULT_CLAUDE_ANYROUTER_COMPACT_MIN_BODY_BYTES;
-  }
-
-  return parsed;
-}
-
-function isClaudeManualCompactRequest(requestPath: string, rawBody: Buffer): boolean {
-  if (endpointFromPath(requestPath) !== "/messages") {
-    return false;
-  }
-
-  const parsed = parseJsonRecord(rawBody);
-  if (!parsed || !Array.isArray(parsed.messages)) {
-    return false;
-  }
-
-  const text = collectTextContent(parsed.messages).toLowerCase();
-  return text.includes("your task is to create a detailed summary of the conversation so far") &&
-    text.includes("critical: respond with text only") &&
-    text.includes("<summary>");
-}
-
-function rewriteClaudeManualCompactBody(rawBody: Buffer, compactModelOverride: string): Buffer {
-  return rewriteClaudeModelBody(rawBody, compactModelOverride);
-}
-
 function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): Buffer {
   const model = readStringField(modelOverride);
   if (!model) {
@@ -915,7 +809,7 @@ async function fetchClaudeModels(config: CompactGateConfig): Promise<{
   error: string | null;
 }> {
   const upstreams = buildClaudeModelListUrls(config.claude.primary.base_url);
-  const auth = resolveClaudeCredential("primary", config);
+  const auth = resolveClaudeCredential(config);
   const headers = buildAnthropicUpstreamHeaders(
     {
       "anthropic-version": "2023-06-01"
@@ -1017,73 +911,8 @@ function extractModelIds(value: unknown): string[] {
   return [...models].sort((left, right) => left.localeCompare(right));
 }
 
-function readClaudeReconnectCount(value: unknown, depth = 0): number | null {
-  if (depth > 8) {
-    return null;
-  }
-
-  if (Array.isArray(value)) {
-    return maxNumbers(value.map((item) => readClaudeReconnectCount(item, depth + 1)));
-  }
-
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const direct = readNumericReconnectCount(value.reconnect_count);
-  const nested = Object.entries(value)
-    .filter(([key]) => key !== "content" && key !== "text")
-    .map(([, child]) => readClaudeReconnectCount(child, depth + 1));
-
-  return maxNumbers([direct, ...nested]);
-}
-
-function readNumericReconnectCount(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.floor(value);
-  }
-
-  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
-    return null;
-  }
-
-  return Number.parseInt(value.trim(), 10);
-}
-
-function maxNumbers(values: Array<number | null>): number | null {
-  const numbers = values.filter((value): value is number => value !== null);
-  return numbers.length > 0 ? Math.max(...numbers) : null;
-}
-
 function readStringField(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function collectTextContent(value: unknown, depth = 0): string {
-  if (depth > 10) {
-    return "";
-  }
-
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (!Array.isArray(value)) {
-    if (!isRecord(value)) {
-      return "";
-    }
-
-    return Object.entries(value)
-      .filter(([key]) => key !== "encrypted_content")
-      .map(([, child]) => collectTextContent(child, depth + 1))
-      .filter((item) => item.length > 0)
-      .join("\n");
-  }
-
-  return value
-    .map((item) => collectTextContent(item, depth + 1))
-    .filter((item) => item.length > 0)
-    .join("\n");
 }
 
 async function persistCapture(

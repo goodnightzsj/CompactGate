@@ -20,12 +20,9 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
 
   if (profile.scope === "claude") {
     const primaryModel = profile.claude_primary_model_override?.trim();
-    const compactModel = profile.claude_compact_model_override?.trim();
     return [
-      `Claude ${profile.claude_primary_host ?? "未配置"} / ${profile.claude_compact_host ?? "未配置"}`,
+      `Claude ${profile.claude_primary_host ?? "未配置"}`,
       `主模型 ${primaryModel || "透传"}`,
-      `compact 模型 ${compactModel || "透传"}`,
-      `Claude compact ${compactModeLabel(profile.claude_compact_upstream_mode ?? "primary")}`,
       secretCopy
     ].join("；");
   }

@@ -117,7 +117,7 @@ export function ConfigPage({
               />
               <ProfileScopeCard
                 scope="claude" title="Claude 配置档案" eyebrow="Claude"
-                description="保存、复制或应用 Claude 主路由 / 压缩路由草稿，不会改动 Codex 档案。"
+                description="保存、复制或应用 Claude 主路由与模型映射草稿，不会改动 Codex 档案。"
                 emptyTitle="还没有保存的 Claude 档案"
                 emptyDescription="填写名称后保存当前 Claude 草稿，就会在这里出现可应用的档案卡片。"
                 config={config}
@@ -162,7 +162,7 @@ export function ConfigPage({
               <div className="config-row">
                 <RouteCredentialFields
                   title="Claude 主路由" badge="Claude" tone="claude"
-                  baseUrlLabel="基础地址" baseUrlHint="普通 Claude Code Messages 请求会转发到这里。"
+                  baseUrlLabel="基础地址" baseUrlHint="所有 Claude Code Messages 请求都会转发到这里。"
                   apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
                   baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
                   storedApiKey={config?.claude.primary.stored_api_key ?? false}
@@ -171,31 +171,13 @@ export function ConfigPage({
                   onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: value, clearClaudePrimaryApiKey: false }))}
                   onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey }))}
                 />
-                <RouteCredentialFields
-                  title="Claude 压缩路由" badge="压缩" tone="compact"
-                  baseUrlLabel="基础地址" baseUrlHint="仅在 AnyRouter 大 reconnect 请求授权后使用。"
-                  apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
-                  baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
-                  storedApiKey={config?.claude.compact.stored_api_key ?? false}
-                  clearApiKey={form.clearClaudeCompactApiKey}
-                  onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, claudeCompactBaseUrl: value }))}
-                  onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, claudeCompactApiKey: value, clearClaudeCompactApiKey: false }))}
-                  onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, claudeCompactApiKey: "", clearClaudeCompactApiKey: !previous.clearClaudeCompactApiKey }))}
-                />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
                 <div>
                   <div className="field-label" style={{ marginBottom: 4 }}>Codex 压缩上游模式</div>
                   <div className="toggle-group">
                     <button className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
                     <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
-                  </div>
-                </div>
-                <div>
-                  <div className="field-label" style={{ marginBottom: 4 }}>Claude 压缩上游模式</div>
-                  <div className="toggle-group">
-                    <button className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
-                    <button className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
                   </div>
                 </div>
               </div>

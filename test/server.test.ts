@@ -1784,7 +1784,7 @@ describe("CompactGate HTTP server", () => {
     });
   });
 
-  it("routes one manual Claude compact request to compact after a large AnyRouter reconnect", async () => {
+  it("keeps manual Claude compact requests on the primary route after a large AnyRouter reconnect", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -1813,6 +1813,14 @@ describe("CompactGate HTTP server", () => {
         primary: {
           base_url: `${claudePrimary.url}/anyrouter`,
           api_key: "saved-claude-primary-token"
+        },
+        model_map: {
+          default: "mapped-claude-default",
+          opus: "mapped-claude-opus",
+          sonnet: "",
+          haiku: "",
+          reasoning: "",
+          subagent: ""
         },
         compact: {
           base_url: claudeCompact.url,
@@ -1861,15 +1869,15 @@ describe("CompactGate HTTP server", () => {
     });
 
     expect(compactResponse.status).toBe(200);
-    expect(compactResponse.headers.get("x-compactgate-claude-route")).toBe("compact");
+    expect(compactResponse.headers.get("x-compactgate-claude-route")).toBe("primary");
     expect(compactResponse.headers.get("x-compactgate-claude-retry")).toBeNull();
-    expect(await compactResponse.text()).toContain("COMPACT_OK");
-    expect(primaryRequests).toHaveLength(1);
-    expect(compactRequests).toHaveLength(1);
-    expect(compactRequests[0].url).toBe("/v1/messages?beta=true");
-    expect(compactRequests[0].headers["anthropic-api-key"]).toBe("saved-claude-compact-token");
-    expect(JSON.parse(compactRequests[0].body).model).toBe("claude-compact-manual");
-    expect(compactRequests[0].body).toContain("Your task is to create a detailed summary");
+    expect(await compactResponse.text()).toContain("PRIMARY_OK");
+    expect(primaryRequests).toHaveLength(2);
+    expect(compactRequests).toHaveLength(0);
+    expect(primaryRequests[1].url).toBe("/anyrouter/v1/messages?beta=true");
+    expect(primaryRequests[1].headers["anthropic-api-key"]).toBe("saved-claude-primary-token");
+    expect(JSON.parse(primaryRequests[1].body).model).toBe("mapped-claude-default");
+    expect(primaryRequests[1].body).toContain("Your task is to create a detailed summary");
 
     const secondCompactResponse = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
       method: "POST",
@@ -1883,12 +1891,12 @@ describe("CompactGate HTTP server", () => {
     expect(secondCompactResponse.status).toBe(200);
     expect(secondCompactResponse.headers.get("x-compactgate-claude-route")).toBe("primary");
     expect(await secondCompactResponse.text()).toContain("PRIMARY_OK");
-    expect(primaryRequests).toHaveLength(2);
-    expect(compactRequests).toHaveLength(1);
-    expect(JSON.parse(primaryRequests[1].body).model).toBe("claude-original-manual");
+    expect(primaryRequests).toHaveLength(3);
+    expect(compactRequests).toHaveLength(0);
+    expect(JSON.parse(primaryRequests[2].body).model).toBe("mapped-claude-default");
   });
 
-  it("does not arm manual Claude compact routing when reconnect count is below threshold", async () => {
+  it("keeps manual Claude compact requests on primary when reconnect count is below threshold", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -1956,7 +1964,7 @@ describe("CompactGate HTTP server", () => {
     expect(compactRequests).toHaveLength(0);
   });
 
-  it("does not arm manual Claude compact routing when the AnyRouter reconnect body is below size threshold", async () => {
+  it("keeps manual Claude compact requests on primary when the reconnect body is small", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -2024,7 +2032,7 @@ describe("CompactGate HTTP server", () => {
     expect(compactRequests).toHaveLength(0);
   });
 
-  it("does not arm manual Claude compact routing for non-AnyRouter Claude upstreams", async () => {
+  it("keeps manual Claude compact requests on primary for non-AnyRouter Claude upstreams", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {
@@ -2092,7 +2100,7 @@ describe("CompactGate HTTP server", () => {
     expect(compactRequests).toHaveLength(0);
   });
 
-  it("does not arm manual Claude compact routing from non-exact reconnect fields", async () => {
+  it("keeps manual Claude compact requests on primary with non-exact reconnect fields", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const claudePrimary = await startClaudeUpstream(async (req, res) => {

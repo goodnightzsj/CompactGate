@@ -898,7 +898,6 @@ function App() {
             currentModel={currentModel}
             compactModel={effectiveCompactModel}
             compactMode={form.upstreamMode}
-            claudeCompactMode={form.claudeCompactUpstreamMode}
             activeRoute={activeRoute}
             latestLog={latestLog}
           />
@@ -1224,7 +1223,6 @@ function RoutesPage({
   currentModel,
   compactModel,
   compactMode,
-  claudeCompactMode,
   activeRoute,
   latestLog
 }: {
@@ -1232,7 +1230,6 @@ function RoutesPage({
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
-  claudeCompactMode: "split" | "primary";
   activeRoute: RouteKind;
   latestLog: RequestLogEntry | null;
 }) {
@@ -1240,9 +1237,7 @@ function RoutesPage({
   const primaryHost = config?.primary.host ?? "primary.example";
   const compactHost = config?.compact.host ?? "compact.example";
   const claudePrimaryHost = config?.claude.primary.host ?? "api.anthropic.com";
-  const claudeCompactHost = config?.claude.compact.host ?? "api.anthropic.com";
   const compactTarget = compactMode === "split" ? compactHost : primaryHost;
-  const claudeCompactTarget = claudeCompactMode === "split" ? claudeCompactHost : claudePrimaryHost;
 
   return (
     <>
@@ -1300,14 +1295,9 @@ function RoutesPage({
 
           <div className="route-mapping">
             <div className={`route-mapping-row ${activeRoute === "claude" ? "is-active" : ""}`}>
-              <code>普通 /messages</code>
+              <code>所有 /messages</code>
               <span className="tag">默认</span>
               <span className="route-chip claude">主上游</span>
-            </div>
-            <div className="route-mapping-row">
-              <code>手动 compact</code>
-              <span className="tag">授权后</span>
-              <span className="route-chip compact">压缩上游</span>
             </div>
           </div>
 
@@ -1315,17 +1305,12 @@ function RoutesPage({
             <div className="route-slot">
               <div className="route-slot-label">主路由</div>
               <div className="route-slot-host">{claudePrimaryHost}</div>
-              <div className="route-slot-hint">Messages 与未授权 compact</div>
-            </div>
-            <div className="route-slot">
-              <div className="route-slot-label">压缩路由</div>
-              <div className="route-slot-host">{claudeCompactTarget}</div>
-              <div className="route-slot-hint">{claudeCompactMode === "split" ? "独立手动 compact 上游" : "复用主路由"}</div>
+              <div className="route-slot-hint">普通请求、手动 compact 和重连请求统一走这里</div>
             </div>
           </div>
 
           <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--jade-soft)", borderRadius: "var(--radius-sm)", fontSize: "0.76rem", color: "var(--muted)", lineHeight: 1.6 }}>
-            仅在 AnyRouter reconnect_count ≥ 3 时授权下一次手动 compact 走压缩路由。授权消费后回到主路由。
+            Claude 侧不再按 compact 请求分流；档案切换只切换 Claude 主路由和模型映射。
           </div>
         </div>
       </div>
@@ -1394,13 +1379,11 @@ function HealthPage({
   const primaryStatus = upstreamHealthBadge(health?.primary);
   const compactStatus = upstreamHealthBadge(health?.compact);
   const claudePrimaryStatus = upstreamHealthBadge(health?.claude.primary);
-  const claudeCompactStatus = upstreamHealthBadge(health?.claude.compact);
   const overallStatus = overallHealthBadge(health);
   const routeStatuses = [
     { label: "Codex 主路由", status: primaryStatus },
     { label: "Codex 压缩", status: compactStatus },
-    { label: "Claude 主路由", status: claudePrimaryStatus },
-    { label: "Claude 压缩", status: claudeCompactStatus }
+    { label: "Claude 主路由", status: claudePrimaryStatus }
   ];
   const readyRoutes = routeStatuses.filter((item) => item.status.tone === "good").length;
   const attentionRoutes = routeStatuses.filter((item) => item.status.tone === "warn").length;
@@ -1487,7 +1470,7 @@ function HealthPage({
         <div className="health-entry-card is-claude">
           <span>Anthropic 兼容入口</span>
           <code>{claudeEndpoint}</code>
-          <small>Claude Messages 与下一次手动 compact 使用这个入口。</small>
+          <small>所有 Claude Messages 请求使用这个入口。</small>
         </div>
       </section>
 
@@ -1513,17 +1496,9 @@ function HealthPage({
           route="claude"
           credentialScope="claude_primary"
           badgeLabel="Claude 主"
-          summary="处理普通 Anthropic Messages 请求"
+          summary="处理所有 Anthropic Messages 请求"
           upstream={health?.claude.primary}
         />
-          <HealthEndpointCard
-            title="Claude 压缩路由"
-            route="claude"
-            credentialScope="claude_compact"
-            badgeLabel="Claude 压缩"
-            summary="仅用于已授权的下一次手动 compact"
-            upstream={health?.claude.compact}
-          />
       </section>
 
       <section className="health-detail-grid">
@@ -1921,8 +1896,7 @@ function overallHealthBadge(health: HealthResponse | null): HealthBadge {
   const statuses = [
     upstreamHealthBadge(health.primary),
     upstreamHealthBadge(health.compact),
-    upstreamHealthBadge(health.claude.primary),
-    upstreamHealthBadge(health.claude.compact)
+    upstreamHealthBadge(health.claude.primary)
   ];
 
   if (statuses.some((item) => item.tone === "bad")) {
