@@ -902,6 +902,104 @@ describe("CompactGate HTTP server", () => {
     expect(JSON.stringify(deletedConfig)).not.toContain("profile-api-primary-key");
   });
 
+  it("reorders scoped config profiles through the public API", async () => {
+    const app = await startApp();
+
+    async function saveProfile(name: string, baseUrl: string): Promise<string> {
+      const response = await fetch(`${app.url}/api/config/profiles`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "codex",
+          name,
+          config: {
+            primary: {
+              base_url: `${baseUrl}/v1`,
+              api_key: `${name.toLowerCase().replaceAll(" ", "-")}-secret`
+            },
+            compact: { base_url: `${baseUrl}/compact/v1` }
+          }
+        })
+      });
+      const body = (await response.json()) as PublicConfig;
+
+      expect(response.status).toBe(200);
+      return body.profile_scopes.codex.profiles.find((profile) => profile.name === name)?.id ?? "";
+    }
+
+    const firstId = await saveProfile("Profile First", "http://127.0.0.1:56101");
+    const secondId = await saveProfile("Profile Second", "http://127.0.0.1:56102");
+    const thirdId = await saveProfile("Profile Third", "http://127.0.0.1:56103");
+    expect(firstId).toBeTruthy();
+    expect(secondId).toBeTruthy();
+    expect(thirdId).toBeTruthy();
+
+    const claudeSaveResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "claude",
+        name: "Claude Scoped",
+        config: {
+          claude: {
+            primary: { base_url: "http://127.0.0.1:56111", api_key: "claude-scoped-secret" },
+            compact: { base_url: "http://127.0.0.1:56112" }
+          }
+        }
+      })
+    });
+    const claudeSaved = (await claudeSaveResponse.json()) as PublicConfig;
+    const claudeId = claudeSaved.profile_scopes.claude.profiles[0].id;
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "codex", profile_id: secondId })
+    });
+    expect(applyResponse.status).toBe(200);
+
+    const reorderResponse = await fetch(`${app.url}/api/config/profiles/reorder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "codex",
+        profile_ids: [thirdId, firstId, secondId]
+      })
+    });
+    const reordered = (await reorderResponse.json()) as PublicConfig;
+
+    expect(reorderResponse.status).toBe(200);
+    expect(reordered.profile_scopes.codex.profiles.map((profile) => profile.id)).toEqual([
+      thirdId,
+      firstId,
+      secondId
+    ]);
+    expect(reordered.profile_scopes.codex.active_profile_id).toBe(secondId);
+    expect(reordered.profile_scopes.claude.profiles.map((profile) => profile.id)).toEqual([claudeId]);
+    expect(JSON.stringify(reordered)).not.toContain("profile-first-secret");
+    expect(JSON.stringify(reordered)).not.toContain("claude-scoped-secret");
+
+    const duplicateResponse = await fetch(`${app.url}/api/config/profiles/reorder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "codex",
+        profile_ids: [thirdId, thirdId, secondId]
+      })
+    });
+    expect(duplicateResponse.status).toBe(400);
+
+    const crossScopeResponse = await fetch(`${app.url}/api/config/profiles/reorder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "codex",
+        profile_ids: [thirdId, firstId, claudeId]
+      })
+    });
+    expect(crossScopeResponse.status).toBe(400);
+  });
+
   it("routes compact requests to primary when upstream mode is primary", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const primary = await startUpstream(async (req, res) => {

@@ -355,6 +355,76 @@ describe("ConfigStore", () => {
     expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
   });
 
+  it("reorders scoped config profiles without mutating profile content", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const configPath = path.join(dir, "compactgate.json");
+    const store = await ConfigStore.load(configPath);
+    await store.saveProfile("codex", "Codex first", {
+      primary: { base_url: "http://127.0.0.1:9521/v1", api_key: "codex-first-key" },
+      compact: { base_url: "http://127.0.0.1:9522/v1" }
+    });
+    await store.saveProfile("codex", "Codex second", {
+      primary: { base_url: "http://127.0.0.1:9531/v1" },
+      compact: { base_url: "http://127.0.0.1:9532/v1" }
+    });
+    await store.saveProfile("codex", "Codex third", {
+      primary: { base_url: "http://127.0.0.1:9541/v1" },
+      compact: { base_url: "http://127.0.0.1:9542/v1" }
+    });
+    await store.saveProfile("claude", "Claude first", {
+      claude: {
+        primary: { base_url: "http://127.0.0.1:9551", api_key: "claude-first-key" },
+        compact: { base_url: "http://127.0.0.1:9552" }
+      }
+    });
+
+    const before = store.get();
+    const codexProfiles = before.profile_scopes?.codex?.profiles ?? [];
+    const claudeProfiles = before.profile_scopes?.claude?.profiles ?? [];
+    const codexFirstId = codexProfiles.find((profile) => profile.name === "Codex first")?.id ?? "";
+    const codexSecondId = codexProfiles.find((profile) => profile.name === "Codex second")?.id ?? "";
+    const codexThirdId = codexProfiles.find((profile) => profile.name === "Codex third")?.id ?? "";
+    const claudeFirstId = claudeProfiles.find((profile) => profile.name === "Claude first")?.id ?? "";
+    const codexFirstUpdatedAt = codexProfiles.find((profile) => profile.id === codexFirstId)?.updated_at;
+    expect(codexFirstId).toBeTruthy();
+    expect(codexSecondId).toBeTruthy();
+    expect(codexThirdId).toBeTruthy();
+    expect(claudeFirstId).toBeTruthy();
+
+    await store.applyProfile("codex", codexSecondId);
+    const reordered = await store.reorderProfiles("codex", [codexThirdId, codexFirstId, codexSecondId]);
+
+    expect(reordered.profile_scopes?.codex?.profiles?.map((profile) => profile.id)).toEqual([
+      codexThirdId,
+      codexFirstId,
+      codexSecondId
+    ]);
+    expect(reordered.profile_scopes?.codex?.active_profile_id).toBe(codexSecondId);
+    expect(reordered.profile_scopes?.claude?.profiles?.map((profile) => profile.id)).toEqual([claudeFirstId]);
+    expect(
+      reordered.profile_scopes?.codex?.profiles?.find((profile) => profile.id === codexFirstId)?.updated_at
+    ).toBe(codexFirstUpdatedAt);
+    expect(JSON.stringify(store.toPublicConfig())).not.toContain("codex-first-key");
+    expect(JSON.stringify(store.toPublicConfig())).not.toContain("claude-first-key");
+
+    const persisted = JSON.parse(await readFile(configPath, "utf8"));
+    expect(persisted.profile_scopes.codex.profiles.map((profile: { id: string }) => profile.id)).toEqual([
+      codexThirdId,
+      codexFirstId,
+      codexSecondId
+    ]);
+
+    await expect(store.reorderProfiles("codex", [codexFirstId, codexFirstId, codexSecondId])).rejects.toThrow(
+      /unique/
+    );
+    await expect(store.reorderProfiles("codex", [codexFirstId, codexSecondId])).rejects.toThrow(/every profile/);
+    await expect(store.reorderProfiles("codex", [claudeFirstId, codexFirstId, codexSecondId])).rejects.toThrow(
+      /existing profiles/
+    );
+  });
+
   it("syncs runtime config when updating active scoped profiles", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
     cleanupPaths.push(dir);

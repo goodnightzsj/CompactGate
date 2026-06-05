@@ -321,6 +321,11 @@ function extractReasoningEffort(parsed: Record<string, unknown> | null): string 
     return parsed.reasoning.effort;
   }
 
+  const outputConfigEffort = readOutputConfigEffort(parsed);
+  if (outputConfigEffort) {
+    return outputConfigEffort;
+  }
+
   if (isRecord(parsed.thinking)) {
     const visibleEffort = readThinkingEffort(parsed.thinking);
     if (visibleEffort) {
@@ -357,7 +362,7 @@ function extractRequestSummary(endpoint: string, parsed: Record<string, unknown>
       describeSystem(parsed.system),
       countArray("tools", parsed.tools),
       describeNumber("max", parsed.max_tokens),
-      describeThinking(parsed.thinking)
+      describeThinking(parsed.thinking, parsed)
     ]);
   }
 
@@ -518,20 +523,30 @@ function describeNumber(label: string, value: unknown): string | null {
   return typeof value === "number" && Number.isFinite(value) ? `${label} ${value}` : null;
 }
 
-function describeThinking(value: unknown): string | null {
+function describeThinking(value: unknown, parsed?: Record<string, unknown>): string | null {
   if (!isRecord(value)) {
     return null;
   }
 
   const effort = readThinkingEffort(value);
+  const outputConfigEffort = parsed ? readOutputConfigEffort(parsed) : null;
   const type = readTrimmedString(value.type);
   const budget = readNumber(value.budget_tokens);
   const display = readTrimmedString(value.display);
   return joinSummaryParts([
     effort ? `thinking ${effort}` : type ? `thinking ${type}` : "thinking yes",
+    outputConfigEffort ? `effort ${outputConfigEffort}` : null,
     budget !== null ? `budget ${budget}` : null,
     display ? `display ${display}` : null
   ]);
+}
+
+function readOutputConfigEffort(parsed: Record<string, unknown>): string | null {
+  if (!isRecord(parsed.output_config)) {
+    return null;
+  }
+
+  return readKnownThinkingLevel(parsed.output_config.effort);
 }
 
 function readThinkingEffort(value: Record<string, unknown>): string | null {
@@ -547,7 +562,8 @@ function readKnownThinkingLevel(value: unknown): string | null {
     text === "medium" ||
     text === "high" ||
     text === "xhigh" ||
-    text === "max"
+    text === "max" ||
+    text === "minimal"
   ) {
     return text;
   }

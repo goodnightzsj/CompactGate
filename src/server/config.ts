@@ -334,6 +334,45 @@ export class ConfigStore {
     return this.get();
   }
 
+  async reorderProfiles(scope: ConfigProfileScope, orderedProfileIds: string[]): Promise<CompactGateConfig> {
+    if (!Array.isArray(orderedProfileIds) || orderedProfileIds.some((id) => typeof id !== "string")) {
+      throw new ConfigError("Profile reorder requires a profile_id list.");
+    }
+
+    const scopeState = getProfileScopeState(this.current, scope);
+    const existingProfiles = scopeState.profiles ?? [];
+    if (orderedProfileIds.length !== existingProfiles.length) {
+      throw new ConfigError("Profile reorder must include every profile exactly once.");
+    }
+
+    const profilesById = new Map(existingProfiles.map((profile) => [profile.id, profile]));
+    const seenIds = new Set<string>();
+    const reorderedProfiles: SavedConfigProfile[] = [];
+
+    for (const rawId of orderedProfileIds) {
+      const profileId = rawId.trim();
+      if (!profileId || seenIds.has(profileId)) {
+        throw new ConfigError("Profile reorder ids must be unique.");
+      }
+
+      const profile = profilesById.get(profileId);
+      if (!profile) {
+        throw new ConfigError("Profile reorder ids must match existing profiles.");
+      }
+
+      seenIds.add(profileId);
+      reorderedProfiles.push(cloneProfile(profile));
+    }
+
+    this.current = withProfileScope(this.current, scope, {
+      profiles: reorderedProfiles,
+      active_profile_id: scopeState.active_profile_id ?? null
+    });
+    validateConfig(this.current);
+    await this.save();
+    return this.get();
+  }
+
   async applyProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
     const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
     const scopeState = getProfileScopeState(this.current, scope);

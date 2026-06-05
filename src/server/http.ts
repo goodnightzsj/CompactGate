@@ -362,6 +362,23 @@ async function handleApi(
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/config/profiles/reorder") {
+    const body = await readJsonBody(req);
+    if (!isRecord(body)) {
+      throw new ConfigError("config profile reorder requires a profile id list.");
+    }
+
+    const profileIds = Array.isArray(body.profile_ids) ? body.profile_ids : body.ordered_profile_ids;
+    if (!Array.isArray(profileIds) || profileIds.some((profileId) => typeof profileId !== "string")) {
+      throw new ConfigError("config profile reorder requires a profile id list.");
+    }
+
+    await configStore.reorderProfiles(readProfileScope(body, url), profileIds);
+    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+    sendJson(res, 200, configStore.toPublicConfig());
+    return;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/config/profiles/duplicate") {
     const body = await readJsonBody(req);
     if (!isRecord(body)) {

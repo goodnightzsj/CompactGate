@@ -110,4 +110,43 @@ describe("usage metadata extraction", () => {
     expect(metadata.reasoningEffort).toBe("thinking adaptive");
     expect(metadata.requestSummary).toContain("thinking adaptive");
   });
+
+  it("extracts Claude adaptive thinking effort from output_config", () => {
+    const metadata = extractRequestMetadata(
+      "/v1/messages",
+      Buffer.from(JSON.stringify({
+        stream: true,
+        thinking: {
+          type: "adaptive"
+        },
+        output_config: {
+          effort: "high"
+        },
+        messages: [{ role: "user", content: "hello" }]
+      }))
+    );
+
+    expect(metadata.reasoningEffort).toBe("high");
+    expect(metadata.requestSummary).toContain("thinking adaptive");
+    expect(metadata.requestSummary).toContain("effort high");
+  });
+
+  it("recognizes minimal Claude adaptive thinking effort", () => {
+    const metadata = extractRequestMetadata(
+      "/v1/messages",
+      Buffer.from(JSON.stringify({
+        stream: true,
+        thinking: {
+          type: "adaptive"
+        },
+        output_config: {
+          effort: "minimal"
+        },
+        messages: [{ role: "user", content: "hello" }]
+      }))
+    );
+
+    expect(metadata.reasoningEffort).toBe("minimal");
+    expect(metadata.requestSummary).toContain("effort minimal");
+  });
 });

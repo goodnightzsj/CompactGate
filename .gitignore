@@ -19,6 +19,8 @@ compactgate.json
 .ai/handoff/
 .playwright-mcp/
 /README-assets/
+.tmp/
+test-results/
 
 # Tool caches
 .vite/
@@ -42,3 +44,9 @@ Thumbs.db
 
 # Local screenshots captured during UI review
 /*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.avif
+/*.bmp
