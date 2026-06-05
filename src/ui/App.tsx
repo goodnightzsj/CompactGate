@@ -482,8 +482,21 @@ function App() {
       const savedProfile = [...nextScope.profiles]
         .reverse()
         .find((profile) => profile.name === trimmedName);
+      const savedProfileIsActive = Boolean(
+        savedProfile?.id && savedProfile.id === nextScope.active_profile_id
+      );
+      const nextHealth = savedProfileIsActive
+        ? await api<HealthResponse>("/api/health", { method: "GET" })
+        : null;
 
       setConfig(nextConfig);
+      if (nextHealth) {
+        setHealth(nextHealth);
+        setForm(formFromConfig(nextConfig));
+        setSaveError(null);
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState("idle"), 1600);
+      }
       accessors.setSelectedId(savedProfile?.id ?? nextScope.active_profile_id ?? "");
       accessors.setName(savedProfile?.name ?? trimmedName);
       accessors.setState("saved");
@@ -564,8 +577,19 @@ function App() {
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);
+      const profileIsActive = targetProfileId === nextScope.active_profile_id;
+      const nextHealth = profileIsActive
+        ? await api<HealthResponse>("/api/health", { method: "GET" })
+        : null;
 
       setConfig(nextConfig);
+      if (nextHealth) {
+        setHealth(nextHealth);
+        setForm(formFromConfig(nextConfig));
+        setSaveError(null);
+        setSaveState("saved");
+        window.setTimeout(() => setSaveState("idle"), 1600);
+      }
       accessors.setSelectedId(targetProfileId);
       accessors.setName(nextScope.profiles.find((profile) => profile.id === targetProfileId)?.name ?? trimmedName);
       accessors.setState("updated");

@@ -86,6 +86,18 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.primary.base_url;
 }
 
+export function compactUpstreamPath(config: CompactGateConfig, requestPath: string): string {
+  if (
+    requestPath === "/v1/responses/compact" &&
+    config.compact.upstream_mode === "primary" &&
+    isAnyRouterHost(config.primary.base_url)
+  ) {
+    return "/v1/responses";
+  }
+
+  return requestPath;
+}
+
 export function previewRoute(
   method: string,
   path: string,
@@ -95,7 +107,8 @@ export function previewRoute(
   const parsedUrl = new URL(path, "http://compactgate.local");
   const route = routeForPath(parsedUrl.pathname);
   const upstreamBase = route === "compact" ? compactUpstreamBaseUrl(config) : config.primary.base_url;
-  const upstream = buildUpstreamUrl(upstreamBase, parsedUrl.pathname, parsedUrl.search);
+  const upstreamPath = route === "compact" ? compactUpstreamPath(config, parsedUrl.pathname) : parsedUrl.pathname;
+  const upstream = buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
 
   if (route === "primary") {
     const sourceModel = extractModelFromUnknown(body);
@@ -141,6 +154,15 @@ function extractModelFromUnknown(body: unknown): string | null {
   }
 
   return typeof body.model === "string" ? body.model : null;
+}
+
+function isAnyRouterHost(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return hostname === "anyrouter.top" || hostname.endsWith(".anyrouter.top");
+  } catch {
+    return false;
+  }
 }
 
 function parseJsonObject(rawBody: Buffer): Record<string, unknown> {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import {
   buildUpstreamUrl,
+  compactUpstreamPath,
   previewRoute,
   rewriteCompactBody
 } from "../src/server/routing.js";
@@ -79,6 +80,31 @@ describe("routing helpers", () => {
 
     expect(preview.route).toBe("compact");
     expect(preview.upstream_host).toBe("primary.example");
+    expect(preview.target_model).toBe("gpt-5.5-openai-compact");
+  });
+
+  it("rewrites AnyRouter primary-mode compact upstream path to responses", () => {
+    const config: CompactGateConfig = {
+      ...DEFAULT_CONFIG,
+      primary: {
+        ...DEFAULT_CONFIG.primary,
+        base_url: "https://anyrouter.top/v1"
+      },
+      compact: {
+        ...DEFAULT_CONFIG.compact,
+        upstream_mode: "primary"
+      }
+    };
+    const preview = previewRoute(
+      "POST",
+      "/v1/responses/compact?trace=1",
+      { model: "gpt-5.5", stream: true },
+      config
+    );
+
+    expect(compactUpstreamPath(config, "/v1/responses/compact")).toBe("/v1/responses");
+    expect(preview.route).toBe("compact");
+    expect(preview.upstream_url).toBe("https://anyrouter.top/v1/responses?trace=1");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
   });
 });

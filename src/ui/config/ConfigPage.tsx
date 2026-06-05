@@ -472,8 +472,22 @@ function ProfileScopeCard({
   const scopeState = config ? profileScopeState(config, scope) : { profiles: [], active_profile_id: null };
   const profiles = scopeState.profiles;
   const activeProfile = profiles.find((profile) => profile.id === scopeState.active_profile_id) ?? null;
-  const profileBusy = isProfileActionBusy(profileState);
   const scopeLabel = scope === "codex" ? "Codex" : "Claude";
+  const namedProfile = profiles.find((profile) => profile.name === profileName.trim()) ?? null;
+  const saveWillApply = Boolean(namedProfile && namedProfile.id === scopeState.active_profile_id);
+  const saveButtonText = profileState === "saving"
+    ? saveWillApply ? "正在保存并应用..." : "正在保存档案..."
+    : saveWillApply
+      ? `保存并应用当前 ${scopeLabel} 草稿`
+      : namedProfile
+        ? `覆盖保存 ${scopeLabel} 档案`
+        : `保存当前 ${scopeLabel} 草稿为新档案`;
+  const profileNameHint = saveWillApply
+    ? "名称命中当前运行时档案，保存后会立即应用到运行时。"
+    : namedProfile
+      ? "名称命中已有档案，保存后只覆盖档案，不切换当前运行时。"
+      : "填写新名称会创建新档案，不会自动切换当前运行时。";
+  const profileBusy = isProfileActionBusy(profileState);
   const profileListRef = useRef<HTMLDivElement | null>(null);
   const profileAutoScrollRef = useRef<{ frame: number | null; speed: number }>({
     frame: null,
@@ -671,7 +685,7 @@ function ProfileScopeCard({
       </div>
 
       <div className="profile-card-controls">
-        <Field label={`${scopeLabel} 档案名称`} hint="选择档案后可改名并保存。">
+        <Field label={`${scopeLabel} 档案名称`} hint={profileNameHint}>
           <input
             aria-label={`${scopeLabel} 档案名称`}
             value={profileName}
@@ -686,7 +700,7 @@ function ProfileScopeCard({
           disabled={profileBusy}
           onClick={() => void onSaveProfile(scope)}
         >
-          {profileState === "saving" ? "正在保存档案..." : `保存当前 ${scopeLabel} 草稿为档案`}
+          {saveButtonText}
         </button>
       </div>
 

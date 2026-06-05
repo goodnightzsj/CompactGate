@@ -789,6 +789,28 @@ describe("CompactGate HTTP server", () => {
     expect(preview.target_model).toBe("profile-api-compact-model");
     expect(preview.upstream_host).toBe("127.0.0.1:56002");
 
+    const activeCodexResaveResponse = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "codex",
+        name: "Profile API",
+        config: {
+          primary: { base_url: "http://127.0.0.1:56018/v1" },
+          compact: {
+            model_mode: "custom",
+            model_override: "profile-api-resaved-model"
+          }
+        }
+      })
+    });
+    const activeCodexResavedConfig = (await activeCodexResaveResponse.json()) as PublicConfig;
+
+    expect(activeCodexResaveResponse.status).toBe(200);
+    expect(activeCodexResavedConfig.active_profile_id).toBe(profileId);
+    expect(activeCodexResavedConfig.primary.base_url).toBe("http://127.0.0.1:56018/v1");
+    expect(activeCodexResavedConfig.compact.model_override).toBe("profile-api-resaved-model");
+
     const activeCodexUpdateResponse = await fetch(`${app.url}/api/config/profiles`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },

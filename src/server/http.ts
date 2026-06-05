@@ -26,6 +26,7 @@ import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
 import {
   buildUpstreamUrl,
   compactUpstreamBaseUrl,
+  compactUpstreamPath,
   extractJsonModel,
   isV1Path,
   rewriteCompactBody,
@@ -549,7 +550,8 @@ async function proxyCompactRequest(
   startedAt: number
 ): Promise<void> {
   const route: RouteKind = "compact";
-  const upstream = buildUpstreamUrl(compactUpstreamBaseUrl(config), url.pathname, url.search);
+  const upstreamPath = compactUpstreamPath(config, url.pathname);
+  const upstream = buildUpstreamUrl(compactUpstreamBaseUrl(config), upstreamPath, url.search);
   const auth = resolveRouteCredential("compact", config);
   let sourceModel: string | null = null;
   let targetModel: string | null = null;

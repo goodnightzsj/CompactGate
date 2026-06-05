@@ -196,13 +196,21 @@ export class ConfigStore {
       config: cloneProfileConfig(profileConfig)
     };
 
-    this.current = withProfileScope(this.current, scope, {
+    const nextScopeState = {
       profiles: [
         ...existingProfiles.filter((profile) => profile.id !== nextProfile.id).map(cloneProfile),
         nextProfile
       ],
       active_profile_id: scopeState.active_profile_id ?? null
-    });
+    };
+    const nextConfig = withProfileScope(this.current, scope, nextScopeState);
+    this.current =
+      scopeState.active_profile_id === nextProfile.id
+        ? {
+            ...nextConfig,
+            ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
+          }
+        : nextConfig;
     validateConfig(this.current);
     await this.save();
     return this.get();

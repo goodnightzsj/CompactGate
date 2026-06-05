@@ -459,6 +459,19 @@ describe("ConfigStore", () => {
 
     await store.applyProfile("codex", codexActiveId);
     await store.applyProfile("claude", claudeActiveId);
+    await store.saveProfile("codex", "Codex active", {
+      primary: { base_url: "http://127.0.0.1:9891/v1" },
+      compact: {
+        model_mode: "custom",
+        model_override: "codex-resaved-model"
+      }
+    });
+
+    let updated = store.get();
+    expect(updated.primary.base_url).toBe("http://127.0.0.1:9891/v1");
+    expect(updated.compact.model_override).toBe("codex-resaved-model");
+    expect(updated.profile_scopes?.codex?.active_profile_id).toBe(codexActiveId);
+
     await store.updateProfile("codex", codexActiveId, "Codex active", {
       primary: { base_url: "http://127.0.0.1:9901/v1" },
       compact: { model_override: "codex-updated-model" },
@@ -467,7 +480,7 @@ describe("ConfigStore", () => {
       }
     });
 
-    let updated = store.get();
+    updated = store.get();
     expect(updated.primary.base_url).toBe("http://127.0.0.1:9901/v1");
     expect(updated.compact.model_override).toBe("codex-updated-model");
     expect(updated.claude.primary.base_url).toBe("http://127.0.0.1:9821");
@@ -492,6 +505,13 @@ describe("ConfigStore", () => {
       primary: { base_url: "http://127.0.0.1:9931/v1" },
       compact: { model_override: "inactive-updated-model" }
     });
+    await store.saveProfile("codex", "Codex inactive", {
+      primary: { base_url: "http://127.0.0.1:9941/v1" },
+      compact: {
+        model_mode: "custom",
+        model_override: "inactive-resaved-model"
+      }
+    });
 
     updated = store.get();
     expect(updated.primary.base_url).toBe("http://127.0.0.1:9901/v1");
@@ -499,8 +519,8 @@ describe("ConfigStore", () => {
     expect(
       updated.profile_scopes?.codex?.profiles?.find((profile) => profile.id === codexInactiveId)?.config
     ).toMatchObject({
-      primary: { base_url: "http://127.0.0.1:9931/v1" },
-      compact: { model_override: "inactive-updated-model" }
+      primary: { base_url: "http://127.0.0.1:9941/v1" },
+      compact: { model_override: "inactive-resaved-model" }
     });
   });
 
