@@ -9126,11 +9126,13 @@ a { color: var(--accent); text-decoration: none; }
 /* Log model cell */
 .log-model-cell {
   display: inline-grid;
+  grid-template-columns: auto 1fr;
   gap: 2px;
   min-width: 0;
   max-inline-size: clamp(16ch, 18vw, 30ch);
   overflow: hidden;
   vertical-align: bottom;
+  align-items: center;
 }
 
 .log-table .log-model-cell {
@@ -9173,8 +9175,8 @@ a { color: var(--accent); text-decoration: none; }
 .log-model-cell .route-chip {
   width: fit-content;
   font-size: 0.6rem;
-  height: 18px;
-  padding: 0 6px;
+  height: 16px;
+  padding: 0 4px;
 }
 
 /* Token tooltip */
@@ -10284,17 +10286,17 @@ a { color: var(--accent); text-decoration: none; }
 
 .log-table-full .log-table-grid th:nth-child(2),
 .log-table-full .log-table-grid td:nth-child(2) {
-  width: 17%;
+  width: 18%;
 }
 
 .log-table-full .log-table-grid th:nth-child(3),
 .log-table-full .log-table-grid td:nth-child(3) {
-  width: 6%;
+  width: 5%;
 }
 
 .log-table-full .log-table-grid th:nth-child(4),
 .log-table-full .log-table-grid td:nth-child(4) {
-  width: 13%;
+  width: 15%;
 }
 
 .log-table-full .log-table-grid th:nth-child(5),
@@ -10304,7 +10306,7 @@ a { color: var(--accent); text-decoration: none; }
 
 .log-table-full .log-table-grid th:nth-child(6),
 .log-table-full .log-table-grid td:nth-child(6) {
-  width: 14%;
+  width: 12%;
 }
 
 .log-table-full .log-table-grid th:nth-child(7),
@@ -11075,7 +11077,7 @@ body::after { display: none; }
 .profile-list {
   display: grid;
   gap: 4px;
-  max-height: 220px;
+  max-height: min(360px, calc(100vh - 520px));
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;

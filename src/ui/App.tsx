@@ -2556,17 +2556,17 @@ function ProfileScopeCard({
     const edgeSize = Math.min(112, Math.max(56, bounds.height * 0.42));
     const distanceFromTop = event.clientY - bounds.top;
     const distanceFromBottom = bounds.bottom - event.clientY;
-    const maxSpeed = 18;
+    const maxSpeed = 8;
 
     if (distanceFromTop < edgeSize) {
       const intensity = 1 - Math.max(0, distanceFromTop) / edgeSize;
-      startProfileAutoScroll(-Math.max(5, Math.round(maxSpeed * intensity)));
+      startProfileAutoScroll(-Math.max(2, Math.round(maxSpeed * intensity * intensity)));
       return;
     }
 
     if (distanceFromBottom < edgeSize) {
       const intensity = 1 - Math.max(0, distanceFromBottom) / edgeSize;
-      startProfileAutoScroll(Math.max(5, Math.round(maxSpeed * intensity)));
+      startProfileAutoScroll(Math.max(2, Math.round(maxSpeed * intensity * intensity)));
       return;
     }
 
@@ -3628,7 +3628,7 @@ function formatLatestLogStatus(entry: RequestLogEntry | null, fallback: string):
 function modelReasoningLabel(entry: RequestLogEntry): string {
   const model = entry.target_model ?? entry.source_model ?? (entry.route === "claude" ? "Claude" : "model");
   const reasoning = entry.reasoning_effort ?? "standard";
-  return `${model} · ${reasoning}`;
+  return `${model}\u2009·\u2009${reasoning}`;
 }
 
 function logStatusKind(entry: RequestLogEntry): LogStatusKind {
