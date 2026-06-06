@@ -2449,6 +2449,304 @@ h3 {
   border-color: rgba(13, 148, 136, 0.24);
 }
 
+.route-url-input-wrap {
+  position: relative;
+}
+
+.route-url-suggestions {
+  position: absolute;
+  z-index: var(--z-dropdown, 140);
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 230px;
+  gap: 0.42rem;
+  overflow-y: auto;
+  padding: 0.48rem;
+  border: 1px solid rgba(24, 35, 49, 0.14);
+  border-radius: 16px 6px 16px 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 241, 234, 0.98)),
+    var(--paper-lift);
+  box-shadow:
+    0 18px 38px rgba(24, 35, 49, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.74);
+}
+
+.route-url-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: 0.64rem 0.72rem;
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 14px 5px 14px 5px;
+  background: rgba(251, 248, 240, 0.72);
+  color: var(--ink);
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.route-url-suggestion:hover,
+.route-url-suggestion:focus-visible,
+.route-url-suggestion[aria-selected="true"],
+.route-url-suggestion[data-active="true"] {
+  border-color: color-mix(in srgb, var(--primary) 38%, rgba(24, 35, 49, 0.12));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 241, 234, 0.96)),
+    var(--paper-lift);
+  box-shadow: 0 8px 18px rgba(24, 35, 49, 0.08);
+}
+
+.route-url-suggestion-main,
+.route-url-suggestion-meta {
+  display: grid;
+  min-width: 0;
+}
+
+.route-url-suggestion-main {
+  gap: 0.18rem;
+}
+
+.route-url-suggestion-main strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-url-suggestion-main small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-url-suggestion-meta {
+  justify-items: end;
+  gap: 0.18rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.config-portable-panel {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid rgba(24, 35, 49, 0.12);
+  border-radius: 22px 8px 22px 8px;
+  background:
+    linear-gradient(135deg, rgba(13, 148, 136, 0.08), transparent 46%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(244, 241, 234, 0.92)),
+    rgba(251, 248, 240, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.68),
+    0 10px 22px rgba(24, 35, 49, 0.06);
+}
+
+.config-portable-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.config-portable-head > div {
+  min-width: 0;
+}
+
+.config-portable-head h3 {
+  margin: 0.2rem 0 0;
+  color: var(--ink);
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.config-portable-head p:last-child {
+  max-width: 68ch;
+  margin: 0.38rem 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.config-portable-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.78fr) minmax(0, 1.22fr);
+  gap: var(--space-3);
+}
+
+.config-portable-card,
+.config-import-summary {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  padding: var(--space-3);
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 18px 8px 18px 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 241, 234, 0.94)),
+    rgba(251, 248, 240, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.66),
+    0 6px 14px rgba(24, 35, 49, 0.05);
+}
+
+.config-file-drop {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  gap: 0.34rem;
+  padding: var(--space-4);
+  border: 1px dashed rgba(13, 148, 136, 0.38);
+  border-radius: 18px 6px 18px 6px;
+  background:
+    radial-gradient(circle at 30% 18%, rgba(13, 148, 136, 0.16), transparent 34%),
+    rgba(205, 238, 232, 0.24);
+  color: var(--ink);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.config-file-drop:hover,
+.config-portable-card:has(.config-file-input:focus-visible) .config-file-drop {
+  border-color: rgba(36, 84, 214, 0.48);
+  background:
+    radial-gradient(circle at 30% 18%, rgba(36, 84, 214, 0.16), transparent 34%),
+    rgba(217, 227, 255, 0.28);
+  box-shadow: 0 8px 18px rgba(24, 35, 49, 0.08);
+  transform: translateY(-1px);
+}
+
+.config-file-drop span {
+  color: var(--teal);
+  font-size: 0.74rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.config-file-drop strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.config-file-drop small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.config-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.config-import-summary-head,
+.config-import-confirm {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.config-import-summary-head strong {
+  color: var(--ink);
+}
+
+.config-import-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.config-import-summary-grid div,
+.config-import-empty,
+.inline-success {
+  padding: 0.72rem;
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 14px 5px 14px 5px;
+  background: rgba(251, 248, 240, 0.7);
+}
+
+.config-import-summary-grid div.is-warn {
+  border-color: rgba(216, 138, 29, 0.34);
+  background: rgba(246, 221, 183, 0.34);
+}
+
+.config-import-summary-grid dt {
+  margin: 0 0 0.24rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.config-import-summary-grid dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.config-import-confirm {
+  padding-top: var(--space-2);
+  border-top: 1px solid rgba(24, 35, 49, 0.1);
+}
+
+.config-import-confirm p {
+  flex: 1 1 280px;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.config-import-empty {
+  display: grid;
+  gap: 0.38rem;
+  min-height: 150px;
+  align-content: center;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.config-import-empty strong {
+  color: var(--ink);
+}
+
+.inline-success {
+  background: var(--app-success-soft, #dcfce7);
+  color: var(--app-success, #15803d);
+  border-color: color-mix(in srgb, var(--app-success, #15803d) 34%, rgba(24, 35, 49, 0.1));
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
 .mode-card {
   display: grid;
   gap: var(--space-3);
@@ -6334,9 +6632,11 @@ textarea::placeholder {
 :root[data-theme] .logs-panel,
 :root[data-theme] .profile-card,
 :root[data-theme] .route-config-group,
-:root[data-theme] .mode-card,
-:root[data-theme] .route-config-card,
-:root[data-theme] .credential-state,
+  :root[data-theme] .mode-card,
+  :root[data-theme] .route-config-card,
+  :root[data-theme] .route-url-suggestions,
+  :root[data-theme] .route-url-suggestion,
+  :root[data-theme] .credential-state,
 :root[data-theme] .provider-card,
 :root[data-theme] .log-row,
 :root[data-theme] .empty-log {
@@ -6420,9 +6720,11 @@ textarea::placeholder {
 :root[data-theme] .log-filter-disclaimer,
 :root[data-theme] .log-load-more,
 :root[data-theme] .log-load-more span,
-:root[data-theme] .field small,
-:root[data-theme] .profile-card-copy p:last-child,
-:root[data-theme] .route-config-group-head p,
+  :root[data-theme] .field small,
+  :root[data-theme] .profile-card-copy p:last-child,
+  :root[data-theme] .route-url-suggestion-main small,
+  :root[data-theme] .route-url-suggestion-meta,
+  :root[data-theme] .route-config-group-head p,
 :root[data-theme] .mode-card p,
 :root[data-theme] .log-model-cell small,
 :root[data-theme] .log-host,
@@ -6443,9 +6745,10 @@ textarea::placeholder {
 :root[data-theme] .log-user-agent,
 :root[data-theme] .log-detail-grid code,
 :root[data-theme] .log-row time,
-:root[data-theme] .log-row code,
-:root[data-theme] .provider-card strong,
-:root[data-theme] .custom-select-copy strong,
+  :root[data-theme] .log-row code,
+  :root[data-theme] .provider-card strong,
+  :root[data-theme] .route-url-suggestion-main strong,
+  :root[data-theme] .custom-select-copy strong,
 :root[data-theme] .custom-select-option strong {
   color: var(--app-text);
 }
@@ -6530,7 +6833,12 @@ textarea::placeholder {
 :root[data-theme] .panel.inspector,
 :root[data-theme] .preview-readout,
 :root[data-theme] .token-tooltip-panel,
-:root[data-theme] .confirm-panel {
+:root[data-theme] .confirm-panel,
+:root[data-theme] .config-portable-panel,
+:root[data-theme] .config-portable-card,
+:root[data-theme] .config-import-summary,
+:root[data-theme] .config-import-summary-grid div,
+:root[data-theme] .config-import-empty {
   border-color: var(--app-line);
   background: linear-gradient(
       180deg,
@@ -6540,6 +6848,64 @@ textarea::placeholder {
     var(--app-surface);
   color: var(--app-text);
   box-shadow: var(--app-shadow-soft);
+}
+
+:root[data-theme] .config-portable-panel {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--app-teal) 10%, transparent), transparent 46%),
+    linear-gradient(180deg, var(--app-surface), var(--app-surface-soft));
+}
+
+:root[data-theme] .config-portable-head h3,
+:root[data-theme] .config-file-drop strong,
+:root[data-theme] .config-import-summary-head strong,
+:root[data-theme] .config-import-summary-grid dd,
+:root[data-theme] .config-import-empty strong {
+  color: var(--app-text);
+}
+
+:root[data-theme] .config-portable-head p:last-child,
+:root[data-theme] .config-file-drop small,
+:root[data-theme] .config-import-confirm p,
+:root[data-theme] .config-import-empty,
+:root[data-theme] .config-import-summary-grid dt {
+  color: var(--app-muted);
+}
+
+:root[data-theme] .config-file-drop {
+  border-color: color-mix(in srgb, var(--app-teal) 38%, var(--app-line));
+  background:
+    radial-gradient(circle at 28% 16%, color-mix(in srgb, var(--app-teal) 15%, transparent), transparent 36%),
+    color-mix(in srgb, var(--app-surface-soft) 90%, transparent);
+  color: var(--app-text);
+}
+
+:root[data-theme] .config-file-drop:hover,
+:root[data-theme] .config-portable-card:has(.config-file-input:focus-visible) .config-file-drop {
+  border-color: color-mix(in srgb, var(--app-blue) 52%, var(--app-line));
+  background:
+    radial-gradient(circle at 28% 16%, color-mix(in srgb, var(--app-blue) 16%, transparent), transparent 36%),
+    color-mix(in srgb, var(--app-surface-raised) 92%, transparent);
+  box-shadow: var(--app-shadow-soft);
+}
+
+:root[data-theme] .config-file-drop span {
+  color: var(--app-teal);
+}
+
+:root[data-theme] .config-import-summary-grid div.is-warn {
+  border-color: color-mix(in srgb, var(--app-amber) 36%, var(--app-line));
+  background: var(--app-amber-soft);
+}
+
+:root[data-theme] .config-import-confirm {
+  border-top-color: var(--app-line);
+}
+
+:root[data-theme] .inline-success {
+  border-color: color-mix(in srgb, var(--app-success) 36%, var(--app-line));
+  background: var(--app-success-soft);
+  color: var(--app-success);
 }
 
 :root[data-theme] .command-deck.operator-ribbon {
@@ -7110,6 +7476,8 @@ textarea::placeholder {
 :root[data-theme="dark"] .live-config .route-config-group-head p,
 :root[data-theme="dark"] .live-config .mode-card p,
 :root[data-theme="dark"] .live-config .field small,
+:root[data-theme="dark"] .live-config .route-url-suggestion-main small,
+:root[data-theme="dark"] .live-config .route-url-suggestion-meta,
 :root[data-theme="dark"] .live-config .profile-empty-card span,
 :root[data-theme="dark"] .live-config .profile-item-copy small,
 :root[data-theme="dark"] .live-config .profile-item-copy > span:last-child,
@@ -7235,6 +7603,8 @@ textarea::placeholder {
 :root[data-theme="dark"] .live-config .profile-card,
 :root[data-theme="dark"] .live-config .route-config-group,
 :root[data-theme="dark"] .live-config .mode-card,
+:root[data-theme="dark"] .live-config .route-url-suggestions,
+:root[data-theme="dark"] .live-config .route-url-suggestion,
 :root[data-theme="dark"] .live-config .profile-empty-card,
 :root[data-theme="dark"] .live-config .profile-item,
 :root[data-theme="dark"] .live-config .profile-card-status span {
@@ -7293,6 +7663,9 @@ textarea::placeholder {
 :root[data-theme="dark"] .live-config .profile-item-actions .ghost-button:hover,
 :root[data-theme="dark"] .live-config .profile-save-button:hover,
 :root[data-theme="dark"] .live-config .field-inline-button:hover,
+:root[data-theme="dark"] .live-config .route-url-suggestion:hover,
+:root[data-theme="dark"] .live-config .route-url-suggestion:focus-visible,
+:root[data-theme="dark"] .live-config .route-url-suggestion[data-active="true"],
 :root[data-theme="dark"] .live-config .compound-input button:hover {
   border-color: #4f76a5;
   background:
@@ -7534,6 +7907,7 @@ textarea::placeholder {
 .log-list,
 .profile-list,
 .health-json,
+.route-url-suggestions,
 .custom-select-menu {
   scrollbar-width: thin;
   scrollbar-color: var(--app-line) transparent;
@@ -7542,6 +7916,7 @@ textarea::placeholder {
 .log-list::-webkit-scrollbar,
 .profile-list::-webkit-scrollbar,
 .health-json::-webkit-scrollbar,
+.route-url-suggestions::-webkit-scrollbar,
 .custom-select-menu::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -7550,6 +7925,7 @@ textarea::placeholder {
 .log-list::-webkit-scrollbar-track,
 .profile-list::-webkit-scrollbar-track,
 .health-json::-webkit-scrollbar-track,
+.route-url-suggestions::-webkit-scrollbar-track,
 .custom-select-menu::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -7557,6 +7933,7 @@ textarea::placeholder {
 .log-list::-webkit-scrollbar-thumb,
 .profile-list::-webkit-scrollbar-thumb,
 .health-json::-webkit-scrollbar-thumb,
+.route-url-suggestions::-webkit-scrollbar-thumb,
 .custom-select-menu::-webkit-scrollbar-thumb {
   background: var(--app-line);
   border-radius: 999px;
@@ -7565,6 +7942,7 @@ textarea::placeholder {
 .log-list::-webkit-scrollbar-thumb:hover,
 .profile-list::-webkit-scrollbar-thumb:hover,
 .health-json::-webkit-scrollbar-thumb:hover,
+.route-url-suggestions::-webkit-scrollbar-thumb:hover,
 .custom-select-menu::-webkit-scrollbar-thumb:hover {
   background: var(--app-line-strong);
 }

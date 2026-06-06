@@ -10,6 +10,8 @@ import type {
   ConfigProfileScope,
   PublicConfig,
   PublicConfigProfile,
+  RouteUrlPreset,
+  RouteUrlPresetKind,
   SavedClaudeProfileConfig,
   SavedCodexProfileConfig,
   SavedConfigProfile,
@@ -26,6 +28,13 @@ const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
   "haiku",
   "reasoning",
   "subagent"
+];
+
+const ROUTE_URL_PRESET_KINDS: RouteUrlPresetKind[] = [
+  "codex_primary",
+  "codex_compact",
+  "claude_primary",
+  "claude_compact"
 ];
 
 function emptyClaudeModelMap(): ClaudeModelMap {
@@ -89,7 +98,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       profiles: [],
       active_profile_id: null
     }
-  }
+  },
+  route_url_presets: []
 };
 
 export class ConfigError extends Error {
@@ -150,13 +160,30 @@ export class ConfigStore {
     }
 
     const merged = mergeConfig(this.current, patch);
-    const next = syncActiveProfilesFromRuntime({
+    const next = withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
       ...merged,
       profiles: undefined,
       active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
-    });
+    }), routeUrlEntriesFromRuntime(merged));
     validateConfig(next);
     this.current = next;
+    await this.save();
+    return this.get();
+  }
+
+  async importConfig(value: unknown): Promise<CompactGateConfig> {
+    if (!isRecord(value)) {
+      throw new ConfigError("Imported config must be a JSON object.");
+    }
+
+    const merged = mergeConfig(DEFAULT_CONFIG, value);
+    const imported = {
+      ...merged,
+      profiles: undefined,
+      active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
+    };
+    validateConfig(imported);
+    this.current = imported;
     await this.save();
     return this.get();
   }
@@ -210,6 +237,10 @@ export class ConfigStore {
             ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
           }
         : nextConfig;
+    this.current = withRecordedRouteUrlPresets(
+      this.current,
+      routeUrlEntriesFromProfileConfig(profileConfig, scope)
+    );
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -275,6 +306,10 @@ export class ConfigStore {
             ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
           }
         : nextConfig;
+    this.current = withRecordedRouteUrlPresets(
+      this.current,
+      routeUrlEntriesFromProfileConfig(profileConfig, scope)
+    );
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -393,7 +428,8 @@ export class ConfigStore {
     this.current = withProfileScope(
       {
         ...nextRuntime,
-        profile_scopes: this.current.profile_scopes
+        profile_scopes: this.current.profile_scopes,
+        route_url_presets: this.current.route_url_presets
       },
       scope,
       {
@@ -473,6 +509,7 @@ export class ConfigStore {
         codex: publicProfileScope(config, "codex"),
         claude: publicProfileScope(config, "claude")
       },
+      route_url_presets: (config.route_url_presets ?? []).map(cloneRouteUrlPreset),
       config_path: this.configPath,
       last_saved_at: this.lastSavedAt
     };
@@ -492,6 +529,10 @@ export class ConfigStore {
 export function validateConfig(config: CompactGateConfig): void {
   validateRuntimeConfig(config);
 
+  for (const preset of config.route_url_presets ?? []) {
+    validateRouteUrlPreset(preset);
+  }
+
   for (const scope of PROFILE_SCOPES) {
     const state = getProfileScopeState(config, scope);
     for (const profile of state.profiles) {
@@ -509,6 +550,15 @@ export function validateConfig(config: CompactGateConfig): void {
     if (state.active_profile_id && !state.profiles.some((profile) => profile.id === state.active_profile_id)) {
       throw new ConfigError(`${scope}.active_profile_id must reference an existing profile.`);
     }
+  }
+}
+
+function validateRouteUrlPreset(preset: RouteUrlPreset): void {
+  validateRouteUrlPresetKind(preset.kind);
+  validateBaseUrl(preset.base_url, `route_url_presets.${preset.kind}.base_url`);
+
+  if (!Number.isInteger(preset.usage_count) || preset.usage_count < 1) {
+    throw new ConfigError("route_url_presets.usage_count must be a positive integer.");
   }
 }
 
@@ -626,6 +676,12 @@ function validateUpstreamMode(value: string): asserts value is CompactUpstreamMo
   }
 }
 
+function validateRouteUrlPresetKind(value: string): asserts value is RouteUrlPresetKind {
+  if (!ROUTE_URL_PRESET_KINDS.includes(value as RouteUrlPresetKind)) {
+    throw new ConfigError("route_url_presets.kind must be a known route URL preset kind.");
+  }
+}
+
 function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig {
   const patchRecord = isRecord(patch) ? patch : {};
   const runtime = mergeRuntimeConfig(base, patchRecord);
@@ -635,7 +691,8 @@ function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig
     ...runtime,
     profiles: undefined,
     active_profile_id: profileScopes.codex?.active_profile_id ?? null,
-    profile_scopes: profileScopes
+    profile_scopes: profileScopes,
+    route_url_presets: mergeRouteUrlPresets(base.route_url_presets, patchRecord.route_url_presets)
   };
 }
 
@@ -644,28 +701,29 @@ function mergeRuntimeConfig(
   patch: unknown
 ): CompactGateRuntimeConfig {
   const patchRecord = isRecord(patch) ? patch : {};
+  const compactPatch = readChild(patchRecord.compact);
 
   return {
     listen: readString(patchRecord.listen, base.listen),
     primary: mergeUpstreamConfig(base.primary, readChild(patchRecord.primary)),
     compact: {
-      base_url: readString(readChild(patchRecord.compact).base_url, base.compact.base_url),
-      api_key: readSensitiveString(readChild(patchRecord.compact).api_key, base.compact.api_key),
-      api_key_env: readString(readChild(patchRecord.compact).api_key_env, base.compact.api_key_env),
+      base_url: readString(compactPatch.base_url, base.compact.base_url),
+      api_key: readSensitiveString(compactPatch.api_key, base.compact.api_key),
+      api_key_env: readString(compactPatch.api_key_env, base.compact.api_key_env),
       upstream_mode: readString(
-        readChild(patchRecord.compact).upstream_mode,
+        compactPatch.upstream_mode,
         base.compact.upstream_mode
       ) as CompactUpstreamMode,
       model_mode: readString(
-        readChild(patchRecord.compact).model_mode,
+        compactPatch.model_mode,
         base.compact.model_mode
       ) as CompactModelMode,
       model_template: readString(
-        readChild(patchRecord.compact).model_template,
+        compactPatch.model_template,
         base.compact.model_template
       ),
       model_override: readString(
-        readChild(patchRecord.compact).model_override,
+        compactPatch.model_override,
         base.compact.model_override
       )
     },
@@ -788,6 +846,174 @@ function mergeClaudeCompactConfig(
     upstream_mode: readString(patch.upstream_mode, base.upstream_mode) as CompactUpstreamMode,
     model_override: readString(patch.model_override, base.model_override)
   };
+}
+
+type RouteUrlPresetEntry = Pick<RouteUrlPreset, "kind" | "base_url">;
+
+function routeUrlEntriesFromRuntime(config: CompactGateRuntimeConfig): RouteUrlPresetEntry[] {
+  return [
+    { kind: "codex_primary", base_url: config.primary.base_url },
+    { kind: "codex_compact", base_url: config.compact.base_url },
+    { kind: "claude_primary", base_url: config.claude.primary.base_url },
+    { kind: "claude_compact", base_url: config.claude.compact.base_url }
+  ];
+}
+
+function routeUrlEntriesFromProfileConfig(
+  config: SavedConfigProfileConfig,
+  scope: ConfigProfileScope
+): RouteUrlPresetEntry[] {
+  const runtime = profileConfigToRuntime(config);
+  if (scope === "codex") {
+    return [
+      { kind: "codex_primary", base_url: runtime.primary.base_url },
+      { kind: "codex_compact", base_url: runtime.compact.base_url }
+    ];
+  }
+
+  return [
+    { kind: "claude_primary", base_url: runtime.claude.primary.base_url },
+    { kind: "claude_compact", base_url: runtime.claude.compact.base_url }
+  ];
+}
+
+function withRecordedRouteUrlPresets(
+  config: CompactGateConfig,
+  entries: RouteUrlPresetEntry[]
+): CompactGateConfig {
+  if (entries.length === 0) {
+    return {
+      ...config,
+      route_url_presets: (config.route_url_presets ?? []).map(cloneRouteUrlPreset)
+    };
+  }
+
+  const now = new Date().toISOString();
+  const presets = (config.route_url_presets ?? []).map(cloneRouteUrlPreset);
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    const kind = entry.kind;
+    const baseUrl = entry.base_url.trim();
+    if (!baseUrl) {
+      continue;
+    }
+
+    validateRouteUrlPresetKind(kind);
+    validateBaseUrl(baseUrl, `route_url_presets.${kind}.base_url`);
+
+    const key = routeUrlPresetKey(kind, baseUrl);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+
+    const existing = presets.find((preset) => routeUrlPresetKey(preset.kind, preset.base_url) === key);
+    if (existing) {
+      existing.base_url = baseUrl;
+      existing.host = safeHost(baseUrl);
+      existing.updated_at = now;
+      existing.usage_count += 1;
+      continue;
+    }
+
+    presets.push({
+      id: createRouteUrlPresetId(kind, baseUrl),
+      kind,
+      base_url: baseUrl,
+      host: safeHost(baseUrl),
+      created_at: now,
+      updated_at: now,
+      usage_count: 1
+    });
+  }
+
+  return {
+    ...config,
+    route_url_presets: sortRouteUrlPresets(presets)
+  };
+}
+
+function mergeRouteUrlPresets(
+  baseValue: RouteUrlPreset[] | undefined,
+  patchValue: unknown
+): RouteUrlPreset[] {
+  const source = Array.isArray(patchValue) ? patchValue : baseValue ?? [];
+  return sortRouteUrlPresets(
+    source
+      .map(readRouteUrlPreset)
+      .filter((preset): preset is RouteUrlPreset => preset !== null)
+  );
+}
+
+function readRouteUrlPreset(value: unknown): RouteUrlPreset | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const kind = readString(value.kind, "");
+  if (!ROUTE_URL_PRESET_KINDS.includes(kind as RouteUrlPresetKind)) {
+    return null;
+  }
+
+  const baseUrl = readString(value.base_url, "");
+  if (!baseUrl || !isValidBaseUrl(baseUrl)) {
+    return null;
+  }
+
+  const createdAt = readString(value.created_at, new Date(0).toISOString());
+  const updatedAt = readString(value.updated_at, createdAt);
+  const usageCount = readNumber(value.usage_count, 1);
+
+  return {
+    id: readString(value.id, createRouteUrlPresetId(kind as RouteUrlPresetKind, baseUrl)),
+    kind: kind as RouteUrlPresetKind,
+    base_url: baseUrl,
+    host: safeHost(baseUrl),
+    created_at: createdAt,
+    updated_at: updatedAt,
+    usage_count: Number.isInteger(usageCount) && usageCount > 0 ? usageCount : 1
+  };
+}
+
+function cloneRouteUrlPreset(preset: RouteUrlPreset): RouteUrlPreset {
+  return { ...preset };
+}
+
+function sortRouteUrlPresets(presets: RouteUrlPreset[]): RouteUrlPreset[] {
+  return [...presets].sort((left, right) => {
+    const kindDelta = ROUTE_URL_PRESET_KINDS.indexOf(left.kind) - ROUTE_URL_PRESET_KINDS.indexOf(right.kind);
+    if (kindDelta !== 0) {
+      return kindDelta;
+    }
+    return right.updated_at.localeCompare(left.updated_at) || left.base_url.localeCompare(right.base_url);
+  });
+}
+
+function createRouteUrlPresetId(kind: RouteUrlPresetKind, baseUrl: string): string {
+  const slug = baseUrl
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "url";
+  return `${kind}-${slug}-${stableHash(baseUrl)}`;
+}
+
+function routeUrlPresetKey(kind: RouteUrlPresetKind, baseUrl: string): string {
+  return `${kind}:${normalizeRouteUrl(baseUrl)}`;
+}
+
+function normalizeRouteUrl(value: string): string {
+  return value.trim().replace(/\/+$/g, "");
+}
+
+function stableHash(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
 }
 
 function mergeRuntimeForProfileScope(
@@ -1018,7 +1244,8 @@ function withProfileScope(
     ...cloneRuntimeConfig(config),
     profiles: undefined,
     active_profile_id: nextScopes.codex?.active_profile_id ?? null,
-    profile_scopes: nextScopes
+    profile_scopes: nextScopes,
+    route_url_presets: (config.route_url_presets ?? []).map(cloneRouteUrlPreset)
   };
 }
 
@@ -1254,6 +1481,10 @@ function toPublicProfile(profile: SavedConfigProfile, scope: ConfigProfileScope)
     name: profile.name,
     created_at: profile.created_at,
     updated_at: profile.updated_at,
+    primary_base_url: codexProfile ? runtime.primary.base_url : null,
+    compact_base_url: codexProfile ? runtime.compact.base_url : null,
+    claude_primary_base_url: codexProfile ? null : runtime.claude.primary.base_url,
+    claude_compact_base_url: codexProfile ? null : runtime.claude.compact.base_url,
     primary_host: codexProfile ? safeHost(runtime.primary.base_url) : null,
     compact_host: codexProfile ? safeHost(runtime.compact.base_url) : null,
     claude_primary_host: codexProfile ? null : safeHost(runtime.claude.primary.base_url),
@@ -1272,6 +1503,15 @@ function safeHost(value: string): string {
     return new URL(value).host;
   } catch {
     return "invalid";
+  }
+}
+
+function isValidBaseUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
   }
 }
 

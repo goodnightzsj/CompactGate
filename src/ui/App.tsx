@@ -816,6 +816,24 @@ function App() {
     }
   }
 
+  async function importConfig(payload: CompactGateConfig) {
+    const nextConfig = await api<PublicConfig>("/api/config/import", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    const nextHealth = await api<HealthResponse>("/api/health", {
+      method: "GET"
+    });
+
+    setConfig(nextConfig);
+    setHealth(nextHealth);
+    setForm(formFromConfig(nextConfig));
+    setSaveError(null);
+    setSaveState("saved");
+    setPageError(null);
+    window.setTimeout(() => setSaveState("idle"), 1600);
+  }
+
   async function refreshHealth() {
     setIsRefreshingHealth(true);
 
@@ -943,6 +961,8 @@ function App() {
             onBodyChange={setPreviewBody}
             onPreviewSubmit={previewRoute}
             onSaveConfig={saveConfig}
+            onExportConfig={exportConfig}
+            onImportConfig={importConfig}
           />
         )}
 
@@ -1798,7 +1818,8 @@ function applyDraftToConfigExport(
     logging: { ...config.logging },
     profiles: config.profiles,
     active_profile_id: config.active_profile_id,
-    profile_scopes: config.profile_scopes
+    profile_scopes: config.profile_scopes,
+    route_url_presets: config.route_url_presets
   };
 
   applyApiKeyDraft(next.primary, form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey);

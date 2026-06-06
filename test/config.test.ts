@@ -33,6 +33,12 @@ describe("ConfigStore", () => {
     expect(next.compact.model_mode).toBe("custom");
     expect(next.compact.model_override).toBe("manual-compact");
     expect(next.logging.keep_recent).toBe(17);
+    expect(next.route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:9001/v1" }),
+        expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:9002/v1" })
+      ])
+    );
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       primary: { base_url: "http://127.0.0.1:9001/v1" },
       compact: { model_override: "manual-compact" }
@@ -55,6 +61,7 @@ describe("ConfigStore", () => {
 
     expect(JSON.stringify(publicConfig)).not.toContain("secret-primary");
     expect(JSON.stringify(publicConfig)).not.toContain("saved-primary-key");
+    expect(JSON.stringify(publicConfig.route_url_presets)).not.toContain("saved-primary-key");
     expect("api_key" in publicConfig.primary).toBe(false);
     expect(publicConfig.primary.stored_api_key).toBe(true);
     expect(publicConfig.primary.api_key_configured).toBe(true);
@@ -207,6 +214,13 @@ describe("ConfigStore", () => {
     });
     const profileId = saved.profile_scopes?.codex?.profiles?.[0]?.id;
     expect(profileId).toBeTruthy();
+    expect(saved.route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:9201/v1" }),
+        expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:9202/v1" })
+      ])
+    );
+    expect(JSON.stringify(saved.route_url_presets)).not.toContain("profile-compact-key");
 
     const publicConfig = store.toPublicConfig();
     expect(publicConfig.profiles).toHaveLength(1);
@@ -214,6 +228,10 @@ describe("ConfigStore", () => {
       id: profileId,
       scope: "codex",
       name: "Local split",
+      primary_base_url: "http://127.0.0.1:9201/v1",
+      compact_base_url: "http://127.0.0.1:9202/v1",
+      claude_primary_base_url: null,
+      claude_compact_base_url: null,
       primary_host: "127.0.0.1:9201",
       compact_host: "127.0.0.1:9202",
       claude_primary_host: null,
@@ -232,6 +250,7 @@ describe("ConfigStore", () => {
     expect(applied.primary.api_key).toBe("profile-primary-key");
     expect(applied.compact.model_override).toBe("profile-compact-model");
     expect(applied.claude.compact.base_url).toBe("https://api.anthropic.com");
+    expect(applied.route_url_presets).toEqual(saved.route_url_presets);
 
     await store.patch({
       primary: {
@@ -333,7 +352,19 @@ describe("ConfigStore", () => {
         }
       }
     });
+    expect(saved.route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:9501/v1" }),
+        expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:9502/v1" }),
+        expect.objectContaining({ kind: "claude_primary", base_url: "http://127.0.0.1:9503" }),
+        expect.objectContaining({ kind: "claude_compact", base_url: "http://127.0.0.1:9504" })
+      ])
+    );
     expect(store.toPublicConfig().profile_scopes.claude.profiles[0]).toMatchObject({
+      primary_base_url: null,
+      compact_base_url: null,
+      claude_primary_base_url: "http://127.0.0.1:9503",
+      claude_compact_base_url: "http://127.0.0.1:9504",
       claude_primary_model_override: "claude-profile-primary-model",
       claude_compact_model_override: "claude-profile-compact-model"
     });
@@ -525,6 +556,141 @@ describe("ConfigStore", () => {
     ).toMatchObject({
       primary: { base_url: "http://127.0.0.1:9941/v1" },
       compact: { model_override: "inactive-resaved-model" }
+    });
+  });
+
+  it("imports a full config without recording URL preset usage or rewriting active profiles", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-config-"));
+    cleanupPaths.push(dir);
+
+    const configPath = path.join(dir, "compactgate.json");
+    const store = await ConfigStore.load(configPath);
+    await store.patch({
+      primary: { base_url: "http://127.0.0.1:9951/v1" },
+      compact: { base_url: "http://127.0.0.1:9952/v1" }
+    });
+
+    const imported = await store.importConfig({
+      listen: "127.0.0.1:7965",
+      primary: {
+        base_url: "http://127.0.0.1:9961/v1",
+        api_key: "import-primary-key",
+        api_key_env: ""
+      },
+      compact: {
+        base_url: "http://127.0.0.1:9962/v1",
+        api_key: "",
+        api_key_env: "",
+        upstream_mode: "split",
+        model_mode: "custom",
+        model_template: "{model}-imported",
+        model_override: "imported-compact-model"
+      },
+      claude: {
+        primary: {
+          base_url: "http://127.0.0.1:9963",
+          api_key: "",
+          api_key_env: "ANTHROPIC_AUTH_TOKEN",
+          model_override: "imported-claude-default"
+        },
+        compact: {
+          base_url: "http://127.0.0.1:9964",
+          api_key: "",
+          api_key_env: "ANTHROPIC_AUTH_TOKEN",
+          upstream_mode: "split",
+          model_override: "imported-claude-compact"
+        },
+        model_map: {
+          default: "imported-claude-default",
+          opus: "",
+          sonnet: "",
+          haiku: "",
+          reasoning: "",
+          subagent: ""
+        }
+      },
+      timeouts: {
+        primary_ms: 1000,
+        compact_ms: 2000,
+        claude_ms: 3000
+      },
+      logging: {
+        redact_body: false,
+        keep_recent: 77
+      },
+      profile_scopes: {
+        codex: {
+          active_profile_id: "codex-import",
+          profiles: [
+            {
+              id: "codex-import",
+              name: "Codex imported",
+              created_at: "2026-06-06T00:00:00.000Z",
+              updated_at: "2026-06-06T00:00:00.000Z",
+              config: {
+                primary: { base_url: "http://127.0.0.1:9971/v1", api_key: "profile-primary-key" },
+                compact: {
+                  base_url: "http://127.0.0.1:9972/v1",
+                  model_mode: "custom",
+                  model_override: "profile-compact-model"
+                }
+              }
+            }
+          ]
+        },
+        claude: {
+          active_profile_id: null,
+          profiles: []
+        }
+      },
+      route_url_presets: [
+        {
+          id: "imported-codex-primary",
+          kind: "codex_primary",
+          base_url: "http://127.0.0.1:9961/v1",
+          host: "127.0.0.1:9961",
+          created_at: "2026-06-06T00:00:00.000Z",
+          updated_at: "2026-06-06T00:00:00.000Z",
+          usage_count: 7
+        }
+      ]
+    });
+
+    expect(imported.primary.base_url).toBe("http://127.0.0.1:9961/v1");
+    expect(imported.primary.api_key).toBe("import-primary-key");
+    expect(imported.compact.model_override).toBe("imported-compact-model");
+    expect(imported.profile_scopes?.codex?.active_profile_id).toBe("codex-import");
+    expect(imported.profile_scopes?.codex?.profiles?.[0]?.config).toMatchObject({
+      primary: {
+        base_url: "http://127.0.0.1:9971/v1",
+        api_key: "profile-primary-key"
+      },
+      compact: {
+        base_url: "http://127.0.0.1:9972/v1",
+        model_override: "profile-compact-model"
+      }
+    });
+    expect(imported.route_url_presets).toEqual([
+      expect.objectContaining({
+        kind: "codex_primary",
+        base_url: "http://127.0.0.1:9961/v1",
+        host: "127.0.0.1:9961",
+        usage_count: 7
+      })
+    ]);
+
+    const publicConfig = store.toPublicConfig();
+    expect(JSON.stringify(publicConfig)).not.toContain("import-primary-key");
+    expect(JSON.stringify(publicConfig)).not.toContain("profile-primary-key");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      primary: { base_url: "http://127.0.0.1:9961/v1", api_key: "import-primary-key" },
+      route_url_presets: [
+        {
+          kind: "codex_primary",
+          base_url: "http://127.0.0.1:9961/v1",
+          usage_count: 7
+        }
+      ]
     });
   });
 

@@ -4,6 +4,7 @@ export type LogStatusKind = "normal" | "error";
 export type CredentialScope = "primary" | "compact" | "claude" | "claude_primary" | "claude_compact";
 export type CredentialSource = "config" | "env" | "missing";
 export type ConfigProfileScope = "codex" | "claude";
+export type RouteUrlPresetKind = "codex_primary" | "codex_compact" | "claude_primary" | "claude_compact";
 export type RequestTransport = "http" | "stream";
 
 export type CompactModelMode = "linked" | "custom";
@@ -92,12 +93,23 @@ export interface SavedConfigProfileScopes {
   claude?: SavedConfigProfileScopeState;
 }
 
+export interface RouteUrlPreset {
+  id: string;
+  kind: RouteUrlPresetKind;
+  base_url: string;
+  host: string;
+  created_at: string;
+  updated_at: string;
+  usage_count: number;
+}
+
 export interface CompactGateConfig extends CompactGateRuntimeConfig {
   /** @deprecated Legacy combined profiles. Loaded as both codex and claude profile scopes. */
   profiles?: SavedConfigProfile[];
   /** @deprecated Legacy combined active profile. Loaded as both codex and claude active profile IDs. */
   active_profile_id?: string | null;
   profile_scopes?: SavedConfigProfileScopes;
+  route_url_presets?: RouteUrlPreset[];
 }
 
 export interface PublicConfigProfile {
@@ -106,6 +118,10 @@ export interface PublicConfigProfile {
   name: string;
   created_at: string;
   updated_at: string;
+  primary_base_url: string | null;
+  compact_base_url: string | null;
+  claude_primary_base_url: string | null;
+  claude_compact_base_url: string | null;
   primary_host: string | null;
   compact_host: string | null;
   claude_primary_host: string | null;
@@ -169,6 +185,7 @@ export interface PublicConfig {
   /** @deprecated Use profile_scopes.codex.active_profile_id. */
   active_profile_id: string | null;
   profile_scopes: PublicConfigProfileScopes;
+  route_url_presets: RouteUrlPreset[];
   config_path: string;
   last_saved_at: string | null;
 }

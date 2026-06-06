@@ -181,6 +181,84 @@ describe("usage metadata extraction", () => {
     });
   });
 
+  it("normalizes OpenAI-compatible prompt cache hit and miss aliases", () => {
+    const usage = extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        choices: [],
+        usage: {
+          prompt_tokens: "123",
+          completion_tokens: 45,
+          total_tokens: 168,
+          prompt_cache_hit_tokens: 100,
+          prompt_cache_miss_tokens: 23
+        }
+      })),
+      { "content-type": "application/json" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 123,
+      outputTokens: 45,
+      cachedInputTokens: 100,
+      additiveCachedInputTokens: false,
+      totalTokens: 168
+    });
+  });
+
+  it("normalizes camelCase usage aliases returned by compatibility gateways", () => {
+    const usage = extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        response: {
+          usage: {
+            inputTokens: 31,
+            outputTokens: 9,
+            cacheReadTokens: 12,
+            cacheCreationTokens: 5,
+            reasoningTokens: 7,
+            totalTokens: 57
+          }
+        }
+      })),
+      { "content-type": "application/json" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 31,
+      outputTokens: 9,
+      cachedInputTokens: 17,
+      cacheReadInputTokens: 12,
+      cacheCreationInputTokens: 5,
+      reasoningTokens: 7,
+      additiveCachedInputTokens: true,
+      totalTokens: 57
+    });
+  });
+
+  it("normalizes Gemini usageMetadata fields nested in raw gateway responses", () => {
+    const usage = extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        candidates: [{ finishReason: "STOP" }],
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 20,
+          cachedContentTokenCount: 30,
+          thoughtsTokenCount: 50,
+          totalTokenCount: 170
+        }
+      })),
+      { "content-type": "application/json" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 70,
+      cachedInputTokens: 30,
+      reasoningTokens: 50,
+      additiveCachedInputTokens: false,
+      totalTokens: 170
+    });
+  });
+
   it("extracts visible Claude thinking effort fields when the request includes them", () => {
     const metadata = extractRequestMetadata(
       "/v1/messages",

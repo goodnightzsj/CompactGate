@@ -10,7 +10,7 @@
     "start": "node dist/server/main.js",
     "restart": "bash scripts/restart-service.sh",
     "service:restart": "bash scripts/restart-service.sh",
-    "test": "vitest run test/config.test.ts test/routing.test.ts test/server.test.ts test/usage.test.ts",
+    "test": "vitest run test/config.test.ts test/routing.test.ts test/primary-failover.test.ts test/server.test.ts test/usage.test.ts",
     "test:watch": "vitest",
     "stop": "bash scripts/stop-service.sh",
     "service:stop": "bash scripts/stop-service.sh"

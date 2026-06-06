@@ -4,8 +4,10 @@ import { routeLabel } from "../../shared/route-meta.js";
 import type {
   ClaudeModelMap,
   ClaudeModelMapRole,
+  CompactGateConfig,
   ConfigProfileScope,
   PublicConfig,
+  RouteUrlPresetKind,
   RoutePreviewResponse
 } from "../../shared/types.js";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
@@ -28,6 +30,36 @@ type PublicRouteCredentialConfig =
   | PublicConfig["claude"]["compact"];
 
 type ClaudeModelsResponse = { models: string[]; upstream_host: string; error: string | null };
+type ImportState = "idle" | "ready" | "importing" | "imported" | "error";
+type ImportCandidate = {
+  fileName: string;
+  sizeBytes: number;
+  config: CompactGateConfig;
+  summary: ConfigImportSummary;
+};
+type ConfigImportSummary = {
+  listen: string;
+  codexPrimaryHost: string;
+  codexCompactHost: string;
+  claudePrimaryHost: string;
+  codexProfileCount: number;
+  claudeProfileCount: number;
+  presetCount: number;
+  keepRecent: number | null;
+  hasDirectApiKeys: boolean;
+};
+
+type ImportSummaryItem = {
+  label: string;
+  value: string;
+  tone?: "warn";
+};
+type ProfileUrlSuggestion = {
+  baseUrl: string;
+  host: string;
+  profileName: string;
+  updatedAt: string;
+};
 
 export function ConfigPage({
   config, form, currentModel, linkedCompactModel, saveState, saveError,
@@ -38,7 +70,8 @@ export function ConfigPage({
   onProfileNameChange, onClaudeProfileNameChange, onSelectedProfileChange,
   onSaveProfile, onApplyProfile, onUpdateProfile, onReorderProfiles, onDuplicateProfile, onDeleteProfile,
   onUnlockCompactModel, onRestoreLinkedMode,
-  onPathChange, onBodyChange, onPreviewSubmit, onSaveConfig
+  onPathChange, onBodyChange, onPreviewSubmit, onSaveConfig,
+  onExportConfig, onImportConfig
 }: {
   config: PublicConfig | null; form: ConfigFormState; currentModel: string;
   linkedCompactModel: string; saveState: SaveState; saveError: string | null;
@@ -63,14 +96,76 @@ export function ConfigPage({
   onPathChange: (path: string) => void; onBodyChange: (body: string) => void;
   onPreviewSubmit: (event: React.FormEvent) => void;
   onSaveConfig: (event: React.FormEvent) => void;
+  onExportConfig: () => void | Promise<void>;
+  onImportConfig: (payload: CompactGateConfig) => void | Promise<void>;
 }) {
   const CONFIG_TABS: Array<{ id: ConfigTab; label: string }> = [
     { id: "profiles", label: "档案" },
     { id: "routes", label: "路由" },
     { id: "model", label: "模型" },
-    { id: "preview", label: "预览" }
+    { id: "preview", label: "预览" },
+    { id: "portable", label: "导入导出" }
   ];
   const applyTarget = activeProfileApplyTarget(config);
+  const [importCandidate, setImportCandidate] = useState<ImportCandidate | null>(null);
+  const [importState, setImportState] = useState<ImportState>("idle");
+  const [importError, setImportError] = useState<string | null>(null);
+
+  async function handleImportFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    setImportState("idle");
+    setImportError(null);
+
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!isRecord(parsed)) {
+        throw new Error("导入文件必须是 JSON 对象。");
+      }
+
+      const nextConfig = parsed as unknown as CompactGateConfig;
+      setImportCandidate({
+        fileName: file.name,
+        sizeBytes: file.size,
+        config: nextConfig,
+        summary: summarizeConfigImport(nextConfig)
+      });
+      setImportState("ready");
+    } catch (error) {
+      setImportCandidate(null);
+      setImportState("error");
+      setImportError(errorSummary(error));
+    }
+  }
+
+  async function confirmImportConfig() {
+    if (!importCandidate) {
+      setImportState("error");
+      setImportError("请先选择一个 compactgate JSON 配置文件。");
+      return;
+    }
+
+    setImportState("importing");
+    setImportError(null);
+
+    try {
+      await onImportConfig(importCandidate.config);
+      setImportState("imported");
+    } catch (error) {
+      setImportState("error");
+      setImportError(errorSummary(error));
+    }
+  }
+
+  function clearImportCandidate() {
+    setImportCandidate(null);
+    setImportState("idle");
+    setImportError(null);
+  }
 
   return (
     <>
@@ -143,6 +238,7 @@ export function ConfigPage({
                   baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
                   storedApiKey={config?.primary.stored_api_key ?? false}
                   clearApiKey={form.clearCodexPrimaryApiKey}
+                  profileUrlSuggestions={profileUrlSuggestions(config, "codex_primary")}
                   onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, codexPrimaryBaseUrl: value }))}
                   onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, codexPrimaryApiKey: value, clearCodexPrimaryApiKey: false }))}
                   onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, codexPrimaryApiKey: "", clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey }))}
@@ -154,9 +250,18 @@ export function ConfigPage({
                   baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
                   storedApiKey={config?.compact.stored_api_key ?? false}
                   clearApiKey={form.clearCodexCompactApiKey}
+                  profileUrlSuggestions={profileUrlSuggestions(config, "codex_compact")}
                   onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, codexCompactBaseUrl: value }))}
-                  onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, codexCompactApiKey: value, clearCodexCompactApiKey: false }))}
-                  onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, codexCompactApiKey: "", clearCodexCompactApiKey: !previous.clearCodexCompactApiKey }))}
+                  onApiKeyChange={(value) => onFormChange((previous) => ({
+                    ...previous,
+                    codexCompactApiKey: value,
+                    clearCodexCompactApiKey: false
+                  }))}
+                  onToggleClearApiKey={() => onFormChange((previous) => ({
+                    ...previous,
+                    codexCompactApiKey: "",
+                    clearCodexCompactApiKey: !previous.clearCodexCompactApiKey
+                  }))}
                 />
               </div>
               <div className="config-row">
@@ -167,6 +272,7 @@ export function ConfigPage({
                   baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
                   storedApiKey={config?.claude.primary.stored_api_key ?? false}
                   clearApiKey={form.clearClaudePrimaryApiKey}
+                  profileUrlSuggestions={profileUrlSuggestions(config, "claude_primary")}
                   onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, claudePrimaryBaseUrl: value }))}
                   onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: value, clearClaudePrimaryApiKey: false }))}
                   onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey }))}
@@ -255,6 +361,19 @@ export function ConfigPage({
                 </div>
               )}
             </div>
+          )}
+
+          {configTab === "portable" && (
+            <ConfigImportExportPanel
+              config={config}
+              importCandidate={importCandidate}
+              importState={importState}
+              importError={importError}
+              onFileChange={handleImportFileChange}
+              onExportConfig={onExportConfig}
+              onConfirmImport={confirmImportConfig}
+              onClearImport={clearImportCandidate}
+            />
           )}
         </div>
 
@@ -445,6 +564,288 @@ function activeProfileApplyTarget(config: PublicConfig | null): {
     savesActiveProfiles: true,
     hint: `会同步更新运行时和 ${activeProfileLabels.join("、")}。`
   };
+}
+
+function ConfigImportExportPanel({
+  config,
+  importCandidate,
+  importState,
+  importError,
+  onFileChange,
+  onExportConfig,
+  onConfirmImport,
+  onClearImport
+}: {
+  config: PublicConfig | null;
+  importCandidate: ImportCandidate | null;
+  importState: ImportState;
+  importError: string | null;
+  onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onExportConfig: () => void | Promise<void>;
+  onConfirmImport: () => void | Promise<void>;
+  onClearImport: () => void;
+}) {
+  const fileInputId = useId();
+  const summaryItems = importCandidate ? importSummaryItems(importCandidate.summary) : [];
+
+  return (
+    <section className="config-portable-panel" aria-labelledby="config-portable-title">
+      <div className="config-portable-head">
+        <div>
+          <p className="eyebrow">Portable Config</p>
+          <h3 id="config-portable-title">配置导入导出</h3>
+          <p>
+            导出当前配置为 compactgate JSON，或选择文件后先核对摘要，再确认覆盖当前运行时配置。
+            URL 预设只包含地址元数据；导入摘要不会显示任何 API key 值。
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!config}
+          onClick={() => void onExportConfig()}
+        >
+          导出配置
+        </button>
+      </div>
+
+      <div className="config-portable-grid">
+        <div className="config-portable-card">
+          <label className="config-file-drop" htmlFor={fileInputId}>
+            <span>选择 compactgate.json</span>
+            <strong>{importCandidate?.fileName ?? "尚未选择文件"}</strong>
+            <small>
+              {importCandidate
+                ? `${formatBytes(importCandidate.sizeBytes)}，确认前不会写入。`
+                : "本地解析后会显示覆盖摘要。"}
+            </small>
+          </label>
+          <input
+            id={fileInputId}
+            className="config-file-input"
+            type="file"
+            accept="application/json,.json"
+            onChange={onFileChange}
+          />
+
+          {importError && <div className="error-banner">{importError}</div>}
+          {importState === "imported" && (
+            <div className="inline-success" role="status">
+              导入完成，当前运行时配置已经刷新。
+            </div>
+          )}
+        </div>
+
+        <div className="config-import-summary" aria-live="polite">
+          {importCandidate ? (
+            <>
+              <div className="config-import-summary-head">
+                <strong>即将导入的配置摘要</strong>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={onClearImport}>
+                  清除选择
+                </button>
+              </div>
+              <dl className="config-import-summary-grid">
+                {summaryItems.map((item) => (
+                  <div key={item.label} className={item.tone === "warn" ? "is-warn" : ""}>
+                    <dt>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="config-import-confirm">
+                <p>
+                  导入会把文件作为新的完整配置保存，缺失字段由默认值补齐。这个操作不会增加 URL 预设使用次数。
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={importState === "importing"}
+                  onClick={() => void onConfirmImport()}
+                >
+                  {importState === "importing" ? "正在导入..." : "确认覆盖当前配置"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="config-import-empty">
+              <strong>先选择文件，再确认覆盖。</strong>
+              <span>CompactGate 会先在浏览器中解析 JSON 并显示摘要；只有点击确认后才会写入后端配置文件。</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function importSummaryItems(summary: ConfigImportSummary): ImportSummaryItem[] {
+  return [
+    { label: "监听地址", value: summary.listen },
+    { label: "Codex 主路由", value: summary.codexPrimaryHost },
+    { label: "Codex 压缩路由", value: summary.codexCompactHost },
+    { label: "Claude 主路由", value: summary.claudePrimaryHost },
+    { label: "Codex 档案", value: `${summary.codexProfileCount}` },
+    { label: "Claude 档案", value: `${summary.claudeProfileCount}` },
+    { label: "URL 预设", value: `${summary.presetCount}` },
+    { label: "保留日志", value: summary.keepRecent === null ? "默认或未声明" : `${summary.keepRecent} 条` },
+    {
+      label: "直填密钥",
+      value: summary.hasDirectApiKeys ? "文件包含直填 API key；摘要已隐藏具体值。" : "未检测到直填 API key。",
+      tone: summary.hasDirectApiKeys ? "warn" : undefined
+    }
+  ];
+}
+
+function summarizeConfigImport(config: CompactGateConfig): ConfigImportSummary {
+  return {
+    listen: typeof config.listen === "string" && config.listen.trim() ? config.listen.trim() : "默认或未声明",
+    codexPrimaryHost: hostLabel(readNestedString(config, ["primary", "base_url"])),
+    codexCompactHost: hostLabel(readNestedString(config, ["compact", "base_url"])),
+    claudePrimaryHost: hostLabel(readNestedString(config, ["claude", "primary", "base_url"])),
+    codexProfileCount: countProfiles(config, "codex"),
+    claudeProfileCount: countProfiles(config, "claude"),
+    presetCount: Array.isArray(config.route_url_presets) ? config.route_url_presets.length : 0,
+    keepRecent: typeof config.logging?.keep_recent === "number" ? config.logging.keep_recent : null,
+    hasDirectApiKeys: hasDirectApiKey(config)
+  };
+}
+
+function countProfiles(config: CompactGateConfig, scope: ConfigProfileScope): number {
+  const scopedProfiles = config.profile_scopes?.[scope]?.profiles;
+  if (Array.isArray(scopedProfiles)) {
+    return scopedProfiles.length;
+  }
+
+  return scope === "codex" && Array.isArray(config.profiles) ? config.profiles.length : 0;
+}
+
+function hasDirectApiKey(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasDirectApiKey);
+  }
+
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Object.entries(value).some(([key, child]) => {
+    if (key === "api_key") {
+      return typeof child === "string" && child.trim().length > 0;
+    }
+
+    return hasDirectApiKey(child);
+  });
+}
+
+function readNestedString(value: unknown, path: string[]): string | null {
+  let current = value;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return null;
+    }
+    current = current[part];
+  }
+
+  return typeof current === "string" ? current : null;
+}
+
+function hostLabel(value: string | null): string {
+  if (!value || !value.trim()) {
+    return "默认或未声明";
+  }
+
+  try {
+    return new URL(value).host;
+  } catch {
+    return "无效 URL";
+  }
+}
+
+function profileUrlSuggestions(
+  config: PublicConfig | null,
+  kind: RouteUrlPresetKind
+): ProfileUrlSuggestion[] {
+  if (!config) {
+    return [];
+  }
+
+  const scope: ConfigProfileScope = kind.startsWith("claude_") ? "claude" : "codex";
+  const profiles = profileScopeState(config, scope).profiles;
+  const seen = new Set<string>();
+  const suggestions: ProfileUrlSuggestion[] = [];
+
+  for (const profile of profiles) {
+    const baseUrl = profileUrlForKind(profile, kind);
+    if (!baseUrl) {
+      continue;
+    }
+
+    const key = normalizeUrlSuggestionKey(baseUrl);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    suggestions.push({
+      baseUrl,
+      host: hostLabel(baseUrl),
+      profileName: profile.name,
+      updatedAt: profile.updated_at
+    });
+  }
+
+  return suggestions;
+}
+
+function profileUrlForKind(
+  profile: PublicConfig["profiles"][number],
+  kind: RouteUrlPresetKind
+): string | null {
+  if (kind === "codex_primary") {
+    return profile.primary_base_url;
+  }
+
+  if (kind === "codex_compact") {
+    return profile.compact_base_url;
+  }
+
+  if (kind === "claude_primary") {
+    return profile.claude_primary_base_url;
+  }
+
+  return profile.claude_compact_base_url;
+}
+
+function normalizeUrlSuggestionKey(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    return url.toString().replace(/\/+$/g, "").toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/g, "").toLowerCase();
+  }
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function ProfileScopeCard({
@@ -903,6 +1304,7 @@ function RouteCredentialFields({
   apiKey,
   storedApiKey,
   clearApiKey,
+  profileUrlSuggestions = [],
   onBaseUrlChange,
   onApiKeyChange,
   onToggleClearApiKey
@@ -918,10 +1320,38 @@ function RouteCredentialFields({
   apiKey: string;
   storedApiKey: boolean;
   clearApiKey: boolean;
+  profileUrlSuggestions?: ProfileUrlSuggestion[];
   onBaseUrlChange: (value: string) => void;
   onApiKeyChange: (value: string) => void;
   onToggleClearApiKey: () => void;
 }) {
+  const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const suggestionsId = useId();
+  const visibleSuggestions = profileUrlSuggestions.slice(0, 8);
+  const showSuggestions = urlSuggestionsOpen && visibleSuggestions.length > 0;
+  const activeSuggestionId =
+    showSuggestions && activeSuggestionIndex >= 0
+      ? `${suggestionsId}-option-${activeSuggestionIndex}`
+      : undefined;
+
+  useEffect(() => {
+    if (!showSuggestions) {
+      setActiveSuggestionIndex(-1);
+      return;
+    }
+
+    setActiveSuggestionIndex((previous) =>
+      previous >= visibleSuggestions.length ? visibleSuggestions.length - 1 : previous
+    );
+  }, [showSuggestions, visibleSuggestions.length]);
+
+  function selectSuggestion(suggestion: ProfileUrlSuggestion) {
+    onBaseUrlChange(suggestion.baseUrl);
+    setUrlSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+  }
+
   return (
     <section className={`route-config-card tone-${tone}`} aria-label={title}>
       <div className="route-config-card-head">
@@ -930,12 +1360,95 @@ function RouteCredentialFields({
       </div>
 
       <Field label={baseUrlLabel} hint={baseUrlHint}>
-        <input
-          aria-label={baseUrlLabel}
-          value={baseUrl}
-          onChange={(event) => onBaseUrlChange(event.target.value)}
-          spellCheck={false}
-        />
+        <div className="route-url-input-wrap">
+          <input
+            aria-label={baseUrlLabel}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeSuggestionId}
+            aria-controls={showSuggestions ? suggestionsId : undefined}
+            aria-expanded={showSuggestions}
+            aria-haspopup="listbox"
+            value={baseUrl}
+            onFocus={() => setUrlSuggestionsOpen(true)}
+            onBlur={() => {
+              window.setTimeout(() => {
+                setUrlSuggestionsOpen(false);
+                setActiveSuggestionIndex(-1);
+              }, 100);
+            }}
+            onChange={(event) => {
+              setUrlSuggestionsOpen(true);
+              setActiveSuggestionIndex(-1);
+              onBaseUrlChange(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && urlSuggestionsOpen) {
+                event.preventDefault();
+                setUrlSuggestionsOpen(false);
+                setActiveSuggestionIndex(-1);
+                return;
+              }
+
+              if (visibleSuggestions.length === 0) {
+                return;
+              }
+
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setUrlSuggestionsOpen(true);
+                setActiveSuggestionIndex((previous) =>
+                  previous < 0 ? 0 : (previous + 1) % visibleSuggestions.length
+                );
+                return;
+              }
+
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setUrlSuggestionsOpen(true);
+                setActiveSuggestionIndex((previous) =>
+                  previous < 0
+                    ? visibleSuggestions.length - 1
+                    : (previous - 1 + visibleSuggestions.length) % visibleSuggestions.length
+                );
+                return;
+              }
+
+              if (event.key === "Enter" && showSuggestions && activeSuggestionIndex >= 0) {
+                event.preventDefault();
+                selectSuggestion(visibleSuggestions[activeSuggestionIndex]);
+              }
+            }}
+            spellCheck={false}
+          />
+          {showSuggestions && (
+            <div id={suggestionsId} className="route-url-suggestions" role="listbox">
+              {visibleSuggestions.map((suggestion, index) => (
+                <button
+                  id={`${suggestionsId}-option-${index}`}
+                  key={`${suggestion.baseUrl}:${suggestion.profileName}`}
+                  type="button"
+                  className="route-url-suggestion"
+                  role="option"
+                  aria-selected={index === activeSuggestionIndex}
+                  data-active={index === activeSuggestionIndex || suggestion.baseUrl === baseUrl}
+                  onMouseEnter={() => setActiveSuggestionIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectSuggestion(suggestion)}
+                >
+                  <span className="route-url-suggestion-main">
+                    <strong>{suggestion.host}</strong>
+                    <small>{suggestion.baseUrl}</small>
+                  </span>
+                  <span className="route-url-suggestion-meta">
+                    <span>{suggestion.profileName}</span>
+                    <span>{formatClock(suggestion.updatedAt)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </Field>
 
       <Field label={apiKeyLabel} hint={apiKeyHint}>

@@ -372,7 +372,15 @@ describe("CompactGate HTTP server", () => {
       }
 
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "retry ok" })}\n\n`);
+      res.end(
+        [
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "retry ok" })}`,
+          "",
+          `data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })}`,
+          "",
+          ""
+        ].join("\n")
+      );
     });
     const compact = await startUpstream((_req, res) => res.end("{}"));
     const app = await startApp(primary.url, compact.url);
@@ -684,6 +692,12 @@ describe("CompactGate HTTP server", () => {
       })
     });
     expect(patchResponse.status).toBe(200);
+    const patchedConfig = (await patchResponse.json()) as PublicConfig;
+    expect(patchedConfig.route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:55555/v1" })
+      ])
+    );
 
     const previewResponse = await fetch(`${app.url}/api/test-route`, {
       method: "POST",
@@ -697,6 +711,116 @@ describe("CompactGate HTTP server", () => {
 
     expect(preview.target_model).toBe("manual-compact");
     expect(preview.upstream_host).toBe("127.0.0.1:55555");
+  });
+
+  it("imports config through the public API without exposing secrets or recording URL preset usage", async () => {
+    const app = await startApp();
+
+    const importResponse = await fetch(`${app.url}/api/config/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        listen: "127.0.0.1:7865",
+        primary: {
+          base_url: "http://127.0.0.1:56201/v1",
+          api_key: "import-api-primary-secret",
+          api_key_env: ""
+        },
+        compact: {
+          base_url: "http://127.0.0.1:56202/v1",
+          api_key: "",
+          api_key_env: "",
+          upstream_mode: "split",
+          model_mode: "custom",
+          model_template: "{model}-import",
+          model_override: "import-api-compact-model"
+        },
+        claude: {
+          primary: {
+            base_url: "http://127.0.0.1:56203",
+            api_key: "import-api-claude-secret",
+            api_key_env: "ANTHROPIC_AUTH_TOKEN",
+            model_override: "import-api-claude-default"
+          },
+          compact: {
+            base_url: "http://127.0.0.1:56204",
+            api_key: "",
+            api_key_env: "ANTHROPIC_AUTH_TOKEN",
+            upstream_mode: "split",
+            model_override: "import-api-claude-compact"
+          },
+          model_map: {
+            default: "import-api-claude-default",
+            opus: "",
+            sonnet: "",
+            haiku: "",
+            reasoning: "",
+            subagent: ""
+          }
+        },
+        timeouts: {
+          primary_ms: 1100,
+          compact_ms: 2200,
+          claude_ms: 3300
+        },
+        logging: {
+          redact_body: true,
+          keep_recent: 33
+        },
+        profile_scopes: {
+          codex: {
+            active_profile_id: null,
+            profiles: []
+          },
+          claude: {
+            active_profile_id: null,
+            profiles: []
+          }
+        },
+        route_url_presets: [
+          {
+            id: "import-api-codex-primary",
+            kind: "codex_primary",
+            base_url: "http://127.0.0.1:56201/v1",
+            host: "127.0.0.1:56201",
+            created_at: "2026-06-06T00:00:00.000Z",
+            updated_at: "2026-06-06T00:00:00.000Z",
+            usage_count: 5
+          }
+        ]
+      })
+    });
+    const importedConfig = (await importResponse.json()) as PublicConfig;
+
+    expect(importResponse.status).toBe(200);
+    expect(importedConfig.primary.base_url).toBe("http://127.0.0.1:56201/v1");
+    expect(importedConfig.primary.stored_api_key).toBe(true);
+    expect(importedConfig.compact.model_override).toBe("import-api-compact-model");
+    expect(importedConfig.claude.primary.base_url).toBe("http://127.0.0.1:56203");
+    expect(importedConfig.logging.keep_recent).toBe(33);
+    expect(importedConfig.route_url_presets).toEqual([
+      expect.objectContaining({
+        kind: "codex_primary",
+        base_url: "http://127.0.0.1:56201/v1",
+        usage_count: 5
+      })
+    ]);
+    expect(JSON.stringify(importedConfig)).not.toContain("import-api-primary-secret");
+    expect(JSON.stringify(importedConfig)).not.toContain("import-api-claude-secret");
+
+    const exportResponse = await fetch(`${app.url}/api/config/export`);
+    const exportedConfig = await exportResponse.json();
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportedConfig.primary.api_key).toBe("import-api-primary-secret");
+    expect(exportedConfig.claude.primary.api_key).toBe("import-api-claude-secret");
+    expect(exportedConfig.route_url_presets).toEqual([
+      expect.objectContaining({
+        kind: "codex_primary",
+        base_url: "http://127.0.0.1:56201/v1",
+        usage_count: 5
+      })
+    ]);
   });
 
   it("saves and applies config profiles through the public API", async () => {
@@ -748,6 +872,12 @@ describe("CompactGate HTTP server", () => {
       stored_api_key_count: 2
     });
     expect(savedConfig.active_profile_id).toBeNull();
+    expect(savedConfig.route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:56001/v1" }),
+        expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:56002/v1" })
+      ])
+    );
     expect(JSON.stringify(savedConfig)).not.toContain("profile-api-primary-key");
     expect(JSON.stringify(savedConfig)).not.toContain("profile-api-claude-compact-key");
 
@@ -1075,6 +1205,385 @@ describe("CompactGate HTTP server", () => {
       })
     });
     expect(crossScopeResponse.status).toBe(400);
+  });
+
+  it("fails over Codex primary streams after four empty 200 responses without touching compact routing", async () => {
+    const firstPrimaryRequests: CapturedRequest[] = [];
+    const secondPrimaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const firstPrimary = await startUpstream(async (req, res) => {
+      firstPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end();
+    });
+    const secondPrimary = await startUpstream(async (req, res) => {
+      secondPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        [
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "second ok" })}`,
+          "",
+          `data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })}`,
+          "",
+          ""
+        ].join("\n")
+      );
+    });
+    const compact = await startUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(firstPrimary.url, compact.url);
+
+    async function saveCodexProfile(name: string, primaryBaseUrl: string): Promise<string> {
+      const response = await fetch(`${app.url}/api/config/profiles`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "codex",
+          name,
+          config: {
+            primary: { base_url: primaryBaseUrl, api_key: `${name}-token` },
+            compact: { base_url: compact.url, api_key: "compact-token", upstream_mode: "split" }
+          }
+        })
+      });
+      const body = (await response.json()) as PublicConfig;
+
+      expect(response.status).toBe(200);
+      return body.profile_scopes.codex.profiles.find((profile) => profile.name === name)?.id ?? "";
+    }
+
+    const firstProfileId = await saveCodexProfile("primary-a", firstPrimary.url);
+    const secondProfileId = await saveCodexProfile("primary-b", secondPrimary.url);
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyResponse.status).toBe(200);
+
+    for (let index = 0; index < 4; index += 1) {
+      const response = await fetch(`${app.url}/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `empty ${index}` }),
+        headers: { "content-type": "application/json" }
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("");
+    }
+
+    const failoverResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "after failover" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(failoverResponse.status).toBe(200);
+    expect(await failoverResponse.text()).toContain("second ok");
+
+    const compactResponse = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "compact untouched" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(compactResponse.status).toBe(200);
+    await compactResponse.text();
+
+    expect(firstPrimaryRequests).toHaveLength(4);
+    expect(secondPrimaryRequests).toHaveLength(1);
+    expect(compactRequests).toHaveLength(1);
+    expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
+      model: "gpt-5.5",
+      stream: true,
+      input: "after failover"
+    });
+    expect(JSON.parse(compactRequests[0].body)).toMatchObject({
+      model: "gpt-5.5-openai-compact",
+      input: "compact untouched"
+    });
+
+    const logs = await fetchRecentLogs(app.url);
+    expect(logs.filter((entry) => entry.upstream_host === new URL(firstPrimary.url).host)).toHaveLength(4);
+    expect(logs.find((entry) => entry.error_summary === "OpenAI stream closed before response.completed.")).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(firstPrimary.url).host,
+      error_summary: "OpenAI stream closed before response.completed."
+    });
+    expect(logs.find((entry) => entry.upstream_host === new URL(secondPrimary.url).host)).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(secondPrimary.url).host,
+      error_summary: null
+    });
+    expect(logs.find((entry) => entry.upstream_host === new URL(compact.url).host)).toMatchObject({
+      route: "compact",
+      status: 200,
+      upstream_host: new URL(compact.url).host,
+      error_summary: null
+    });
+  });
+
+  it("fails over Codex primary streams after four output-only 200 responses without completion", async () => {
+    const firstPrimaryRequests: CapturedRequest[] = [];
+    const secondPrimaryRequests: CapturedRequest[] = [];
+    const firstPrimary = await startUpstream(async (req, res) => {
+      firstPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        [
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "partial" })}`,
+          "",
+          ""
+        ].join("\n")
+      );
+    });
+    const secondPrimary = await startUpstream(async (req, res) => {
+      secondPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        [
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "second ok" })}`,
+          "",
+          `data: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } })}`,
+          "",
+          ""
+        ].join("\n")
+      );
+    });
+    const compact = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(firstPrimary.url, compact.url);
+
+    async function saveCodexProfile(name: string, primaryBaseUrl: string): Promise<string> {
+      const response = await fetch(`${app.url}/api/config/profiles`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "codex",
+          name,
+          config: {
+            primary: { base_url: primaryBaseUrl, api_key: `${name}-token` },
+            compact: { base_url: compact.url, api_key: "compact-token", upstream_mode: "split" }
+          }
+        })
+      });
+      const body = (await response.json()) as PublicConfig;
+
+      expect(response.status).toBe(200);
+      return body.profile_scopes.codex.profiles.find((profile) => profile.name === name)?.id ?? "";
+    }
+
+    const firstProfileId = await saveCodexProfile("output-only-a", firstPrimary.url);
+    const secondProfileId = await saveCodexProfile("output-only-b", secondPrimary.url);
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyResponse.status).toBe(200);
+
+    for (let index = 0; index < 4; index += 1) {
+      const response = await fetch(`${app.url}/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `partial ${index}` }),
+        headers: { "content-type": "application/json" }
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("partial");
+    }
+
+    const failoverResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "after output-only failover" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(failoverResponse.status).toBe(200);
+    expect(await failoverResponse.text()).toContain("second ok");
+
+    expect(firstPrimaryRequests).toHaveLength(4);
+    expect(secondPrimaryRequests).toHaveLength(1);
+
+    const logs = await fetchRecentLogs(app.url);
+    expect(logs.find((entry) => entry.upstream_host === new URL(firstPrimary.url).host)).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(firstPrimary.url).host,
+      error_summary: "OpenAI stream closed before response.completed."
+    });
+    expect(logs.find((entry) => entry.upstream_host === new URL(secondPrimary.url).host)).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(secondPrimary.url).host,
+      error_summary: null
+    });
+  });
+
+  it("marks non-SSE 200 primary stream responses as incomplete", async () => {
+    const primary = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<!doctype html><html><body>not an event stream</body></html>");
+    });
+    const compact = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(primary.url, compact.url);
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "html instead of sse" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("not an event stream");
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(primary.url).host,
+      error_summary: "OpenAI stream response was not text/event-stream."
+    });
+  });
+
+  it("avoids a Codex primary profile after an account-level failure without touching compact routing", async () => {
+    const firstPrimaryRequests: CapturedRequest[] = [];
+    const secondPrimaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const firstPrimary = await startUpstream(async (req, res) => {
+      firstPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "insufficient balance" } }));
+    });
+    const secondPrimary = await startUpstream(async (req, res) => {
+      secondPrimaryRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "resp-second", output: [{ content: "second ok" }] }));
+    });
+    const compact = await startUpstream(async (req, res) => {
+      compactRequests.push({
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(firstPrimary.url, compact.url);
+
+    async function saveCodexProfile(name: string, primaryBaseUrl: string): Promise<string> {
+      const response = await fetch(`${app.url}/api/config/profiles`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "codex",
+          name,
+          config: {
+            primary: { base_url: primaryBaseUrl, api_key: `${name}-token` },
+            compact: { base_url: compact.url, api_key: "compact-token", upstream_mode: "split" }
+          }
+        })
+      });
+      const body = (await response.json()) as PublicConfig;
+
+      expect(response.status).toBe(200);
+      return body.profile_scopes.codex.profiles.find((profile) => profile.name === name)?.id ?? "";
+    }
+
+    const firstProfileId = await saveCodexProfile("balance-a", firstPrimary.url);
+    const secondProfileId = await saveCodexProfile("balance-b", secondPrimary.url);
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyResponse.status).toBe(200);
+
+    const failingResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "first fails" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(failingResponse.status).toBe(403);
+    await failingResponse.text();
+
+    const recoveredResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "after account failure" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(recoveredResponse.status).toBe(200);
+    expect(await recoveredResponse.text()).toContain("second ok");
+
+    const compactResponse = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "compact untouched" }),
+      headers: { "content-type": "application/json" }
+    });
+    expect(compactResponse.status).toBe(200);
+    await compactResponse.text();
+
+    expect(firstPrimaryRequests).toHaveLength(1);
+    expect(secondPrimaryRequests).toHaveLength(1);
+    expect(compactRequests).toHaveLength(1);
+    expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
+      model: "gpt-5.5",
+      input: "after account failure"
+    });
+    expect(JSON.parse(compactRequests[0].body)).toMatchObject({
+      model: "gpt-5.5-openai-compact",
+      input: "compact untouched"
+    });
   });
 
   it("routes compact requests to primary when upstream mode is primary", async () => {

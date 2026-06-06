@@ -24,6 +24,11 @@ import {
 } from "./debug-capture.js";
 import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
 import {
+  PrimaryFailoverState,
+  primaryRouteRequestContextFromBody,
+  type PrimaryRouteSelection
+} from "./primary-failover.js";
+import {
   buildUpstreamUrl,
   compactUpstreamBaseUrl,
   compactUpstreamPath,
@@ -59,6 +64,7 @@ import {
   requestJson,
   sendBufferedUpstreamRequest,
   sendOpenAiUpstreamRequest,
+  summarizeOpenAiStreamFailure,
   UpstreamStatusError,
   type BufferedUpstreamResult
 } from "./upstream-client.js";
@@ -87,6 +93,8 @@ export function createCompactGateApp(
   compactionBridge = new CompactionBridgeStore(),
   studioEvents = new StudioEventBroadcaster()
 ): CompactGateApp {
+  const primaryFailover = new PrimaryFailoverState();
+
   return {
     handler: (req, res) => {
       void routeRequest(
@@ -96,7 +104,8 @@ export function createCompactGateApp(
         logger,
         captureWriter,
         compactionBridge,
-        studioEvents
+        studioEvents,
+        primaryFailover
       );
     }
   };
@@ -131,7 +140,8 @@ async function routeRequest(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  primaryFailover: PrimaryFailoverState
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://compactgate.local");
 
@@ -163,7 +173,8 @@ async function routeRequest(
         logger,
         captureWriter,
         compactionBridge,
-        studioEvents
+        studioEvents,
+        primaryFailover
       );
       return;
     }
@@ -182,7 +193,8 @@ async function proxyOpenAiRequest(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  primaryFailover: PrimaryFailoverState
 ): Promise<void> {
   const startedAt = performance.now();
   const config = configStore.get();
@@ -214,6 +226,7 @@ async function proxyOpenAiRequest(
     captureWriter,
     compactionBridge,
     studioEvents,
+    primaryFailover,
     requestId,
     startedAt
   );
@@ -373,12 +386,14 @@ async function proxyPrimaryRequest(
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
+  primaryFailover: PrimaryFailoverState,
   requestId: string,
   startedAt: number
 ): Promise<void> {
   let route: RouteKind = "primary";
+  let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = buildUpstreamUrl(config.primary.base_url, url.pathname, url.search);
-  let auth = resolveRouteCredential("primary", config);
+  let authApiKey = "";
   let timeoutMs = config.timeouts.primary_ms;
   let timeoutMessage = "Primary upstream request timed out.";
   let requestHeaders: Record<string, string> = {};
@@ -407,11 +422,18 @@ async function proxyPrimaryRequest(
     if (useCompactFollowUp) {
       route = "compact";
       upstream = buildUpstreamUrl(compactUpstreamBaseUrl(config), url.pathname, url.search);
-      auth = resolveRouteCredential("compact", config);
+      authApiKey = resolveRouteCredential("compact", config).apiKey ?? "";
       timeoutMs = config.timeouts.compact_ms;
       timeoutMessage = "Compact upstream request timed out.";
       upstreamBody = rawBody;
     } else {
+      primarySelection = primaryFailover.select(
+        config,
+        primaryRouteRequestContextFromBody(rawBody, req.headers, requestMetadata.endpoint)
+      );
+      const selectedPrimaryConfig = primarySelection.config;
+      upstream = buildUpstreamUrl(selectedPrimaryConfig.primary.base_url, url.pathname, url.search);
+      authApiKey = resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "";
       const bridgeResult =
         config.compact.upstream_mode === "split"
           ? compactionBridge.rewritePrimaryBody(rawBody)
@@ -419,7 +441,7 @@ async function proxyPrimaryRequest(
       upstreamBody = bridgeResult.body;
       compactBridgeReplacements = bridgeResult.replacedCompactionCount;
     }
-    requestHeaders = buildUpstreamHeaders(req.headers, auth.apiKey);
+    requestHeaders = buildUpstreamHeaders(req.headers, authApiKey);
 
     const result = await sendOpenAiUpstreamRequest({
       req,
@@ -444,6 +466,9 @@ async function proxyPrimaryRequest(
     requestType = responseTransport(responseHeaders) ?? requestType;
     firstTokenMs = result.firstTokenMs;
     usage = extractResponseUsage(responseBody, responseHeaders);
+    if (route === "primary" && requestMetadata.requestType === "stream") {
+      errorSummary ??= summarizeOpenAiStreamFailure(result);
+    }
     if (route === "compact" && status >= 200 && status < 300) {
       compactionBridge.storeCompactResponse(responseBody, { armFollowUp: false });
     }
@@ -456,6 +481,16 @@ async function proxyPrimaryRequest(
       res.destroy(error instanceof Error ? error : new Error(errorSummary));
     }
   } finally {
+    if (route === "primary" && primarySelection) {
+      primaryFailover.recordResult(primarySelection, {
+        status,
+        errorSummary,
+        responseBody,
+        responseHeaders,
+        firstTokenMs
+      });
+    }
+
     const logEntry = addLog(logger, {
       route,
       req,

@@ -40,7 +40,7 @@ export type ConfigFormState = {
   modelOverride: string;
 };
 
-export type ConfigTab = "profiles" | "routes" | "model" | "preview";
+export type ConfigTab = "profiles" | "routes" | "model" | "preview" | "portable";
 export type PublicConfigProfile = PublicConfig["profiles"][number];
 export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
 export type ProfileDropPosition = "before" | "after";

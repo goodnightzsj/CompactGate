@@ -57,6 +57,15 @@ export async function handleApi(
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/config/import") {
+    const importedConfig = await readJsonBody(req);
+    await configStore.importConfig(importedConfig);
+    logger.resize(configStore.get().logging.keep_recent);
+    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+    sendJson(res, 200, configStore.toPublicConfig());
+    return;
+  }
+
   if (req.method === "PATCH" && url.pathname === "/api/config") {
     const patch = await readJsonBody(req);
     await configStore.patch(patch);

@@ -32,10 +32,21 @@ export interface BufferedUpstreamResult {
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
+  streamSummary: OpenAiStreamSummary | null;
 }
 
 export interface OpenAiUpstreamOptions extends BufferedUpstreamOptions {
   retryEmptyStreamError?: boolean;
+}
+
+export interface OpenAiStreamSummary {
+  sawTerminalEvent: boolean;
+  sawCompletedEvent: boolean;
+  sawFailedEvent: boolean;
+  sawIncompleteEvent: boolean;
+  sawOutputEvent: boolean;
+  sawDoneMarker: boolean;
+  eventCount: number;
 }
 
 let cachedHttpsProxyAgentKey: string | null = null;
@@ -133,6 +144,7 @@ export function sendBufferedUpstreamRequest(
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
         let firstTokenMs: number | null = null;
+        const streamObserver = createOpenAiStreamObserver(response.headers);
         const shouldWriteResponse =
           options.writeResponse !== false &&
           !(options.deferRetryableStreamErrors === true && status >= 500);
@@ -146,6 +158,7 @@ export function sendBufferedUpstreamRequest(
         response.on("data", (chunk: Buffer) => {
           firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
           responseChunks.push(Buffer.from(chunk));
+          streamObserver?.observe(chunk);
         });
         response.on("aborted", handleUpstreamResponseAborted);
         response.on("error", handleUpstreamResponseError);
@@ -160,7 +173,8 @@ export function sendBufferedUpstreamRequest(
             errorSummary: extractResponseErrorSummary(status, responseBody, response.headers),
             responseBody,
             responseHeaders: response.headers,
-            firstTokenMs
+            firstTokenMs,
+            streamSummary: streamObserver?.finish() ?? null
           });
         });
       }
@@ -198,6 +212,37 @@ export async function sendOpenAiUpstreamRequest(
   }
 
   return retryResult;
+}
+
+export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): string | null {
+  if (result.status < 200 || result.status >= 300) {
+    return null;
+  }
+
+  if (!result.streamSummary) {
+    return "OpenAI stream response was not text/event-stream.";
+  }
+
+  const summary = result.streamSummary;
+  if (summary.sawCompletedEvent || summary.sawDoneMarker) {
+    return null;
+  }
+
+  if (summary.sawFailedEvent) {
+    return "OpenAI stream ended with response.failed.";
+  }
+
+  if (summary.sawIncompleteEvent) {
+    return "OpenAI stream ended with response.incomplete.";
+  }
+
+  if (summary.sawOutputEvent) {
+    return "OpenAI stream closed before response.completed.";
+  }
+
+  return summary.eventCount > 0
+    ? "OpenAI stream ended without response.completed, [DONE], or output token."
+    : "OpenAI stream closed before response.completed.";
 }
 
 export function requestJson(
@@ -265,6 +310,170 @@ function isRetryableEmptyStreamUpstreamError(result: BufferedUpstreamResult): bo
   );
 }
 
+function createOpenAiStreamObserver(headers: IncomingHttpHeaders): OpenAiStreamObserver | null {
+  const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
+  return contentType.includes("text/event-stream") ? new OpenAiStreamObserver() : null;
+}
+
+class OpenAiStreamObserver {
+  private pending = "";
+  private eventName: string | null = null;
+  private dataLines: string[] = [];
+  private summary: OpenAiStreamSummary = {
+    sawTerminalEvent: false,
+    sawCompletedEvent: false,
+    sawFailedEvent: false,
+    sawIncompleteEvent: false,
+    sawOutputEvent: false,
+    sawDoneMarker: false,
+    eventCount: 0
+  };
+
+  observe(chunk: Buffer): void {
+    this.pending += chunk.toString("utf8");
+    const lines = this.pending.split(/\r?\n/);
+    this.pending = lines.pop() ?? "";
+
+    for (const line of lines) {
+      this.observeLine(line);
+    }
+  }
+
+  finish(): OpenAiStreamSummary {
+    if (this.pending.length > 0) {
+      this.observeLine(this.pending);
+      this.pending = "";
+    }
+    this.flushEvent();
+    return { ...this.summary };
+  }
+
+  private observeLine(line: string): void {
+    if (line === "") {
+      this.flushEvent();
+      return;
+    }
+
+    if (line.startsWith("event:")) {
+      this.eventName = line.slice("event:".length).trim();
+      return;
+    }
+
+    if (line.startsWith("data:")) {
+      this.dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  private flushEvent(): void {
+    if (!this.eventName && this.dataLines.length === 0) {
+      return;
+    }
+
+    this.summary.eventCount += 1;
+    const data = this.dataLines.join("\n").trim();
+    if (data === "[DONE]") {
+      this.summary.sawDoneMarker = true;
+      this.summary.sawTerminalEvent = true;
+    }
+
+    const eventType = this.readEventType(data);
+    if (isOpenAiTerminalEvent(this.eventName) || isOpenAiTerminalEvent(eventType)) {
+      this.summary.sawTerminalEvent = true;
+    }
+    if (isOpenAiCompletedEvent(this.eventName) || isOpenAiCompletedEvent(eventType)) {
+      this.summary.sawCompletedEvent = true;
+    }
+    if (isOpenAiFailedEvent(this.eventName) || isOpenAiFailedEvent(eventType)) {
+      this.summary.sawFailedEvent = true;
+    }
+    if (isOpenAiIncompleteEvent(this.eventName) || isOpenAiIncompleteEvent(eventType)) {
+      this.summary.sawIncompleteEvent = true;
+    }
+    if (isOpenAiOutputEvent(this.eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
+      this.summary.sawOutputEvent = true;
+    }
+
+    this.eventName = null;
+    this.dataLines = [];
+  }
+
+  private readEventType(data: string): string | null {
+    if (!data || data === "[DONE]") {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(data) as unknown;
+      if (isRecord(parsed) && typeof parsed.type === "string") {
+        return parsed.type;
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+}
+
+function isOpenAiTerminalEvent(type: string | null): boolean {
+  return type === "response.completed" || type === "response.failed" || type === "response.incomplete";
+}
+
+function isOpenAiCompletedEvent(type: string | null): boolean {
+  return type === "response.completed";
+}
+
+function isOpenAiFailedEvent(type: string | null): boolean {
+  return type === "response.failed";
+}
+
+function isOpenAiIncompleteEvent(type: string | null): boolean {
+  return type === "response.incomplete";
+}
+
+function isOpenAiOutputEvent(type: string | null): boolean {
+  if (!type) {
+    return false;
+  }
+
+  return (
+    type === "response.output_text.delta" ||
+    type === "response.output_item.done" ||
+    type === "response.reasoning_summary_text.delta" ||
+    type === "response.reasoning_summary_part.added" ||
+    type === "response.reasoning_text.delta" ||
+    type === "response.reasoning.delta" ||
+    type.endsWith(".delta")
+  );
+}
+
+function hasOpenAiOutputPayload(data: string): boolean {
+  if (!data || data === "[DONE]") {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (!isRecord(parsed)) {
+      return false;
+    }
+
+    const delta = parsed.delta;
+    if (typeof delta === "string" && delta.length > 0) {
+      return true;
+    }
+
+    if (Array.isArray(parsed.output) && parsed.output.length > 0) {
+      return true;
+    }
+
+    const response = parsed.response;
+    return isRecord(response) && Array.isArray(response.output) && response.output.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function writeDeferredUpstreamResult(
   res: ServerResponse,
   result: BufferedUpstreamResult,
@@ -280,6 +489,18 @@ function writeDeferredUpstreamResult(
   }
   res.writeHead(result.status);
   res.end(result.responseBody);
+}
+
+function readHeader(value: IncomingHttpHeaders[string]): string | null {
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+
+  return value ?? null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 class HttpConnectHttpsAgent extends HttpsAgent {
