@@ -1,4 +1,0 @@
-/* Dark polish pass: replace foggy slate fills with crisp operator surfaces. */
-:root[data-theme="dark"] .live-config::before {
-  opacity: 0.14;
-}

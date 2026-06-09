@@ -1,8 +1,0 @@
-:root[data-theme="dark"] .live-config .section-heading h2,
-:root[data-theme="dark"] .live-config .profile-card-copy h3,
-:root[data-theme="dark"] .live-config .route-config-group-head h3,
-:root[data-theme="dark"] .live-config .route-config-card-head h4,
-:root[data-theme="dark"] .live-config .mode-card-title,
-:root[data-theme="dark"] .live-config .field span {
-  color: #f8fafc;
-}

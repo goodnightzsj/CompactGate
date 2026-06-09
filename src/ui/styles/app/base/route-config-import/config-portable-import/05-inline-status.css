@@ -1,7 +1,0 @@
-.inline-success {
-  background: var(--app-success-soft, #dcfce7);
-  color: var(--app-success, #15803d);
-  border-color: color-mix(in srgb, var(--app-success, #15803d) 34%, rgba(24, 35, 49, 0.1));
-  font-size: 0.86rem;
-  font-weight: 800;
-}

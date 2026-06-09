@@ -1,8 +1,0 @@
-:root[data-theme] .live-config input:hover,
-:root[data-theme] .live-config textarea:hover,
-:root[data-theme] .live-config input:focus,
-:root[data-theme] .live-config textarea:focus {
-  border-color: var(--live-input-hover-border);
-  background: var(--live-input-hover-bg);
-  box-shadow: var(--live-input-hover-shadow);
-}

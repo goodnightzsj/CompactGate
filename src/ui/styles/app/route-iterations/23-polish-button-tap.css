@@ -1,9 +1,0 @@
-/* ── Polish: button tap refinement ── */
-.ghost-button:active,
-.solid-button:active,
-.apply-button:active,
-.preview-button:active,
-.path-presets button:active,
-.compound-input button:active {
-  transform: translateY(1px) scale(0.985);
-}

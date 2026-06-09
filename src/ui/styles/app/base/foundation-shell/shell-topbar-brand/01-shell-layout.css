@@ -1,5 +1,0 @@
-.shell {
-  width: min(1600px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: max(12px, var(--space-3)) 0 var(--space-6);
-}

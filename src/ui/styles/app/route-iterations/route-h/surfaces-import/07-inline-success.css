@@ -1,5 +1,0 @@
-:root[data-theme] .inline-success {
-  border-color: color-mix(in srgb, var(--app-success) 36%, var(--app-line));
-  background: var(--app-success-soft);
-  color: var(--app-success);
-}

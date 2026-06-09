@@ -1,5 +1,0 @@
-:root[data-theme] .config-portable-panel {
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--app-teal) 10%, transparent), transparent 46%),
-    linear-gradient(180deg, var(--app-surface), var(--app-surface-soft));
-}

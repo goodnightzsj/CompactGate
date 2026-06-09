@@ -1,8 +1,0 @@
-.log-row {
-  box-shadow: 0 1px 0 rgba(23, 32, 51, 0.04);
-}
-
-.log-row:hover,
-.log-row:has(.log-detail) {
-  background: #f4f8ff;
-}
