@@ -1,0 +1,22 @@
+/* Route A visual polish: calibrated operator-console details. */
+.topbar,
+.command-deck,
+.route-board,
+.panel,
+.logs-panel {
+  transform: translateZ(0);
+}
+
+.topbar {
+  overflow: hidden;
+}
+
+.topbar::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 5px;
+  background: linear-gradient(180deg, var(--primary), var(--teal) 58%, var(--compact));
+  content: "";
+}

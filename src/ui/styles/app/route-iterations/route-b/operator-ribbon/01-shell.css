@@ -1,0 +1,28 @@
+.command-deck.operator-ribbon {
+  grid-template-columns: minmax(150px, 0.45fr) minmax(330px, 0.9fr) minmax(520px, 1.4fr) minmax(270px, 0.75fr);
+  gap: 0.7rem;
+  align-items: stretch;
+  margin: 0.85rem 0 1rem;
+  padding: 0.72rem;
+  border-color: rgba(20, 28, 40, 0.28);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(29, 40, 54, 0.98), rgba(18, 26, 38, 0.98)),
+    var(--ops-rail);
+  box-shadow: 0 16px 34px rgba(20, 28, 40, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.command-deck.operator-ribbon::before,
+.command-deck.operator-ribbon::after {
+  display: none;
+}
+
+.ribbon-title,
+.ribbon-endpoints,
+.ribbon-status-grid,
+.ribbon-traffic,
+.claude-route-proof,
+.ribbon-note {
+  position: relative;
+  z-index: 1;
+}

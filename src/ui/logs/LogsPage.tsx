@@ -1,5 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { UIEvent } from "react";
+import { Fragment, useState } from "react";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
@@ -9,24 +8,15 @@ import type {
   StatusLogCounts
 } from "../../shared/types.js";
 import { CustomSelect } from "../shared/CustomSelect.js";
-import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
+import { formatDateTime, formatDurationMs } from "../shared/format.js";
+import { LogDetailRow } from "./LogDetailRow.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
-  cacheCreationInputTokens,
-  cacheReadInputTokens,
-  cachedInputTotalTokens,
-  displayInputTokens,
-  displayTotalTokens,
-  formatCacheHitRate,
-  hasAdditiveCachedInput,
   type HostFilterOption,
-  modelReasoningLabel,
-  totalInputTokens
+  modelReasoningLabel
 } from "./log-utils.js";
-
-const LOG_LAZY_LOAD_THRESHOLD_PX = 220;
-const LOG_STICKY_TOP_THRESHOLD_PX = 24;
+import { useLogTableScroll } from "./useLogTableScroll.js";
 
 export function LogsPage({
   logs, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
@@ -45,67 +35,13 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
-  const tableBodyRef = useRef<HTMLDivElement | null>(null);
-  const scrollSnapshotRef = useRef({
-    firstLogId: null as string | null,
-    scrollHeight: 0,
-    scrollTop: 0
+  const { handleLogScroll, tableBodyRef } = useLogTableScroll({
+    hasMoreLogs,
+    isLoadingLogs,
+    isLoadingMoreLogs,
+    logs,
+    onLoadMore
   });
-  const autoLoadPendingRef = useRef(false);
-
-  useEffect(() => {
-    if (!isLoadingMoreLogs) {
-      autoLoadPendingRef.current = false;
-    }
-  }, [isLoadingMoreLogs, logs.length]);
-
-  useLayoutEffect(() => {
-    const body = tableBodyRef.current;
-    if (!body) {
-      return;
-    }
-
-    const previous = scrollSnapshotRef.current;
-    const firstLogId = logs[0]?.request_id ?? null;
-    const previousFirstIndex = previous.firstLogId
-      ? logs.findIndex((entry) => entry.request_id === previous.firstLogId)
-      : -1;
-    const liveLogsWerePrepended = previousFirstIndex > 0 && firstLogId !== previous.firstLogId;
-
-    if (liveLogsWerePrepended && previous.scrollTop > LOG_STICKY_TOP_THRESHOLD_PX) {
-      const delta = body.scrollHeight - previous.scrollHeight;
-      if (delta > 0) {
-        body.scrollTop = previous.scrollTop + delta;
-      }
-    }
-
-    scrollSnapshotRef.current = {
-      firstLogId,
-      scrollHeight: body.scrollHeight,
-      scrollTop: body.scrollTop
-    };
-  }, [logs]);
-
-  function handleLogScroll(event: UIEvent<HTMLDivElement>) {
-    const body = event.currentTarget;
-    scrollSnapshotRef.current = {
-      ...scrollSnapshotRef.current,
-      scrollHeight: body.scrollHeight,
-      scrollTop: body.scrollTop
-    };
-
-    const remainingScroll = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (
-      remainingScroll <= LOG_LAZY_LOAD_THRESHOLD_PX &&
-      hasMoreLogs &&
-      !isLoadingLogs &&
-      !isLoadingMoreLogs &&
-      !autoLoadPendingRef.current
-    ) {
-      autoLoadPendingRef.current = true;
-      onLoadMore();
-    }
-  }
 
   return (
     <>
@@ -218,168 +154,7 @@ export function LogsPage({
                         <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
                         <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
                       </tr>
-                      {expandedRequestId === entry.request_id && (
-                        <tr className="log-detail-row">
-                          <td colSpan={10}>
-                            <div className="log-detail-panel">
-                              <section className="log-detail-section is-primary" aria-label="请求上下文">
-                                <div className="log-detail-section-head">
-                                  <div>
-                                    <span className="log-detail-kicker">请求</span>
-                                    <h3>{entry.method} {entry.path}</h3>
-                                  </div>
-                                  <span className={`log-status ${entry.status < 400 ? "is-ok" : "is-err"}`}>{entry.status}</span>
-                                </div>
-                                <div className="log-detail-section-grid">
-                                  <div className="log-detail-item is-wide">
-                                    <span className="log-detail-label">请求 ID</span>
-                                    <span className="log-detail-value is-small">{entry.request_id}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">采样时间</span>
-                                    <span className="log-detail-value is-medium">{entry.time}</span>
-                                  </div>
-                                  <div className="log-detail-item is-full">
-                                    <span className="log-detail-label">请求摘要</span>
-                                    <span className="log-detail-value is-small">{entry.request_summary ?? "无"}</span>
-                                  </div>
-                                </div>
-                              </section>
-
-                              <section className="log-detail-section" aria-label="路由与模型">
-                                <div className="log-detail-section-head">
-                                  <div>
-                                    <span className="log-detail-kicker">路由</span>
-                                    <h3>{routeLabel(entry.route)}</h3>
-                                  </div>
-                                  <span className={`route-chip ${entry.route}`}>{entry.route}</span>
-                                </div>
-                                <div className="log-detail-section-grid">
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">源模型</span>
-                                    <span className="log-detail-value is-medium">{entry.source_model ?? "-"}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">目标模型</span>
-                                    <span className="log-detail-value is-medium">{entry.target_model ?? entry.source_model ?? "-"}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">上游 Host</span>
-                                    <span className="log-detail-value">{entry.upstream_host}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">端点</span>
-                                    <span className="log-detail-value">{entry.endpoint}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">推理强度</span>
-                                    <span className="log-detail-value is-small">{entry.reasoning_effort ?? "无"}</span>
-                                  </div>
-                                </div>
-                              </section>
-
-                              <section className="log-detail-section" aria-label="性能">
-                                <div className="log-detail-section-head">
-                                  <div>
-                                    <span className="log-detail-kicker">性能</span>
-                                    <h3>{formatDurationMs(entry.duration_ms)}</h3>
-                                  </div>
-                                  <span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span>
-                                </div>
-                                <div className="log-detail-section-grid">
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">状态</span>
-                                    <span className="log-detail-value">{entry.status}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">类型</span>
-                                    <span className="log-detail-value">{entry.request_type}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">首 Token</span>
-                                    <span className="log-detail-value">{formatDurationMs(entry.first_token_ms)}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">总耗时</span>
-                                    <span className="log-detail-value">{formatDurationMs(entry.duration_ms)}</span>
-                                  </div>
-                                </div>
-                              </section>
-
-                              <section className="log-detail-section is-wide" aria-label="Token 明细">
-                                <div className="log-detail-section-head">
-                                  <div>
-                                    <span className="log-detail-kicker">Token</span>
-                                    <h3>{formatMetricNumber(displayTotalTokens(entry))}</h3>
-                                  </div>
-                                  <span className="token-total-pill">{formatCacheHitRate(entry)} 缓存命中</span>
-                                </div>
-                                <div className="log-detail-section-grid is-token-grid">
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">输入</span>
-                                    <span className="log-detail-value">{formatMetricNumber(displayInputTokens(entry))}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">输出</span>
-                                    <span className="log-detail-value">{formatMetricNumber(entry.output_tokens)}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">{hasAdditiveCachedInput(entry) ? "缓存读取" : "缓存输入"}</span>
-                                    <span className="log-detail-value">{formatMetricNumber(cacheReadInputTokens(entry))}</span>
-                                  </div>
-                                  {hasAdditiveCachedInput(entry) && (
-                                    <div className="log-detail-item">
-                                      <span className="log-detail-label">缓存写入</span>
-                                      <span className="log-detail-value">{formatMetricNumber(cacheCreationInputTokens(entry))}</span>
-                                    </div>
-                                  )}
-                                  {hasAdditiveCachedInput(entry) && (
-                                    <div className="log-detail-item">
-                                      <span className="log-detail-label">缓存合计</span>
-                                      <span className="log-detail-value">{formatMetricNumber(cachedInputTotalTokens(entry))}</span>
-                                    </div>
-                                  )}
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">总输入</span>
-                                    <span className="log-detail-value">{formatMetricNumber(totalInputTokens(entry))}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">缓存输出</span>
-                                    <span className="log-detail-value">{formatMetricNumber(entry.cached_output_tokens)}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">推理</span>
-                                    <span className="log-detail-value">{formatMetricNumber(entry.reasoning_tokens)}</span>
-                                  </div>
-                                  <div className="log-detail-item">
-                                    <span className="log-detail-label">原始总量</span>
-                                    <span className="log-detail-value">{formatMetricNumber(entry.total_tokens)}</span>
-                                  </div>
-                                </div>
-                              </section>
-
-                              <section className="log-detail-section is-wide" aria-label="诊断">
-                                <div className="log-detail-section-head">
-                                  <div>
-                                    <span className="log-detail-kicker">诊断</span>
-                                    <h3>{entry.error_summary ? "错误信息" : "客户端信息"}</h3>
-                                  </div>
-                                </div>
-                                <div className="log-detail-section-grid">
-                                  <div className="log-detail-item is-full">
-                                    <span className="log-detail-label">错误信息</span>
-                                    <span className="log-detail-value">{entry.error_summary ?? "无"}</span>
-                                  </div>
-                                  <div className="log-detail-item is-full">
-                                    <span className="log-detail-label">User Agent</span>
-                                    <span className="log-detail-value is-tiny">{entry.user_agent ?? "-"}</span>
-                                  </div>
-                                </div>
-                              </section>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
+                      {expandedRequestId === entry.request_id && <LogDetailRow entry={entry} />}
                     </Fragment>
                   );
                 })}

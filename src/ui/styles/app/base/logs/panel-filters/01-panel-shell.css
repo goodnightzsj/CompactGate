@@ -1,0 +1,44 @@
+.logs-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: start;
+  justify-content: space-between;
+}
+
+.logs-panel {
+  border-color: rgba(36, 84, 214, 0.16);
+  background:
+    linear-gradient(180deg, rgba(16, 24, 35, 0.98), rgba(24, 35, 49, 0.98)),
+    var(--ink);
+  color: var(--paper-lift);
+  box-shadow:
+    0 24px 46px rgba(24, 35, 49, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.logs-panel::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(251, 248, 240, 0.06) 1px, transparent 1px),
+    linear-gradient(rgba(251, 248, 240, 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(180deg, #000, transparent 94%);
+  content: "";
+}
+
+.logs-panel .eyebrow,
+.logs-panel .section-heading p,
+.logs-panel .empty-log span,
+.logs-panel .log-detail small,
+.logs-panel .log-detail-grid dt {
+  color: rgba(251, 248, 240, 0.62);
+}
+
+.logs-panel .section-heading h2,
+.logs-panel .empty-log strong,
+.logs-panel .log-detail p,
+.logs-panel .log-detail-grid dd {
+  color: var(--paper-lift);
+}

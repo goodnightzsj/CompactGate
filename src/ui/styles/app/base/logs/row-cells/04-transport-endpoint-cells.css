@@ -1,0 +1,28 @@
+.transport-pill {
+  width: fit-content;
+  padding: 0 0.72rem;
+  border: 1px solid rgba(251, 248, 240, 0.12);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.transport-pill.is-stream {
+  background: rgba(112, 65, 214, 0.36);
+  color: #d8c5ff;
+}
+
+.transport-pill.is-http {
+  background: rgba(36, 84, 214, 0.22);
+  color: #9ab4ff;
+}
+
+.log-endpoint,
+.log-host,
+.log-user-agent {
+  color: rgba(251, 248, 240, 0.82);
+}
+
+.log-host,
+.log-user-agent {
+  color: rgba(251, 248, 240, 0.66);
+}

@@ -1,0 +1,21 @@
+/* Profile cards */
+.profile-card {
+  padding: 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.profile-card-copy h3 {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 2px 0 0;
+}
+
+.profile-card-copy p {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin: 4px 0 0;
+}

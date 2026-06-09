@@ -1,0 +1,58 @@
+.studio-grid {
+  gap: 1rem;
+}
+
+.route-board,
+.panel {
+  border-color: var(--ops-line);
+  background:
+    linear-gradient(180deg, rgba(247, 243, 234, 0.94), rgba(238, 231, 218, 0.94)),
+    var(--ops-panel);
+  box-shadow: 0 8px 20px rgba(20, 28, 40, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.66);
+}
+
+.operator-stage {
+  gap: 0.65rem;
+}
+
+.operator-stage-head.compact-heading {
+  display: flex;
+  max-width: none;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 0.15rem;
+}
+
+.operator-stage-head.compact-heading h2 {
+  font-size: clamp(1.1rem, 1.6vw, 1.55rem);
+}
+
+.operator-stage-head.compact-heading p:last-child {
+  display: none;
+}
+
+.control-stack {
+  gap: 0.9rem;
+}
+
+.config-note,
+.route-config-group-head p,
+.mode-card p,
+.credential-card-copy p,
+.profile-card-copy p,
+.log-filter-disclaimer {
+  font-size: 0.78rem;
+  line-height: 1.42;
+}
+
+input {
+  min-height: 38px;
+}
+
+textarea {
+  min-height: 140px;
+}
+
+.field small {
+  font-size: 0.78rem;
+}

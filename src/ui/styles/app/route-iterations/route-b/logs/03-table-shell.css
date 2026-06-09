@@ -1,0 +1,25 @@
+.log-list {
+  gap: 0;
+  max-height: min(720px, 72vh);
+  border: 1px solid rgba(247, 243, 234, 0.1);
+  border-radius: 12px;
+  background: rgba(9, 14, 21, 0.28);
+}
+
+.log-usage-head {
+  grid-template-columns:
+    minmax(112px, 0.72fr)
+    minmax(150px, 1.05fr)
+    64px
+    minmax(116px, 0.82fr)
+    minmax(110px, 0.7fr)
+    minmax(130px, 0.88fr)
+    70px
+    minmax(145px, 0.95fr)
+    86px
+    78px
+    76px;
+  margin-top: var(--space-3);
+  padding-inline: 0.75rem;
+  font-size: 0.64rem;
+}

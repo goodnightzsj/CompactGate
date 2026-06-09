@@ -1,0 +1,4 @@
+/* Route chips in both themes */
+:root[data-theme] .route-chip.codex { background: var(--accent-soft); color: var(--accent); }
+:root[data-theme] .route-chip.compact { background: var(--amber-soft); color: var(--amber); }
+:root[data-theme] .route-chip.claude { background: var(--jade-soft); color: var(--jade); }

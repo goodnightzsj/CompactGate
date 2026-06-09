@@ -1,0 +1,4 @@
+/* ── Polish: traffic counter emphasis ── */
+.traffic-chip strong {
+  transition: transform 180ms var(--ease-out), color 180ms ease;
+}

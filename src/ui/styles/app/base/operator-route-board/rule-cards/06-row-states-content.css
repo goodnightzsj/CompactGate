@@ -1,0 +1,42 @@
+.route-rule-row.is-active {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--hairline));
+  box-shadow:
+    inset 4px 0 0 var(--primary),
+    0 10px 20px rgba(36, 84, 214, 0.08);
+}
+
+.route-board.is-compact .codex-rule .route-rule-row.is-active {
+  border-color: color-mix(in srgb, var(--compact) 42%, var(--hairline));
+  box-shadow:
+    inset 4px 0 0 var(--compact),
+    0 10px 20px rgba(216, 138, 29, 0.09);
+}
+
+.route-board.is-claude .claude-rule .route-rule-row.is-active {
+  border-color: color-mix(in srgb, var(--teal) 42%, var(--hairline));
+  box-shadow:
+    inset 4px 0 0 var(--teal),
+    0 10px 20px rgba(13, 148, 136, 0.09);
+}
+
+.route-rule-row code,
+.route-rule-row strong {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-rule-row span {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.62rem;
+  border-radius: 999px;
+  background: rgba(24, 35, 49, 0.08);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}

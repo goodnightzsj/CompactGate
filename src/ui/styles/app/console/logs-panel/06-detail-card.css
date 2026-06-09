@@ -1,0 +1,24 @@
+/* Log detail */
+.log-detail {
+  padding: 12px;
+  margin: 0 10px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.token-detail-card {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.token-detail-card div {
+  padding: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.token-detail-card span { font-size: 0.6rem; color: var(--text-tertiary); text-transform: uppercase; font-weight: 800; }
+.token-detail-card strong { font-size: 0.9rem; color: var(--text-primary); font-family: var(--font-mono); }

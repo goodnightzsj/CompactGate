@@ -9,14 +9,35 @@ interface StudioSseClient {
   res: ServerResponse;
 }
 
+interface StudioEventBroadcasterOptions {
+  maxClients?: number;
+}
+
+const DEFAULT_MAX_STUDIO_EVENT_CLIENTS = 64;
+
 export class StudioEventBroadcaster {
   private readonly clients = new Set<StudioSseClient>();
+
+  private readonly maxClients: number;
+
+  constructor(options: StudioEventBroadcasterOptions = {}) {
+    this.maxClients = normalizeMaxClients(options.maxClients);
+  }
 
   subscribe(
     req: IncomingMessage,
     res: ServerResponse,
     snapshot: StudioSnapshotEvent
   ): void {
+    if (this.clients.size >= this.maxClients) {
+      res.writeHead(429, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-cache"
+      });
+      res.end("Too many live event clients.");
+      return;
+    }
+
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
@@ -24,14 +45,13 @@ export class StudioEventBroadcaster {
     });
     res.flushHeaders?.();
 
-    const client: StudioSseClient = {
-      res,
-      keepAliveTimer: setInterval(() => {
-        if (!res.destroyed && !res.writableEnded) {
-          res.write(": keep-alive\n\n");
-        }
-      }, 20_000)
-    };
+    let client: StudioSseClient;
+    const keepAliveTimer = setInterval(() => {
+      if (res.destroyed || res.writableEnded || !writeSseChunk(res, ": keep-alive\n\n")) {
+        this.disposeClient(client);
+      }
+    }, 20_000);
+    client = { res, keepAliveTimer };
 
     const cleanup = () => {
       this.disposeClient(client);
@@ -108,10 +128,27 @@ function writeSseEvent(
   }
 
   try {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-    return true;
+    return (
+      writeSseChunk(res, `event: ${event}\n`) &&
+      writeSseChunk(res, `data: ${JSON.stringify(payload)}\n\n`)
+    );
   } catch {
     return false;
   }
+}
+
+function writeSseChunk(res: ServerResponse, chunk: string): boolean {
+  try {
+    return res.write(chunk);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeMaxClients(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_MAX_STUDIO_EVENT_CLIENTS;
+  }
+
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : DEFAULT_MAX_STUDIO_EVENT_CLIENTS;
 }

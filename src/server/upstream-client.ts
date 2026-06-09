@@ -1,15 +1,13 @@
 import http, {
-  Agent as HttpAgent,
   type IncomingHttpHeaders,
   type IncomingMessage,
   type RequestOptions,
   type ServerResponse
 } from "node:http";
-import https, { Agent as HttpsAgent } from "node:https";
-import net from "node:net";
-import tls from "node:tls";
-import type { Duplex } from "node:stream";
+import https from "node:https";
 import { copyResponseHeaders, decodeBodyText } from "./http-utils.js";
+import { createOpenAiStreamObserver, type OpenAiStreamSummary } from "./upstream-openai-stream.js";
+import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
 import { extractResponseErrorSummary } from "./usage.js";
 
 export interface BufferedUpstreamOptions {
@@ -24,33 +22,33 @@ export interface BufferedUpstreamOptions {
   extraResponseHeaders: Record<string, string>;
   writeResponse?: boolean;
   deferRetryableStreamErrors?: boolean;
+  maxBufferedResponseBytes?: number;
+  maxObservedStreamEventBytes?: number;
 }
 
 export interface BufferedUpstreamResult {
   status: number;
   errorSummary: string | null;
   responseBody: Buffer;
+  responseBodyTruncated: boolean;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
   streamSummary: OpenAiStreamSummary | null;
 }
 
+export const DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_MAX_JSON_RESPONSE_BYTES = 1 * 1024 * 1024;
+export const DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES = 64 * 1024;
+const DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR =
+  "Upstream response exceeded the internal buffer limit before it could be forwarded.";
+
 export interface OpenAiUpstreamOptions extends BufferedUpstreamOptions {
   retryEmptyStreamError?: boolean;
 }
 
-export interface OpenAiStreamSummary {
-  sawTerminalEvent: boolean;
-  sawCompletedEvent: boolean;
-  sawFailedEvent: boolean;
-  sawIncompleteEvent: boolean;
-  sawOutputEvent: boolean;
-  sawDoneMarker: boolean;
-  eventCount: number;
+export interface RequestJsonOptions {
+  maxResponseBytes?: number;
 }
-
-let cachedHttpsProxyAgentKey: string | null = null;
-let cachedHttpsProxyAgent: HttpsAgent | null = null;
 
 export function sendBufferedUpstreamRequest(
   options: BufferedUpstreamOptions
@@ -143,11 +141,20 @@ export function sendBufferedUpstreamRequest(
       (response) => {
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
+        let bufferedBytes = 0;
+        let responseBodyTruncated = false;
         let firstTokenMs: number | null = null;
-        const streamObserver = createOpenAiStreamObserver(response.headers);
+        const streamObserver = createOpenAiStreamObserver(response.headers, {
+          maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
+        });
         const shouldWriteResponse =
           options.writeResponse !== false &&
           !(options.deferRetryableStreamErrors === true && status >= 500);
+        const shouldDeferRetryableResponse =
+          options.deferRetryableStreamErrors === true && status >= 500;
+        const maxBufferedResponseBytes = shouldWriteResponse || shouldDeferRetryableResponse
+          ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes)
+          : Number.POSITIVE_INFINITY;
         if (shouldWriteResponse) {
           copyResponseHeaders(response.headers, options.res);
           for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
@@ -157,8 +164,22 @@ export function sendBufferedUpstreamRequest(
         }
         response.on("data", (chunk: Buffer) => {
           firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
-          responseChunks.push(Buffer.from(chunk));
+          const previousBufferedBytes = bufferedBytes;
+          bufferedBytes = appendBufferedResponseChunk(
+            responseChunks,
+            bufferedBytes,
+            chunk,
+            maxBufferedResponseBytes
+          );
+          if (bufferedBytes - previousBufferedBytes < chunk.byteLength) {
+            responseBodyTruncated = true;
+          }
           streamObserver?.observe(chunk);
+          if (shouldDeferRetryableResponse && responseBodyTruncated) {
+            resolveUpstreamResponse();
+            upstreamReq?.destroy();
+            response.destroy();
+          }
         });
         response.on("aborted", handleUpstreamResponseAborted);
         response.on("error", handleUpstreamResponseError);
@@ -167,16 +188,21 @@ export function sendBufferedUpstreamRequest(
         }
 
         response.on("end", () => {
+          resolveUpstreamResponse();
+        });
+
+        function resolveUpstreamResponse() {
           const responseBody = Buffer.concat(responseChunks);
           resolveOnce({
             status,
             errorSummary: extractResponseErrorSummary(status, responseBody, response.headers),
             responseBody,
+            responseBodyTruncated,
             responseHeaders: response.headers,
             firstTokenMs,
             streamSummary: streamObserver?.finish() ?? null
           });
-        });
+        }
       }
     );
 
@@ -202,8 +228,11 @@ export async function sendOpenAiUpstreamRequest(
   });
 
   if (!isRetryableEmptyStreamUpstreamError(firstResult)) {
-    writeDeferredUpstreamResult(options.res, firstResult, options.extraResponseHeaders);
-    return firstResult;
+    const finalResult = firstResult.responseBodyTruncated
+      ? buildDeferredBufferLimitResult(firstResult)
+      : firstResult;
+    writeDeferredUpstreamResult(options.res, finalResult, options.extraResponseHeaders);
+    return finalResult;
   }
 
   const retryResult = await sendBufferedUpstreamRequest(options);
@@ -212,6 +241,23 @@ export async function sendOpenAiUpstreamRequest(
   }
 
   return retryResult;
+}
+
+function buildDeferredBufferLimitResult(result: BufferedUpstreamResult): BufferedUpstreamResult {
+  const responseBody = Buffer.from(JSON.stringify({
+    error: DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR
+  }, null, 2));
+  return {
+    ...result,
+    status: 502,
+    errorSummary: DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR,
+    responseBody,
+    responseBodyTruncated: true,
+    responseHeaders: {
+      "content-type": "application/json; charset=utf-8",
+      "content-length": String(responseBody.byteLength)
+    }
+  };
 }
 
 export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): string | null {
@@ -248,7 +294,8 @@ export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): st
 export function requestJson(
   upstream: URL,
   headers: Record<string, string>,
-  timeoutMs: number
+  timeoutMs: number,
+  options: RequestJsonOptions = {}
 ): Promise<unknown> {
   const client = upstream.protocol === "https:" ? https : http;
   const requestOptions: RequestOptions = {
@@ -262,31 +309,65 @@ export function requestJson(
   }
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const maxResponseBytes = normalizeMaxJsonResponseBytes(options.maxResponseBytes);
+
+    const resolveOnce = (value: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(value);
+    };
+
+    const rejectOnce = (error: Error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(error);
+    };
+
     const upstreamReq = client.request(upstream, requestOptions, (response) => {
       const chunks: Buffer[] = [];
+      let totalBytes = 0;
       response.on("data", (chunk: Buffer) => {
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxResponseBytes) {
+          rejectOnce(new Error("Upstream JSON response is too large."));
+          upstreamReq.destroy();
+          response.destroy();
+          return;
+        }
+
         chunks.push(chunk);
       });
       response.on("end", () => {
+        if (settled) {
+          return;
+        }
+
         const body = Buffer.concat(chunks);
         const status = response.statusCode ?? 502;
         if (status >= 400) {
-          reject(new UpstreamStatusError(status, `Claude models request failed with status ${status}.`));
+          rejectOnce(new UpstreamStatusError(status, `Claude models request failed with status ${status}.`));
           return;
         }
 
         try {
-          resolve(JSON.parse(body.toString("utf8")) as unknown);
+          resolveOnce(JSON.parse(decodeBodyText(body)) as unknown);
         } catch (error) {
-          reject(error);
+          rejectOnce(error instanceof Error ? error : new Error("Failed to parse upstream JSON response."));
         }
       });
-      response.once("error", reject);
-      response.once("aborted", () => reject(new Error("Claude models response aborted before completion.")));
+      response.once("error", rejectOnce);
+      response.once("aborted", () => rejectOnce(new Error("Claude models response aborted before completion.")));
     });
 
     upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Claude models request timed out.")));
-    upstreamReq.once("error", reject);
+    upstreamReq.once("error", rejectOnce);
     upstreamReq.end();
   });
 }
@@ -310,170 +391,6 @@ function isRetryableEmptyStreamUpstreamError(result: BufferedUpstreamResult): bo
   );
 }
 
-function createOpenAiStreamObserver(headers: IncomingHttpHeaders): OpenAiStreamObserver | null {
-  const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
-  return contentType.includes("text/event-stream") ? new OpenAiStreamObserver() : null;
-}
-
-class OpenAiStreamObserver {
-  private pending = "";
-  private eventName: string | null = null;
-  private dataLines: string[] = [];
-  private summary: OpenAiStreamSummary = {
-    sawTerminalEvent: false,
-    sawCompletedEvent: false,
-    sawFailedEvent: false,
-    sawIncompleteEvent: false,
-    sawOutputEvent: false,
-    sawDoneMarker: false,
-    eventCount: 0
-  };
-
-  observe(chunk: Buffer): void {
-    this.pending += chunk.toString("utf8");
-    const lines = this.pending.split(/\r?\n/);
-    this.pending = lines.pop() ?? "";
-
-    for (const line of lines) {
-      this.observeLine(line);
-    }
-  }
-
-  finish(): OpenAiStreamSummary {
-    if (this.pending.length > 0) {
-      this.observeLine(this.pending);
-      this.pending = "";
-    }
-    this.flushEvent();
-    return { ...this.summary };
-  }
-
-  private observeLine(line: string): void {
-    if (line === "") {
-      this.flushEvent();
-      return;
-    }
-
-    if (line.startsWith("event:")) {
-      this.eventName = line.slice("event:".length).trim();
-      return;
-    }
-
-    if (line.startsWith("data:")) {
-      this.dataLines.push(line.slice("data:".length).trimStart());
-    }
-  }
-
-  private flushEvent(): void {
-    if (!this.eventName && this.dataLines.length === 0) {
-      return;
-    }
-
-    this.summary.eventCount += 1;
-    const data = this.dataLines.join("\n").trim();
-    if (data === "[DONE]") {
-      this.summary.sawDoneMarker = true;
-      this.summary.sawTerminalEvent = true;
-    }
-
-    const eventType = this.readEventType(data);
-    if (isOpenAiTerminalEvent(this.eventName) || isOpenAiTerminalEvent(eventType)) {
-      this.summary.sawTerminalEvent = true;
-    }
-    if (isOpenAiCompletedEvent(this.eventName) || isOpenAiCompletedEvent(eventType)) {
-      this.summary.sawCompletedEvent = true;
-    }
-    if (isOpenAiFailedEvent(this.eventName) || isOpenAiFailedEvent(eventType)) {
-      this.summary.sawFailedEvent = true;
-    }
-    if (isOpenAiIncompleteEvent(this.eventName) || isOpenAiIncompleteEvent(eventType)) {
-      this.summary.sawIncompleteEvent = true;
-    }
-    if (isOpenAiOutputEvent(this.eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
-      this.summary.sawOutputEvent = true;
-    }
-
-    this.eventName = null;
-    this.dataLines = [];
-  }
-
-  private readEventType(data: string): string | null {
-    if (!data || data === "[DONE]") {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(data) as unknown;
-      if (isRecord(parsed) && typeof parsed.type === "string") {
-        return parsed.type;
-      }
-    } catch {
-      return null;
-    }
-
-    return null;
-  }
-}
-
-function isOpenAiTerminalEvent(type: string | null): boolean {
-  return type === "response.completed" || type === "response.failed" || type === "response.incomplete";
-}
-
-function isOpenAiCompletedEvent(type: string | null): boolean {
-  return type === "response.completed";
-}
-
-function isOpenAiFailedEvent(type: string | null): boolean {
-  return type === "response.failed";
-}
-
-function isOpenAiIncompleteEvent(type: string | null): boolean {
-  return type === "response.incomplete";
-}
-
-function isOpenAiOutputEvent(type: string | null): boolean {
-  if (!type) {
-    return false;
-  }
-
-  return (
-    type === "response.output_text.delta" ||
-    type === "response.output_item.done" ||
-    type === "response.reasoning_summary_text.delta" ||
-    type === "response.reasoning_summary_part.added" ||
-    type === "response.reasoning_text.delta" ||
-    type === "response.reasoning.delta" ||
-    type.endsWith(".delta")
-  );
-}
-
-function hasOpenAiOutputPayload(data: string): boolean {
-  if (!data || data === "[DONE]") {
-    return false;
-  }
-
-  try {
-    const parsed = JSON.parse(data) as unknown;
-    if (!isRecord(parsed)) {
-      return false;
-    }
-
-    const delta = parsed.delta;
-    if (typeof delta === "string" && delta.length > 0) {
-      return true;
-    }
-
-    if (Array.isArray(parsed.output) && parsed.output.length > 0) {
-      return true;
-    }
-
-    const response = parsed.response;
-    return isRecord(response) && Array.isArray(response.output) && response.output.length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function writeDeferredUpstreamResult(
   res: ServerResponse,
   result: BufferedUpstreamResult,
@@ -491,215 +408,50 @@ function writeDeferredUpstreamResult(
   res.end(result.responseBody);
 }
 
-function readHeader(value: IncomingHttpHeaders[string]): string | null {
-  if (Array.isArray(value)) {
-    return value[0] ?? null;
+function appendBufferedResponseChunk(
+  chunks: Buffer[],
+  bufferedBytes: number,
+  chunk: Buffer,
+  maxBufferedBytes: number
+): number {
+  if (chunk.byteLength === 0 || bufferedBytes >= maxBufferedBytes) {
+    return bufferedBytes;
   }
 
-  return value ?? null;
+  if (!Number.isFinite(maxBufferedBytes)) {
+    chunks.push(Buffer.from(chunk));
+    return bufferedBytes + chunk.byteLength;
+  }
+
+  const remainingBytes = maxBufferedBytes - bufferedBytes;
+  const bytesToCopy = Math.min(remainingBytes, chunk.byteLength);
+  if (bytesToCopy > 0) {
+    chunks.push(Buffer.from(chunk.subarray(0, bytesToCopy)));
+  }
+
+  return bufferedBytes + bytesToCopy;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function normalizeMaxBufferedResponseBytes(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
+  }
+
+  return Math.max(0, Math.floor(value));
 }
 
-class HttpConnectHttpsAgent extends HttpsAgent {
-  constructor(private readonly proxy: URL) {
-    super({ keepAlive: false });
+function normalizeMaxJsonResponseBytes(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_MAX_JSON_RESPONSE_BYTES;
   }
 
-  override createConnection(
-    options: RequestOptions & { servername?: string },
-    callback?: (error: Error | null, stream: Duplex) => void
-  ): Duplex | null | undefined {
-    const targetHost = String(options.hostname ?? options.host ?? "");
-    const targetPort = Number(options.port ?? 443);
-    const proxyHost = this.proxy.hostname;
-    const proxyPort = Number(this.proxy.port || 80);
-    const proxySocket = net.connect(proxyPort, proxyHost);
-    const complete = callback ?? (() => undefined);
-    let responseBuffer = Buffer.alloc(0);
-    let completed = false;
-
-    const cleanup = () => {
-      proxySocket.off("connect", handleConnect);
-      proxySocket.off("data", handleData);
-      proxySocket.off("error", handleProxyError);
-    };
-
-    const fail = (error: Error) => {
-      if (completed) {
-        return;
-      }
-
-      completed = true;
-      cleanup();
-      proxySocket.destroy();
-      complete(error, proxySocket);
-    };
-
-    const succeed = (socket: tls.TLSSocket) => {
-      if (completed) {
-        return;
-      }
-
-      completed = true;
-      cleanup();
-      complete(null, socket);
-    };
-
-    const handleConnect = () => {
-      const lines = [
-        `CONNECT ${targetHost}:${targetPort} HTTP/1.1`,
-        `Host: ${targetHost}:${targetPort}`,
-        "Proxy-Connection: Keep-Alive"
-      ];
-      const auth = proxyAuthorizationHeader(this.proxy);
-      if (auth) {
-        lines.push(`Proxy-Authorization: ${auth}`);
-      }
-
-      proxySocket.write(`${lines.join("\r\n")}\r\n\r\n`);
-    };
-
-    const handleData = (chunk: Buffer) => {
-      responseBuffer = Buffer.concat([responseBuffer, chunk]);
-      const headerEnd = responseBuffer.indexOf("\r\n\r\n");
-      if (headerEnd === -1) {
-        return;
-      }
-
-      const rawHeader = responseBuffer.subarray(0, headerEnd).toString("latin1");
-      const statusLine = rawHeader.split("\r\n")[0] ?? "";
-      if (!/^HTTP\/1\.[01] 200\b/.test(statusLine)) {
-        fail(new Error(`Proxy CONNECT failed: ${statusLine || "no status line"}`));
-        return;
-      }
-
-      const remaining = responseBuffer.subarray(headerEnd + 4);
-      if (remaining.byteLength > 0) {
-        proxySocket.unshift(remaining);
-      }
-
-      proxySocket.off("data", handleData);
-      proxySocket.off("error", handleProxyError);
-
-      const tlsSocket = tls.connect(
-        {
-          socket: proxySocket,
-          servername: typeof options.servername === "string" ? options.servername : targetHost,
-          ALPNProtocols: ["http/1.1"]
-        },
-        () => succeed(tlsSocket)
-      );
-      tlsSocket.once("error", fail);
-    };
-
-    const handleProxyError = (error: Error) => {
-      fail(error);
-    };
-
-    proxySocket.once("connect", handleConnect);
-    proxySocket.on("data", handleData);
-    proxySocket.once("error", handleProxyError);
-
-    return undefined;
-  }
+  return Math.max(0, Math.floor(value));
 }
 
-function resolveUpstreamAgent(upstream: URL): HttpAgent | HttpsAgent | undefined {
-  if (upstream.protocol !== "https:") {
-    return undefined;
+function normalizeMaxObservedStreamEventBytes(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES;
   }
 
-  const proxy = resolveHttpsProxy(upstream);
-  if (!proxy) {
-    return undefined;
-  }
-
-  const key = proxy.toString();
-  if (cachedHttpsProxyAgentKey !== key || !cachedHttpsProxyAgent) {
-    cachedHttpsProxyAgentKey = key;
-    cachedHttpsProxyAgent = new HttpConnectHttpsAgent(proxy);
-  }
-
-  return cachedHttpsProxyAgent ?? undefined;
-}
-
-function resolveHttpsProxy(upstream: URL): URL | null {
-  const configured =
-    process.env.HTTPS_PROXY?.trim() ||
-    process.env.https_proxy?.trim() ||
-    process.env.HTTP_PROXY?.trim() ||
-    process.env.http_proxy?.trim();
-  if (!configured || hostMatchesNoProxy(upstream)) {
-    return null;
-  }
-
-  try {
-    const proxy = new URL(configured);
-    return proxy.protocol === "http:" ? proxy : null;
-  } catch {
-    return null;
-  }
-}
-
-function hostMatchesNoProxy(upstream: URL): boolean {
-  const configured = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
-  const host = upstream.hostname.toLowerCase();
-  const port = upstream.port || (upstream.protocol === "https:" ? "443" : "80");
-
-  for (const rawPattern of configured.split(",")) {
-    const pattern = rawPattern.trim().toLowerCase();
-    if (!pattern) {
-      continue;
-    }
-
-    if (pattern === "*") {
-      return true;
-    }
-
-    const [patternHost, patternPort] = splitNoProxyPattern(pattern);
-    if (patternPort && patternPort !== port) {
-      continue;
-    }
-
-    if (patternHost.startsWith(".")) {
-      const suffix = patternHost.slice(1);
-      if (host === suffix || host.endsWith(`.${suffix}`)) {
-        return true;
-      }
-      continue;
-    }
-
-    if (host === patternHost || host.endsWith(`.${patternHost}`)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function splitNoProxyPattern(pattern: string): [host: string, port: string | null] {
-  const index = pattern.lastIndexOf(":");
-  if (index <= 0 || pattern.includes("]")) {
-    return [pattern, null];
-  }
-
-  const possiblePort = pattern.slice(index + 1);
-  if (!/^\d+$/.test(possiblePort)) {
-    return [pattern, null];
-  }
-
-  return [pattern.slice(0, index), possiblePort];
-}
-
-function proxyAuthorizationHeader(proxy: URL): string | null {
-  if (!proxy.username && !proxy.password) {
-    return null;
-  }
-
-  const username = decodeURIComponent(proxy.username);
-  const password = decodeURIComponent(proxy.password);
-  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  return Math.max(0, Math.floor(value));
 }

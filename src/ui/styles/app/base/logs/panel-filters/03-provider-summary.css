@@ -1,0 +1,53 @@
+.provider-summary {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.provider-card {
+  min-width: 0;
+  border: 1px solid rgba(251, 248, 240, 0.1);
+  border-radius: 18px;
+  background: rgba(11, 17, 25, 0.32);
+}
+
+.provider-card span,
+.provider-card small {
+  color: rgba(251, 248, 240, 0.58);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.provider-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-card {
+  padding: 0.9rem 1rem;
+}
+
+.provider-card strong {
+  display: block;
+  margin: 0.22rem 0;
+  color: var(--paper-lift);
+  font-family: var(--display);
+  font-size: clamp(1.45rem, 2.2vw, 2.2rem);
+  letter-spacing: -0.04em;
+}
+
+.provider-card.tone-primary {
+  border-color: rgba(36, 84, 214, 0.28);
+  background:
+    linear-gradient(135deg, rgba(36, 84, 214, 0.2), rgba(36, 84, 214, 0.04)),
+    rgba(11, 17, 25, 0.32);
+}
+
+.provider-card.tone-claude {
+  border-color: rgba(13, 148, 136, 0.28);
+  background:
+    linear-gradient(135deg, rgba(13, 148, 136, 0.18), rgba(13, 148, 136, 0.04)),
+    rgba(11, 17, 25, 0.32);
+}

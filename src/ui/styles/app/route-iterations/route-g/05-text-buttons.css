@@ -1,0 +1,47 @@
+:root[data-theme] .eyebrow,
+:root[data-theme] .custom-select-label,
+:root[data-theme] .custom-select-copy small,
+:root[data-theme] .log-filter-summary,
+:root[data-theme] .log-filter-disclaimer,
+:root[data-theme] .log-load-more,
+:root[data-theme] .log-load-more span,
+  :root[data-theme] .field small,
+  :root[data-theme] .profile-card-copy p:last-child,
+  :root[data-theme] .route-url-suggestion-main small,
+  :root[data-theme] .route-url-suggestion-meta,
+  :root[data-theme] .route-config-group-head p,
+:root[data-theme] .mode-card p,
+:root[data-theme] .log-model-cell small,
+:root[data-theme] .log-host,
+:root[data-theme] .log-user-agent,
+:root[data-theme] .log-detail p,
+:root[data-theme] .log-detail small,
+:root[data-theme] .log-detail-grid dt,
+:root[data-theme] .provider-card span,
+:root[data-theme] .provider-card small {
+  color: var(--app-muted);
+}
+
+:root[data-theme] .log-time,
+:root[data-theme] .log-model-cell strong,
+:root[data-theme] .metric-time,
+:root[data-theme] .log-endpoint,
+:root[data-theme] .log-host,
+:root[data-theme] .log-user-agent,
+:root[data-theme] .log-detail-grid code,
+:root[data-theme] .log-row time,
+  :root[data-theme] .log-row code,
+  :root[data-theme] .provider-card strong,
+  :root[data-theme] .route-url-suggestion-main strong,
+  :root[data-theme] .custom-select-copy strong,
+:root[data-theme] .custom-select-option strong {
+  color: var(--app-text);
+}
+
+:root[data-theme] .log-load-more button,
+:root[data-theme] .ghost-button,
+:root[data-theme] .solid-button {
+  border-color: var(--app-line-strong);
+  background: var(--app-surface-raised);
+  color: var(--app-text);
+}

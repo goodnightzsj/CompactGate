@@ -1,0 +1,36 @@
+.route-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 0.72rem;
+  border: 1px solid rgba(24, 35, 49, 0.08);
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.route-chip.primary {
+  background: var(--primary-quiet);
+  color: var(--primary);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 0 14px rgba(36, 84, 214, 0.08);
+}
+
+.route-chip.compact {
+  background: var(--compact-quiet);
+  color: #8a560f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 0 14px rgba(216, 138, 29, 0.08);
+}
+
+.route-chip.claude {
+  background: #cdeee8;
+  color: #08746d;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 0 14px rgba(13, 148, 136, 0.08);
+}

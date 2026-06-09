@@ -1,17 +1,23 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { routeProvider } from "../shared/route-meta.js";
 import type {
   HostLogCount,
-  LogStatusKind,
-  ProviderLogCounts,
   RequestLogEntry,
   RequestLogPage,
-  RequestTransport,
   RouteKind,
   StatusLogCounts
 } from "../shared/types.js";
+import {
+  buildWhereClause,
+  type LogPageOptions,
+  normalizeLogStatus,
+  normalizeRoute,
+  providerCountsFromRouteCounts,
+  readCount,
+  readNullableNumber,
+  rowToLogEntry
+} from "./logger-helpers.js";
 
 const LOG_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS request_logs (
@@ -97,12 +103,10 @@ const MIGRATION_COLUMNS: Record<string, string> = {
   user_agent: "TEXT"
 };
 
-interface LogPageOptions {
-  route?: RouteKind;
-  status?: LogStatusKind;
-  host?: string;
-  limit: number;
-  offset: number;
+export const DEFAULT_MAX_PERSISTED_LOG_ENTRIES = 20_000;
+
+export interface RequestLoggerOptions {
+  maxPersistedEntries?: number;
 }
 
 export function resolveDefaultLogDatabasePath(configPath: string): string {
@@ -121,20 +125,25 @@ export class RequestLogger {
 
   private readonly databasePath: string;
 
+  private readonly maxPersistedEntries: number;
+
   private closed = false;
 
   constructor(
     private keepRecent: number,
-    databasePath: string
+    databasePath: string,
+    options: RequestLoggerOptions = {}
   ) {
     const resolvedPath = path.resolve(databasePath);
     mkdirSync(path.dirname(resolvedPath), { recursive: true });
     this.databasePath = resolvedPath;
+    this.maxPersistedEntries = normalizeMaxPersistedEntries(options.maxPersistedEntries);
     this.db = new DatabaseSync(resolvedPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
+    this.prunePersistedEntries();
     this.reloadRecent();
   }
 
@@ -217,6 +226,7 @@ export class RequestLogger {
           entry.request_id,
           entry.error_summary
         );
+      this.prunePersistedEntries();
     } catch (error) {
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
@@ -232,7 +242,9 @@ export class RequestLogger {
 
   page(options: LogPageOptions): RequestLogPage {
     const limit = Math.max(1, Math.floor(options.limit));
-    const offset = Math.max(0, Math.floor(options.offset));
+    const offset = Number.isSafeInteger(options.offset)
+      ? Math.max(0, Math.floor(options.offset))
+      : 0;
     const where = buildWhereClause(options);
     const logs = (
       this.db
@@ -397,139 +409,29 @@ export class RequestLogger {
       claude: readNullableNumber(row.claude_count) ?? 0
     }));
   }
+
+  private prunePersistedEntries(): void {
+    this.db
+      .prepare(
+        `
+          DELETE FROM request_logs
+          WHERE id <= COALESCE((
+            SELECT id
+            FROM request_logs
+            ORDER BY id DESC
+            LIMIT 1 OFFSET ?
+          ), 0)
+        `
+      )
+      .run(this.maxPersistedEntries);
+  }
 }
 
-function providerCountsFromRouteCounts(
-  counts: Record<"all" | RouteKind, number>
-): ProviderLogCounts {
-  const providerCounts: ProviderLogCounts = {
-    all: counts.all,
-    openai: 0,
-    claude: 0
-  };
-
-  for (const route of ["primary", "compact", "claude"] as const) {
-    providerCounts[routeProvider(route)] += counts[route];
+function normalizeMaxPersistedEntries(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined) {
+    return DEFAULT_MAX_PERSISTED_LOG_ENTRIES;
   }
 
-  return providerCounts;
-}
-
-function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host">): {
-  sql: string;
-  params: Array<RouteKind | string>;
-} {
-  const conditions: string[] = [];
-  const params: Array<RouteKind | string> = [];
-
-  if (options.route) {
-    conditions.push("route = ?");
-    params.push(options.route);
-  }
-
-  if (options.status === "normal") {
-    conditions.push("status < 400 AND error_summary IS NULL");
-  } else if (options.status === "error") {
-    conditions.push("(status >= 400 OR error_summary IS NOT NULL)");
-  }
-
-  if (options.host) {
-    conditions.push("upstream_host = ?");
-    params.push(options.host);
-  }
-
-  return {
-    sql: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
-    params
-  };
-}
-
-function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
-  return {
-    time: String(row.time),
-    route: normalizeRoute(row.route),
-    method: String(row.method),
-    path: String(row.path),
-    endpoint: readEndpoint(row.endpoint, String(row.path)),
-    request_type: readRequestTransport(row.request_type),
-    reasoning_effort: readNullableString(row.reasoning_effort),
-    request_summary: readNullableString(row.request_summary),
-    source_model: readNullableString(row.source_model),
-    target_model: readNullableString(row.target_model),
-    status: Number(row.status),
-    duration_ms: Number(row.duration_ms),
-    first_token_ms: readNullableNumber(row.first_token_ms),
-    input_tokens: readNullableNumber(row.input_tokens),
-    output_tokens: readNullableNumber(row.output_tokens),
-    cached_input_tokens: readNullableNumber(row.cached_input_tokens),
-    cached_output_tokens: readNullableNumber(row.cached_output_tokens),
-    cache_read_input_tokens: readNullableNumber(row.cache_read_input_tokens),
-    cache_creation_input_tokens: readNullableNumber(row.cache_creation_input_tokens),
-    reasoning_tokens: readNullableNumber(row.reasoning_tokens),
-    additive_cached_input_tokens: readBoolean(row.additive_cached_input_tokens),
-    additive_cached_output_tokens: readBoolean(row.additive_cached_output_tokens),
-    total_tokens: readNullableNumber(row.total_tokens),
-    upstream_host: String(row.upstream_host),
-    user_agent: readNullableString(row.user_agent),
-    request_id: String(row.request_id),
-    error_summary: readNullableString(row.error_summary)
-  };
-}
-
-function normalizeLogStatus(value: unknown): LogStatusKind {
-  return value === "error" ? "error" : "normal";
-}
-
-function normalizeRoute(value: unknown): RouteKind {
-  if (value === "compact" || value === "claude") {
-    return value;
-  }
-
-  return "primary";
-}
-
-function readCount(row: unknown): number {
-  return isRecord(row) ? readNullableNumber(row.count) ?? 0 : 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readNullableString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function readNullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function readBoolean(value: unknown): boolean {
-  return value === true || value === 1 || value === "1";
-}
-
-function readRequestTransport(value: unknown): RequestTransport {
-  return value === "stream" ? "stream" : "http";
-}
-
-function readEndpoint(value: unknown, pathValue: string): string {
-  if (typeof value === "string" && value.length > 0) {
-    return value;
-  }
-
-  const pathname = pathValue.split("?")[0] ?? "/";
-  if (pathname === "/v1") {
-    return "/";
-  }
-
-  if (pathname.startsWith("/v1/")) {
-    return pathname.slice(3);
-  }
-
-  return pathname || "/";
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : DEFAULT_MAX_PERSISTED_LOG_ENTRIES;
 }

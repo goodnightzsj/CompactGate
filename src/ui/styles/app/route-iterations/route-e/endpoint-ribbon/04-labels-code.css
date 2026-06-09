@@ -1,0 +1,19 @@
+.endpoint-tile span,
+.traffic-chip span,
+.claude-route-proof small,
+.custom-select-label,
+.custom-select-copy small,
+.log-filter-summary,
+.log-filter-disclaimer,
+.provider-card span,
+.provider-card small,
+.log-detail-grid dt,
+.token-detail-card span {
+  color: var(--theme-muted);
+}
+
+.endpoint-tile code {
+  color: var(--theme-ink);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}

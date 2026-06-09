@@ -1,0 +1,20 @@
+.logs-panel,
+.logs-panel .eyebrow,
+.logs-panel .section-heading p,
+.logs-panel .empty-log span,
+.logs-panel .log-detail small,
+.logs-panel .log-detail-grid dt,
+.logs-panel .section-heading h2,
+.logs-panel .empty-log strong,
+.logs-panel .log-detail p,
+.logs-panel .log-detail-grid dd {
+  color: var(--theme-ink);
+}
+
+.logs-panel .eyebrow,
+.logs-panel .section-heading p,
+.logs-panel .empty-log span,
+.logs-panel .log-detail small,
+.logs-panel .log-detail-grid dt {
+  color: var(--theme-muted);
+}

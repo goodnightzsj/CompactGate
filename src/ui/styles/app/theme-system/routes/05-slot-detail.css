@@ -1,0 +1,29 @@
+.route-slot {
+  padding: 10px 12px;
+  background: var(--paper-warm);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.route-slot-label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 3px;
+}
+
+.route-slot-host {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.route-slot-hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 2px;
+}

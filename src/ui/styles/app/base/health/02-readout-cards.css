@@ -1,0 +1,53 @@
+.health-hero-readout,
+.health-grid,
+.health-detail-grid,
+.health-kv-grid,
+.health-checklist {
+  display: grid;
+}
+
+.health-hero-readout {
+  gap: var(--space-3);
+  align-self: center;
+}
+
+.health-mini-card {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid rgba(24, 35, 49, 0.14);
+  border-radius: 10px 24px 10px 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(244, 241, 234, 0.94)),
+    rgba(251, 248, 240, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 10px 22px rgba(24, 35, 49, 0.08);
+}
+
+.health-mini-card span,
+.health-kv span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.health-mini-card strong,
+.health-kv strong,
+.health-json {
+  font-family: var(--mono);
+}
+
+.health-mini-card strong {
+  font-size: 1rem;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.health-mini-card small,
+.health-card-copy {
+  color: var(--muted);
+  line-height: 1.55;
+}

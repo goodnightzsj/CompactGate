@@ -1,0 +1,5 @@
+@import "./operator-route-board/01-stage-board-shell.css";
+@import "./operator-route-board/02-rule-cards.css";
+@import "./operator-route-board/03-slots-model-loop.css";
+@import "./operator-route-board/04-canvas-flow.css";
+@import "./operator-route-board/05-footer-summary.css";

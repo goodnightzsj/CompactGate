@@ -1,0 +1,75 @@
+.profile-item-main {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.profile-item-main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 64%, transparent);
+  outline-offset: 4px;
+  border-radius: 14px;
+}
+
+.profile-item-icon {
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(13, 148, 136, 0.22);
+  border-radius: 14px 6px 14px 6px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.78), transparent 35%),
+    linear-gradient(135deg, rgba(13, 148, 136, 0.25), rgba(36, 84, 214, 0.16)),
+    rgba(205, 238, 232, 0.64);
+  color: #0f766e;
+  font-weight: 950;
+}
+
+.profile-item-copy {
+  display: grid;
+  gap: 0.34rem;
+  min-width: 0;
+}
+
+.profile-item-copy strong,
+.profile-item-copy small,
+.profile-item-copy span {
+  overflow-wrap: anywhere;
+}
+
+.profile-item-copy strong {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.profile-item-copy small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.profile-item-copy > span:last-child {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.profile-item-kicker {
+  width: fit-content;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(13, 148, 136, 0.22);
+  border-radius: 999px;
+  background: rgba(205, 238, 232, 0.38);
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}

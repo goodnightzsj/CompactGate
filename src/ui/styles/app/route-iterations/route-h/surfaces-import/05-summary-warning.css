@@ -1,0 +1,4 @@
+:root[data-theme] .config-import-summary-grid div.is-warn {
+  border-color: color-mix(in srgb, var(--app-amber) 36%, var(--app-line));
+  background: var(--app-amber-soft);
+}

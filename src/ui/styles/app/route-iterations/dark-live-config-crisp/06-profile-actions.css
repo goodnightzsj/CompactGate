@@ -1,0 +1,45 @@
+:root[data-theme="dark"] .live-config .mode-switch button.is-selected,
+:root[data-theme="dark"] .live-config .compound-input button,
+:root[data-theme="dark"] .live-config .field-inline-button,
+:root[data-theme="dark"] .live-config .profile-save-button {
+  border-color: color-mix(in srgb, var(--app-blue) 44%, var(--app-line));
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.26), rgba(30, 64, 175, 0.2)),
+    rgba(15, 23, 42, 0.94);
+  color: #eaf2ff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 10px 22px rgba(2, 6, 23, 0.22);
+}
+
+:root[data-theme="dark"] .live-config .profile-item.is-selected,
+:root[data-theme="dark"] .live-config .profile-item.is-active {
+  border-color: color-mix(in srgb, var(--app-teal) 42%, var(--app-line));
+  background:
+    linear-gradient(135deg, rgba(45, 212, 191, 0.1), transparent 42%),
+    linear-gradient(180deg, rgba(26, 39, 57, 0.98), rgba(15, 23, 42, 0.98));
+}
+
+:root[data-theme="dark"] .live-config .profile-item-icon,
+:root[data-theme="dark"] .live-config .profile-item-kicker {
+  border-color: color-mix(in srgb, var(--app-teal) 38%, var(--app-line));
+  background: color-mix(in srgb, var(--app-teal) 16%, var(--app-surface-raised));
+  color: #99f6e4;
+}
+
+:root[data-theme="dark"] .live-config .profile-item-copy strong,
+:root[data-theme="dark"] .live-config .profile-card-status strong {
+  color: #f8fafc;
+}
+
+:root[data-theme="dark"] .live-config .apply-button {
+  border-color: rgba(147, 197, 253, 0.72);
+  background:
+    linear-gradient(180deg, #93c5fd, #60a5fa 48%, #3b82f6),
+    var(--app-blue);
+  color: #06111f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.46),
+    0 16px 34px rgba(37, 99, 235, 0.3),
+    0 0 0 1px rgba(96, 165, 250, 0.12);
+}

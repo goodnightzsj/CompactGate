@@ -1,0 +1,53 @@
+@media (max-width: 1180px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: 1fr 1fr;
+    background: linear-gradient(180deg, rgba(29, 40, 54, 0.98), rgba(18, 26, 38, 0.98));
+  }
+
+  .ribbon-status-grid,
+  .ribbon-traffic,
+  .claude-route-proof,
+  .ribbon-note {
+    grid-column: 1 / -1;
+  }
+
+  .logs-head {
+    position: static;
+    margin: 0 0 var(--space-3);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .shell {
+    width: min(100% - 16px, 1680px);
+  }
+
+  .topbar,
+  .command-deck.operator-ribbon {
+    border-radius: 12px;
+  }
+
+  .command-deck.operator-ribbon,
+  .ribbon-endpoints,
+  .ribbon-status-grid,
+  .ribbon-traffic,
+  .log-select-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ribbon-note {
+    grid-column: 1;
+  }
+
+  .operator-stage-head.compact-heading {
+    display: grid;
+  }
+
+  .log-row-main {
+    min-height: 0;
+  }
+}

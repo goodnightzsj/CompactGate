@@ -1,0 +1,14 @@
+.profile-item-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 3px;
+}
+
+.profile-item-actions .solid-button,
+.profile-item-actions .ghost-button {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 0.66rem;
+  border-radius: 5px;
+  min-height: unset;
+}

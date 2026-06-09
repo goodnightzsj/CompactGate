@@ -1,0 +1,42 @@
+.log-select-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0.28rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+}
+
+.log-filter-disclaimer {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(247, 243, 234, 0.58);
+  font-weight: 600;
+}
+
+.provider-summary {
+  margin-top: 0;
+}
+
+.provider-card {
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.provider-card strong {
+  margin: 0.08rem 0;
+  font-family: var(--mono);
+  font-size: 1.2rem;
+  letter-spacing: -0.03em;
+}
+
+.custom-select-trigger,
+.custom-select-option {
+  min-height: 38px;
+  border-radius: 9px;
+}
+
+.custom-select-label {
+  margin-left: 0.08rem;
+}

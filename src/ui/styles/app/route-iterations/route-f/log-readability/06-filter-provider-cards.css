@@ -1,0 +1,37 @@
+.log-filter-summary,
+.log-filter-disclaimer,
+.log-load-more,
+.log-load-more span {
+  color: var(--theme-muted);
+}
+
+.log-load-more button {
+  border-color: var(--theme-line-strong);
+  background: #ffffff;
+  color: var(--theme-ink);
+  box-shadow: 0 3px 10px rgba(23, 32, 51, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.log-load-more button:hover:not(:disabled),
+.log-load-more button:focus-visible {
+  border-color: #9fb3e8;
+  background: #eef4ff;
+  color: #1e3a8a;
+}
+
+.log-select-row,
+.log-filter-disclaimer,
+.provider-card {
+  border-color: var(--theme-line);
+  background: #ffffff;
+  color: var(--theme-ink);
+}
+
+.provider-card span,
+.provider-card small {
+  color: var(--theme-muted);
+}
+
+.provider-card strong {
+  color: var(--theme-ink);
+}

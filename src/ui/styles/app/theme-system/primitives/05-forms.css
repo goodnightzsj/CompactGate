@@ -1,0 +1,41 @@
+/* ── Form ── */
+.field {
+  display: grid;
+  gap: 3px;
+}
+
+.field-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.field-hint {
+  font-size: 0.7rem;
+  color: var(--faint);
+  line-height: 1.4;
+}
+
+.input, .textarea {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  transition: border-color 120ms var(--ease);
+}
+
+.input { min-height: 36px; }
+
+.input:focus, .textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+
+.input:hover, .textarea:hover {
+  border-color: var(--hairline-strong);
+}

@@ -1,0 +1,70 @@
+/* TopBar traffic dots */
+.topbar-traffic {
+  display: flex;
+  gap: 4px;
+}
+
+.traffic-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 26px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.traffic-dot.tone-primary { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.traffic-dot.tone-compact { background: var(--accent-amber-soft); color: var(--accent-amber); }
+.traffic-dot.tone-claude  { background: var(--accent-teal-soft); color: var(--accent-teal); }
+
+/* TopBar status strip */
+.status-strip {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.status-pill, .save-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.status-pill::before {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  content: "";
+  flex-shrink: 0;
+}
+
+.status-pill.is-good::before {
+  background: var(--accent-green);
+  box-shadow: 0 0 8px var(--accent-green-glow), 0 0 2px var(--accent-green);
+}
+.status-pill.is-warn::before {
+  background: var(--accent-amber);
+  box-shadow: 0 0 8px var(--accent-amber-glow), 0 0 2px var(--accent-amber);
+}
+.status-pill.is-bad::before {
+  background: var(--accent-red);
+  box-shadow: 0 0 8px rgba(204,33,33,0.15), 0 0 2px var(--accent-red);
+}
+
+.save-meter.is-dirty {
+  border-color: color-mix(in srgb, var(--accent-amber) 45%, var(--border-default));
+  background: var(--accent-amber-soft);
+  color: var(--accent-amber);
+  font-weight: 700;
+}

@@ -1,0 +1,74 @@
+@media (max-width: 1280px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: minmax(140px, 0.45fr) minmax(440px, 1.65fr) minmax(210px, 0.7fr) minmax(120px, 0.36fr);
+  }
+
+  .ribbon-endpoints {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 1180px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  }
+
+  .ribbon-title,
+  .ribbon-traffic,
+  .claude-route-proof {
+    grid-column: auto;
+  }
+
+  .ribbon-endpoints {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .operator-grid,
+  .route-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .ribbon-title,
+  .ribbon-endpoints,
+  .ribbon-traffic,
+  .claude-route-proof {
+    grid-column: 1;
+  }
+
+  .ribbon-endpoints {
+    grid-row: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .endpoint-tile,
+  .traffic-chip,
+  .claude-route-proof {
+    min-height: 52px;
+  }
+
+  .claude-route-proof {
+    grid-template-columns: auto auto 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  .claude-route-proof .route-led {
+    grid-row: 1;
+  }
+
+  .mode-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-list {
+    max-height: 300px;
+  }
+}

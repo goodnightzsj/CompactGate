@@ -1,0 +1,8 @@
+:root[data-theme="dark"] .live-config input,
+:root[data-theme="dark"] .live-config textarea,
+:root[data-theme="dark"] .live-config .compound-input {
+  border-color: #2a3d55;
+  background:
+    linear-gradient(180deg, #060d18, #08111f),
+    #060d18;
+}

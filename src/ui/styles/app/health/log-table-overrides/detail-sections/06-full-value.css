@@ -1,0 +1,3 @@
+.log-table-full .log-detail-item.is-full .log-detail-value {
+  max-inline-size: 100%;
+}

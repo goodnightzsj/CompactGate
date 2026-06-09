@@ -1,0 +1,36 @@
+:root {
+  --paper: #f4f1ea;
+  --paper-lift: #fbf8f0;
+  --paper-warm: #eee5d6;
+  --ink: #182331;
+  --ink-2: #243346;
+  --muted: #66717e;
+  --soft-muted: #8b7f6f;
+  --hairline: #d7cfc2;
+  --rail: #e7dfd2;
+  --primary: #2454d6;
+  --primary-quiet: #d9e3ff;
+  --compact: #d88a1d;
+  --compact-quiet: #f6ddb7;
+  --teal: #0d9488;
+  --red: #c2410c;
+  --green: #1f7a4d;
+  --shadow: 0 4px 12px rgba(24, 35, 49, 0.06), 0 1px 3px rgba(24, 35, 49, 0.08);
+  --shadow-float: 0 18px 46px rgba(24, 35, 49, 0.14), 0 4px 12px rgba(24, 35, 49, 0.08);
+  --shadow-tight: 0 3px 8px rgba(24, 35, 49, 0.12), 0 1px 2px rgba(24, 35, 49, 0.1);
+  --control-shadow: 0 8px 18px rgba(24, 35, 49, 0.08), 0 2px 4px rgba(24, 35, 49, 0.1);
+  --display: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --panel-inset:
+    inset 0 1px 0 rgba(255, 255, 255, 0.64),
+    inset 0 -1px 0 rgba(24, 35, 49, 0.04);
+  --radius: 20px;
+  --radius-small: 12px;
+  --space-1: 0.35rem;
+  --space-2: 0.6rem;
+  --space-3: 0.9rem;
+  --space-4: 1.2rem;
+  --space-5: 1.8rem;
+  --space-6: clamp(1.8rem, 4vw, 3.5rem);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}

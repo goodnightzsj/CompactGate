@@ -1,0 +1,50 @@
+/* Route config */
+.route-config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.route-config-group {
+  padding: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.route-config-group-head h3 {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.route-config-group-head p {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin: 2px 0 0;
+}
+
+.route-config-cards {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.route-config-card {
+  padding: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.route-config-card.tone-primary { border-left: 3px solid var(--accent-blue); }
+.route-config-card.tone-compact { border-left: 3px solid var(--accent-amber); }
+.route-config-card.tone-claude  { border-left: 3px solid var(--accent-teal); }
+
+.route-config-card-head h4 {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}

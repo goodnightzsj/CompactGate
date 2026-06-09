@@ -1,0 +1,5 @@
+@import "./routes/01-routes-layout.css";
+@import "./routes/02-route-rule-card.css";
+@import "./routes/03-route-mapping.css";
+@import "./routes/04-slot-grid.css";
+@import "./routes/05-slot-detail.css";

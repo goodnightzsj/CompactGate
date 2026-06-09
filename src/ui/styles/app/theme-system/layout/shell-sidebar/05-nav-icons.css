@@ -1,0 +1,20 @@
+.sidebar-nav-icon {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+  opacity: 0.55;
+  border-radius: 4px;
+  transition: all 120ms var(--ease);
+}
+
+.sidebar-nav-item:hover .sidebar-nav-icon,
+.sidebar-nav-item.is-active .sidebar-nav-icon {
+  opacity: 1;
+}
+
+.sidebar-nav-item.is-active .sidebar-nav-icon {
+  background: var(--accent-soft);
+}

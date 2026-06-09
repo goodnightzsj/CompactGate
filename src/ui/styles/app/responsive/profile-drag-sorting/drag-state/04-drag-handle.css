@@ -1,0 +1,42 @@
+.profile-item-handle,
+:root[data-theme] .profile-item-handle,
+:root[data-theme="dark"] .profile-item-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 42px;
+  min-height: 42px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 12px 5px 12px 5px;
+  background: transparent;
+  color: var(--app-muted, var(--muted));
+  cursor: grab;
+  box-shadow: none;
+  touch-action: none;
+  user-select: none;
+}
+
+.profile-item-handle:hover,
+:root[data-theme] .profile-item-handle:hover,
+:root[data-theme="dark"] .profile-item-handle:hover {
+  border-color: color-mix(in srgb, var(--app-teal, var(--teal)) 28%, var(--app-line, var(--hairline)));
+  background: color-mix(in srgb, var(--app-teal, var(--teal)) 12%, transparent);
+  color: var(--app-teal, var(--teal));
+}
+
+.profile-item-handle:active {
+  cursor: grabbing;
+}
+
+.profile-item-handle:focus,
+.profile-item-handle:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.profile-item-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}

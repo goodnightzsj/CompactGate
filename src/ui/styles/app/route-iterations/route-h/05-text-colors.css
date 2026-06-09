@@ -1,0 +1,34 @@
+:root[data-theme] .route-rule-card code,
+:root[data-theme] .route-rule-row code,
+:root[data-theme] .route-slot strong,
+:root[data-theme] .endpoint-tile code,
+:root[data-theme] .traffic-chip strong,
+:root[data-theme] .profile-item-copy strong,
+:root[data-theme] .token-tooltip-title,
+:root[data-theme] .token-tooltip-row b,
+:root[data-theme] .token-tooltip-total b,
+:root[data-theme] .preview-readout dd,
+:root[data-theme] .preview-readout code,
+:root[data-theme] .health-kv strong,
+:root[data-theme] .health-mini-card strong,
+:root[data-theme] .confirm-copy h2 {
+  color: var(--app-text);
+}
+
+:root[data-theme] .route-rule-card-head p,
+:root[data-theme] .route-rule-row span,
+:root[data-theme] .route-slot small,
+:root[data-theme] .endpoint-tile span,
+:root[data-theme] .traffic-chip span,
+:root[data-theme] .profile-empty-card span,
+:root[data-theme] .profile-item-copy small,
+:root[data-theme] .profile-item-copy > span:last-child,
+:root[data-theme] .preview-readout p,
+:root[data-theme] .preview-readout dt,
+:root[data-theme] .token-tooltip-row em,
+:root[data-theme] .token-tooltip-total em,
+:root[data-theme] .health-kv span,
+:root[data-theme] .health-mini-card span,
+:root[data-theme] .confirm-copy p {
+  color: var(--app-muted);
+}

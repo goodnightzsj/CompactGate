@@ -1,0 +1,42 @@
+.panel.inspector {
+  position: sticky;
+  top: 104px;
+  align-self: start;
+}
+
+.panel.inspector .section-heading h2 {
+  font-size: clamp(1.15rem, 1.55vw, 1.55rem);
+}
+
+.panel.inspector .control-stack {
+  gap: 0.65rem;
+}
+
+.panel.inspector textarea {
+  min-height: 108px;
+  max-height: 180px;
+}
+
+.panel.inspector .preview-button {
+  min-height: 38px;
+}
+
+.panel.inspector .preview-readout {
+  margin-top: 0.75rem;
+  padding: 0.78rem;
+}
+
+.panel.inspector .preview-readout dl {
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.panel.inspector .preview-readout dt {
+  font-size: 0.66rem;
+}
+
+.panel.inspector .preview-readout dd {
+  margin-top: 0.12rem;
+  font-size: 0.78rem;
+}

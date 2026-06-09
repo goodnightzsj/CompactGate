@@ -1,0 +1,9 @@
+.ribbon-title,
+.endpoint-tile,
+.traffic-chip,
+.claude-route-proof {
+  background: var(--theme-elevated);
+  border-color: var(--theme-line);
+  color: var(--theme-ink);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+}

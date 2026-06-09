@@ -1,0 +1,26 @@
+.route-rule-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.route-rule-card-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.12rem, 1.6vw, 1.45rem);
+  line-height: 1.08;
+}
+
+.route-rule-card-head p {
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+  line-height: 1.62;
+}
+
+.route-rule-card code,
+.route-rule-row code,
+.route-model-strip code,
+.auto-compact-loop code {
+  font-family: var(--mono);
+}

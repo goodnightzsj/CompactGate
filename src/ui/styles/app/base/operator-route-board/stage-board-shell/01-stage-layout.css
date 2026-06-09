@@ -1,0 +1,10 @@
+.studio-grid {
+  display: grid;
+  gap: var(--space-5);
+  margin-top: 0;
+}
+
+.operator-stage {
+  display: grid;
+  gap: var(--space-4);
+}

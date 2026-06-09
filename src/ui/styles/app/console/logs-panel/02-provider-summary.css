@@ -1,0 +1,33 @@
+.provider-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.provider-card {
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.provider-card strong {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.03em;
+}
+
+.provider-card span, .provider-card small {
+  font-size: 0.64rem;
+  font-weight: 800;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.provider-card.tone-primary { border-left: 3px solid var(--accent-blue); }
+.provider-card.tone-claude  { border-left: 3px solid var(--accent-teal); }

@@ -1,0 +1,15 @@
+/* Health page redesign: operator-grade status board aligned with the current console theme. */
+.shell-health {
+  width: min(100% - 40px, 1480px);
+  padding-bottom: 42px;
+}
+
+.health-topbar {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-bottom: 16px;
+}
+
+.health-topbar .status-strip {
+  justify-content: center;
+  min-width: 0;
+}

@@ -1,0 +1,34 @@
+:root[data-theme="dark"] .path-presets {
+  gap: 0.72rem;
+}
+
+:root[data-theme="dark"] .path-presets button {
+  min-height: 44px;
+  border-color: color-mix(in srgb, var(--app-blue) 34%, var(--app-line));
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.96)),
+    color-mix(in srgb, var(--app-blue) 10%, var(--app-surface-raised));
+  color: #eaf2ff;
+  font-weight: 850;
+  letter-spacing: -0.01em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 20px rgba(2, 6, 23, 0.22);
+}
+
+:root[data-theme="dark"] .path-presets button::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent);
+}
+
+:root[data-theme="dark"] .path-presets button:hover,
+:root[data-theme="dark"] .path-presets button:focus-visible {
+  border-color: color-mix(in srgb, var(--app-blue) 68%, #bfdbfe);
+  background:
+    linear-gradient(180deg, rgba(37, 99, 235, 0.28), rgba(15, 23, 42, 0.96)),
+    var(--app-surface-raised);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 0 3px rgba(96, 165, 250, 0.14),
+    0 14px 28px rgba(2, 6, 23, 0.34);
+}

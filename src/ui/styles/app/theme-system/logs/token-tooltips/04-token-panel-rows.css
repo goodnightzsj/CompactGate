@@ -1,0 +1,45 @@
+.token-tooltip-panel {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.token-tooltip-title {
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.token-tooltip-row,
+.token-tooltip-total {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.token-tooltip-row em,
+.token-tooltip-total em {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.token-tooltip-row b,
+.token-tooltip-total b {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.token-tooltip-total {
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.token-tooltip-total b {
+  color: var(--accent);
+}

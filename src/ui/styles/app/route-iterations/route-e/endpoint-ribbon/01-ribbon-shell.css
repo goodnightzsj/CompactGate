@@ -1,0 +1,6 @@
+.command-deck.operator-ribbon {
+  grid-template-columns: minmax(145px, 0.52fr) minmax(540px, 1.9fr) minmax(230px, 0.7fr) minmax(132px, 0.38fr);
+  gap: 0.5rem;
+  min-height: 80px;
+  padding: 0.55rem;
+}

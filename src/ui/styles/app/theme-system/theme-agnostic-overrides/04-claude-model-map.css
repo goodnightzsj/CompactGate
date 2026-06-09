@@ -1,0 +1,83 @@
+/* Claude model map must follow the active theme after the global tag rules above. */
+:root[data-theme] .claude-model-map-card {
+  border-color: color-mix(in srgb, var(--jade) 28%, var(--hairline));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--jade) 8%, transparent), transparent 44%),
+    var(--surface);
+  color: var(--ink);
+}
+
+:root[data-theme] .claude-model-map-card h3,
+:root[data-theme] .claude-model-map-row label,
+:root[data-theme] .claude-model-map-row strong {
+  color: var(--ink);
+}
+
+:root[data-theme] .claude-model-map-head p:last-child,
+:root[data-theme] .model-role-cell small,
+:root[data-theme] .model-row-hint {
+  color: var(--muted);
+}
+
+:root[data-theme] .map-counter,
+:root[data-theme] .model-fetch-note {
+  border-color: color-mix(in srgb, var(--jade) 28%, var(--hairline));
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+
+:root[data-theme] .model-fetch-note.is-error {
+  border-color: color-mix(in srgb, var(--brick) 34%, var(--hairline));
+  background: var(--brick-soft);
+  color: var(--brick);
+}
+
+:root[data-theme] .claude-model-map-row {
+  border-color: var(--hairline);
+  background: var(--paper-warm);
+}
+
+:root[data-theme] .claude-model-map-row.is-default {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+:root[data-theme] .claude-model-map-row .tag {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+:root[data-theme] .claude-model-map-row .tag.is-compat {
+  color: var(--amber);
+}
+
+:root[data-theme] .claude-model-map-row .tag.is-fallback {
+  color: var(--jade);
+}
+
+:root[data-theme] .claude-model-map-row .custom-select-trigger {
+  border-color: var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+:root[data-theme] .custom-select-menu.is-compact {
+  border-color: var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option:hover,
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option:focus-visible,
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--ink);
+}

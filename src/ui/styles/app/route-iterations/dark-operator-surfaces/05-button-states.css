@@ -1,0 +1,36 @@
+:root[data-theme="dark"] .live-config .profile-item-actions .solid-button,
+:root[data-theme="dark"] .live-config .profile-item-actions .ghost-button,
+:root[data-theme="dark"] .live-config .profile-save-button,
+:root[data-theme="dark"] .live-config .field-inline-button,
+:root[data-theme="dark"] .live-config .compound-input button {
+  border-color: #2e435d;
+  background:
+    linear-gradient(180deg, #0e1a2b, #07111e),
+    #07111e;
+  color: #e8f0fb;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    inset 0 -1px 0 rgba(2, 6, 23, 0.5),
+    0 8px 18px rgba(2, 6, 23, 0.24);
+}
+
+:root[data-theme="dark"] .live-config .profile-item-actions .solid-button::before,
+:root[data-theme="dark"] .live-config .profile-item-actions .ghost-button::before,
+:root[data-theme="dark"] .live-config .profile-save-button::before,
+:root[data-theme="dark"] .live-config .field-inline-button::before,
+:root[data-theme="dark"] .live-config .compound-input button::before {
+  opacity: 0.16;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent);
+}
+
+:root[data-theme="dark"] .live-config .profile-item-actions .solid-button:hover,
+:root[data-theme="dark"] .live-config .profile-item-actions .ghost-button:hover,
+:root[data-theme="dark"] .live-config .profile-save-button:hover,
+:root[data-theme="dark"] .live-config .field-inline-button:hover,
+:root[data-theme="dark"] .live-config .compound-input button:hover {
+  border-color: #49719b;
+  background:
+    linear-gradient(180deg, #13233a, #091625),
+    #091625;
+  color: #ffffff;
+}

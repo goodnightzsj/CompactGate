@@ -1,0 +1,32 @@
+.health-kv-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.health-kv {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--app-surface-raised) 78%, var(--app-surface-soft));
+  box-shadow: none;
+}
+
+.health-kv.is-wide {
+  margin: -4px 0 0;
+}
+
+.health-kv strong {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}

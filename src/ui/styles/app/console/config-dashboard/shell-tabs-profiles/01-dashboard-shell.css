@@ -1,0 +1,28 @@
+/* ══════════════════════════════════════════════════════════
+   Config Dashboard (right panel)
+   ══════════════════════════════════════════════════════════ */
+.config-dashboard {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: 20px 22px;
+  display: grid;
+  gap: 16px;
+}
+
+.config-dashboard .section-heading h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.config-dashboard .section-heading .eyebrow {
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-tertiary);
+  margin: 0 0 4px;
+}

@@ -1,0 +1,15 @@
+@keyframes deck-travel-mobile {
+  from {
+    transform: translateX(0) scale(0.8);
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  to {
+    transform: translateX(min(62vw, 230px)) scale(1);
+    opacity: 0;
+  }
+}

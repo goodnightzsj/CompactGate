@@ -1,0 +1,17 @@
+.custom-select-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-weight: 900;
+}
+
+.custom-select-count {
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+  padding: 0 0.4rem;
+  background: rgba(251, 248, 240, 0.12);
+  color: inherit;
+  font-size: 0.74rem;
+}

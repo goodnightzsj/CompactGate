@@ -1,0 +1,73 @@
+.button-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.button-row .apply-button {
+  flex: 1 1 240px;
+}
+
+.button-row .ghost-button {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 176px;
+}
+
+.field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.field span {
+  font-weight: 700;
+}
+
+.field small,
+.preview-readout p,
+.empty-log span,
+.log-detail small {
+  color: var(--muted);
+}
+
+.field-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.field-inline-button {
+  min-height: 36px;
+  padding: 0 0.85rem;
+  border: 1px solid rgba(24, 35, 49, 0.16);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(244, 241, 234, 0.96)),
+    rgba(251, 248, 240, 0.76);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 4px 10px rgba(24, 35, 49, 0.06);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.field-inline-button:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 16px rgba(24, 35, 49, 0.1);
+}
+
+.field-inline-button.is-danger {
+  border-color: rgba(194, 65, 12, 0.28);
+  color: var(--red);
+}

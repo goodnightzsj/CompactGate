@@ -1,0 +1,69 @@
+.panel,
+.logs-panel {
+  padding: var(--space-5);
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px 10px 24px 10px;
+}
+
+.live-config,
+.inspector {
+  box-shadow:
+    0 22px 40px rgba(24, 35, 49, 0.1),
+    var(--panel-inset);
+}
+
+.live-config {
+  background:
+    linear-gradient(140deg, rgba(36, 84, 214, 0.08), transparent 50%),
+    linear-gradient(180deg, rgba(251, 248, 240, 0.94), rgba(243, 236, 222, 0.86)),
+    rgba(251, 248, 240, 0.82);
+}
+
+.live-config::before,
+.inspector::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+}
+
+.live-config::before {
+  background:
+    linear-gradient(90deg, transparent 48px, rgba(36, 84, 214, 0.05) 48px 50px, transparent 50px),
+    linear-gradient(rgba(24, 35, 49, 0.035) 1px, transparent 1px);
+  background-size: auto, 100% 30px;
+  mask-image: linear-gradient(180deg, #000, transparent 84%);
+}
+
+.inspector {
+  background:
+    linear-gradient(140deg, rgba(216, 138, 29, 0.09), transparent 54%),
+    linear-gradient(180deg, rgba(251, 248, 240, 0.95), rgba(243, 236, 222, 0.88)),
+    rgba(251, 248, 240, 0.82);
+}
+
+.inspector::before {
+  background:
+    radial-gradient(circle at 100% 0, rgba(216, 138, 29, 0.12), transparent 26%),
+    linear-gradient(rgba(24, 35, 49, 0.03) 1px, transparent 1px);
+  background-size: auto, 100% 30px;
+  mask-image: linear-gradient(180deg, #000, transparent 88%);
+}
+
+.control-stack {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.subform-stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.config-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}

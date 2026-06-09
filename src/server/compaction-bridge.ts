@@ -5,15 +5,54 @@ export interface PrimaryBridgeResult {
   replacedCompactionCount: number;
 }
 
+export interface CompactionBridgeScope {
+  compactUpstream: string;
+  sourceModel: string | null;
+  targetModel: string | null;
+}
+
+export interface CompactionBridgeStoreOptions {
+  now?: () => number;
+  ttlMs?: number;
+  maxEntries?: number;
+}
+
+interface CachedFallbackItems {
+  items: unknown[];
+  expiresAt: number;
+}
+
+const DEFAULT_BRIDGE_TTL_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_MAX_BRIDGE_ENTRIES = 512;
+const DEFAULT_MAX_DECODED_COMPACTION_BYTES = 8 * 1024 * 1024;
+
 export class CompactionBridgeStore {
-  private readonly fallbackItemsByEncryptedContent = new Map<string, unknown[]>();
+  private readonly fallbackItemsByKey = new Map<string, CachedFallbackItems>();
 
-  private readonly pendingCompactFollowUps = new Set<string>();
+  private readonly pendingCompactFollowUps = new Map<string, number>();
 
-  storeCompactResponse(responseBody: Buffer, options: { armFollowUp?: boolean } = {}): void {
+  private readonly now: () => number;
+
+  private readonly ttlMs: number;
+
+  private readonly maxEntries: number;
+
+  constructor(options: CompactionBridgeStoreOptions = {}) {
+    this.now = options.now ?? Date.now;
+    this.ttlMs = options.ttlMs ?? DEFAULT_BRIDGE_TTL_MS;
+    this.maxEntries = options.maxEntries ?? DEFAULT_MAX_BRIDGE_ENTRIES;
+  }
+
+  storeCompactResponse(
+    responseBody: Buffer,
+    options: { armFollowUp?: boolean; scope: CompactionBridgeScope }
+  ): void {
     const armFollowUp = options.armFollowUp ?? true;
     const parsed = parseJsonRecord(responseBody);
     const output = Array.isArray(parsed?.output) ? parsed.output : null;
+    const now = this.now();
+    const expiresAt = now + this.ttlMs;
+    this.pruneExpired(now);
 
     if (!output || output.length === 0) {
       return;
@@ -24,8 +63,9 @@ export class CompactionBridgeStore {
         continue;
       }
 
+      const key = compactionKey(options.scope, item.encrypted_content);
       if (armFollowUp) {
-        this.pendingCompactFollowUps.add(item.encrypted_content);
+        rememberMapEntry(this.pendingCompactFollowUps, key, expiresAt);
       }
 
       const fallbackItems = extractFallbackItems(output, item);
@@ -33,36 +73,49 @@ export class CompactionBridgeStore {
         continue;
       }
 
-      this.fallbackItemsByEncryptedContent.set(
-        item.encrypted_content,
-        deepCloneJsonArray(fallbackItems)
-      );
+      rememberMapEntry(this.fallbackItemsByKey, key, {
+        items: deepCloneJsonArray(fallbackItems),
+        expiresAt
+      });
     }
+
+    enforceMaxEntries(this.pendingCompactFollowUps, this.maxEntries);
+    enforceMaxEntries(this.fallbackItemsByKey, this.maxEntries);
   }
 
-  consumeCompactFollowUp(rawBody: Buffer): boolean {
+  consumeCompactFollowUp(rawBody: Buffer, scope: CompactionBridgeScope): boolean {
     const parsed = parseJsonRecord(rawBody);
     const input = Array.isArray(parsed?.input) ? parsed.input : null;
+    const now = this.now();
+    this.pruneExpired(now);
 
     if (!input) {
       return false;
     }
 
     for (const item of input) {
-      if (!isCompactionItem(item) || !this.pendingCompactFollowUps.has(item.encrypted_content)) {
+      if (!isCompactionItem(item)) {
         continue;
       }
 
-      this.pendingCompactFollowUps.delete(item.encrypted_content);
+      const key = compactionKey(scope, item.encrypted_content);
+      const expiresAt = this.pendingCompactFollowUps.get(key);
+      if (!expiresAt || expiresAt <= now) {
+        this.pendingCompactFollowUps.delete(key);
+        continue;
+      }
+
+      this.pendingCompactFollowUps.delete(key);
       return true;
     }
 
     return false;
   }
 
-  rewritePrimaryBody(rawBody: Buffer): PrimaryBridgeResult {
+  rewritePrimaryBody(rawBody: Buffer, scope: CompactionBridgeScope): PrimaryBridgeResult {
     const parsed = parseJsonRecord(rawBody);
     const input = Array.isArray(parsed?.input) ? parsed.input : null;
+    this.pruneExpired(this.now());
 
     if (!parsed || !input) {
       return { body: rawBody, replacedCompactionCount: 0 };
@@ -77,9 +130,9 @@ export class CompactionBridgeStore {
         continue;
       }
 
-      const fallbackItems = this.fallbackItemsByEncryptedContent.get(item.encrypted_content);
-      if (fallbackItems) {
-        rewrittenInput.push(...deepCloneJsonArray(fallbackItems));
+      const fallback = this.fallbackItemsByKey.get(compactionKey(scope, item.encrypted_content));
+      if (fallback) {
+        rewrittenInput.push(...deepCloneJsonArray(fallback.items));
         replacedCompactionCount += 1;
         continue;
       }
@@ -104,6 +157,44 @@ export class CompactionBridgeStore {
       replacedCompactionCount
     };
   }
+
+  private pruneExpired(now: number): void {
+    for (const [key, expiresAt] of this.pendingCompactFollowUps.entries()) {
+      if (expiresAt <= now) {
+        this.pendingCompactFollowUps.delete(key);
+      }
+    }
+
+    for (const [key, fallback] of this.fallbackItemsByKey.entries()) {
+      if (fallback.expiresAt <= now) {
+        this.fallbackItemsByKey.delete(key);
+      }
+    }
+  }
+}
+
+function rememberMapEntry<Value>(map: Map<string, Value>, key: string, value: Value): void {
+  map.delete(key);
+  map.set(key, value);
+}
+
+function enforceMaxEntries<Value>(map: Map<string, Value>, maxEntries: number): void {
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      return;
+    }
+    map.delete(oldestKey);
+  }
+}
+
+function compactionKey(scope: CompactionBridgeScope, encryptedContent: string): string {
+  return JSON.stringify([
+    scope.compactUpstream,
+    scope.sourceModel ?? "",
+    scope.targetModel ?? "",
+    encryptedContent
+  ]);
 }
 
 function extractFallbackItems(
@@ -136,7 +227,9 @@ function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null {
     }
 
     try {
-      const parsed = JSON.parse(gunzipSync(buffer).toString("utf8")) as unknown;
+      const parsed = JSON.parse(gunzipSync(buffer, {
+        maxOutputLength: DEFAULT_MAX_DECODED_COMPACTION_BYTES
+      }).toString("utf8")) as unknown;
       return isRecord(parsed) ? parsed : null;
     } catch {
       return null;

@@ -1,9 +1,35 @@
-import type { IncomingHttpHeaders } from "node:http";
+import type { CompactGateConfig } from "../shared/types.js";
+import {
+  candidateSignature,
+  codexPrimaryCandidates
+} from "./primary-failover-candidates.js";
+import { normalizeRequestContext } from "./primary-failover-context.js";
+import {
+  classifyPrimaryRouteResult,
+  isReconnectLikePrimaryFailure,
+  rateLimitCooldownMs,
+  readResponseId
+} from "./primary-failover-result.js";
 import type {
-  CompactGateConfig,
-  SavedConfigProfile,
-  UpstreamConfig
-} from "../shared/types.js";
+  PrimaryCandidate,
+  PrimaryProfileHealthSnapshot,
+  PrimaryRouteRequestContext,
+  PrimaryRouteResult,
+  PrimaryRouteSelection
+} from "./primary-failover-types.js";
+
+export { primaryRouteRequestContextFromBody } from "./primary-failover-context.js";
+export {
+  classifyPrimaryRouteResult,
+  isReconnectLikePrimaryFailure
+} from "./primary-failover-result.js";
+export type {
+  PrimaryProfileHealthSnapshot,
+  PrimaryResultCategory,
+  PrimaryRouteRequestContext,
+  PrimaryRouteResult,
+  PrimaryRouteSelection
+} from "./primary-failover-types.js";
 
 const EMPTY_STREAM_FAILURE_THRESHOLD = 4;
 const SESSION_STICKY_TTL_MS = 30 * 60 * 1000;
@@ -12,63 +38,9 @@ const TRANSIENT_COOLDOWN_MS = 60 * 1000;
 const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
-const RATE_LIMIT_FALLBACK_MS = 60 * 1000;
-const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
 const TOP_K_SCORE_WINDOW = 100;
-
-export type PrimaryResultCategory =
-  | "success"
-  | "auth"
-  | "quota"
-  | "rate_limit"
-  | "transient"
-  | "model_incompatible"
-  | "request_shape"
-  | "client_cancel";
-
-export interface PrimaryRouteRequestContext {
-  endpoint?: string | null;
-  model?: string | null;
-  previousResponseId?: string | null;
-  sessionKey?: string | null;
-}
-
-export interface PrimaryRouteSelection {
-  config: CompactGateConfig;
-  profileId: string | null;
-  profileName: string | null;
-  generation: number;
-  healthVersion: number;
-  context: Required<PrimaryRouteRequestContext>;
-}
-
-export interface PrimaryRouteResult {
-  status: number;
-  errorSummary: string | null;
-  responseHeaders?: IncomingHttpHeaders;
-  responseBody?: Buffer;
-  firstTokenMs?: number | null;
-  responseId?: string | null;
-}
-
-export interface PrimaryProfileHealthSnapshot {
-  profileId: string;
-  inFlight: number;
-  transientFailures: number;
-  emptyStreamFailures: number;
-  cooldownUntil: number;
-  quarantineUntil: number;
-  rateLimitUntil: number;
-  modelCooldowns: Array<{ model: string; until: number; reason: string }>;
-}
-
-interface PrimaryCandidate {
-  id: string;
-  name: string;
-  config: CompactGateConfig;
-  order: number;
-  active: boolean;
-}
+const DEFAULT_MAX_STICKY_ENTRIES = 2_048;
+const DEFAULT_MAX_MODEL_COOLDOWN_ENTRIES = 512;
 
 interface ProfileHealth {
   version: number;
@@ -104,6 +76,8 @@ interface ScoredCandidate {
 interface PrimaryFailoverOptions {
   now?: () => number;
   random?: () => number;
+  maxStickyEntries?: number;
+  maxModelCooldownEntries?: number;
 }
 
 export class PrimaryFailoverState {
@@ -112,12 +86,17 @@ export class PrimaryFailoverState {
   private readonly health = new Map<string, ProfileHealth>();
   private readonly sessionStickiness = new Map<string, StickyEntry>();
   private readonly continuationStickiness = new Map<string, StickyEntry>();
+  private readonly compactionStateStickiness = new Map<string, StickyEntry>();
   private readonly now: () => number;
   private readonly random: () => number;
+  private readonly maxStickyEntries: number;
+  private readonly maxModelCooldownEntries: number;
 
   constructor(options: PrimaryFailoverOptions = {}) {
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
+    this.maxStickyEntries = normalizeMaxEntries(options.maxStickyEntries);
+    this.maxModelCooldownEntries = normalizeMaxEntries(options.maxModelCooldownEntries, DEFAULT_MAX_MODEL_COOLDOWN_ENTRIES);
   }
 
   select(
@@ -214,10 +193,11 @@ export class PrimaryFailoverState {
       case "model_incompatible": {
         const model = selection.context.model;
         if (model) {
-          health.modelCooldowns.set(model, {
+          rememberMapEntry(health.modelCooldowns, model, {
             until: now + MODEL_DISABLE_MS,
             reason: result.errorSummary ?? `HTTP ${result.status}`
           });
+          enforceMaxEntries(health.modelCooldowns, this.maxModelCooldownEntries);
         } else {
           health.cooldownUntil = Math.max(health.cooldownUntil, now + TRANSIENT_COOLDOWN_MS);
         }
@@ -272,6 +252,7 @@ export class PrimaryFailoverState {
       this.health.clear();
       this.sessionStickiness.clear();
       this.continuationStickiness.clear();
+      this.compactionStateStickiness.clear();
     }
 
     this.reconcileHealth(candidates);
@@ -317,6 +298,16 @@ export class PrimaryFailoverState {
   ): PrimaryCandidate | null {
     if (context.previousResponseId) {
       const sticky = this.continuationStickiness.get(context.previousResponseId);
+      const candidate = sticky
+        ? this.usableCandidateById(candidates, sticky.profileId, context, now)
+        : null;
+      if (candidate) {
+        return candidate;
+      }
+    }
+
+    if (context.compactionStateKey) {
+      const sticky = this.compactionStateStickiness.get(context.compactionStateKey);
       const candidate = sticky
         ? this.usableCandidateById(candidates, sticky.profileId, context, now)
         : null;
@@ -463,16 +454,18 @@ export class PrimaryFailoverState {
     now: number
   ): void {
     if (context.sessionKey) {
-      this.sessionStickiness.set(context.sessionKey, {
+      rememberStickyEntry(this.sessionStickiness, context.sessionKey, {
         profileId,
         expiresAt: now + SESSION_STICKY_TTL_MS
       });
+      enforceMaxEntries(this.sessionStickiness, this.maxStickyEntries);
     }
     if (context.previousResponseId) {
-      this.continuationStickiness.set(context.previousResponseId, {
+      rememberStickyEntry(this.continuationStickiness, context.previousResponseId, {
         profileId,
         expiresAt: now + CONTINUATION_STICKY_TTL_MS
       });
+      enforceMaxEntries(this.continuationStickiness, this.maxStickyEntries);
     }
   }
 
@@ -487,22 +480,32 @@ export class PrimaryFailoverState {
 
     const responseId = readResponseId(result);
     if (responseId) {
-      this.continuationStickiness.set(responseId, {
+      rememberStickyEntry(this.continuationStickiness, responseId, {
         profileId: selection.profileId,
         expiresAt: now + CONTINUATION_STICKY_TTL_MS
       });
+      enforceMaxEntries(this.continuationStickiness, this.maxStickyEntries);
     }
     if (selection.context.sessionKey) {
-      this.sessionStickiness.set(selection.context.sessionKey, {
+      rememberStickyEntry(this.sessionStickiness, selection.context.sessionKey, {
         profileId: selection.profileId,
         expiresAt: now + SESSION_STICKY_TTL_MS
       });
+      enforceMaxEntries(this.sessionStickiness, this.maxStickyEntries);
+    }
+    if (selection.context.compactionStateKey) {
+      rememberStickyEntry(this.compactionStateStickiness, selection.context.compactionStateKey, {
+        profileId: selection.profileId,
+        expiresAt: now + CONTINUATION_STICKY_TTL_MS
+      });
+      enforceMaxEntries(this.compactionStateStickiness, this.maxStickyEntries);
     }
   }
 
   private cleanupExpiredState(now: number): void {
     cleanupStickyMap(this.sessionStickiness, now);
     cleanupStickyMap(this.continuationStickiness, now);
+    cleanupStickyMap(this.compactionStateStickiness, now);
     for (const health of this.health.values()) {
       for (const [model, cooldown] of health.modelCooldowns.entries()) {
         if (cooldown.until <= now) {
@@ -538,104 +541,6 @@ export class PrimaryFailoverState {
   }
 }
 
-export function classifyPrimaryRouteResult(result: PrimaryRouteResult): PrimaryResultCategory {
-  const summary = result.errorSummary?.toLowerCase() ?? "";
-
-  if (isClientCancelSummary(summary)) {
-    return "client_cancel";
-  }
-
-  if (result.status >= 200 && result.status < 300 && !result.errorSummary) {
-    return "success";
-  }
-
-  if (isModelIncompatibleFailure(result.status, summary)) {
-    return "model_incompatible";
-  }
-
-  if (result.status === 400 || result.status === 422) {
-    return "request_shape";
-  }
-
-  if (result.status === 429) {
-    return "rate_limit";
-  }
-
-  if (result.status === 401 || isAuthFailureSummary(summary)) {
-    return "auth";
-  }
-
-  if (result.status === 402 || result.status === 403 || isQuotaFailureSummary(summary)) {
-    return "quota";
-  }
-
-  if (
-    result.status === 408 ||
-    result.status >= 500 ||
-    isReconnectLikePrimaryFailure(result.status, result.errorSummary)
-  ) {
-    return "transient";
-  }
-
-  return result.status >= 400 || result.errorSummary ? "transient" : "success";
-}
-
-export function isReconnectLikePrimaryFailure(status: number, errorSummary: string | null): boolean {
-  if (!errorSummary) {
-    return false;
-  }
-
-  const lower = errorSummary.toLowerCase();
-  if (
-    status >= 200 &&
-    status < 300 &&
-    (
-      lower.includes("openai stream closed before response.completed") ||
-      lower.includes("stream closed before response.completed") ||
-      lower.includes("not text/event-stream") ||
-      lower.includes("without response.completed") ||
-      lower.includes("without a terminal event or output token")
-    )
-  ) {
-    return true;
-  }
-
-  if (status < 500) {
-    return false;
-  }
-
-  return [
-    "reconnect",
-    "response aborted",
-    "socket hang up",
-    "econnreset",
-    "network socket disconnected",
-    "stream disconnected before valid content",
-    "stream closed before response.completed",
-    "upstream_stream_error",
-    "received 0 chars"
-  ].some((pattern) => lower.includes(pattern));
-}
-
-export function primaryRouteRequestContextFromBody(
-  rawBody: Buffer,
-  headers: IncomingHttpHeaders = {},
-  endpoint: string | null = null
-): PrimaryRouteRequestContext {
-  const parsed = parseJsonRecord(rawBody);
-  const model = readTrimmedString(parsed?.model);
-  const previousResponseId =
-    readTrimmedString(parsed?.previous_response_id) ??
-    readTrimmedString(parsed?.previousResponseId);
-
-  return {
-    endpoint,
-    model,
-    previousResponseId,
-    sessionKey: readSessionKey(parsed, headers)
-  };
-}
-
 function normalizeResult(
   resultOrStatus: PrimaryRouteResult | number,
   maybeErrorSummary?: string | null
@@ -650,215 +555,6 @@ function normalizeResult(
   return resultOrStatus;
 }
 
-function normalizeRequestContext(
-  context: PrimaryRouteRequestContext
-): Required<PrimaryRouteRequestContext> {
-  return {
-    endpoint: context.endpoint ?? null,
-    model: context.model ?? null,
-    previousResponseId: context.previousResponseId ?? null,
-    sessionKey: context.sessionKey ?? null
-  };
-}
-
-function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandidate[] {
-  const state = config.profile_scopes?.codex;
-  const profiles = state?.profiles ?? [];
-  if (profiles.length === 0 || !state?.active_profile_id) {
-    return [];
-  }
-
-  const candidates = profiles.filter((profile) => Boolean(readProfilePrimary(profile)));
-  const activeIndex = candidates.findIndex((profile) => profile.id === state.active_profile_id);
-
-  return candidates.map((profile, index) => ({
-    id: profile.id,
-    name: profile.name,
-    order: activeIndex >= 0
-      ? (index - activeIndex + candidates.length) % candidates.length
-      : index,
-    active: profile.id === state.active_profile_id,
-    config: configWithProfilePrimary(config, profile)
-  }));
-}
-
-function configWithProfilePrimary(config: CompactGateConfig, profile: SavedConfigProfile): CompactGateConfig {
-  return {
-    ...cloneConfig(config),
-    primary: {
-      ...config.primary,
-      ...readProfilePrimary(profile)
-    }
-  };
-}
-
-function readProfilePrimary(profile: SavedConfigProfile): Partial<UpstreamConfig> | null {
-  const config = profile.config;
-  if (!isRecord(config) || !isRecord(config.primary)) {
-    return null;
-  }
-
-  return config.primary as Partial<UpstreamConfig>;
-}
-
-function candidateSignature(config: CompactGateConfig, candidates: PrimaryCandidate[]): string {
-  const activeProfileId = config.profile_scopes?.codex?.active_profile_id ?? "";
-  const candidateParts = candidates.map((candidate) => [
-    candidate.id,
-    candidate.config.primary.base_url,
-    candidate.config.primary.api_key_env,
-    candidate.config.primary.api_key.length > 0 ? "key" : "no-key"
-  ].join("|"));
-  return [activeProfileId, ...candidateParts].join("::");
-}
-
-function rateLimitCooldownMs(result: PrimaryRouteResult, failureCount: number, now: number): number {
-  const retryAfterMs = parseRetryAfterMs(result.responseHeaders, now);
-  if (retryAfterMs !== null) {
-    return Math.min(RATE_LIMIT_MAX_MS, retryAfterMs);
-  }
-
-  return Math.min(RATE_LIMIT_MAX_MS, RATE_LIMIT_FALLBACK_MS * 2 ** Math.max(0, failureCount - 1));
-}
-
-function parseRetryAfterMs(headers: IncomingHttpHeaders | undefined, now: number): number | null {
-  const value = readHeader(headers?.["retry-after"]);
-  if (!value) {
-    return null;
-  }
-
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.round(seconds * 1000);
-  }
-
-  const timestamp = Date.parse(value);
-  if (!Number.isNaN(timestamp)) {
-    return Math.max(0, timestamp - now);
-  }
-
-  return null;
-}
-
-function readResponseId(result: PrimaryRouteResult): string | null {
-  const explicit = readTrimmedString(result.responseId);
-  if (explicit) {
-    return explicit;
-  }
-
-  const body = result.responseBody;
-  if (!body || body.byteLength === 0) {
-    return null;
-  }
-
-  const text = body.toString("utf8");
-  const contentType = readHeader(result.responseHeaders?.["content-type"])?.toLowerCase() ?? "";
-  if (contentType.includes("text/event-stream")) {
-    return readSseResponseId(text);
-  }
-
-  return readJsonResponseId(text);
-}
-
-function readSseResponseId(text: string): string | null {
-  const frames = text.split(/\r?\n\r?\n/);
-  for (const frame of frames) {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim())
-      .join("\n");
-    if (!data || data === "[DONE]") {
-      continue;
-    }
-
-    const responseId = readJsonResponseId(data);
-    if (responseId) {
-      return responseId;
-    }
-  }
-
-  return null;
-}
-
-function readJsonResponseId(text: string): string | null {
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (!isRecord(parsed)) {
-      return null;
-    }
-
-    return readTrimmedString(parsed.id) ??
-      (isRecord(parsed.response) ? readTrimmedString(parsed.response.id) : null);
-  } catch {
-    return null;
-  }
-}
-
-function readSessionKey(
-  parsed: Record<string, unknown> | null,
-  headers: IncomingHttpHeaders
-): string | null {
-  const metadata = isRecord(parsed?.metadata) ? parsed.metadata : null;
-  return (
-    readTrimmedString(parsed?.session_hash) ??
-    readTrimmedString(parsed?.session_id) ??
-    readTrimmedString(parsed?.conversation_id) ??
-    readTrimmedString(metadata?.session_hash) ??
-    readTrimmedString(metadata?.session_id) ??
-    readHeader(headers["x-compactgate-session"]) ??
-    readHeader(headers["x-session-id"]) ??
-    readHeader(headers["x-conversation-id"]) ??
-    readHeader(headers["openai-conversation-id"])
-  );
-}
-
-function isClientCancelSummary(summary: string): boolean {
-  return (
-    summary.includes("client disconnected before upstream response completed") ||
-    summary.includes("client canceled") ||
-    summary.includes("client cancelled")
-  );
-}
-
-function isAuthFailureSummary(summary: string): boolean {
-  return [
-    "invalid api key",
-    "invalid token",
-    "unauthorized",
-    "authentication",
-    "auth token",
-    "api key is invalid"
-  ].some((pattern) => summary.includes(pattern));
-}
-
-function isQuotaFailureSummary(summary: string): boolean {
-  return [
-    "insufficient balance",
-    "insufficient_quota",
-    "quota exceeded",
-    "credit balance",
-    "billing",
-    "account balance"
-  ].some((pattern) => summary.includes(pattern));
-}
-
-function isModelIncompatibleFailure(status: number, summary: string): boolean {
-  if (status !== 404 && status !== 400) {
-    return false;
-  }
-
-  return (
-    summary.includes("model") &&
-    (
-      summary.includes("not found") ||
-      summary.includes("does not exist") ||
-      summary.includes("unavailable") ||
-      summary.includes("unsupported")
-    )
-  );
-}
-
 function cleanupStickyMap(map: Map<string, StickyEntry>, now: number): void {
   for (const [key, entry] of map.entries()) {
     if (entry.expiresAt <= now) {
@@ -867,32 +563,29 @@ function cleanupStickyMap(map: Map<string, StickyEntry>, now: number): void {
   }
 }
 
-function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
-  if (rawBody.byteLength === 0) {
-    return null;
+function rememberMapEntry<Value>(map: Map<string, Value>, key: string, entry: Value): void {
+  map.delete(key);
+  map.set(key, entry);
+}
+
+function rememberStickyEntry(map: Map<string, StickyEntry>, key: string, entry: StickyEntry): void {
+  rememberMapEntry(map, key, entry);
+}
+
+function enforceMaxEntries<Value>(map: Map<string, Value>, maxEntries: number): void {
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      return;
+    }
+    map.delete(oldestKey);
+  }
+}
+
+function normalizeMaxEntries(value: number | undefined, fallback = DEFAULT_MAX_STICKY_ENTRIES): number {
+  if (value === undefined) {
+    return fallback;
   }
 
-  try {
-    const parsed = JSON.parse(rawBody.toString("utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function readHeader(value: IncomingHttpHeaders[string]): string | null {
-  const raw = Array.isArray(value) ? value[0] : value;
-  return readTrimmedString(raw);
-}
-
-function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function cloneConfig(config: CompactGateConfig): CompactGateConfig {
-  return JSON.parse(JSON.stringify(config)) as CompactGateConfig;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
 }

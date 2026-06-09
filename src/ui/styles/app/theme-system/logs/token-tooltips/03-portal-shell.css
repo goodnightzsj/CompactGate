@@ -1,0 +1,9 @@
+.portal-tooltip-panel {
+  position: fixed;
+  z-index: 200;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+}

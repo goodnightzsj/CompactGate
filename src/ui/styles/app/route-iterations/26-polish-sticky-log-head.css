@@ -1,0 +1,8 @@
+/* ── Polish: sticky log head shadow ── */
+.logs-head {
+  transition: box-shadow 260ms ease;
+}
+
+.logs-head.is-scrolled {
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+}

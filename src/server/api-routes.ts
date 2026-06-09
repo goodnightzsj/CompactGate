@@ -192,10 +192,21 @@ export async function handleApi(
     }
 
     const method = typeof body.method === "string" ? body.method.toUpperCase() : "POST";
+    let routePreview;
+    try {
+      routePreview = previewRoute(method, body.path, body.body, configStore.get());
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new ConfigError("test-route path must be a valid URL or path.");
+      }
+
+      throw error;
+    }
+
     sendJson(
       res,
       200,
-      previewRoute(method, body.path, body.body, configStore.get())
+      routePreview
     );
     return;
   }
@@ -214,7 +225,9 @@ export async function handleApi(
     const route = parseRouteFilter(url.searchParams.get("route"));
     const status = parseStatusFilter(url.searchParams.get("status"));
     const host = parseHostFilter(url.searchParams.get("host"));
-    const limit = parsePositiveInteger(url.searchParams.get("limit"), configStore.get().logging.keep_recent);
+    const keepRecent = configStore.get().logging.keep_recent;
+    const requestedLimit = parsePositiveInteger(url.searchParams.get("limit"), keepRecent);
+    const limit = Math.min(requestedLimit, keepRecent);
     const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
     sendJson(res, 200, logger.page({ route, status, host, limit, offset }));
     return;

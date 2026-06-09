@@ -1,0 +1,83 @@
+.health-status-board,
+.health-mini-card,
+.health-entry-card,
+.health-card,
+.health-notes,
+.health-json-panel {
+  border: 1px solid var(--app-line);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--app-surface-raised) 96%, transparent), var(--app-surface-soft)),
+    var(--app-surface);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.health-status-board {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: var(--radius-md);
+}
+
+.health-status-board strong {
+  font-family: var(--font-display);
+  font-size: clamp(1.7rem, 2.4vw, 2.5rem);
+  font-weight: 760;
+  letter-spacing: -0.05em;
+  line-height: 0.98;
+  color: var(--app-text);
+}
+
+.health-status-board small,
+.health-mini-card small,
+.health-entry-card small,
+.health-card-status small {
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.health-state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--radius-full);
+  color: var(--app-muted);
+  font-size: 0.66rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.health-state-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px color-mix(in srgb, currentColor 36%, transparent);
+}
+
+.health-state-badge.is-good {
+  border-color: color-mix(in srgb, var(--accent-green) 36%, var(--app-line));
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+}
+
+.health-state-badge.is-warn {
+  border-color: color-mix(in srgb, var(--accent-amber) 42%, var(--app-line));
+  background: var(--accent-amber-soft);
+  color: var(--accent-amber);
+}
+
+.health-state-badge.is-bad {
+  border-color: color-mix(in srgb, var(--accent-red) 42%, var(--app-line));
+  background: var(--accent-red-soft);
+  color: var(--accent-red);
+}

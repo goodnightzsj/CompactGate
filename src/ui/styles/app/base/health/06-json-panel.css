@@ -1,0 +1,18 @@
+.health-json-panel {
+  overflow: hidden;
+}
+
+.health-json {
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4);
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: var(--radius-small);
+  background:
+    linear-gradient(180deg, rgba(36, 51, 70, 0.92), rgba(24, 35, 49, 0.98)),
+    var(--ink);
+  color: var(--paper-lift);
+  font-size: 0.84rem;
+  line-height: 1.65;
+  overflow: auto;
+  max-height: 440px;
+}

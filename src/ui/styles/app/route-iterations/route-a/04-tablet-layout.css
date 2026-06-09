@@ -1,0 +1,57 @@
+@media (max-width: 1180px) {
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .status-strip,
+  .toolbar {
+    justify-content: start;
+    flex-wrap: wrap;
+  }
+
+  .command-deck {
+    grid-template-columns: 1fr;
+    background:
+      linear-gradient(162deg, rgba(16, 24, 35, 0.98) 0 56%, rgba(34, 49, 69, 0.95) 56% 68%, rgba(251, 248, 240, 0.94) 68%),
+      var(--ink);
+  }
+
+  .deck-story,
+  .deck-readouts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .deck-signal-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .route-switchboard {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-card-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .profile-card-controls .field {
+    grid-column: 1 / -1;
+  }
+
+  .health-hero,
+  .health-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-readout-grid {
+    grid-template-columns: 1fr;
+  }
+
+}

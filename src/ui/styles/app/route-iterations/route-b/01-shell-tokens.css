@@ -1,0 +1,87 @@
+/* Route B theme redesign: dense local operator workspace. */
+:root {
+  --ops-bg: #e8e2d6;
+  --ops-panel: #f7f3ea;
+  --ops-panel-2: #eee7da;
+  --ops-rail: #141c28;
+  --ops-rail-2: #1d2836;
+  --ops-line: rgba(20, 28, 40, 0.14);
+  --ops-line-strong: rgba(20, 28, 40, 0.24);
+  --ops-text-dim: #697382;
+}
+
+body {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.26), transparent 22%),
+    linear-gradient(90deg, rgba(20, 28, 40, 0.035) 1px, transparent 1px),
+    var(--ops-bg);
+  background-size: auto, 28px 28px, auto;
+}
+
+body::before,
+body::after {
+  opacity: 0.22;
+}
+
+.shell {
+  width: min(100% - 28px, 1680px);
+  padding-block: clamp(0.8rem, 1.5vw, 1.4rem) var(--space-5);
+}
+
+.topbar {
+  top: 10px;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(360px, 1.4fr) auto;
+  padding: 0.7rem 0.85rem;
+  border-color: var(--ops-line-strong);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(247, 243, 234, 0.96), rgba(238, 231, 218, 0.96)),
+    var(--ops-panel);
+  box-shadow: 0 10px 24px rgba(20, 28, 40, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.topbar::before {
+  width: 3px;
+  background: linear-gradient(180deg, var(--green), var(--teal), var(--compact));
+}
+
+.mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  background: var(--ops-rail);
+  letter-spacing: -0.08em;
+}
+
+.brand-lockup h1 {
+  font-size: clamp(1.25rem, 1.8vw, 1.8rem);
+  letter-spacing: -0.04em;
+}
+
+.status-strip {
+  justify-content: center;
+}
+
+.status-pill,
+.save-meter,
+.route-chip,
+.traffic-chip,
+.endpoint-tile,
+.deck-readout,
+.provider-card,
+.log-row,
+.log-select-row,
+.custom-select-trigger,
+.panel,
+.route-board {
+  border-radius: 10px;
+}
+
+.ghost-button,
+.solid-button,
+.apply-button,
+.preview-button,
+.path-presets button,
+.compound-input button {
+  border-radius: 10px;
+}

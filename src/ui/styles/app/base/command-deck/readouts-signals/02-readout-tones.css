@@ -1,0 +1,44 @@
+.deck-readout.tone-primary {
+  border-color: rgba(36, 84, 214, 0.24);
+}
+
+.deck-readout.tone-compact {
+  border-color: rgba(216, 138, 29, 0.3);
+}
+
+.deck-readout.tone-claude {
+  border-color: rgba(13, 148, 136, 0.28);
+}
+
+.deck-readout.tone-good {
+  border-color: rgba(31, 122, 77, 0.22);
+}
+
+.deck-readout.tone-warn {
+  border-color: rgba(216, 138, 29, 0.26);
+}
+
+.deck-readout.tone-bad {
+  border-color: rgba(194, 65, 12, 0.26);
+}
+
+.command-deck.route-primary .deck-readout.tone-primary {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 12px 24px rgba(24, 35, 49, 0.08),
+    0 0 24px rgba(36, 84, 214, 0.12);
+}
+
+.command-deck.route-compact .deck-readout.tone-compact {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 12px 24px rgba(24, 35, 49, 0.08),
+    0 0 24px rgba(216, 138, 29, 0.14);
+}
+
+.command-deck.route-claude .deck-readout.tone-claude {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 12px 24px rgba(24, 35, 49, 0.08),
+    0 0 24px rgba(13, 148, 136, 0.12);
+}

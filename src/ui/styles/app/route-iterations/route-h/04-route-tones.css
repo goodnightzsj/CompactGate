@@ -1,0 +1,41 @@
+:root[data-theme] .transport-pill.is-stream,
+:root[data-theme] .route-chip.primary {
+  background: color-mix(in srgb, var(--app-blue) 14%, var(--app-surface-raised));
+  color: var(--app-blue);
+  border-color: color-mix(in srgb, var(--app-blue) 34%, var(--app-line));
+}
+
+:root[data-theme] .route-chip.compact {
+  background: color-mix(in srgb, var(--app-amber) 16%, var(--app-surface-raised));
+  color: var(--app-amber);
+  border-color: color-mix(in srgb, var(--app-amber) 38%, var(--app-line));
+}
+
+:root[data-theme] .route-chip.claude,
+:root[data-theme] .transport-pill.is-http {
+  background: color-mix(in srgb, var(--app-teal) 14%, var(--app-surface-raised));
+  color: var(--app-teal);
+  border-color: color-mix(in srgb, var(--app-teal) 34%, var(--app-line));
+}
+
+:root[data-theme] .route-slot.primary-slot,
+:root[data-theme] .traffic-chip.tone-primary,
+:root[data-theme] .provider-card.tone-primary,
+:root[data-theme] .preview-readout.route-primary {
+  border-color: color-mix(in srgb, var(--app-blue) 30%, var(--app-line));
+  background: color-mix(in srgb, var(--app-blue) 9%, var(--app-surface-raised));
+}
+
+:root[data-theme] .route-slot.compact-slot,
+:root[data-theme] .traffic-chip.tone-compact,
+:root[data-theme] .preview-readout.route-compact {
+  border-color: color-mix(in srgb, var(--app-amber) 34%, var(--app-line));
+  background: color-mix(in srgb, var(--app-amber) 10%, var(--app-surface-raised));
+}
+
+:root[data-theme] .route-slot.claude-slot,
+:root[data-theme] .traffic-chip.tone-claude,
+:root[data-theme] .provider-card.tone-claude {
+  border-color: color-mix(in srgb, var(--app-teal) 32%, var(--app-line));
+  background: color-mix(in srgb, var(--app-teal) 9%, var(--app-surface-raised));
+}

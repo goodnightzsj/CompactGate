@@ -1,0 +1,60 @@
+.ribbon-title {
+  display: grid;
+  align-content: center;
+  padding: 0.6rem 0.72rem;
+  border: 1px solid rgba(247, 243, 234, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.ribbon-title .eyebrow {
+  color: rgba(247, 243, 234, 0.56);
+}
+
+.ribbon-title h2 {
+  margin: 0;
+  color: var(--paper-lift);
+  font-size: clamp(1.3rem, 2.4vw, 2.1rem);
+  line-height: 0.96;
+}
+
+.ribbon-endpoints {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.endpoint-tile {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(247, 243, 234, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.endpoint-tile.is-claude {
+  border-color: rgba(13, 148, 136, 0.34);
+  background: rgba(13, 148, 136, 0.12);
+}
+
+.endpoint-tile span,
+.traffic-chip span,
+.claude-route-proof strong,
+.deck-readout span {
+  color: rgba(247, 243, 234, 0.58);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.endpoint-tile code,
+.ribbon-note code {
+  overflow: hidden;
+  color: var(--paper-lift);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

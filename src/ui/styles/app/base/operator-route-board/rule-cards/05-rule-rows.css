@@ -1,0 +1,18 @@
+.route-rule-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.route-rule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(128px, 0.55fr);
+  gap: var(--space-2);
+  align-items: center;
+  padding: 0.78rem 0.85rem;
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 14px 6px 14px 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(244, 241, 234, 0.9)),
+    rgba(251, 248, 240, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}

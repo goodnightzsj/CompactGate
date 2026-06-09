@@ -1,0 +1,49 @@
+.command-deck.operator-ribbon {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.55fr) minmax(320px, 1.05fr) minmax(320px, 1fr) minmax(260px, 0.9fr);
+  gap: 0.62rem;
+  align-items: stretch;
+  overflow: hidden;
+  margin: 0.85rem 0 1rem;
+  padding: 0.62rem;
+}
+
+.command-deck.operator-ribbon .eyebrow,
+.ribbon-title .eyebrow,
+.endpoint-tile span,
+.traffic-chip span,
+.claude-route-proof strong {
+  color: var(--muted);
+}
+
+.ribbon-title,
+.endpoint-tile,
+.traffic-chip,
+.claude-route-proof {
+  border-color: rgba(20, 28, 40, 0.1);
+  background: rgba(255, 255, 255, 0.44);
+  color: var(--ink);
+}
+
+.ribbon-title h2,
+.endpoint-tile code,
+.traffic-chip strong {
+  color: var(--ink);
+}
+
+.ribbon-title h2 {
+  overflow-wrap: anywhere;
+}
+
+.endpoint-tile code,
+.claude-route-proof small {
+  color: var(--ink);
+}
+
+.claude-route-proof {
+  grid-column: auto;
+}
+
+.claude-route-proof small {
+  color: var(--ops-text-dim);
+}

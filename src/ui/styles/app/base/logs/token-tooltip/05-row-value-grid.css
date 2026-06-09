@@ -1,0 +1,23 @@
+.token-tooltip-row,
+.token-tooltip-total {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.token-tooltip-row em,
+.token-tooltip-total em {
+  color: rgba(251, 248, 240, 0.62);
+  font-size: 0.86rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.token-tooltip-row b,
+.token-tooltip-total b {
+  color: var(--paper-lift);
+  font-family: var(--mono);
+  font-size: 0.94rem;
+  font-weight: 800;
+}

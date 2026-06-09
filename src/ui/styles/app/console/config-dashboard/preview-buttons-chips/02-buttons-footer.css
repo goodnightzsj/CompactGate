@@ -1,0 +1,46 @@
+/* Buttons */
+.apply-button, .preview-button, .solid-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.apply-button, .preview-button {
+  background: linear-gradient(135deg, var(--accent-blue), color-mix(in srgb, var(--accent-blue) 85%, #000));
+  color: #ffffff;
+  width: 100%;
+  box-shadow: 0 2px 8px var(--accent-blue-glow);
+}
+
+.apply-button:hover, .preview-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px var(--accent-blue-glow);
+}
+
+.apply-button:active, .preview-button:active {
+  transform: translateY(0);
+}
+
+.solid-button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+}
+
+.solid-button:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.config-dashboard-footer {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-default);
+}

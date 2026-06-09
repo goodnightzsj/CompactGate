@@ -1,0 +1,20 @@
+.operator-stage-head.compact-heading {
+  display: none;
+}
+
+.operator-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(330px, 0.42fr);
+  gap: var(--space-4);
+}
+
+.live-config .section-heading {
+  margin-bottom: var(--space-3);
+}
+
+.live-config .section-heading h2 {
+  font-size: clamp(1.35rem, 1.8vw, 1.9rem);
+}
+
+.live-config .control-stack {
+  gap: var(--space-3);
+}

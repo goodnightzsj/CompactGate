@@ -1,0 +1,5 @@
+/* Token tooltip */
+.token-tooltip {
+  display: inline-block;
+  min-width: max-content;
+}

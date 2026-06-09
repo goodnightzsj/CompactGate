@@ -1,0 +1,11 @@
+.log-row time,
+.log-row code {
+  font-family: var(--mono);
+  color: rgba(251, 248, 240, 0.86);
+}
+
+.log-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

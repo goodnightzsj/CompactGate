@@ -1,0 +1,51 @@
+.config-import-summary-head,
+.config-import-confirm {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.config-import-summary-head strong {
+  color: var(--ink);
+}
+
+.config-import-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.config-import-summary-grid div,
+.config-import-empty,
+.inline-success {
+  padding: 0.72rem;
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 14px 5px 14px 5px;
+  background: rgba(251, 248, 240, 0.7);
+}
+
+.config-import-summary-grid div.is-warn {
+  border-color: rgba(216, 138, 29, 0.34);
+  background: rgba(246, 221, 183, 0.34);
+}
+
+.config-import-summary-grid dt {
+  margin: 0 0 0.24rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.config-import-summary-grid dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}

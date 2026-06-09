@@ -1,0 +1,35 @@
+@media (max-width: 420px) {
+  .sidebar-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .brand-lockup h1,
+  .route-board .section-heading h2,
+  .config-dashboard .section-heading h2,
+  .logs-panel .section-heading h2 {
+    font-size: clamp(1rem, 7vw, 1.25rem);
+  }
+
+  .route-board,
+  .config-dashboard,
+  .logs-panel,
+  .profile-card,
+  .route-config-group,
+  .route-config-card,
+  .claude-model-map-card {
+    padding: 10px;
+  }
+
+  .log-row-main > * {
+    grid-template-columns: minmax(0, 1fr);
+    text-align: left;
+  }
+
+  .log-model-cell,
+  .log-status-code,
+  .transport-pill,
+  .token-total-pill,
+  .metric-time {
+    justify-self: start;
+  }
+}

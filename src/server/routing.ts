@@ -3,6 +3,7 @@ import type {
   RouteKind,
   RoutePreviewResponse
 } from "../shared/types.js";
+import { isRecord, parseJsonRecord } from "./http-utils.js";
 
 export interface RewriteResult {
   sourceModel: string | null;
@@ -86,12 +87,8 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.primary.base_url;
 }
 
-export function compactUpstreamPath(config: CompactGateConfig, requestPath: string): string {
-  if (
-    requestPath === "/v1/responses/compact" &&
-    config.compact.upstream_mode === "primary" &&
-    isAnyRouterHost(config.primary.base_url)
-  ) {
+export function compactUpstreamPath(_config: CompactGateConfig, requestPath: string): string {
+  if (requestPath === "/v1/responses/compact") {
     return "/v1/responses";
   }
 
@@ -156,25 +153,12 @@ function extractModelFromUnknown(body: unknown): string | null {
   return typeof body.model === "string" ? body.model : null;
 }
 
-function isAnyRouterHost(baseUrl: string): boolean {
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    return hostname === "anyrouter.top" || hostname.endsWith(".anyrouter.top");
-  } catch {
-    return false;
-  }
-}
-
 function parseJsonObject(rawBody: Buffer): Record<string, unknown> {
-  const parsed = JSON.parse(rawBody.toString("utf8")) as unknown;
+  const parsed = parseJsonRecord(rawBody);
 
-  if (!isRecord(parsed)) {
+  if (!parsed) {
     throw new Error("JSON body must be an object.");
   }
 
   return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

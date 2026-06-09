@@ -1,0 +1,164 @@
+import { routeProvider } from "../shared/route-meta.js";
+import type {
+  LogStatusKind,
+  ProviderLogCounts,
+  RequestLogEntry,
+  RequestTransport,
+  RouteKind
+} from "../shared/types.js";
+
+export interface LogPageOptions {
+  route?: RouteKind;
+  status?: LogStatusKind;
+  host?: string;
+  limit: number;
+  offset: number;
+}
+
+export function providerCountsFromRouteCounts(
+  counts: Record<"all" | RouteKind, number>
+): ProviderLogCounts {
+  const providerCounts: ProviderLogCounts = {
+    all: counts.all,
+    openai: 0,
+    claude: 0
+  };
+
+  for (const route of ["primary", "compact", "claude"] as const) {
+    providerCounts[routeProvider(route)] += counts[route];
+  }
+
+  return providerCounts;
+}
+
+export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host">): {
+  sql: string;
+  params: Array<RouteKind | string>;
+} {
+  const conditions: string[] = [];
+  const params: Array<RouteKind | string> = [];
+
+  if (options.route) {
+    conditions.push("route = ?");
+    params.push(options.route);
+  }
+
+  if (options.status === "normal") {
+    conditions.push("status < 400 AND error_summary IS NULL");
+  } else if (options.status === "error") {
+    conditions.push("(status >= 400 OR error_summary IS NOT NULL)");
+  }
+
+  if (options.host) {
+    conditions.push("upstream_host = ?");
+    params.push(options.host);
+  }
+
+  return {
+    sql: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    params
+  };
+}
+
+export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
+  return {
+    time: String(row.time),
+    route: normalizeRoute(row.route),
+    method: String(row.method),
+    path: String(row.path),
+    endpoint: readEndpoint(row.endpoint, String(row.path)),
+    request_type: readRequestTransport(row.request_type),
+    reasoning_effort: readNullableString(row.reasoning_effort),
+    request_summary: readNullableString(row.request_summary),
+    source_model: readNullableString(row.source_model),
+    target_model: readNullableString(row.target_model),
+    status: readRequiredNumber(row.status),
+    duration_ms: readRequiredNumber(row.duration_ms),
+    first_token_ms: readNullableNumber(row.first_token_ms),
+    input_tokens: readNullableNumber(row.input_tokens),
+    output_tokens: readNullableNumber(row.output_tokens),
+    cached_input_tokens: readNullableNumber(row.cached_input_tokens),
+    cached_output_tokens: readNullableNumber(row.cached_output_tokens),
+    cache_read_input_tokens: readNullableNumber(row.cache_read_input_tokens),
+    cache_creation_input_tokens: readNullableNumber(row.cache_creation_input_tokens),
+    reasoning_tokens: readNullableNumber(row.reasoning_tokens),
+    additive_cached_input_tokens: readBoolean(row.additive_cached_input_tokens),
+    additive_cached_output_tokens: readBoolean(row.additive_cached_output_tokens),
+    total_tokens: readNullableNumber(row.total_tokens),
+    upstream_host: String(row.upstream_host),
+    user_agent: readNullableString(row.user_agent),
+    request_id: String(row.request_id),
+    error_summary: readNullableString(row.error_summary)
+  };
+}
+
+export function normalizeLogStatus(value: unknown): LogStatusKind {
+  return value === "error" ? "error" : "normal";
+}
+
+export function normalizeRoute(value: unknown): RouteKind {
+  if (value === "compact" || value === "claude") {
+    return value;
+  }
+
+  return "primary";
+}
+
+export function readCount(row: unknown): number {
+  return isRecord(row) ? readNullableNumber(row.count) ?? 0 : 0;
+}
+
+export function readNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const text = value.trim();
+    const number = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+    return Number.isSafeInteger(number) ? number : null;
+  }
+
+  return null;
+}
+
+function readRequiredNumber(value: unknown): number {
+  return readNullableNumber(value) ?? 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readNullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true || value === 1 || value === "1";
+}
+
+function readRequestTransport(value: unknown): RequestTransport {
+  return value === "stream" ? "stream" : "http";
+}
+
+function readEndpoint(value: unknown, pathValue: string): string {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+
+  const pathname = pathValue.split("?")[0] ?? "/";
+  if (pathname === "/v1") {
+    return "/";
+  }
+
+  if (pathname.startsWith("/v1/")) {
+    return pathname.slice(3);
+  }
+
+  return pathname || "/";
+}

@@ -1,0 +1,9 @@
+@media (min-width: 1600px) {
+  .shell {
+    width: min(100% - 56px, 1800px);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1.12fr) minmax(440px, 0.68fr);
+  }
+}

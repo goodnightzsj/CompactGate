@@ -1,0 +1,53 @@
+@media (max-width: 1180px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .claude-route-proof {
+    grid-column: 1 / -1;
+  }
+
+  .operator-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel.inspector {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .command-deck.operator-ribbon {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ribbon-traffic {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .traffic-chip {
+    min-height: 58px;
+  }
+
+  .claude-route-proof {
+    min-height: 64px;
+  }
+
+  .panel.inspector textarea {
+    min-height: 96px;
+  }
+
+  .panel.inspector .preview-readout dl {
+    grid-template-columns: 1fr;
+  }
+
+  .log-list {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(247, 243, 234, 0.74)),
+      rgba(247, 243, 234, 0.9);
+  }
+
+  .log-row-main {
+    color: var(--ink);
+  }
+}

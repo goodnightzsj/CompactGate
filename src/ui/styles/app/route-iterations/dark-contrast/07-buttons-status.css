@@ -1,0 +1,45 @@
+:root[data-theme="dark"] .apply-button,
+:root[data-theme="dark"] .preview-button {
+  border-color: color-mix(in srgb, var(--app-blue) 58%, #bfdbfe);
+  background:
+    linear-gradient(180deg, #93c5fd, #60a5fa 58%, #3b82f6);
+  color: #06111f;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+:root[data-theme="dark"] .apply-button:hover,
+:root[data-theme="dark"] .preview-button:hover {
+  background:
+    linear-gradient(180deg, #bfdbfe, #7db8fb 56%, #60a5fa);
+  color: #06111f;
+}
+
+:root[data-theme="dark"] .log-load-more button,
+:root[data-theme="dark"] .ghost-button,
+:root[data-theme="dark"] .solid-button,
+:root[data-theme="dark"] .profile-item-actions .solid-button,
+:root[data-theme="dark"] .profile-item-actions .ghost-button {
+  border-color: var(--app-line-strong);
+  background: color-mix(in srgb, var(--app-surface-raised) 90%, #020617);
+  color: var(--app-text);
+}
+
+:root[data-theme="dark"] .log-request-info {
+  border-color: color-mix(in srgb, var(--app-blue) 34%, var(--app-line));
+  background: color-mix(in srgb, var(--app-blue) 14%, var(--app-surface-raised));
+  color: #bfdbfe;
+}
+
+:root[data-theme="dark"] .log-status-code.is-normal,
+:root[data-theme="dark"] .health-check-row.is-good,
+:root[data-theme="dark"] .status-pill.is-good {
+  color: #86efac;
+}
+
+:root[data-theme="dark"] .log-status-code.is-error,
+:root[data-theme="dark"] .log-row-error,
+:root[data-theme="dark"] .error-note,
+:root[data-theme="dark"] .error-banner,
+:root[data-theme="dark"] .inline-warning {
+  color: #fca5a5;
+}

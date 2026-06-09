@@ -1,0 +1,74 @@
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background:
+    radial-gradient(circle at 50% 20%, rgba(216, 138, 29, 0.18), transparent 30%),
+    rgba(24, 35, 49, 0.58);
+  backdrop-filter: blur(12px);
+}
+
+.confirm-panel {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: var(--space-3);
+  width: min(520px, 100%);
+  padding: var(--space-4);
+  border: 1px solid rgba(194, 65, 12, 0.28);
+  border-radius: 24px 10px 24px 10px;
+  background:
+    radial-gradient(circle at 8% 0, rgba(216, 138, 29, 0.18), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 241, 234, 0.98)),
+    var(--paper-lift);
+  box-shadow:
+    0 28px 70px rgba(24, 35, 49, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+.confirm-icon {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px 6px 16px 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent),
+    rgba(194, 65, 12, 0.14);
+  color: var(--red);
+  font-size: 1.35rem;
+  font-weight: 950;
+}
+
+.confirm-copy {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.confirm-copy h2,
+.confirm-copy p {
+  margin: 0;
+}
+
+.confirm-copy h2 {
+  color: var(--ink);
+  font-size: 1.34rem;
+  line-height: 1.18;
+}
+
+.confirm-copy p:last-child {
+  color: var(--muted);
+  line-height: 1.58;
+}
+
+.confirm-actions {
+  display: flex;
+  grid-column: 2;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}

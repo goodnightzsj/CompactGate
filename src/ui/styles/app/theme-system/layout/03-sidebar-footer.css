@@ -1,0 +1,54 @@
+.sidebar-footer {
+  padding: 12px 10px 14px;
+  border-top: 1px solid var(--hairline);
+  display: grid;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sidebar-health {
+  display: grid;
+  gap: 0;
+  padding: 6px 8px;
+  background: var(--paper-warm);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+}
+
+.sidebar-health-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.69rem;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2.5px 0;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-health-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sidebar-health-dot.is-good { background: var(--forest); box-shadow: 0 0 4px color-mix(in srgb, var(--forest) 50%, transparent); }
+.sidebar-health-dot.is-warn { background: var(--amber); box-shadow: 0 0 4px color-mix(in srgb, var(--amber) 50%, transparent); }
+.sidebar-health-dot.is-bad  { background: var(--brick); box-shadow: 0 0 4px color-mix(in srgb, var(--brick) 50%, transparent); }
+
+.sidebar .theme-switch {
+  margin-top: 2px;
+}
+
+.sidebar .theme-switch button {
+  height: 24px;
+  font-size: 0.64rem;
+}
+
+.sidebar .btn-sm.ghost-button,
+.sidebar .btn-sm.btn-ghost {
+  justify-content: center;
+  width: 100%;
+  font-size: 0.7rem;
+  height: 28px;
+}

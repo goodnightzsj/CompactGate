@@ -1,0 +1,57 @@
+.log-cell-time  {
+  display: inline-block;
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.log-cell-model,
+.log-cell-code {
+  display: inline-block;
+  max-inline-size: clamp(10ch, 14vw, 24ch);
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.log-cell-model {
+  font-weight: 700;
+}
+
+.log-cell-user-agent {
+  font-size: 0.68rem;
+  max-inline-size: clamp(18ch, 22vw, 44ch);
+}
+
+.log-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 40px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.log-status.is-ok  { background: var(--forest-soft); color: var(--forest); }
+.log-status.is-err { background: var(--brick-soft); color: var(--brick); }
+
+.log-transport {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+
+.log-transport.stream { background: var(--accent-soft); color: var(--accent); }
+.log-transport.http   { background: var(--jade-soft); color: var(--jade); }

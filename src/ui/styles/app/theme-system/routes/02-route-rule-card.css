@@ -1,0 +1,26 @@
+.route-rule {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.route-rule.codex  { border-top: 3px solid var(--accent); }
+.route-rule.claude { border-top: 3px solid var(--jade); }
+
+.route-rule h3 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.route-rule p {
+  margin: 0 0 14px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.5;
+}

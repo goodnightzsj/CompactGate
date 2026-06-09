@@ -1,0 +1,13 @@
+@keyframes pulse-route {
+  0% {
+    filter: saturate(1);
+  }
+
+  50% {
+    filter: saturate(1.5) brightness(1.1);
+  }
+
+  100% {
+    filter: saturate(1);
+  }
+}

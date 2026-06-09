@@ -1,0 +1,9 @@
+.log-detail {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.log-detail p {
+  margin: 0;
+}

@@ -1,0 +1,32 @@
+:root[data-theme="dark"] .custom-select-count,
+:root[data-theme="dark"] .token-total-pill,
+:root[data-theme="dark"] .mode-switch,
+:root[data-theme="dark"] .compound-input,
+:root[data-theme="dark"] .save-meter,
+:root[data-theme="dark"] .transport-pill,
+:root[data-theme="dark"] .log-status-code {
+  border-color: var(--app-line);
+  background: color-mix(in srgb, var(--app-surface-soft) 82%, #020617);
+  color: var(--app-text);
+}
+
+.log-table .token-tooltip,
+.log-table .token-total-pill,
+:root[data-theme] .log-table .token-total-pill,
+:root[data-theme="dark"] .log-table .token-total-pill {
+  min-width: max-content;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+:root[data-theme] .log-table .token-total-pill,
+:root[data-theme="dark"] .log-table .token-total-pill {
+  color: var(--app-text);
+}

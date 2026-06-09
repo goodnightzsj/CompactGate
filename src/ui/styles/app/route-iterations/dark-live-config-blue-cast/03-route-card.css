@@ -1,0 +1,9 @@
+:root[data-theme="dark"] .live-config .route-config-card {
+  border-color: #26374c;
+  background:
+    linear-gradient(180deg, #0a1423, #07101d),
+    #07101d;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 10px 22px rgba(2, 6, 23, 0.24);
+}

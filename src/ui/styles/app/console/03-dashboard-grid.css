@@ -1,0 +1,22 @@
+/* ══════════════════════════════════════════════════════════
+   Dashboard Grid
+   ══════════════════════════════════════════════════════════ */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(400px, 0.7fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.dashboard-left {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.dashboard-right {
+  position: sticky;
+  top: 80px;
+  min-width: 0;
+}

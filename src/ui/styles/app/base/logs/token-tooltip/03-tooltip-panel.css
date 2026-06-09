@@ -1,0 +1,17 @@
+.token-tooltip-panel {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem 1.08rem;
+  border: 1px solid rgba(147, 161, 184, 0.46);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(33, 43, 57, 0.97), rgba(24, 35, 49, 0.97)),
+    #182331;
+  box-shadow:
+    0 22px 46px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+  animation: tooltip-pop 140ms ease-out;
+}

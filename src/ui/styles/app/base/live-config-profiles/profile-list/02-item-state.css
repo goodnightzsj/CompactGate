@@ -1,0 +1,31 @@
+.profile-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) minmax(220px, 0.62fr);
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.profile-item:hover,
+.profile-item:focus-within {
+  transform: translateY(-1px);
+}
+
+.profile-item.is-selected {
+  border-color: rgba(36, 84, 214, 0.28);
+  box-shadow:
+    inset 4px 0 0 var(--primary),
+    0 12px 22px rgba(36, 84, 214, 0.08);
+}
+
+.profile-item.is-active {
+  border-color: rgba(13, 148, 136, 0.34);
+  box-shadow:
+    inset 4px 0 0 var(--teal),
+    0 12px 22px rgba(13, 148, 136, 0.09);
+}

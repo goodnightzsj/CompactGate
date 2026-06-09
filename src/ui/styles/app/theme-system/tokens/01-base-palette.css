@@ -1,0 +1,38 @@
+/* ═══════════════════════════════════════════════════════════
+   CompactGate Studio — Operator Console
+   Warm paper + ink. No AI clichés.
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Palette ── */
+:root {
+  --paper: #faf8f3;
+  --paper-warm: #f4efe5;
+  --surface: #fefdfb;
+  --surface-raised: #ffffff;
+  --ink: #1a1c1e;
+  --ink-soft: #3d4044;
+  --muted: #737578;
+  --faint: #9b9d9f;
+  --hairline: #e4dfd5;
+  --hairline-strong: #cfc8b8;
+  --accent: #314e7c;
+  --accent-soft: #edf0f6;
+  --amber: #b85c0e;
+  --amber-soft: #fef7ef;
+  --jade: #1a6b5e;
+  --jade-soft: #edf8f4;
+  --brick: #b33028;
+  --brick-soft: #fef5f4;
+  --forest: #2d6a3f;
+  --forest-soft: #edf7ef;
+  --shadow-sm: 0 1px 2px rgba(26,28,30,0.04);
+  --shadow-md: 0 2px 8px rgba(26,28,30,0.06);
+  --shadow-lg: 0 4px 16px rgba(26,28,30,0.08);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}

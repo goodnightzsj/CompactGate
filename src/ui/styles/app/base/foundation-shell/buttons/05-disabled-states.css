@@ -1,0 +1,9 @@
+.solid-button:disabled,
+.ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.profile-apply-button:disabled[data-active-disabled="true"] {
+  cursor: default;
+}

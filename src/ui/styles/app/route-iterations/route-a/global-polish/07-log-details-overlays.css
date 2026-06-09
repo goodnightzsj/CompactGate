@@ -1,0 +1,24 @@
+.logs-panel {
+  overflow: clip;
+}
+
+.log-list {
+  position: relative;
+  padding-bottom: 0.2rem;
+}
+
+.log-row.can-expand .log-row-main::after {
+  color: rgba(251, 248, 240, 0.42);
+  content: "↵";
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.log-row.can-expand:hover .log-row-main::after {
+  color: var(--paper-lift);
+}
+
+.token-tooltip-panel,
+.custom-select-menu {
+  backdrop-filter: blur(18px);
+}

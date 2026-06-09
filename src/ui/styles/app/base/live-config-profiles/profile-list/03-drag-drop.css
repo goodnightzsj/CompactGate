@@ -1,0 +1,59 @@
+.profile-item-handle {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  min-width: 0;
+  height: 42px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 12px 5px 12px 5px;
+  background: transparent;
+  color: rgba(24, 35, 49, 0.32);
+  font-size: 1.12rem;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  cursor: grab;
+  box-shadow: none;
+  touch-action: none;
+}
+
+.profile-item-handle:hover {
+  border-color: rgba(13, 148, 136, 0.24);
+  background: rgba(205, 238, 232, 0.34);
+  color: #0f766e;
+}
+
+.profile-item-handle:active {
+  cursor: grabbing;
+}
+
+.profile-item-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.profile-item.is-dragging {
+  opacity: 0.48;
+  transform: scale(0.985);
+}
+
+.profile-item.is-drop-before::before,
+.profile-item.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-teal));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-blue) 14%, transparent);
+}
+
+.profile-item.is-drop-before::before {
+  top: -8px;
+}
+
+.profile-item.is-drop-after::after {
+  bottom: -8px;
+}

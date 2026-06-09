@@ -27,7 +27,13 @@ export async function serveStatic(
   }
 
   const publicDir = resolvePublicDir();
-  const pathname = decodeURIComponent(url.pathname);
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    sendJson(res, 400, { error: "Malformed URL path." });
+    return;
+  }
   const requested = pathname === "/" ? "/index.html" : pathname;
   const safeRelativePath = requested.replace(/^\/+/, "");
   const filePath = path.resolve(publicDir, safeRelativePath);

@@ -1,0 +1,40 @@
+/* ══════════════════════════════════════════════════════════
+   Route Board
+   ══════════════════════════════════════════════════════════ */
+.route-board {
+  position: relative;
+  padding: 24px 26px;
+  background:
+    radial-gradient(ellipse at 5% 0%, var(--accent-blue-glow), transparent 50%),
+    radial-gradient(ellipse at 95% 100%, var(--accent-teal-glow), transparent 45%),
+    var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.route-board::before, .route-board::after { display: none; }
+
+.route-board .section-heading h2 {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.route-board .section-heading .eyebrow {
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-tertiary);
+  margin: 0 0 4px;
+}
+
+.route-switchboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 18px;
+}

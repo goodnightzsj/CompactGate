@@ -1,0 +1,71 @@
+.log-table .log-row {
+  display: table-row;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transition: background 120ms var(--ease);
+}
+
+:root[data-theme] .log-table .log-row,
+:root[data-theme="dark"] .log-table .log-row {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.log-table .log-row:last-child td,
+.log-table .log-row:last-child th {
+  border-bottom: 0;
+}
+
+.log-table .log-row:hover td {
+  background: var(--paper-warm);
+}
+
+:root[data-theme="dark"] .log-table .log-row:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+:root[data-theme="dark"] .log-table .log-row:hover td {
+  background: var(--bg-raised);
+}
+
+.log-table .log-row.is-clickable { cursor: pointer; }
+
+.log-table .log-row.has-error td:first-child {
+  border-left: 3px solid var(--brick);
+}
+
+.log-table .log-detail-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.log-table-body {
+  position: relative;
+  max-height: 60vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+.log-table-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.log-table-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-table-body::-webkit-scrollbar-thumb {
+  background: var(--hairline-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}

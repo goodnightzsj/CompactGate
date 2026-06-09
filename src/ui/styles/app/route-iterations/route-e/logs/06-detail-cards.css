@@ -1,0 +1,21 @@
+.log-detail {
+  margin: 0 var(--space-3) var(--space-3);
+  background: #ffffff;
+  border: 1px solid var(--theme-line);
+  color: var(--theme-ink);
+}
+
+.log-detail p,
+.log-detail small {
+  color: var(--theme-muted);
+}
+
+.token-detail-card div {
+  background: #f8fafc;
+  border: 1px solid var(--theme-line);
+}
+
+.log-detail-grid div {
+  background: #f8fafc;
+  border: 1px solid var(--theme-line);
+}

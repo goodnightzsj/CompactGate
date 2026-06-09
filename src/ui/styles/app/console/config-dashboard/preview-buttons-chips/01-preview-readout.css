@@ -1,0 +1,32 @@
+/* Preview readout */
+.preview-readout {
+  padding: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+}
+
+.preview-readout dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 0;
+}
+
+.preview-readout dt {
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.preview-readout dd {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-primary);
+  margin: 2px 0 0;
+}
+
+.preview-readout.route-primary { border-left: 3px solid var(--accent-blue); }
+.preview-readout.route-compact { border-left: 3px solid var(--accent-amber); }

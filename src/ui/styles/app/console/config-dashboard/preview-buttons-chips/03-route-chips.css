@@ -1,0 +1,15 @@
+/* Route chips */
+.route-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+
+.route-chip.primary { background: var(--accent-blue-soft); color: var(--accent-blue); }
+.route-chip.compact { background: var(--accent-amber-soft); color: var(--accent-amber); }
+.route-chip.claude  { background: var(--accent-teal-soft); color: var(--accent-teal); }

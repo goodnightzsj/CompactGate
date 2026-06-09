@@ -1,0 +1,36 @@
+.log-request-info {
+  background: #edf3ff;
+  color: #1d4ed8;
+  border: 1px solid #c9d8ff;
+}
+
+.log-status-code.is-normal {
+  background: #dcf7ef;
+  color: #0f766e;
+  border-color: #a7ead8;
+}
+
+.log-status-code.is-error,
+.log-row-error {
+  background: #fff1ed;
+  color: var(--theme-red);
+  border-color: #fecaca;
+}
+
+.transport-pill.is-stream {
+  background: #f0eaff;
+  color: #5b21b6;
+  border-color: #d9ccff;
+}
+
+.transport-pill.is-http {
+  background: #eaf1ff;
+  color: #1d4ed8;
+  border-color: #c8d8ff;
+}
+
+.token-total-pill {
+  background: #eef2f7;
+  color: var(--theme-ink);
+  border-color: var(--theme-line);
+}

@@ -1,0 +1,17 @@
+.logs-panel {
+  background:
+    linear-gradient(180deg, rgba(247, 243, 234, 0.97), rgba(238, 231, 218, 0.96)),
+    var(--ops-panel);
+}
+
+.log-list {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(247, 243, 234, 0.7)),
+    rgba(247, 243, 234, 0.86);
+  border-color: rgba(20, 28, 40, 0.12);
+  color: var(--ink);
+}
+
+.log-usage-head {
+  color: var(--muted);
+}

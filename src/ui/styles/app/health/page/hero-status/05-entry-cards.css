@@ -1,0 +1,27 @@
+.health-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.health-entry-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px 15px;
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--app-blue);
+}
+
+.health-entry-card.is-claude {
+  border-left-color: var(--app-teal);
+}
+
+.health-entry-card code {
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: clamp(0.82rem, 1vw, 0.96rem);
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}

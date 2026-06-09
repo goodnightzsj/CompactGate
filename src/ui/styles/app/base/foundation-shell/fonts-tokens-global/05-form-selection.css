@@ -1,0 +1,10 @@
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--compact-quiet) 82%, white);
+}

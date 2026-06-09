@@ -1,0 +1,32 @@
+.health-hero-readout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-self: stretch;
+}
+
+.health-mini-card {
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+}
+
+.health-mini-card span,
+.health-entry-card span,
+.health-kv span {
+  color: var(--app-muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.health-mini-card strong {
+  color: var(--app-text);
+  font-family: var(--font-mono);
+  font-size: clamp(1rem, 1.4vw, 1.28rem);
+  font-weight: 780;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}

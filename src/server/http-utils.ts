@@ -3,6 +3,8 @@ import { gunzipSync } from "node:zlib";
 import { ConfigError } from "./config.js";
 import type { LogStatusKind, RouteKind } from "../shared/types.js";
 
+const DEFAULT_MAX_DECODED_BODY_BYTES = 8 * 1024 * 1024;
+
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -56,7 +58,13 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     return {};
   }
 
-  return JSON.parse(rawBody.toString("utf8")) as unknown;
+  return JSON.parse(decodeBodyText(rawBody)) as unknown;
+}
+
+export class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super("Request body is too large.");
+  }
 }
 
 export function readRawBody(
@@ -66,12 +74,37 @@ export function readRawBody(
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let bodyTooLarge = false;
+    let settled = false;
+
+    const settle = (finish: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      finish();
+    };
+
+    const rejectClientAbort = () => {
+      if (bodyTooLarge || req.complete) {
+        return;
+      }
+
+      settle(() => reject(new Error("Client disconnected before request body completed.")));
+    };
 
     req.on("data", (chunk: Buffer) => {
+      if (bodyTooLarge) {
+        return;
+      }
+
       total += chunk.byteLength;
       if (total > limitBytes) {
-        reject(new Error("Request body is too large."));
-        req.destroy();
+        bodyTooLarge = true;
+        chunks.length = 0;
+        settle(() => reject(new RequestBodyTooLargeError()));
+        req.resume();
         return;
       }
 
@@ -79,10 +112,21 @@ export function readRawBody(
     });
 
     req.on("end", () => {
-      resolve(Buffer.concat(chunks));
+      if (bodyTooLarge) {
+        return;
+      }
+
+      settle(() => resolve(Buffer.concat(chunks)));
     });
 
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!bodyTooLarge) {
+        settle(() => reject(error));
+      }
+    });
+
+    req.on("aborted", rejectClientAbort);
+    req.on("close", rejectClientAbort);
   });
 }
 
@@ -126,6 +170,10 @@ export function statusForError(error: unknown): number {
     return 400;
   }
 
+  if (error instanceof RequestBodyTooLargeError) {
+    return 413;
+  }
+
   if (error instanceof SyntaxError) {
     return 400;
   }
@@ -155,7 +203,7 @@ export function parseHostFilter(value: string | null): string | undefined {
 }
 
 export function parsePositiveInteger(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  const parsed = parseDecimalInteger(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     return fallback;
   }
@@ -164,12 +212,16 @@ export function parsePositiveInteger(value: string | null, fallback: number): nu
 }
 
 export function parseNonNegativeInteger(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseDecimalInteger(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     return fallback;
   }
 
   return parsed;
+}
+
+function parseDecimalInteger(value: string | null): number {
+  return value && /^\d+$/.test(value) ? Number(value) : Number.NaN;
 }
 
 export function decodeBodyText(body: Buffer): string {
@@ -182,7 +234,9 @@ export function decodeBodyText(body: Buffer): string {
   }
 
   try {
-    return gunzipSync(body).toString("utf8");
+    return gunzipSync(body, {
+      maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES
+    }).toString("utf8");
   } catch {
     return "";
   }
@@ -198,7 +252,9 @@ export function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null 
     }
 
     try {
-      const parsed = JSON.parse(gunzipSync(buffer).toString("utf8")) as unknown;
+      const parsed = JSON.parse(gunzipSync(buffer, {
+        maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES
+      }).toString("utf8")) as unknown;
       return isRecord(parsed) ? parsed : null;
     } catch {
       return null;

@@ -1,0 +1,35 @@
+.route-url-suggestion-main,
+.route-url-suggestion-meta {
+  display: grid;
+  min-width: 0;
+}
+
+.route-url-suggestion-main {
+  gap: 0.18rem;
+}
+
+.route-url-suggestion-main strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-url-suggestion-main small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-url-suggestion-meta {
+  justify-items: end;
+  gap: 0.18rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}

@@ -1,0 +1,34 @@
+:root[data-theme="dark"] .logs-head,
+:root[data-theme="dark"] .log-select-row,
+:root[data-theme="dark"] .log-filter-disclaimer,
+:root[data-theme="dark"] .log-list,
+:root[data-theme="dark"] .log-row,
+:root[data-theme="dark"] .log-row:nth-child(even),
+:root[data-theme="dark"] .log-detail,
+:root[data-theme="dark"] .token-detail-card div,
+:root[data-theme="dark"] .log-detail-grid div,
+:root[data-theme="dark"] .provider-card,
+:root[data-theme="dark"] .custom-select-trigger,
+:root[data-theme="dark"] .custom-select-menu,
+:root[data-theme="dark"] .custom-select-option,
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] textarea {
+  border-color: var(--app-line);
+  background: var(--app-surface-raised);
+  color: var(--app-text);
+}
+
+:root[data-theme="dark"] .logs-head,
+:root[data-theme="dark"] .log-list {
+  background: color-mix(in srgb, var(--app-surface-soft) 92%, #020617);
+}
+
+:root[data-theme="dark"] .log-row:nth-child(even) {
+  background: color-mix(in srgb, var(--app-surface-raised) 88%, #020617);
+}
+
+:root[data-theme="dark"] .log-row:hover,
+:root[data-theme="dark"] .log-row:has(.log-detail) {
+  border-color: color-mix(in srgb, var(--app-blue) 36%, var(--app-line));
+  background: color-mix(in srgb, var(--app-blue) 12%, var(--app-surface-raised));
+}

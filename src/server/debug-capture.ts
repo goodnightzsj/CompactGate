@@ -30,22 +30,36 @@ interface CaptureResponsePayload extends CapturePayload {
 
 interface SerializedBody {
   byte_length: number;
+  captured_byte_length: number;
+  truncated: boolean;
   text: string;
   base64: string;
 }
 
+const DEFAULT_MAX_CAPTURE_BODY_BYTES = 1 * 1024 * 1024;
+
 export class DebugCaptureWriter {
   private sequence = 0;
 
-  private constructor(private readonly captureDir: string | null) {}
+  private constructor(
+    private readonly captureDir: string | null,
+    private readonly maxBodyBytes: number
+  ) {}
 
   static fromEnv(): DebugCaptureWriter {
     const configured = process.env.COMPACTGATE_CAPTURE_DIR?.trim();
-    return new DebugCaptureWriter(configured ? path.resolve(configured) : null);
+    return new DebugCaptureWriter(
+      configured ? path.resolve(configured) : null,
+      normalizeMaxCaptureBodyBytes(process.env.COMPACTGATE_CAPTURE_BODY_MAX_BYTES)
+    );
   }
 
   isEnabled(): boolean {
     return this.captureDir !== null;
+  }
+
+  serializeBody(buffer: Buffer): SerializedBody {
+    return serializeBody(buffer, this.maxBodyBytes);
   }
 
   async write(record: CaptureRecord): Promise<void> {
@@ -101,14 +115,30 @@ function isSensitiveHeader(name: string): boolean {
   );
 }
 
-export function serializeBody(buffer: Buffer): SerializedBody {
+export function serializeBody(
+  buffer: Buffer,
+  maxBodyBytes = DEFAULT_MAX_CAPTURE_BODY_BYTES
+): SerializedBody {
+  const capturedBody = buffer.subarray(0, Math.max(0, maxBodyBytes));
   return {
     byte_length: buffer.byteLength,
-    text: buffer.toString("utf8"),
-    base64: buffer.toString("base64")
+    captured_byte_length: capturedBody.byteLength,
+    truncated: capturedBody.byteLength < buffer.byteLength,
+    text: capturedBody.toString("utf8"),
+    base64: capturedBody.toString("base64")
   };
 }
 
 function sanitizePath(pathname: string): string {
   return pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "root";
+}
+
+function normalizeMaxCaptureBodyBytes(value: string | undefined): number {
+  const text = value?.trim();
+  const parsed = text && /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_MAX_CAPTURE_BODY_BYTES;
+  }
+
+  return parsed;
 }

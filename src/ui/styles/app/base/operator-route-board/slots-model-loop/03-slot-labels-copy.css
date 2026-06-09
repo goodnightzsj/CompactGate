@@ -1,0 +1,22 @@
+.route-slot span,
+.route-model-strip span,
+.auto-compact-loop span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.route-slot strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  line-height: 1.36;
+}
+
+.route-slot small {
+  color: var(--muted);
+  line-height: 1.46;
+}

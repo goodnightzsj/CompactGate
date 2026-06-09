@@ -1,0 +1,4 @@
+.log-table-full .log-detail-panel {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px;
+}

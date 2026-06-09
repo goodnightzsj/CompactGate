@@ -1,0 +1,40 @@
+.profile-item-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  align-content: center;
+  opacity: 0.78;
+  transition: opacity 160ms ease;
+}
+
+.profile-item:hover .profile-item-actions,
+.profile-item:focus-within .profile-item-actions {
+  opacity: 1;
+}
+
+.profile-item-actions .solid-button,
+.profile-item-actions .ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0.55rem 0.72rem;
+  font-size: 0.78rem;
+  line-height: 1.22;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-danger-button {
+  border-color: rgba(194, 65, 12, 0.28);
+  color: var(--red);
+}
+
+.danger-solid-button {
+  border-color: rgba(194, 65, 12, 0.46);
+  background:
+    linear-gradient(180deg, rgba(220, 77, 32, 0.98), rgba(153, 43, 19, 0.98)),
+    var(--red);
+}

@@ -1,0 +1,67 @@
+.health-detail-grid {
+  grid-template-columns: minmax(320px, 0.76fr) minmax(0, 1.24fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.health-notes,
+.health-json-panel {
+  padding: 16px;
+  border-radius: var(--radius-lg);
+}
+
+.health-checklist {
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.health-check-row {
+  min-height: 0;
+  padding: 10px;
+  border-color: var(--app-line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--app-surface-raised) 82%, var(--app-surface-soft));
+}
+
+.health-check-row.is-good {
+  border-color: color-mix(in srgb, var(--accent-green) 28%, var(--app-line));
+  background: color-mix(in srgb, var(--accent-green) 8%, var(--app-surface-raised));
+}
+
+.health-check-row.is-warn {
+  border-color: color-mix(in srgb, var(--accent-amber) 34%, var(--app-line));
+  background: color-mix(in srgb, var(--accent-amber) 10%, var(--app-surface-raised));
+}
+
+.health-check-row.is-bad {
+  border-color: color-mix(in srgb, var(--accent-red) 34%, var(--app-line));
+  background: color-mix(in srgb, var(--accent-red) 9%, var(--app-surface-raised));
+}
+
+.health-check-row span {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--app-line);
+  background: var(--app-surface);
+  color: var(--app-muted);
+  font-size: 0.7rem;
+}
+
+.health-check-row p {
+  color: var(--app-muted);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.health-json {
+  max-height: 420px;
+  margin-top: 12px;
+  border-color: var(--app-line);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--app-blue) 6%, transparent) 1px, transparent 1px) 0 0 / 34px 34px,
+    linear-gradient(color-mix(in srgb, var(--app-blue) 5%, transparent) 1px, transparent 1px) 0 0 / 34px 34px,
+    var(--app-surface-soft);
+  color: var(--app-text);
+  font-size: 0.78rem;
+  line-height: 1.58;
+}

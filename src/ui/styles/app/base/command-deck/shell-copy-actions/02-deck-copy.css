@@ -1,0 +1,25 @@
+.deck-copy {
+  display: grid;
+  align-content: center;
+  gap: 0;
+  color: var(--paper-lift);
+}
+
+.deck-copy .eyebrow {
+  color: rgba(251, 248, 240, 0.62);
+}
+
+.deck-copy h2 {
+  max-width: 8.4ch;
+  font-size: clamp(2.4rem, 5.4vw, 6rem);
+  line-height: 0.88;
+  text-wrap: balance;
+}
+
+.deck-lead {
+  max-width: 54ch;
+  margin: var(--space-3) 0 0;
+  color: rgba(251, 248, 240, 0.72);
+  font-size: clamp(0.98rem, 1.14vw, 1.1rem);
+  line-height: 1.72;
+}

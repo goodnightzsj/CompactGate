@@ -1,0 +1,23 @@
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  position: relative;
+  min-width: 320px;
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(24, 35, 49, 0.035) 1px, transparent 1px) 0 0 / 22px 22px,
+    linear-gradient(rgba(24, 35, 49, 0.028) 1px, transparent 1px) 0 0 / 22px 22px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.38), transparent 26%),
+    linear-gradient(180deg, rgba(251, 248, 240, 0.76), rgba(238, 229, 214, 0.72)),
+    var(--paper);
+  font-family: "IBM Plex Sans", "Aptos", sans-serif;
+  font-size: clamp(15px, 0.88vw, 16px);
+  text-rendering: optimizeLegibility;
+}

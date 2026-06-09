@@ -1,0 +1,25 @@
+/* ── Status pills ── */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.status-pill::before {
+  content: "";
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex-shrink: 0;
+}
+
+.status-pill.is-good::before { background: var(--forest); }
+.status-pill.is-warn::before { background: var(--amber); }
+.status-pill.is-bad::before  { background: var(--brick); }

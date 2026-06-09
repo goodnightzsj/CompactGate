@@ -1,0 +1,356 @@
+@media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    display: block;
+    min-width: 0;
+  }
+
+  .main-content > *,
+  .page-header,
+  .dashboard-grid,
+  .dashboard-left,
+  .dashboard-right,
+  .card,
+  .stat-card {
+    box-sizing: border-box;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .page-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .page-header > * {
+    min-width: 0;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-default);
+    overflow: visible;
+  }
+
+  .sidebar-brand {
+    padding: 0 2px 6px;
+  }
+
+  .sidebar-brand h1 {
+    white-space: normal;
+  }
+
+  .sidebar-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    padding: 0;
+  }
+
+  .sidebar-nav-item {
+    height: auto;
+    min-height: 44px;
+    min-width: 0;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 5px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    text-align: center;
+    box-shadow: none;
+  }
+
+  .sidebar-nav-item.is-active {
+    border-radius: var(--radius-sm);
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+
+  .sidebar-nav-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .sidebar-footer {
+    display: none;
+  }
+
+  .shell {
+    width: calc(100% - 16px);
+    max-width: 100%;
+    padding: 10px 0 24px;
+  }
+
+  .topbar {
+    position: static;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .brand-lockup {
+    min-width: 0;
+  }
+
+  .topbar-endpoints,
+  .status-strip,
+  .toolbar,
+  .topbar-traffic {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .endpoint-chip,
+  .status-pill,
+  .save-meter,
+  .theme-switch,
+  .toolbar .ghost-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .theme-switch {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .theme-switch button {
+    width: 100%;
+  }
+
+  button,
+  .ghost-button,
+  .solid-button,
+  .apply-button,
+  .preview-button,
+  .custom-select-trigger,
+  .custom-select-option,
+  .config-tab,
+  input,
+  textarea {
+    min-height: 44px;
+  }
+
+  .dashboard-grid,
+  .dashboard-left,
+  .studio-grid,
+  .health-grid,
+  .routes-layout,
+  .route-switchboard,
+  .route-slot-grid,
+  .route-config-grid,
+  .route-config-cards,
+  .config-row,
+  .provider-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-board,
+  .config-dashboard,
+  .logs-panel,
+  .profile-card,
+  .route-config-group,
+  .route-config-card,
+  .claude-model-map-card {
+    width: 100%;
+    min-width: 0;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .route-rule-row,
+  .route-foot,
+  .mode-card,
+  .compound-input,
+  .preview-readout dl,
+  .token-detail-card,
+  .log-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-foot {
+    gap: 8px;
+  }
+
+  .config-tab-bar {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .config-tab {
+    flex: 0 0 max(92px, 25%);
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
+  .profile-card-controls,
+  .profile-item,
+  .profile-item-main,
+  .profile-item-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-item {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .profile-item-handle {
+    display: none;
+  }
+
+  .profile-item-actions {
+    display: grid;
+    gap: 6px;
+    width: 100%;
+  }
+
+  .profile-item-actions .solid-button,
+  .profile-item-actions .ghost-button,
+  .profile-save-button,
+  .apply-button,
+  .preview-button,
+  .log-load-more button {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .claude-model-map-head,
+  .claude-model-map-actions,
+  .model-control-cell,
+  .claude-model-map-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .claude-model-map-head,
+  .claude-model-map-actions {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .map-counter {
+    justify-content: center;
+  }
+
+  .logs-head,
+  .log-filter-stack,
+  .log-select-row,
+  .log-load-more {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .log-list {
+    max-height: none;
+    overflow-x: hidden;
+    padding: 0;
+    background: transparent;
+    border: 0;
+  }
+
+  .log-usage-head {
+    display: none;
+  }
+
+  .log-row {
+    margin-bottom: 10px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    overflow: hidden;
+  }
+
+  .log-row-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .log-row-main > * {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+    width: 100%;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border-default);
+    text-align: right;
+  }
+
+  .log-row-main > *::before {
+    content: attr(data-label);
+    color: var(--text-tertiary);
+    font-family: var(--font-sans);
+    font-size: 0.63rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .log-row-main > *:last-child {
+    border-bottom: 0;
+  }
+
+  .log-model-cell,
+  .token-tooltip,
+  .log-time,
+  .log-request-info,
+  .log-endpoint,
+  .log-host,
+  .log-user-agent,
+  .metric-time {
+    overflow: visible;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .log-model-cell {
+    justify-items: end;
+  }
+
+  .log-status-code,
+  .transport-pill,
+  .token-total-pill,
+  .metric-time {
+    justify-self: end;
+  }
+
+  .log-detail {
+    margin: 0;
+    border-width: 1px 0 0;
+    border-radius: 0;
+  }
+
+  .token-tooltip-panel {
+    display: none;
+  }
+
+  .custom-select-menu {
+    max-width: calc(100vw - 24px);
+  }
+}

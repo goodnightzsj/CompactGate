@@ -1,0 +1,25 @@
+.log-time,
+.log-model-cell strong,
+.metric-time,
+.log-endpoint,
+.log-host,
+.log-user-agent,
+.log-detail-grid code,
+.log-row time,
+.log-row code {
+  color: var(--theme-ink);
+}
+
+.log-model-cell small,
+.log-host,
+.log-user-agent,
+.log-detail p,
+.log-detail small {
+  color: var(--theme-muted);
+}
+
+.log-request-info {
+  background: #e9f1ff;
+  color: #1e3a8a;
+  border-color: #bfd0ff;
+}

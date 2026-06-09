@@ -1,0 +1,83 @@
+.deck-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.deck-signal-card {
+  position: relative;
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(24, 35, 49, 0.1);
+  border-radius: 18px 8px 18px 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 241, 234, 0.96)),
+    rgba(251, 248, 240, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.76),
+    0 10px 20px rgba(24, 35, 49, 0.06);
+}
+
+.deck-signal-card span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.deck-signal-card strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 1rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+
+.deck-signal-card small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.deck-signal-card.tone-primary {
+  border-color: rgba(36, 84, 214, 0.2);
+}
+
+.deck-signal-card.tone-compact {
+  border-color: rgba(216, 138, 29, 0.24);
+}
+
+.deck-signal-card.tone-claude {
+  border-color: rgba(13, 148, 136, 0.24);
+}
+
+.deck-signal-card.tone-primary::before,
+.deck-signal-card.tone-compact::before,
+.deck-signal-card.tone-claude::before {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  content: "";
+}
+
+.deck-signal-card.tone-primary::before {
+  background: var(--primary);
+  box-shadow: 0 0 14px rgba(36, 84, 214, 0.22);
+}
+
+.deck-signal-card.tone-compact::before {
+  background: var(--compact);
+  box-shadow: 0 0 14px rgba(216, 138, 29, 0.24);
+}
+
+.deck-signal-card.tone-claude::before {
+  background: var(--teal);
+  box-shadow: 0 0 14px rgba(13, 148, 136, 0.22);
+}

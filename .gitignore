@@ -17,6 +17,7 @@ compactgate.json
 # Local task and agent state
 .codex-tasks/
 .ai/
+.serena/
 .playwright-mcp/
 /README-assets/
 .tmp/

@@ -1,0 +1,56 @@
+.shell-health {
+  padding-bottom: var(--space-5);
+}
+
+.health-topbar {
+  margin-bottom: var(--space-4);
+}
+
+.health-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+  gap: var(--space-5);
+  margin-bottom: var(--space-5);
+  padding: clamp(1.25rem, 2.6vw, 2.3rem);
+  border: 1px solid rgba(24, 35, 49, 0.16);
+  border-radius: 20px 40px 20px 40px;
+  background:
+    linear-gradient(135deg, rgba(36, 84, 214, 0.08), transparent 32%),
+    linear-gradient(225deg, rgba(216, 138, 29, 0.12), transparent 46%),
+    linear-gradient(180deg, rgba(251, 248, 240, 0.96), rgba(243, 236, 222, 0.92));
+  box-shadow:
+    0 20px 44px rgba(24, 35, 49, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}
+
+.health-hero.tone-good {
+  border-color: rgba(31, 122, 77, 0.24);
+}
+
+.health-hero.tone-warn {
+  border-color: rgba(216, 138, 29, 0.28);
+}
+
+.health-hero.tone-bad {
+  border-color: rgba(194, 65, 12, 0.24);
+}
+
+.health-hero-copy h2 {
+  max-width: 12ch;
+  font-size: clamp(2.1rem, 4.8vw, 4.5rem);
+  line-height: 0.92;
+}
+
+.health-hero-copy p:last-of-type {
+  max-width: 54ch;
+  margin: var(--space-4) 0 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.health-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}

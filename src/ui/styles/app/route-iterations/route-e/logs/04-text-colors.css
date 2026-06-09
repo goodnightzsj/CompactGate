@@ -1,0 +1,19 @@
+.log-row-main {
+  color: var(--theme-ink);
+}
+
+.log-model-cell strong,
+.log-time,
+.metric-time,
+.log-endpoint,
+.log-host,
+.log-user-agent,
+.log-detail-grid code {
+  color: var(--theme-ink);
+}
+
+.log-model-cell small,
+.log-host,
+.log-user-agent {
+  color: var(--theme-muted);
+}

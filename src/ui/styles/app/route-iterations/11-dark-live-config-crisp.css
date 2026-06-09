@@ -1,0 +1,7 @@
+/* Dark polish pass: make Live Config feel crisp instead of foggy. */
+@import "./dark-live-config-crisp/01-panel-surface.css";
+@import "./dark-live-config-crisp/02-strong-text.css";
+@import "./dark-live-config-crisp/03-card-surfaces.css";
+@import "./dark-live-config-crisp/04-muted-copy.css";
+@import "./dark-live-config-crisp/05-form-controls.css";
+@import "./dark-live-config-crisp/06-profile-actions.css";

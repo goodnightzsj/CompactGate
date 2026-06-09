@@ -1,0 +1,14 @@
+.log-row {
+  background: #ffffff;
+  border-color: var(--theme-line);
+}
+
+.log-row:nth-child(even) {
+  background: #f8fafc;
+}
+
+.log-row:hover,
+.log-row:has(.log-detail) {
+  background: #eef4ff;
+  border-color: #b9c8ef;
+}

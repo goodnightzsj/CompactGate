@@ -1,0 +1,79 @@
+import type {
+  ClaudeModelMap,
+  ClaudeModelMapRole,
+  CompactGateConfig
+} from "../shared/types.js";
+
+export const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
+  "default",
+  "opus",
+  "sonnet",
+  "haiku",
+  "reasoning",
+  "subagent"
+];
+
+export function emptyClaudeModelMap(): ClaudeModelMap {
+  return {
+    default: "",
+    opus: "",
+    sonnet: "",
+    haiku: "",
+    reasoning: "",
+    subagent: ""
+  };
+}
+
+export const DEFAULT_CONFIG: CompactGateConfig = {
+  listen: "127.0.0.1:7865",
+  primary: {
+    base_url: "https://primary.example/v1",
+    api_key: "",
+    api_key_env: ""
+  },
+  compact: {
+    base_url: "https://compact.example/v1",
+    api_key: "",
+    api_key_env: "",
+    upstream_mode: "split",
+    model_mode: "linked",
+    model_template: "{model}-openai-compact",
+    model_override: ""
+  },
+  claude: {
+    primary: {
+      base_url: "https://api.anthropic.com",
+      api_key: "",
+      api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      model_override: ""
+    },
+    compact: {
+      base_url: "https://api.anthropic.com",
+      api_key: "",
+      api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      upstream_mode: "primary",
+      model_override: ""
+    },
+    model_map: emptyClaudeModelMap()
+  },
+  timeouts: {
+    primary_ms: 120_000,
+    compact_ms: 900_000,
+    claude_ms: 900_000
+  },
+  logging: {
+    redact_body: true,
+    keep_recent: 200
+  },
+  profile_scopes: {
+    codex: {
+      profiles: [],
+      active_profile_id: null
+    },
+    claude: {
+      profiles: [],
+      active_profile_id: null
+    }
+  },
+  route_url_presets: []
+};

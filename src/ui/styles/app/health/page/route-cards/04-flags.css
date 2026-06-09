@@ -1,0 +1,30 @@
+.health-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-top: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.health-flag.is-good {
+  border-color: color-mix(in srgb, var(--accent-green) 34%, var(--app-line));
+  background: var(--accent-green-soft);
+  color: var(--accent-green);
+}
+
+.health-flag.is-warn {
+  border-color: color-mix(in srgb, var(--accent-amber) 38%, var(--app-line));
+  background: var(--accent-amber-soft);
+  color: var(--accent-amber);
+}
+
+.health-led {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+}

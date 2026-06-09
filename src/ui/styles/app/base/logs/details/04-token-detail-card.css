@@ -1,0 +1,26 @@
+.token-detail-card {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.token-detail-card div {
+  gap: 0.25rem;
+  padding: var(--space-3);
+  border: 1px solid rgba(251, 248, 240, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.token-detail-card span {
+  color: rgba(251, 248, 240, 0.58);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.token-detail-card strong {
+  color: #55b9ff;
+  font-family: var(--mono);
+  font-size: 1.05rem;
+}

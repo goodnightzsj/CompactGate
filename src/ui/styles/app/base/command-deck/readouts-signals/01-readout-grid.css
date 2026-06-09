@@ -1,0 +1,36 @@
+.deck-readouts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.deck-readout {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+  align-content: start;
+  padding: 0.85rem var(--space-3);
+  border: 1px solid rgba(24, 35, 49, 0.12);
+  border-radius: 6px 18px 6px 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 241, 234, 0.92)),
+    rgba(251, 248, 240, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74), 0 6px 14px rgba(24, 35, 49, 0.06);
+}
+
+.deck-readout strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.deck-readout small {
+  color: var(--muted);
+}

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { extractRequestMetadata, extractResponseUsage } from "../src/server/usage.js";
+import { gzipSync } from "node:zlib";
+import {
+  extractRequestMetadata,
+  extractResponseErrorSummary,
+  extractResponseUsage
+} from "../src/server/usage.js";
+import {
+  decodeBodyText,
+  parseJsonRecord
+} from "../src/server/http-utils.js";
 
 describe("usage metadata extraction", () => {
   it("keeps OpenAI-style cached input as an input token subset", () => {
@@ -205,6 +214,29 @@ describe("usage metadata extraction", () => {
     });
   });
 
+  it("ignores malformed usage token strings without losing decimal aliases", () => {
+    const usage = extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        usage: {
+          prompt_tokens: "123",
+          completion_tokens: "1e6",
+          total_tokens: "0x10",
+          prompt_cache_hit_tokens: "10tokens",
+          prompt_cache_miss_tokens: "23"
+        }
+      })),
+      { "content-type": "application/json" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 123,
+      outputTokens: null,
+      cachedInputTokens: null,
+      additiveCachedInputTokens: false,
+      totalTokens: 123
+    });
+  });
+
   it("normalizes camelCase usage aliases returned by compatibility gateways", () => {
     const usage = extractResponseUsage(
       Buffer.from(JSON.stringify({
@@ -257,6 +289,51 @@ describe("usage metadata extraction", () => {
       additiveCachedInputTokens: false,
       totalTokens: 170
     });
+  });
+
+  it("does not inflate oversized gzip responses while extracting usage", () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({
+      usage: {
+        input_tokens: 1,
+        output_tokens: 2
+      },
+      padding: "x".repeat(9 * 1024 * 1024)
+    })));
+
+    const usage = extractResponseUsage(body, {
+      "content-type": "application/json",
+      "content-encoding": "gzip"
+    });
+
+    expect(usage).toMatchObject({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null
+    });
+  });
+
+  it("falls back to a generic summary for oversized gzip error responses", () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({
+      error: {
+        message: "OVERSIZED_GZIP_ERROR_SHOULD_NOT_BE_INFLATED"
+      },
+      padding: "x".repeat(9 * 1024 * 1024)
+    })));
+
+    expect(extractResponseErrorSummary(500, body, {
+      "content-type": "application/json",
+      "content-encoding": "gzip"
+    })).toBe("Upstream returned HTTP 500.");
+  });
+
+  it("bounds generic gzip text and JSON decoding helpers", () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({
+      ok: true,
+      padding: "x".repeat(9 * 1024 * 1024)
+    })));
+
+    expect(decodeBodyText(body)).toBe("");
+    expect(parseJsonRecord(body)).toBeNull();
   });
 
   it("extracts visible Claude thinking effort fields when the request includes them", () => {

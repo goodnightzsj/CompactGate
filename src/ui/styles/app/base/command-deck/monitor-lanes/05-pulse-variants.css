@@ -1,0 +1,49 @@
+.deck-pulse {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(24, 35, 49, 0.16), rgba(255, 255, 255, 0.12)),
+    linear-gradient(90deg, var(--primary), var(--compact));
+  box-shadow:
+    inset 0 2px 4px rgba(24, 35, 49, 0.2),
+    0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.deck-pulse span {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.14) 24%, transparent 26%),
+    radial-gradient(circle, color-mix(in srgb, var(--compact) 72%, white), var(--compact) 62%, #5a3207 100%);
+  box-shadow:
+    0 0 0 5px rgba(216, 138, 29, 0.14),
+    0 0 20px rgba(216, 138, 29, 0.26),
+    0 3px 8px rgba(24, 35, 49, 0.18);
+  animation: deck-travel 1.8s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.route-primary .deck-pulse span {
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.14) 24%, transparent 26%),
+    radial-gradient(circle, color-mix(in srgb, var(--primary) 72%, white), var(--primary) 62%, #122861 100%);
+  box-shadow:
+    0 0 0 5px rgba(36, 84, 214, 0.14),
+    0 0 20px rgba(36, 84, 214, 0.26),
+    0 3px 8px rgba(24, 35, 49, 0.18);
+}
+
+.route-claude .deck-pulse span {
+  background:
+    radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.14) 24%, transparent 26%),
+    radial-gradient(circle, color-mix(in srgb, var(--teal) 72%, white), var(--teal) 62%, #075751 100%);
+  box-shadow:
+    0 0 0 5px rgba(13, 148, 136, 0.14),
+    0 0 20px rgba(13, 148, 136, 0.24),
+    0 3px 8px rgba(24, 35, 49, 0.18);
+}

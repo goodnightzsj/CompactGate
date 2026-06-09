@@ -1,0 +1,16 @@
+/* ── Sidebar ── */
+.sidebar {
+  --sidebar-width: 212px;
+  position: sticky;
+  top: 0;
+  width: var(--sidebar-width);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--hairline);
+  z-index: 50;
+  user-select: none;
+  overflow: hidden;
+}

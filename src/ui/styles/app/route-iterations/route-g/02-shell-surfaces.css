@@ -1,0 +1,32 @@
+:root[data-theme] body {
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--app-blue) 12%, transparent), transparent 28rem),
+    radial-gradient(circle at 88% 12%, color-mix(in srgb, var(--app-teal) 10%, transparent), transparent 26rem),
+    linear-gradient(180deg, var(--app-bg), var(--app-bg-2) 58%, var(--app-bg));
+  color: var(--app-text);
+}
+
+:root[data-theme] .topbar,
+:root[data-theme] .command-deck.operator-ribbon,
+:root[data-theme] .route-board,
+:root[data-theme] .panel,
+:root[data-theme] .logs-panel,
+:root[data-theme] .profile-card,
+:root[data-theme] .route-config-group,
+  :root[data-theme] .mode-card,
+  :root[data-theme] .route-config-card,
+  :root[data-theme] .route-url-suggestions,
+  :root[data-theme] .route-url-suggestion,
+  :root[data-theme] .credential-state,
+:root[data-theme] .provider-card,
+:root[data-theme] .log-row,
+:root[data-theme] .empty-log {
+  border-color: var(--app-line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--app-surface) 96%, transparent), color-mix(in srgb, var(--app-surface-soft) 96%, transparent));
+  color: var(--app-text);
+  box-shadow: var(--app-shadow-soft);
+}
+
+:root[data-theme] .topbar {
+  z-index: var(--z-sticky);
+}

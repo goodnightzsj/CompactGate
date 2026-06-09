@@ -1,0 +1,24 @@
+:root[data-theme="dark"] .route-chip.primary {
+  background: rgba(96, 165, 250, 0.18);
+  color: #bfdbfe;
+}
+
+:root[data-theme="dark"] .route-chip.compact {
+  background: rgba(251, 191, 36, 0.18);
+  color: #fde68a;
+}
+
+:root[data-theme="dark"] .route-chip.claude {
+  background: rgba(45, 212, 191, 0.16);
+  color: #99f6e4;
+}
+
+@media (max-width: 760px) {
+  .theme-switch {
+    width: 100%;
+  }
+
+  .theme-switch button {
+    flex: 1;
+  }
+}

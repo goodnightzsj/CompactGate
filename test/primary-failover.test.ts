@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import {
@@ -57,6 +58,31 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
   });
 
+  it("resets primary health when the effective profile credential changes", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "bad-key"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "fallback-key")
+    ]);
+    const { state } = createState();
+
+    state.recordResult(
+      state.select(config, { model: "gpt-5.5" }),
+      401,
+      "Upstream returned HTTP 401: invalid token."
+    );
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+
+    const rotatedConfig = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "good-key"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "fallback-key")
+    ]);
+
+    expect(state.preview(rotatedConfig, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
+      quarantineUntil: 0
+    });
+  });
+
   it("starts from the active profile and then falls forward through saved order", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
@@ -93,6 +119,27 @@ describe("PrimaryFailoverState", () => {
 
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
     clock.advance(2_100);
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
+  it("ignores malformed Retry-After delay values for rate-limit cooldowns", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const clock = createState(1_000);
+
+    clock.state.recordResult(
+      clock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "1e6" }
+      }
+    );
+
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+    clock.advance(60_100);
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
   });
 
@@ -197,6 +244,199 @@ describe("PrimaryFailoverState", () => {
     }).profileId).toBe("codex-b");
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
   });
+
+  it("sticks gzip encoded response ids to the profile that produced them", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const clock = createState(1_000);
+
+    clock.state.recordResult(
+      clock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
+
+    const selection = clock.state.select(config, { model: "gpt-5.5" });
+    expect(selection.profileId).toBe("codex-b");
+    clock.state.recordResult(selection, {
+      status: 200,
+      errorSummary: null,
+      responseBody: gzipSync(Buffer.from(JSON.stringify({ id: "resp-gzip-produced" }))),
+      responseHeaders: {
+        "content-type": "application/json",
+        "content-encoding": "gzip"
+      }
+    });
+    clock.advance(2_100);
+
+    expect(clock.state.preview(config, {
+      model: "gpt-5.5",
+      previousResponseId: "resp-gzip-produced"
+    }).profileId).toBe("codex-b");
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
+  it("sticks compaction state to the primary profile that successfully handled it", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const clock = createState(1_000);
+    const compactionContext = {
+      model: "gpt-5.5",
+      compactionStateKey: "sha256:opaque-compact-state"
+    };
+
+    clock.state.recordResult(
+      clock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
+
+    const selection = clock.state.select(config, compactionContext);
+    expect(selection.profileId).toBe("codex-b");
+    clock.state.recordResult(selection, 200, null);
+    clock.advance(2_100);
+
+    expect(clock.state.preview(config, compactionContext).profileId).toBe("codex-b");
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
+  it("bounds sticky state by evicting the oldest session and continuation entries", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const clock = createState(1_000, { maxStickyEntries: 2 });
+
+    clock.state.recordResult(
+      clock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
+
+    for (const sessionKey of ["session-0", "session-1", "session-2"]) {
+      const selection = clock.state.select(config, { model: "gpt-5.5", sessionKey });
+      expect(selection.profileId).toBe("codex-b");
+      clock.state.recordResult(selection, 200, null);
+    }
+
+    clock.advance(2_100);
+    expect(clock.state.preview(config, { model: "gpt-5.5", sessionKey: "session-0" }).profileId)
+      .toBe("codex-a");
+    expect(clock.state.preview(config, { model: "gpt-5.5", sessionKey: "session-1" }).profileId)
+      .toBe("codex-b");
+    expect(clock.state.preview(config, { model: "gpt-5.5", sessionKey: "session-2" }).profileId)
+      .toBe("codex-b");
+
+    const continuationClock = createState(1_000, { maxStickyEntries: 2 });
+    continuationClock.state.recordResult(
+      continuationClock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
+
+    for (const responseId of ["resp-0", "resp-1", "resp-2"]) {
+      const selection = continuationClock.state.select(config, { model: "gpt-5.5" });
+      expect(selection.profileId).toBe("codex-b");
+      continuationClock.state.recordResult(selection, {
+        status: 200,
+        errorSummary: null,
+        responseId
+      });
+    }
+
+    continuationClock.advance(2_100);
+    expect(continuationClock.state.preview(config, {
+      model: "gpt-5.5",
+      previousResponseId: "resp-0"
+    }).profileId).toBe("codex-a");
+    expect(continuationClock.state.preview(config, {
+      model: "gpt-5.5",
+      previousResponseId: "resp-1"
+    }).profileId).toBe("codex-b");
+    expect(continuationClock.state.preview(config, {
+      model: "gpt-5.5",
+      previousResponseId: "resp-2"
+    }).profileId).toBe("codex-b");
+
+    const compactionClock = createState(1_000, { maxStickyEntries: 2 });
+    compactionClock.state.recordResult(
+      compactionClock.state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
+
+    for (const compactionStateKey of ["sha256:state-0", "sha256:state-1", "sha256:state-2"]) {
+      const selection = compactionClock.state.select(config, { model: "gpt-5.5", compactionStateKey });
+      expect(selection.profileId).toBe("codex-b");
+      compactionClock.state.recordResult(selection, 200, null);
+    }
+
+    compactionClock.advance(2_100);
+    expect(compactionClock.state.preview(config, {
+      model: "gpt-5.5",
+      compactionStateKey: "sha256:state-0"
+    }).profileId).toBe("codex-a");
+    expect(compactionClock.state.preview(config, {
+      model: "gpt-5.5",
+      compactionStateKey: "sha256:state-1"
+    }).profileId).toBe("codex-b");
+    expect(compactionClock.state.preview(config, {
+      model: "gpt-5.5",
+      compactionStateKey: "sha256:state-2"
+    }).profileId).toBe("codex-b");
+  });
+
+  it("bounds model cooldown state by evicting the oldest incompatible models", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState(1_000, { maxModelCooldownEntries: 2 });
+
+    state.recordResult(
+      state.select(config, { model: "gpt-5.5" }),
+      403,
+      "Upstream returned HTTP 403: insufficient balance."
+    );
+
+    for (const model of ["missing-0", "missing-1", "missing-2"]) {
+      const selection = state.select(config, { model });
+      expect(selection.profileId).toBe("codex-b");
+      state.recordResult(
+        selection,
+        404,
+        `Upstream returned HTTP 404: model ${model} not found.`
+      );
+    }
+
+    expect(state.preview(config, { model: "missing-0" }).profileId).toBe("codex-b");
+    expect(state.preview(config, { model: "missing-1" }).profileId).toBe("codex-a");
+    expect(state.preview(config, { model: "missing-2" }).profileId).toBe("codex-a");
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-b")?.modelCooldowns)
+      .toEqual([
+        expect.objectContaining({ model: "missing-1" }),
+        expect.objectContaining({ model: "missing-2" })
+      ]);
+  });
 });
 
 describe("primary route result classification", () => {
@@ -234,24 +474,60 @@ describe("primary route result classification", () => {
 
 describe("primaryRouteRequestContextFromBody", () => {
   it("extracts model, previous response id, and session key from body and headers", () => {
-    expect(primaryRouteRequestContextFromBody(
+    const context = primaryRouteRequestContextFromBody(
       Buffer.from(JSON.stringify({
         model: "gpt-5.5",
         previous_response_id: "resp-old",
+        input: [
+          { type: "compaction", encrypted_content: "OPAQUE_REMOTE_STATE" },
+          { type: "message", role: "user" }
+        ],
         metadata: { session_hash: "body-session" }
       })),
       { "x-session-id": "header-session" },
       "/responses"
-    )).toEqual({
+    );
+
+    expect(context).toEqual({
       endpoint: "/responses",
       model: "gpt-5.5",
       previousResponseId: "resp-old",
-      sessionKey: "body-session"
+      sessionKey: "body-session",
+      compactionStateKey: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
     });
+    expect(context.compactionStateKey).not.toContain("OPAQUE_REMOTE_STATE");
+  });
+
+  it("extracts sticky context from gzip encoded primary request bodies", () => {
+    const context = primaryRouteRequestContextFromBody(
+      gzipSync(Buffer.from(JSON.stringify({
+        model: "gpt-5.5",
+        previous_response_id: "resp-gzip-old",
+        input: [
+          { type: "compaction", encrypted_content: "OPAQUE_GZIP_STATE" },
+          { type: "message", role: "user" }
+        ],
+        metadata: { session_hash: "gzip-body-session" }
+      }))),
+      { "x-session-id": "gzip-header-session" },
+      "/responses"
+    );
+
+    expect(context).toEqual({
+      endpoint: "/responses",
+      model: "gpt-5.5",
+      previousResponseId: "resp-gzip-old",
+      sessionKey: "gzip-body-session",
+      compactionStateKey: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
+    });
+    expect(context.compactionStateKey).not.toContain("OPAQUE_GZIP_STATE");
   });
 });
 
-function createState(startNow = 0): {
+function createState(
+  startNow = 0,
+  options: { maxStickyEntries?: number; maxModelCooldownEntries?: number } = {}
+): {
   state: PrimaryFailoverState;
   advance: (ms: number) => void;
 } {
@@ -259,7 +535,8 @@ function createState(startNow = 0): {
   return {
     state: new PrimaryFailoverState({
       now: () => now,
-      random: () => 0
+      random: () => 0,
+      ...options
     }),
     advance: (ms: number) => {
       now += ms;
@@ -298,7 +575,12 @@ function configWithCodexProfiles(
   };
 }
 
-function codexProfile(id: string, name: string, primaryBaseUrl: string): SavedConfigProfile {
+function codexProfile(
+  id: string,
+  name: string,
+  primaryBaseUrl: string,
+  primaryApiKey = DEFAULT_CONFIG.primary.api_key
+): SavedConfigProfile {
   return {
     id,
     name,
@@ -307,7 +589,8 @@ function codexProfile(id: string, name: string, primaryBaseUrl: string): SavedCo
     config: {
       primary: {
         ...DEFAULT_CONFIG.primary,
-        base_url: primaryBaseUrl
+        base_url: primaryBaseUrl,
+        api_key: primaryApiKey
       },
       compact: { ...DEFAULT_CONFIG.compact }
     }
