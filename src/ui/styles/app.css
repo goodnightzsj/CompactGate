@@ -1,6 +1,5 @@
-@import "./app/01-base.css";
-@import "./app/02-route-iterations.css";
-@import "./app/03-theme-system.css";
-@import "./app/04-health.css";
-@import "./app/05-console.css";
-@import "./app/06-responsive.css";
+@import "./app/base.css";
+@import "./app/theme-system.css";
+@import "./app/health.css";
+@import "./app/console.css";
+@import "./app/responsive.css";

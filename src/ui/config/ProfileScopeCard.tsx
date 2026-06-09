@@ -1,4 +1,3 @@
-import type * as React from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import { formatClock } from "../shared/format.js";
 import { Field } from "./Field.js";

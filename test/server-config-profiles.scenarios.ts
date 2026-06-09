@@ -123,6 +123,7 @@ describe("CompactGate config API", () => {
         }
       }
     );
+    expect(claudeSaveResponse.status).toBe(200);
     const claudeProfileId = claudeSavedConfig.profile_scopes.claude.profiles[0].id;
     expect(claudeSavedConfig.profile_scopes.claude.profiles[0]).toMatchObject({
       scope: "claude",

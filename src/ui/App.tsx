@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { PageMode, StudioPage } from "./app-types.js";
 import { ConfirmProfileDeleteDialog } from "./config/ConfirmProfileDeleteDialog.js";
@@ -186,44 +186,56 @@ function App() {
           <ConfigPage
             config={config}
             form={form}
-            currentModel={currentModel}
-            linkedCompactModel={linkedCompactModel}
-            saveState={saveState}
-            saveError={saveError}
-            profileName={profileName}
-            selectedProfileId={selectedProfileId}
-            profileState={profileState}
-            profileError={profileError}
-            claudeProfileName={claudeProfileName}
-            selectedClaudeProfileId={selectedClaudeProfileId}
-            claudeProfileState={claudeProfileState}
-            claudeProfileError={claudeProfileError}
-            hasPendingChanges={hasPendingChanges}
-            previewPath={previewPath}
-            previewBody={previewBody}
-            preview={preview}
-            previewError={previewError}
-            configTab={configTab}
-            onConfigTabChange={setConfigTab}
-            onCurrentModelChange={setCurrentModel}
             onFormChange={setForm}
-            onProfileNameChange={setProfileName}
-            onClaudeProfileNameChange={setClaudeProfileName}
-            onSelectedProfileChange={selectConfigProfile}
-            onSaveProfile={saveConfigProfile}
-            onApplyProfile={applySelectedProfile}
-            onUpdateProfile={updateSelectedProfile}
-            onReorderProfiles={reorderProfiles}
-            onDuplicateProfile={duplicateSelectedProfile}
-            onDeleteProfile={requestDeleteSelectedProfile}
-            onUnlockCompactModel={unlockCompactModel}
-            onRestoreLinkedMode={restoreLinkedMode}
-            onPathChange={setPreviewPath}
-            onBodyChange={setPreviewBody}
-            onPreviewSubmit={previewRoute}
-            onSaveConfig={saveConfig}
-            onExportConfig={exportConfig}
-            onImportConfig={importConfig}
+            model={{
+              currentModel,
+              linkedCompactModel,
+              onCurrentModelChange: setCurrentModel,
+              onUnlockCompactModel: unlockCompactModel,
+              onRestoreLinkedMode: restoreLinkedMode
+            }}
+            save={{
+              saveState,
+              saveError,
+              hasPendingChanges,
+              onSaveConfig: saveConfig
+            }}
+            profiles={{
+              profileName,
+              selectedProfileId,
+              profileState,
+              profileError,
+              claudeProfileName,
+              selectedClaudeProfileId,
+              claudeProfileState,
+              claudeProfileError,
+              onProfileNameChange: setProfileName,
+              onClaudeProfileNameChange: setClaudeProfileName,
+              onSelectedProfileChange: selectConfigProfile,
+              onSaveProfile: saveConfigProfile,
+              onApplyProfile: applySelectedProfile,
+              onUpdateProfile: updateSelectedProfile,
+              onReorderProfiles: reorderProfiles,
+              onDuplicateProfile: duplicateSelectedProfile,
+              onDeleteProfile: requestDeleteSelectedProfile
+            }}
+            previewState={{
+              previewPath,
+              previewBody,
+              preview,
+              previewError,
+              onPathChange: setPreviewPath,
+              onBodyChange: setPreviewBody,
+              onPreviewSubmit: previewRoute
+            }}
+            tab={{
+              configTab,
+              onConfigTabChange: setConfigTab
+            }}
+            portable={{
+              onExportConfig: exportConfig,
+              onImportConfig: importConfig
+            }}
           />
         )}
 

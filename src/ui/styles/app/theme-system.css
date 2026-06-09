@@ -25,6 +25,12 @@
   --brick-soft: #fef5f4;
   --forest: #2d6a3f;
   --forest-soft: #edf7ef;
+  --live-profile-selected-border: color-mix(in srgb, var(--accent) 40%, var(--hairline));
+  --live-profile-selected-bg: var(--accent-soft);
+  --live-profile-selected-shadow: inset 3px 0 0 var(--accent), 0 4px 12px color-mix(in srgb, var(--accent) 12%, transparent);
+  --live-profile-active-border: color-mix(in srgb, var(--jade) 40%, var(--hairline));
+  --live-profile-active-bg: var(--jade-soft);
+  --live-profile-active-shadow: inset 3px 0 0 var(--jade), 0 4px 12px color-mix(in srgb, var(--jade) 12%, transparent);
   --shadow-sm: 0 1px 2px rgba(26,28,30,0.04);
   --shadow-md: 0 2px 8px rgba(26,28,30,0.06);
   --shadow-lg: 0 4px 16px rgba(26,28,30,0.08);
@@ -1097,44 +1103,6 @@ a { color: var(--accent); text-decoration: none; }
   grid-column: 1 / -1;
 }
 
-.profile-item {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  background: var(--paper-warm);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  transition: all 120ms var(--ease);
-}
-
-.profile-item:hover {
-  border-color: var(--hairline-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.profile-item.is-active {
-  border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.profile-item-info strong {
-  display: block;
-  font-size: 0.86rem;
-  color: var(--ink);
-}
-
-.profile-item-info small {
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-
-.profile-item-actions {
-  display: flex;
-  gap: 4px;
-}
-
 /* ═══════════════════════════════════════════════════
    Logs Page
    ═══════════════════════════════════════════════════ */
@@ -1770,7 +1738,6 @@ a { color: var(--accent); text-decoration: none; }
 :root[data-theme] .sidebar-health-row,
 :root[data-theme] .route-rule p,
 :root[data-theme] .profile-card-copy p,
-:root[data-theme] .profile-item-info small,
 :root[data-theme] .log-cell-time,
 :root[data-theme] .tag {
   color: var(--muted);
@@ -1784,7 +1751,6 @@ a { color: var(--accent); text-decoration: none; }
 :root[data-theme] .route-rule h3,
 :root[data-theme] .empty-state strong,
 :root[data-theme] .log-detail-value,
-:root[data-theme] .profile-item-info strong,
 :root[data-theme] .sidebar-brand h1,
 :root[data-theme] .page-header h2 {
   color: var(--ink);

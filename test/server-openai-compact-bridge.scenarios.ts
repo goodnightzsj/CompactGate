@@ -208,6 +208,109 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it("consumes armed compact follow-up state once before using cached primary fallback", () => {
+    const scope = {
+      compactUpstream: "http://compact.example/v1",
+      sourceModel: "gpt-5.5",
+      targetModel: "gpt-5.5-openai-compact"
+    };
+    const store = new CompactionBridgeStore();
+    const compactResponseBody = Buffer.from(JSON.stringify({
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "SUMMARY FROM COMPACT CACHE" }]
+        },
+        {
+          type: "compaction",
+          encrypted_content: "ONE_SHOT_COMPACT_STATE"
+        }
+      ]
+    }));
+    const followUpBody = Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: [
+        { type: "compaction", encrypted_content: "ONE_SHOT_COMPACT_STATE" },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue after one shot" }]
+        }
+      ]
+    }));
+
+    store.storeCompactResponse(compactResponseBody, { scope });
+
+    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(true);
+    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(false);
+
+    const rewritten = store.rewritePrimaryBody(followUpBody, scope);
+    expect(rewritten.replacedCompactionCount).toBe(1);
+    expect(JSON.parse(rewritten.body.toString("utf8")).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "SUMMARY FROM COMPACT CACHE" }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after one shot" }]
+      }
+    ]);
+  });
+
+  it("isolates compact follow-up and fallback state by upstream and model scope", () => {
+    const cachedScope = {
+      compactUpstream: "http://compact-a.example/v1",
+      sourceModel: "gpt-5.5",
+      targetModel: "gpt-5.5-openai-compact"
+    };
+    const mismatchedScope = {
+      compactUpstream: "http://compact-b.example/v1",
+      sourceModel: "gpt-5.5",
+      targetModel: "gpt-5.5-openai-compact"
+    };
+    const store = new CompactionBridgeStore();
+    const compactResponseBody = Buffer.from(JSON.stringify({
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "SCOPED SUMMARY" }]
+        },
+        {
+          type: "compaction",
+          encrypted_content: "SCOPED_COMPACT_STATE"
+        }
+      ]
+    }));
+    const followUpBody = Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: [{ type: "compaction", encrypted_content: "SCOPED_COMPACT_STATE" }]
+    }));
+
+    store.storeCompactResponse(compactResponseBody, { scope: cachedScope });
+
+    expect(store.consumeCompactFollowUp(followUpBody, mismatchedScope)).toBe(false);
+    expect(store.rewritePrimaryBody(followUpBody, mismatchedScope)).toMatchObject({
+      body: followUpBody,
+      replacedCompactionCount: 0
+    });
+    expect(store.consumeCompactFollowUp(followUpBody, cachedScope)).toBe(true);
+
+    const rewritten = store.rewritePrimaryBody(followUpBody, cachedScope);
+    expect(rewritten.replacedCompactionCount).toBe(1);
+    expect(JSON.parse(rewritten.body.toString("utf8")).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "SCOPED SUMMARY" }]
+      }
+    ]);
+  });
+
   it("closes compact client responses when the compact upstream aborts after headers", async () => {
     const primary = await startUpstream((_req, res) => {
       writeJsonResponse(res, { ok: true });

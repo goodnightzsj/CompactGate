@@ -8,7 +8,23 @@ import https from "node:https";
 import { copyResponseHeaders, decodeBodyText } from "./http-utils.js";
 import { createOpenAiStreamObserver, type OpenAiStreamSummary } from "./upstream-openai-stream.js";
 import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
+import {
+  appendBufferedResponseChunk,
+  normalizeMaxBufferedResponseBytes,
+  normalizeMaxObservedStreamEventBytes
+} from "./upstream-response-buffer.js";
 import { extractResponseErrorSummary } from "./usage.js";
+
+export {
+  DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
+  DEFAULT_MAX_JSON_RESPONSE_BYTES,
+  DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES
+} from "./upstream-response-buffer.js";
+export {
+  requestJson,
+  UpstreamStatusError
+} from "./upstream-json-client.js";
+export type { RequestJsonOptions } from "./upstream-json-client.js";
 
 export interface BufferedUpstreamOptions {
   req: IncomingMessage;
@@ -36,18 +52,11 @@ export interface BufferedUpstreamResult {
   streamSummary: OpenAiStreamSummary | null;
 }
 
-export const DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
-export const DEFAULT_MAX_JSON_RESPONSE_BYTES = 1 * 1024 * 1024;
-export const DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES = 64 * 1024;
 const DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR =
   "Upstream response exceeded the internal buffer limit before it could be forwarded.";
 
 export interface OpenAiUpstreamOptions extends BufferedUpstreamOptions {
   retryEmptyStreamError?: boolean;
-}
-
-export interface RequestJsonOptions {
-  maxResponseBytes?: number;
 }
 
 export function sendBufferedUpstreamRequest(
@@ -291,93 +300,6 @@ export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): st
     : "OpenAI stream closed before response.completed.";
 }
 
-export function requestJson(
-  upstream: URL,
-  headers: Record<string, string>,
-  timeoutMs: number,
-  options: RequestJsonOptions = {}
-): Promise<unknown> {
-  const client = upstream.protocol === "https:" ? https : http;
-  const requestOptions: RequestOptions = {
-    method: "GET",
-    headers,
-    timeout: timeoutMs
-  };
-  const agent = resolveUpstreamAgent(upstream);
-  if (agent) {
-    requestOptions.agent = agent;
-  }
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const maxResponseBytes = normalizeMaxJsonResponseBytes(options.maxResponseBytes);
-
-    const resolveOnce = (value: unknown) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      resolve(value);
-    };
-
-    const rejectOnce = (error: Error) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      reject(error);
-    };
-
-    const upstreamReq = client.request(upstream, requestOptions, (response) => {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      response.on("data", (chunk: Buffer) => {
-        totalBytes += chunk.byteLength;
-        if (totalBytes > maxResponseBytes) {
-          rejectOnce(new Error("Upstream JSON response is too large."));
-          upstreamReq.destroy();
-          response.destroy();
-          return;
-        }
-
-        chunks.push(chunk);
-      });
-      response.on("end", () => {
-        if (settled) {
-          return;
-        }
-
-        const body = Buffer.concat(chunks);
-        const status = response.statusCode ?? 502;
-        if (status >= 400) {
-          rejectOnce(new UpstreamStatusError(status, `Claude models request failed with status ${status}.`));
-          return;
-        }
-
-        try {
-          resolveOnce(JSON.parse(decodeBodyText(body)) as unknown);
-        } catch (error) {
-          rejectOnce(error instanceof Error ? error : new Error("Failed to parse upstream JSON response."));
-        }
-      });
-      response.once("error", rejectOnce);
-      response.once("aborted", () => rejectOnce(new Error("Claude models response aborted before completion.")));
-    });
-
-    upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Claude models request timed out.")));
-    upstreamReq.once("error", rejectOnce);
-    upstreamReq.end();
-  });
-}
-
-export class UpstreamStatusError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
-
 function isRetryableEmptyStreamUpstreamError(result: BufferedUpstreamResult): boolean {
   if (result.status < 500) {
     return false;
@@ -406,52 +328,4 @@ function writeDeferredUpstreamResult(
   }
   res.writeHead(result.status);
   res.end(result.responseBody);
-}
-
-function appendBufferedResponseChunk(
-  chunks: Buffer[],
-  bufferedBytes: number,
-  chunk: Buffer,
-  maxBufferedBytes: number
-): number {
-  if (chunk.byteLength === 0 || bufferedBytes >= maxBufferedBytes) {
-    return bufferedBytes;
-  }
-
-  if (!Number.isFinite(maxBufferedBytes)) {
-    chunks.push(Buffer.from(chunk));
-    return bufferedBytes + chunk.byteLength;
-  }
-
-  const remainingBytes = maxBufferedBytes - bufferedBytes;
-  const bytesToCopy = Math.min(remainingBytes, chunk.byteLength);
-  if (bytesToCopy > 0) {
-    chunks.push(Buffer.from(chunk.subarray(0, bytesToCopy)));
-  }
-
-  return bufferedBytes + bytesToCopy;
-}
-
-function normalizeMaxBufferedResponseBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
-  }
-
-  return Math.max(0, Math.floor(value));
-}
-
-function normalizeMaxJsonResponseBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_JSON_RESPONSE_BYTES;
-  }
-
-  return Math.max(0, Math.floor(value));
-}
-
-function normalizeMaxObservedStreamEventBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES;
-  }
-
-  return Math.max(0, Math.floor(value));
 }

@@ -18,90 +18,11 @@ import {
   readNullableNumber,
   rowToLogEntry
 } from "./logger-helpers.js";
-
-const LOG_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS request_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time TEXT NOT NULL,
-    route TEXT NOT NULL,
-    method TEXT NOT NULL,
-    path TEXT NOT NULL,
-    endpoint TEXT NOT NULL DEFAULT '',
-    request_type TEXT NOT NULL DEFAULT 'http',
-    reasoning_effort TEXT,
-    request_summary TEXT,
-    source_model TEXT,
-    target_model TEXT,
-    status INTEGER NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    first_token_ms INTEGER,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    cached_input_tokens INTEGER,
-    cached_output_tokens INTEGER,
-    cache_read_input_tokens INTEGER,
-    cache_creation_input_tokens INTEGER,
-    reasoning_tokens INTEGER,
-    additive_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-    additive_cached_output_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER,
-    upstream_host TEXT NOT NULL,
-    user_agent TEXT,
-    request_id TEXT NOT NULL,
-    error_summary TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_request_logs_id ON request_logs(id DESC);
-`;
-
-const RECENT_LOG_FIELDS = `
-  time,
-  route,
-  method,
-  path,
-  endpoint,
-  request_type,
-  reasoning_effort,
-  request_summary,
-  source_model,
-  target_model,
-  status,
-  duration_ms,
-  first_token_ms,
-  input_tokens,
-  output_tokens,
-  cached_input_tokens,
-  cached_output_tokens,
-  cache_read_input_tokens,
-  cache_creation_input_tokens,
-  reasoning_tokens,
-  additive_cached_input_tokens,
-  additive_cached_output_tokens,
-  total_tokens,
-  upstream_host,
-  user_agent,
-  request_id,
-  error_summary
-`;
-
-const MIGRATION_COLUMNS: Record<string, string> = {
-  endpoint: "TEXT NOT NULL DEFAULT ''",
-  request_type: "TEXT NOT NULL DEFAULT 'http'",
-  reasoning_effort: "TEXT",
-  request_summary: "TEXT",
-  error_summary: "TEXT",
-  first_token_ms: "INTEGER",
-  input_tokens: "INTEGER",
-  output_tokens: "INTEGER",
-  cached_input_tokens: "INTEGER",
-  cached_output_tokens: "INTEGER",
-  cache_read_input_tokens: "INTEGER",
-  cache_creation_input_tokens: "INTEGER",
-  reasoning_tokens: "INTEGER",
-  additive_cached_input_tokens: "INTEGER NOT NULL DEFAULT 0",
-  additive_cached_output_tokens: "INTEGER NOT NULL DEFAULT 0",
-  total_tokens: "INTEGER",
-  user_agent: "TEXT"
-};
+import {
+  LOG_TABLE_SQL,
+  MIGRATION_COLUMNS,
+  RECENT_LOG_FIELDS
+} from "./logger-schema.js";
 
 export const DEFAULT_MAX_PERSISTED_LOG_ENTRIES = 20_000;
 
@@ -119,8 +40,6 @@ export function resolveLogDatabasePath(configPath: string): string {
 }
 
 export class RequestLogger {
-  private entries: RequestLogEntry[] = [];
-
   private readonly db: DatabaseSync;
 
   private readonly databasePath: string;
@@ -144,12 +63,10 @@ export class RequestLogger {
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
     this.prunePersistedEntries();
-    this.reloadRecent();
   }
 
   resize(keepRecent: number): void {
     this.keepRecent = keepRecent;
-    this.reloadRecent();
   }
 
   getDatabasePath(): string {
@@ -157,11 +74,6 @@ export class RequestLogger {
   }
 
   add(entry: RequestLogEntry): void {
-    this.entries.push(entry);
-    if (this.entries.length > this.keepRecent) {
-      this.entries = this.entries.slice(-this.keepRecent);
-    }
-
     try {
       this.db
         .prepare(
@@ -291,20 +203,6 @@ export class RequestLogger {
 
     this.closed = true;
     this.db.close();
-  }
-
-  private reloadRecent(): void {
-    const rows = this.db
-      .prepare(
-        `
-          SELECT ${RECENT_LOG_FIELDS}
-          FROM request_logs
-          ORDER BY id DESC
-          LIMIT ?
-        `
-      )
-      .all(this.keepRecent) as Array<Record<string, unknown>>;
-    this.entries = rows.map(rowToLogEntry).reverse();
   }
 
   private migratePersistedSchema(): void {

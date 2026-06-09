@@ -1,20 +1,18 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type {
   CompactGateConfig,
   ConfigProfileScope,
   PublicConfig,
-  RouteUrlPreset,
-  SavedConfigProfile,
-  SavedConfigProfileConfig
+  RouteUrlPreset
 } from "../shared/types.js";
 import {
-  cloneConfig,
-  cloneProfile,
-  cloneProfileConfig
+  cloneConfig
 } from "./config-clone.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
+import {
+  readConfigFile,
+  writeConfigFile
+} from "./config-file-repository.js";
 import {
   PROFILE_SCOPES,
   normalizeProfileIdArgs,
@@ -22,19 +20,32 @@ import {
   normalizeProfileMutationArgs,
   normalizeProfileOperationArgs
 } from "./config-profile-args.js";
-import { createProfileScopeHelpers } from "./config-profile-scope.js";
+import {
+  applyProfile as applyConfigProfile,
+  deleteProfile as deleteConfigProfile,
+  duplicateProfile as duplicateConfigProfile,
+  reorderProfiles as reorderConfigProfiles,
+  saveProfile as saveConfigProfile,
+  updateProfile as updateConfigProfile
+} from "./config-profile-mutations.js";
+import {
+  getProfileScopeState,
+  mergeProfileScopes,
+  profileConfigToRuntime,
+  shouldPersistProfileNormalization,
+  syncActiveProfilesFromRuntime,
+  validateProfileConfig
+} from "./config-profile-scope.js";
 import { buildPublicConfig } from "./config-public.js";
 import {
   isRouteUrlPresetKind,
   mergeRouteUrlPresets,
-  routeUrlEntriesFromProfileConfig,
   routeUrlEntriesFromRuntime,
   withRecordedRouteUrlPresets
 } from "./config-route-presets.js";
 import { isRecord } from "./config-readers.js";
 import {
   mergeRuntimeConfig,
-  parseListenAddress,
   validateBaseUrl,
   validateRuntimeConfig
 } from "./config-runtime.js";
@@ -42,23 +53,6 @@ import {
 export { ConfigError } from "./config-error.js";
 export { DEFAULT_CONFIG } from "./config-defaults.js";
 export { parseListenAddress } from "./config-runtime.js";
-
-const {
-  createProfileId,
-  createScopedProfileConfig,
-  getProfileScopeState,
-  mergeProfileScopes,
-  mergeRuntimeForProfileScope,
-  profileConfigToRuntime,
-  shouldPersistProfileNormalization,
-  syncActiveProfilesFromRuntime,
-  updateScopedProfileConfig,
-  validateProfileConfig,
-  withProfileScope
-} = createProfileScopeHelpers({
-  mergeRuntimeConfig,
-  validateRuntimeConfig
-});
 
 export class ConfigStore {
   private current: CompactGateConfig;
@@ -73,24 +67,17 @@ export class ConfigStore {
   }
 
   static async load(configPath: string): Promise<ConfigStore> {
-    const resolvedPath = path.resolve(configPath);
+    const loaded = await readConfigFile(configPath);
     let config = DEFAULT_CONFIG;
     let shouldPersistNormalizedProfiles = false;
 
-    try {
-      const raw = await fs.readFile(resolvedPath, "utf8");
-      const parsed = JSON.parse(raw);
-      config = mergeConfig(DEFAULT_CONFIG, parsed);
-      shouldPersistNormalizedProfiles = shouldPersistProfileNormalization(parsed);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        throw error;
-      }
+    if (!loaded.missing) {
+      config = mergeConfig(DEFAULT_CONFIG, loaded.value);
+      shouldPersistNormalizedProfiles = shouldPersistProfileNormalization(loaded.value);
     }
 
     validateConfig(config);
-    const store = new ConfigStore(resolvedPath, config);
+    const store = new ConfigStore(loaded.resolvedPath, config);
     if (shouldPersistNormalizedProfiles) {
       await store.save();
     }
@@ -145,53 +132,7 @@ export class ConfigStore {
     maybePatch?: unknown
   ): Promise<CompactGateConfig> {
     const { scope, name, patch } = normalizeProfileOperationArgs(scopeOrName, nameOrPatch, maybePatch);
-    return this.saveScopedProfile(scope, name, patch);
-  }
-
-  private async saveScopedProfile(scope: ConfigProfileScope, name: string, patch: unknown): Promise<CompactGateConfig> {
-    if (!isRecord(patch)) {
-      throw new ConfigError("Profile config patch must be a JSON object.");
-    }
-
-    const trimmedName = name.trim();
-    if (trimmedName.length === 0) {
-      throw new ConfigError("Profile name is required.");
-    }
-
-    const now = new Date().toISOString();
-    const profileConfig = createScopedProfileConfig(this.current, patch, scope);
-    validateProfileConfig(profileConfig, scope);
-
-    const scopeState = getProfileScopeState(this.current, scope);
-    const existingProfiles = scopeState.profiles ?? [];
-    const existing = existingProfiles.find((profile) => profile.name === trimmedName);
-    const nextProfile: SavedConfigProfile = {
-      id: existing?.id ?? createProfileId(`${scope}-${trimmedName}`, now),
-      name: trimmedName,
-      created_at: existing?.created_at ?? now,
-      updated_at: now,
-      config: cloneProfileConfig(profileConfig)
-    };
-
-    const nextScopeState = {
-      profiles: [
-        ...existingProfiles.filter((profile) => profile.id !== nextProfile.id).map(cloneProfile),
-        nextProfile
-      ],
-      active_profile_id: scopeState.active_profile_id ?? null
-    };
-    const nextConfig = withProfileScope(this.current, scope, nextScopeState);
-    this.current =
-      scopeState.active_profile_id === nextProfile.id
-        ? {
-            ...nextConfig,
-            ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
-          }
-        : nextConfig;
-    this.current = withRecordedRouteUrlPresets(
-      this.current,
-      routeUrlEntriesFromProfileConfig(profileConfig, scope, profileConfigToRuntime)
-    );
+    this.current = saveConfigProfile(this.current, scope, name, patch);
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -209,58 +150,7 @@ export class ConfigStore {
       nameOrPatch,
       maybePatch
     );
-    const scopeState = getProfileScopeState(this.current, scope);
-    const existingProfiles = scopeState.profiles ?? [];
-    const profile = existingProfiles.find((item) => item.id === profileId);
-    if (!profile) {
-      throw new ConfigError("Profile not found.");
-    }
-
-    if (!isRecord(patch)) {
-      throw new ConfigError("Profile config patch must be a JSON object.");
-    }
-
-    const trimmedName = typeof name === "string" ? name.trim() : profile.name;
-    if (trimmedName.length === 0) {
-      throw new ConfigError("Profile name is required.");
-    }
-
-    const duplicateName = existingProfiles.find(
-      (item) => item.id !== profileId && item.name === trimmedName
-    );
-    if (duplicateName) {
-      throw new ConfigError("Profile name already exists.");
-    }
-
-    const now = new Date().toISOString();
-    const profileConfig = updateScopedProfileConfig(profile.config, patch, scope);
-    validateProfileConfig(profileConfig, scope);
-    const nextScopeState = {
-      profiles: existingProfiles.map((item) =>
-        item.id === profileId
-          ? {
-              ...item,
-              name: trimmedName,
-              updated_at: now,
-              config: cloneProfileConfig(profileConfig)
-            }
-          : cloneProfile(item)
-      ),
-      active_profile_id: scopeState.active_profile_id ?? null
-    };
-
-    const nextConfig = withProfileScope(this.current, scope, nextScopeState);
-    this.current =
-      scopeState.active_profile_id === profileId
-        ? {
-            ...nextConfig,
-            ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
-          }
-        : nextConfig;
-    this.current = withRecordedRouteUrlPresets(
-      this.current,
-      routeUrlEntriesFromProfileConfig(profileConfig, scope, profileConfigToRuntime)
-    );
+    this.current = updateConfigProfile(this.current, scope, profileId, name, patch);
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -272,35 +162,7 @@ export class ConfigStore {
     maybeName?: string
   ): Promise<CompactGateConfig> {
     const { scope, profileId, name } = normalizeProfileIdNameArgs(scopeOrProfileId, profileIdOrName, maybeName);
-    const scopeState = getProfileScopeState(this.current, scope);
-    const existingProfiles = scopeState.profiles ?? [];
-    const profile = existingProfiles.find((item) => item.id === profileId);
-    if (!profile) {
-      throw new ConfigError("Profile not found.");
-    }
-
-    const now = new Date().toISOString();
-    const trimmedName = (name?.trim() || `${profile.name} copy`).trim();
-    if (trimmedName.length === 0) {
-      throw new ConfigError("Profile name is required.");
-    }
-
-    if (existingProfiles.some((item) => item.name === trimmedName)) {
-      throw new ConfigError("Profile name already exists.");
-    }
-
-    const nextProfile: SavedConfigProfile = {
-      id: createProfileId(`${scope}-${trimmedName}`, now),
-      name: trimmedName,
-      created_at: now,
-      updated_at: now,
-      config: cloneProfileConfig(profile.config)
-    };
-
-    this.current = withProfileScope(this.current, scope, {
-      profiles: [...existingProfiles.map(cloneProfile), nextProfile],
-      active_profile_id: scopeState.active_profile_id ?? null
-    });
+    this.current = duplicateConfigProfile(this.current, scope, profileId, name);
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -308,59 +170,14 @@ export class ConfigStore {
 
   async deleteProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
     const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
-    const scopeState = getProfileScopeState(this.current, scope);
-    const existingProfiles = scopeState.profiles ?? [];
-    const profile = existingProfiles.find((item) => item.id === profileId);
-    if (!profile) {
-      throw new ConfigError("Profile not found.");
-    }
-
-    this.current = withProfileScope(this.current, scope, {
-      profiles: existingProfiles.filter((item) => item.id !== profileId).map(cloneProfile),
-      active_profile_id:
-        scopeState.active_profile_id === profileId
-          ? null
-          : scopeState.active_profile_id ?? null
-    });
+    this.current = deleteConfigProfile(this.current, scope, profileId);
     validateConfig(this.current);
     await this.save();
     return this.get();
   }
 
   async reorderProfiles(scope: ConfigProfileScope, orderedProfileIds: string[]): Promise<CompactGateConfig> {
-    if (!Array.isArray(orderedProfileIds) || orderedProfileIds.some((id) => typeof id !== "string")) {
-      throw new ConfigError("Profile reorder requires a profile_id list.");
-    }
-
-    const scopeState = getProfileScopeState(this.current, scope);
-    const existingProfiles = scopeState.profiles ?? [];
-    if (orderedProfileIds.length !== existingProfiles.length) {
-      throw new ConfigError("Profile reorder must include every profile exactly once.");
-    }
-
-    const profilesById = new Map(existingProfiles.map((profile) => [profile.id, profile]));
-    const seenIds = new Set<string>();
-    const reorderedProfiles: SavedConfigProfile[] = [];
-
-    for (const rawId of orderedProfileIds) {
-      const profileId = rawId.trim();
-      if (!profileId || seenIds.has(profileId)) {
-        throw new ConfigError("Profile reorder ids must be unique.");
-      }
-
-      const profile = profilesById.get(profileId);
-      if (!profile) {
-        throw new ConfigError("Profile reorder ids must match existing profiles.");
-      }
-
-      seenIds.add(profileId);
-      reorderedProfiles.push(cloneProfile(profile));
-    }
-
-    this.current = withProfileScope(this.current, scope, {
-      profiles: reorderedProfiles,
-      active_profile_id: scopeState.active_profile_id ?? null
-    });
+    this.current = reorderConfigProfiles(this.current, scope, orderedProfileIds);
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -368,26 +185,7 @@ export class ConfigStore {
 
   async applyProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
     const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
-    const scopeState = getProfileScopeState(this.current, scope);
-    const profile = (scopeState.profiles ?? []).find((item) => item.id === profileId);
-    if (!profile) {
-      throw new ConfigError("Profile not found.");
-    }
-
-    const nextRuntime = mergeRuntimeForProfileScope(this.current, profile.config, scope);
-    validateRuntimeConfig(nextRuntime);
-    this.current = withProfileScope(
-      {
-        ...nextRuntime,
-        profile_scopes: this.current.profile_scopes,
-        route_url_presets: this.current.route_url_presets
-      },
-      scope,
-      {
-        profiles: scopeState.profiles ?? [],
-        active_profile_id: profile.id
-      }
-    );
+    this.current = applyConfigProfile(this.current, scope, profileId);
     validateConfig(this.current);
     await this.save();
     return this.get();
@@ -404,13 +202,7 @@ export class ConfigStore {
   }
 
   private async save(): Promise<void> {
-    await fs.mkdir(path.dirname(this.configPath), { recursive: true });
-    await fs.writeFile(
-      this.configPath,
-      `${JSON.stringify(this.current, null, 2)}\n`,
-      "utf8"
-    );
-    this.lastSavedAt = new Date().toISOString();
+    this.lastSavedAt = await writeConfigFile(this.configPath, this.current);
   }
 }
 

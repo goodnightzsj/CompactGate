@@ -1,10 +1,6 @@
-import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import type {
-  CompactGateConfig,
-  RequestTransport,
-  RouteKind
-} from "../shared/types.js";
+import type { RouteKind } from "../shared/types.js";
 import type { ConfigStore } from "./config.js";
 import {
   buildAnthropicUpstreamHeaders,
@@ -14,25 +10,25 @@ import {
   rewriteClaudeModelBody
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
-import { serializeHeaders } from "./debug-capture.js";
 import {
   copyResponseHeaders,
-  endpointFromPath,
   RequestBodyTooLargeError,
   readRawBody,
   sendJson,
   summaryForError
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
-import { addLog, emptyUsageMetrics, persistCapture } from "./proxy-support.js";
+import {
+  applyOpenAiProxyUpstreamResult,
+  createOpenAiProxyTransactionState,
+  finalizeOpenAiProxyTransaction
+} from "./openai-proxy-transaction.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
   extractSourceModel,
-  responseTransport,
-  type RequestMetadata,
-  type TokenUsageMetrics
+  responseTransport
 } from "./usage.js";
 import {
   sendBufferedUpstreamRequest,
@@ -57,32 +53,20 @@ export async function proxyClaudeRequest(
   const requestId = randomUUID();
   const upstreamPath = stripAnthropicProxyPrefix(url.pathname);
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
-  let requestHeaders: Record<string, string> = {};
-  let upstreamBody: Buffer = Buffer.alloc(0);
-  let status = 502;
-  let errorSummary: string | null = null;
-  let rawBody: Buffer = Buffer.alloc(0);
-  let responseBody: Buffer = Buffer.alloc(0);
-  let responseHeaders: IncomingHttpHeaders = {};
-  let requestMetadata: RequestMetadata | null = null;
-  let requestType: RequestTransport = "http";
-  let firstTokenMs: number | null = null;
-  let sourceModel: string | null = null;
-  let targetModel: string | null = null;
-  let usage: TokenUsageMetrics = emptyUsageMetrics();
+  const transaction = createOpenAiProxyTransactionState();
 
   try {
-    rawBody = await readRawBody(req, 100 * 1024 * 1024);
-    requestMetadata = extractRequestMetadata(upstreamPath, rawBody);
-    requestType = requestMetadata.requestType;
-    sourceModel = extractSourceModel(rawBody);
-    targetModel = resolveClaudeMappedModel(sourceModel, config) ?? sourceModel;
+    transaction.rawBody = await readRawBody(req, 100 * 1024 * 1024);
+    transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
+    transaction.requestType = transaction.requestMetadata.requestType;
+    transaction.sourceModel = extractSourceModel(transaction.rawBody);
+    transaction.targetModel = resolveClaudeMappedModel(transaction.sourceModel, config) ?? transaction.sourceModel;
     upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
-    upstreamBody = rewriteClaudeModelBody(rawBody, targetModel ?? "");
+    transaction.upstreamBody = rewriteClaudeModelBody(transaction.rawBody, transaction.targetModel ?? "");
     const auth = resolveClaudeCredential(config);
-    requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
-    if (upstreamBody !== rawBody) {
-      delete requestHeaders["content-encoding"];
+    transaction.requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
+    if (transaction.upstreamBody !== transaction.rawBody) {
+      delete transaction.requestHeaders["content-encoding"];
     }
 
     let finalResult: BufferedUpstreamResult | null = null;
@@ -95,8 +79,8 @@ export async function proxyClaudeRequest(
         startedAt,
         timeoutMs: config.timeouts.claude_ms,
         timeoutMessage: "Claude upstream request timed out.",
-        requestHeaders,
-        body: upstreamBody,
+        requestHeaders: transaction.requestHeaders,
+        body: transaction.upstreamBody,
         extraResponseHeaders: {
           "x-compactgate-route": route,
           "x-compactgate-claude-route": "primary",
@@ -106,8 +90,7 @@ export async function proxyClaudeRequest(
       });
 
       finalResult = result;
-      status = result.status;
-      errorSummary = result.errorSummary;
+      applyOpenAiProxyUpstreamResult(transaction, result);
     }
 
     if (!finalResult) {
@@ -125,68 +108,46 @@ export async function proxyClaudeRequest(
       res.end(completedResult.responseBody);
     }
 
-    status = completedResult.status;
-    errorSummary = completedResult.errorSummary;
-    responseBody = completedResult.responseBody;
-    responseHeaders = completedResult.responseHeaders;
-    requestType = responseTransport(responseHeaders) ?? requestType;
-    firstTokenMs = completedResult.firstTokenMs;
-    usage = extractResponseUsage(responseBody, responseHeaders);
+    applyOpenAiProxyUpstreamResult(transaction, completedResult);
+    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
+    transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
   } catch (error) {
-    status = error instanceof RequestBodyTooLargeError ? 413 : 502;
-    errorSummary = summaryForError(error);
+    transaction.status = error instanceof RequestBodyTooLargeError ? 413 : 502;
+    transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
-      sendJson(res, status, { error: errorSummary, request_id: requestId });
+      sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
     } else {
-      res.destroy(error instanceof Error ? error : new Error(errorSummary));
+      res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
     const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");
-    const logEntry = addLog(logger, {
+    await finalizeOpenAiProxyTransaction({
+      logger,
+      captureWriter,
+      studioEvents,
       route,
       req,
       url: logUrl,
-      status,
+      status: transaction.status,
       startedAt,
-      endpoint: requestMetadata?.endpoint ?? endpointFromPath(upstreamPath),
-      requestType,
-      reasoningEffort: requestMetadata?.reasoningEffort ?? null,
-      requestSummary: requestMetadata?.requestSummary ?? null,
-      upstreamHost: upstream.host,
+      requestMetadata: transaction.requestMetadata,
+      requestType: transaction.requestType,
+      upstream,
       requestId,
-      sourceModel,
-      targetModel,
-      firstTokenMs,
-      usage,
-      errorSummary
+      sourceModel: transaction.sourceModel,
+      targetModel: transaction.targetModel,
+      firstTokenMs: transaction.firstTokenMs,
+      usage: transaction.usage,
+      errorSummary: transaction.errorSummary,
+      compactBridgeReplacements: transaction.compactBridgeReplacements,
+      rawBody: transaction.rawBody,
+      requestHeaders: transaction.requestHeaders,
+      upstreamBody: transaction.upstreamBody.byteLength > 0
+        ? transaction.upstreamBody
+        : transaction.rawBody,
+      responseBody: transaction.responseBody,
+      responseHeaders: transaction.responseHeaders
     });
-    studioEvents.broadcastLog(logEntry);
-
-    await persistCapture(captureWriter, () => ({
-      request_id: requestId,
-      time: new Date().toISOString(),
-      route,
-      method: req.method ?? "GET",
-      path: `${upstreamPath}${url.search}`,
-      upstream_url: upstream.toString(),
-      upstream_host: upstream.host,
-      source_model: sourceModel,
-      target_model: targetModel,
-      compact_bridge_replacements: 0,
-      incoming_request: {
-        headers: serializeHeaders(req.headers),
-        body: captureWriter.serializeBody(rawBody)
-      },
-      upstream_request: {
-        headers: serializeHeaders(requestHeaders),
-        body: captureWriter.serializeBody(upstreamBody.byteLength > 0 ? upstreamBody : rawBody)
-      },
-      upstream_response: {
-        status,
-        headers: serializeHeaders(responseHeaders),
-        body: captureWriter.serializeBody(responseBody)
-      }
-    }));
   }
 }
 

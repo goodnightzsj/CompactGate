@@ -10,9 +10,11 @@
     "start": "node dist/server/main.js",
     "restart": "bash scripts/restart-service.sh",
     "service:restart": "bash scripts/restart-service.sh",
-    "test": "vitest run test/config.test.ts test/routing.test.ts test/ui-routing.test.ts test/primary-failover.test.ts test/logger.test.ts test/upstream-client.test.ts test/server.test.ts test/usage.test.ts",
+    "test": "vitest run",
+    "test:scenarios": "vitest run scenarios",
     "test:isolated": "node scripts/isolated-e2e.mjs",
     "test:watch": "vitest",
+    "typecheck:strict": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "stop": "bash scripts/stop-service.sh",
     "service:stop": "bash scripts/stop-service.sh"
   },

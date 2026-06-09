@@ -7,9 +7,13 @@ import { normalizeRequestContext } from "./primary-failover-context.js";
 import {
   classifyPrimaryRouteResult,
   isReconnectLikePrimaryFailure,
-  rateLimitCooldownMs,
-  readResponseId
+  rateLimitCooldownMs
 } from "./primary-failover-result.js";
+import {
+  PrimaryProfileHealthStore
+} from "./primary-failover-health.js";
+import { selectPrimaryCandidate } from "./primary-failover-policy.js";
+import { PrimaryStickinessStore } from "./primary-failover-stickiness.js";
 import type {
   PrimaryCandidate,
   PrimaryProfileHealthSnapshot,
@@ -32,46 +36,10 @@ export type {
 } from "./primary-failover-types.js";
 
 const EMPTY_STREAM_FAILURE_THRESHOLD = 4;
-const SESSION_STICKY_TTL_MS = 30 * 60 * 1000;
-const CONTINUATION_STICKY_TTL_MS = 2 * 60 * 60 * 1000;
 const TRANSIENT_COOLDOWN_MS = 60 * 1000;
 const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
-const TOP_K_SCORE_WINDOW = 100;
-const DEFAULT_MAX_STICKY_ENTRIES = 2_048;
-const DEFAULT_MAX_MODEL_COOLDOWN_ENTRIES = 512;
-
-interface ProfileHealth {
-  version: number;
-  inFlight: number;
-  successes: number;
-  failures: number;
-  transientFailures: number;
-  emptyStreamFailures: number;
-  rateLimitFailures: number;
-  cooldownUntil: number;
-  quarantineUntil: number;
-  rateLimitUntil: number;
-  lastFirstTokenMs: number | null;
-  lastSelectedAt: number;
-  modelCooldowns: Map<string, ModelCooldown>;
-}
-
-interface ModelCooldown {
-  until: number;
-  reason: string;
-}
-
-interface StickyEntry {
-  profileId: string;
-  expiresAt: number;
-}
-
-interface ScoredCandidate {
-  candidate: PrimaryCandidate;
-  score: number;
-}
 
 interface PrimaryFailoverOptions {
   now?: () => number;
@@ -83,20 +51,16 @@ interface PrimaryFailoverOptions {
 export class PrimaryFailoverState {
   private signature = "";
   private generation = 0;
-  private readonly health = new Map<string, ProfileHealth>();
-  private readonly sessionStickiness = new Map<string, StickyEntry>();
-  private readonly continuationStickiness = new Map<string, StickyEntry>();
-  private readonly compactionStateStickiness = new Map<string, StickyEntry>();
+  private readonly health: PrimaryProfileHealthStore;
+  private readonly stickiness: PrimaryStickinessStore;
   private readonly now: () => number;
   private readonly random: () => number;
-  private readonly maxStickyEntries: number;
-  private readonly maxModelCooldownEntries: number;
 
   constructor(options: PrimaryFailoverOptions = {}) {
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
-    this.maxStickyEntries = normalizeMaxEntries(options.maxStickyEntries);
-    this.maxModelCooldownEntries = normalizeMaxEntries(options.maxModelCooldownEntries, DEFAULT_MAX_MODEL_COOLDOWN_ENTRIES);
+    this.health = new PrimaryProfileHealthStore(options.maxModelCooldownEntries);
+    this.stickiness = new PrimaryStickinessStore(options.maxStickyEntries);
   }
 
   select(
@@ -193,11 +157,10 @@ export class PrimaryFailoverState {
       case "model_incompatible": {
         const model = selection.context.model;
         if (model) {
-          rememberMapEntry(health.modelCooldowns, model, {
+          this.health.rememberModelCooldown(health, model, {
             until: now + MODEL_DISABLE_MS,
             reason: result.errorSummary ?? `HTTP ${result.status}`
           });
-          enforceMaxEntries(health.modelCooldowns, this.maxModelCooldownEntries);
         } else {
           health.cooldownUntil = Math.max(health.cooldownUntil, now + TRANSIENT_COOLDOWN_MS);
         }
@@ -211,20 +174,7 @@ export class PrimaryFailoverState {
   }
 
   getHealthSnapshot(): PrimaryProfileHealthSnapshot[] {
-    return [...this.health.entries()].map(([profileId, health]) => ({
-      profileId,
-      inFlight: health.inFlight,
-      transientFailures: health.transientFailures,
-      emptyStreamFailures: health.emptyStreamFailures,
-      cooldownUntil: health.cooldownUntil,
-      quarantineUntil: health.quarantineUntil,
-      rateLimitUntil: health.rateLimitUntil,
-      modelCooldowns: [...health.modelCooldowns.entries()].map(([model, cooldown]) => ({
-        model,
-        until: cooldown.until,
-        reason: cooldown.reason
-      }))
-    }));
+    return this.health.snapshot();
   }
 
   private selectInternal(
@@ -250,23 +200,29 @@ export class PrimaryFailoverState {
       this.signature = signature;
       this.generation += 1;
       this.health.clear();
-      this.sessionStickiness.clear();
-      this.continuationStickiness.clear();
-      this.compactionStateStickiness.clear();
+      this.stickiness.clear();
     }
 
-    this.reconcileHealth(candidates);
+    this.health.reconcile(candidates);
     const now = this.now();
     this.cleanupExpiredState(now);
 
-    const selected =
-      this.selectStickyCandidate(candidates, normalizedContext, now) ??
-      this.selectScoredCandidate(candidates, normalizedContext, now);
-    const health = this.healthFor(selected.id);
+    const selected = selectPrimaryCandidate({
+      candidates,
+      context: normalizedContext,
+      now,
+      random: this.random,
+      healthForProfile: (profileId) => this.health.forProfile(profileId),
+      blockedUntil: (candidate, candidateContext, candidateNow) =>
+        this.blockedUntil(candidate, candidateContext, candidateNow),
+      stickyProfileId: (isUsable) =>
+        this.stickiness.selectProfileId(normalizedContext, isUsable)
+    });
+    const health = this.health.forProfile(selected.id);
     if (reserve) {
       health.inFlight += 1;
       health.lastSelectedAt = now;
-      this.rememberRequestStickiness(normalizedContext, selected.id, now);
+      this.stickiness.rememberRequest(normalizedContext, selected.id, now);
     }
 
     return {
@@ -279,194 +235,17 @@ export class PrimaryFailoverState {
     };
   }
 
-  private reconcileHealth(candidates: PrimaryCandidate[]): void {
-    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-    for (const id of [...this.health.keys()]) {
-      if (!candidateIds.has(id)) {
-        this.health.delete(id);
-      }
-    }
-    for (const candidate of candidates) {
-      this.healthFor(candidate.id);
-    }
-  }
-
-  private selectStickyCandidate(
-    candidates: PrimaryCandidate[],
-    context: Required<PrimaryRouteRequestContext>,
-    now: number
-  ): PrimaryCandidate | null {
-    if (context.previousResponseId) {
-      const sticky = this.continuationStickiness.get(context.previousResponseId);
-      const candidate = sticky
-        ? this.usableCandidateById(candidates, sticky.profileId, context, now)
-        : null;
-      if (candidate) {
-        return candidate;
-      }
-    }
-
-    if (context.compactionStateKey) {
-      const sticky = this.compactionStateStickiness.get(context.compactionStateKey);
-      const candidate = sticky
-        ? this.usableCandidateById(candidates, sticky.profileId, context, now)
-        : null;
-      if (candidate) {
-        return candidate;
-      }
-    }
-
-    if (context.sessionKey) {
-      const sticky = this.sessionStickiness.get(context.sessionKey);
-      const candidate = sticky
-        ? this.usableCandidateById(candidates, sticky.profileId, context, now)
-        : null;
-      if (candidate) {
-        return candidate;
-      }
-    }
-
-    return null;
-  }
-
-  private selectScoredCandidate(
-    candidates: PrimaryCandidate[],
-    context: Required<PrimaryRouteRequestContext>,
-    now: number
-  ): PrimaryCandidate {
-    const eligible = candidates.filter((candidate) => this.isCandidateEligible(candidate, context, now));
-    const pool = eligible.length > 0
-      ? eligible
-      : [...candidates].sort((left, right) => {
-          const leftUntil = this.blockedUntil(left, context, now);
-          const rightUntil = this.blockedUntil(right, context, now);
-          return leftUntil === rightUntil ? left.order - right.order : leftUntil - rightUntil;
-        });
-    const scored = pool
-      .map((candidate) => ({
-        candidate,
-        score: this.scoreCandidate(candidate, context, now)
-      }))
-      .sort((left, right) => {
-        if (right.score !== left.score) {
-          return right.score - left.score;
-        }
-        return left.candidate.order - right.candidate.order;
-      });
-    const best = scored[0];
-    if (!best) {
-      return candidates[0];
-    }
-
-    const topK = scored
-      .filter((candidate) => best.score - candidate.score <= TOP_K_SCORE_WINDOW)
-      .slice(0, 3);
-    if (topK.length <= 1) {
-      return best.candidate;
-    }
-
-    return this.weightedChoice(topK);
-  }
-
-  private scoreCandidate(
-    candidate: PrimaryCandidate,
-    _context: Required<PrimaryRouteRequestContext>,
-    _now: number
-  ): number {
-    const health = this.healthFor(candidate.id);
-    const total = health.successes + health.failures;
-    const errorRate = total > 0 ? health.failures / total : 0;
-    const latencyPenalty = health.lastFirstTokenMs === null
-      ? 0
-      : Math.min(200, Math.round(health.lastFirstTokenMs / 100));
-
-    return (
-      10_000 -
-      candidate.order * 500 -
-      health.inFlight * 80 -
-      health.transientFailures * 40 -
-      Math.round(errorRate * 250) -
-      latencyPenalty +
-      (candidate.active ? 1_000 : 0)
-    );
-  }
-
-  private weightedChoice(candidates: ScoredCandidate[]): PrimaryCandidate {
-    const minScore = Math.min(...candidates.map((candidate) => candidate.score));
-    const weights = candidates.map((candidate) => Math.max(1, candidate.score - minScore + 1));
-    const total = weights.reduce((sum, weight) => sum + weight, 0);
-    let roll = this.random() * total;
-    for (let index = 0; index < candidates.length; index += 1) {
-      roll -= weights[index];
-      if (roll <= 0) {
-        return candidates[index].candidate;
-      }
-    }
-
-    return candidates[0].candidate;
-  }
-
-  private usableCandidateById(
-    candidates: PrimaryCandidate[],
-    profileId: string,
-    context: Required<PrimaryRouteRequestContext>,
-    now: number
-  ): PrimaryCandidate | null {
-    const candidate = candidates.find((item) => item.id === profileId);
-    if (!candidate || !this.isCandidateEligible(candidate, context, now)) {
-      return null;
-    }
-
-    return candidate;
-  }
-
-  private isCandidateEligible(
-    candidate: PrimaryCandidate,
-    context: Required<PrimaryRouteRequestContext>,
-    now: number
-  ): boolean {
-    return this.blockedUntil(candidate, context, now) <= now;
-  }
-
   private blockedUntil(
     candidate: PrimaryCandidate,
     context: Required<PrimaryRouteRequestContext>,
     now: number
   ): number {
-    const health = this.healthFor(candidate.id);
-    const model = context.model;
-    const modelCooldown = model ? health.modelCooldowns.get(model)?.until ?? 0 : 0;
-    if (model && modelCooldown > 0 && modelCooldown <= now) {
-      health.modelCooldowns.delete(model);
-    }
-
-    return Math.max(
-      health.cooldownUntil,
-      health.quarantineUntil,
-      health.rateLimitUntil,
-      modelCooldown
-    );
+    return this.health.blockedUntil(candidate.id, context.model, now);
   }
 
-  private rememberRequestStickiness(
-    context: Required<PrimaryRouteRequestContext>,
-    profileId: string,
-    now: number
-  ): void {
-    if (context.sessionKey) {
-      rememberStickyEntry(this.sessionStickiness, context.sessionKey, {
-        profileId,
-        expiresAt: now + SESSION_STICKY_TTL_MS
-      });
-      enforceMaxEntries(this.sessionStickiness, this.maxStickyEntries);
-    }
-    if (context.previousResponseId) {
-      rememberStickyEntry(this.continuationStickiness, context.previousResponseId, {
-        profileId,
-        expiresAt: now + CONTINUATION_STICKY_TTL_MS
-      });
-      enforceMaxEntries(this.continuationStickiness, this.maxStickyEntries);
-    }
+  private cleanupExpiredState(now: number): void {
+    this.stickiness.cleanup(now);
+    this.health.cleanupExpiredModelCooldowns(now);
   }
 
   private rememberResponseStickiness(
@@ -474,70 +253,7 @@ export class PrimaryFailoverState {
     result: PrimaryRouteResult,
     now: number
   ): void {
-    if (!selection.profileId) {
-      return;
-    }
-
-    const responseId = readResponseId(result);
-    if (responseId) {
-      rememberStickyEntry(this.continuationStickiness, responseId, {
-        profileId: selection.profileId,
-        expiresAt: now + CONTINUATION_STICKY_TTL_MS
-      });
-      enforceMaxEntries(this.continuationStickiness, this.maxStickyEntries);
-    }
-    if (selection.context.sessionKey) {
-      rememberStickyEntry(this.sessionStickiness, selection.context.sessionKey, {
-        profileId: selection.profileId,
-        expiresAt: now + SESSION_STICKY_TTL_MS
-      });
-      enforceMaxEntries(this.sessionStickiness, this.maxStickyEntries);
-    }
-    if (selection.context.compactionStateKey) {
-      rememberStickyEntry(this.compactionStateStickiness, selection.context.compactionStateKey, {
-        profileId: selection.profileId,
-        expiresAt: now + CONTINUATION_STICKY_TTL_MS
-      });
-      enforceMaxEntries(this.compactionStateStickiness, this.maxStickyEntries);
-    }
-  }
-
-  private cleanupExpiredState(now: number): void {
-    cleanupStickyMap(this.sessionStickiness, now);
-    cleanupStickyMap(this.continuationStickiness, now);
-    cleanupStickyMap(this.compactionStateStickiness, now);
-    for (const health of this.health.values()) {
-      for (const [model, cooldown] of health.modelCooldowns.entries()) {
-        if (cooldown.until <= now) {
-          health.modelCooldowns.delete(model);
-        }
-      }
-    }
-  }
-
-  private healthFor(profileId: string): ProfileHealth {
-    const existing = this.health.get(profileId);
-    if (existing) {
-      return existing;
-    }
-
-    const created: ProfileHealth = {
-      version: 0,
-      inFlight: 0,
-      successes: 0,
-      failures: 0,
-      transientFailures: 0,
-      emptyStreamFailures: 0,
-      rateLimitFailures: 0,
-      cooldownUntil: 0,
-      quarantineUntil: 0,
-      rateLimitUntil: 0,
-      lastFirstTokenMs: null,
-      lastSelectedAt: 0,
-      modelCooldowns: new Map()
-    };
-    this.health.set(profileId, created);
-    return created;
+    this.stickiness.rememberResponse(selection, result, now);
   }
 }
 
@@ -553,39 +269,4 @@ function normalizeResult(
   }
 
   return resultOrStatus;
-}
-
-function cleanupStickyMap(map: Map<string, StickyEntry>, now: number): void {
-  for (const [key, entry] of map.entries()) {
-    if (entry.expiresAt <= now) {
-      map.delete(key);
-    }
-  }
-}
-
-function rememberMapEntry<Value>(map: Map<string, Value>, key: string, entry: Value): void {
-  map.delete(key);
-  map.set(key, entry);
-}
-
-function rememberStickyEntry(map: Map<string, StickyEntry>, key: string, entry: StickyEntry): void {
-  rememberMapEntry(map, key, entry);
-}
-
-function enforceMaxEntries<Value>(map: Map<string, Value>, maxEntries: number): void {
-  while (map.size > maxEntries) {
-    const oldestKey = map.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
-}
-
-function normalizeMaxEntries(value: number | undefined, fallback = DEFAULT_MAX_STICKY_ENTRIES): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
 }
