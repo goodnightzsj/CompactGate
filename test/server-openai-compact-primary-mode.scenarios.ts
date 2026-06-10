@@ -55,7 +55,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("does not arm compact follow-up routing when compact requests reuse primary", async () => {
+  it("keeps primary-mode compact follow-ups on primary without bridge rewrite", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const primary = await startCapturedOpenAiUpstream(primaryRequests, (res) => writeJson(res, {

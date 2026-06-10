@@ -163,12 +163,6 @@ async function proxyPrimaryRequest(
     if (route === "primary" && transaction.requestMetadata.requestType === "stream") {
       transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
     }
-    if (route === "compact" && transaction.status >= 200 && transaction.status < 300 && plan.compactBridgeScope) {
-      compactionBridge.storeCompactResponse(transaction.responseBody, {
-        armFollowUp: false,
-        scope: plan.compactBridgeScope
-      });
-    }
   } catch (error) {
     transaction.status = error instanceof RequestBodyTooLargeError ? 413 : 502;
     transaction.errorSummary = summaryForError(error);
@@ -301,7 +295,6 @@ async function proxyCompactRequest(
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
     if (transaction.status >= 200 && transaction.status < 300 && plan.compactBridgeScope) {
       compactionBridge.storeCompactResponse(transaction.responseBody, {
-        armFollowUp: config.compact.upstream_mode === "split",
         scope: plan.compactBridgeScope
       });
     }

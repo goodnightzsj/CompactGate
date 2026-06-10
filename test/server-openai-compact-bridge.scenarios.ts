@@ -133,7 +133,7 @@ function postJsonUntilClosed(
 }
 
 describe("CompactGate OpenAI routing", () => {
-  it("expires pending compaction bridge state after its bounded lifetime", () => {
+  it("expires cached compaction bridge fallback after its bounded lifetime", () => {
     let now = 1_000;
     const scope = {
       compactUpstream: "http://compact.example/v1",
@@ -165,14 +165,13 @@ describe("CompactGate OpenAI routing", () => {
     store.storeCompactResponse(compactResponseBody, { scope });
     now += 1_001;
 
-    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(false);
     expect(store.rewritePrimaryBody(followUpBody, scope)).toMatchObject({
       body: followUpBody,
       replacedCompactionCount: 0
     });
   });
 
-  it("does not arm compaction bridge state from oversized gzip compact responses", () => {
+  it("does not cache fallback state from oversized gzip compact responses", () => {
     const scope = {
       compactUpstream: "http://compact.example/v1",
       sourceModel: "gpt-5.5",
@@ -201,14 +200,13 @@ describe("CompactGate OpenAI routing", () => {
 
     store.storeCompactResponse(compactResponseBody, { scope });
 
-    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(false);
     expect(store.rewritePrimaryBody(followUpBody, scope)).toMatchObject({
       body: followUpBody,
       replacedCompactionCount: 0
     });
   });
 
-  it("consumes armed compact follow-up state once before using cached primary fallback", () => {
+  it("bridges cached compaction fallback directly into primary requests", () => {
     const scope = {
       compactUpstream: "http://compact.example/v1",
       sourceModel: "gpt-5.5",
@@ -224,26 +222,23 @@ describe("CompactGate OpenAI routing", () => {
         },
         {
           type: "compaction",
-          encrypted_content: "ONE_SHOT_COMPACT_STATE"
+          encrypted_content: "CACHED_COMPACT_STATE"
         }
       ]
     }));
     const followUpBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
       input: [
-        { type: "compaction", encrypted_content: "ONE_SHOT_COMPACT_STATE" },
+        { type: "compaction", encrypted_content: "CACHED_COMPACT_STATE" },
         {
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: "continue after one shot" }]
+          content: [{ type: "input_text", text: "continue after compact" }]
         }
       ]
     }));
 
     store.storeCompactResponse(compactResponseBody, { scope });
-
-    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(true);
-    expect(store.consumeCompactFollowUp(followUpBody, scope)).toBe(false);
 
     const rewritten = store.rewritePrimaryBody(followUpBody, scope);
     expect(rewritten.replacedCompactionCount).toBe(1);
@@ -256,12 +251,12 @@ describe("CompactGate OpenAI routing", () => {
       {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "continue after one shot" }]
+        content: [{ type: "input_text", text: "continue after compact" }]
       }
     ]);
   });
 
-  it("isolates compact follow-up and fallback state by upstream and model scope", () => {
+  it("isolates cached fallback state by upstream and model scope", () => {
     const cachedScope = {
       compactUpstream: "http://compact-a.example/v1",
       sourceModel: "gpt-5.5",
@@ -293,12 +288,10 @@ describe("CompactGate OpenAI routing", () => {
 
     store.storeCompactResponse(compactResponseBody, { scope: cachedScope });
 
-    expect(store.consumeCompactFollowUp(followUpBody, mismatchedScope)).toBe(false);
     expect(store.rewritePrimaryBody(followUpBody, mismatchedScope)).toMatchObject({
       body: followUpBody,
       replacedCompactionCount: 0
     });
-    expect(store.consumeCompactFollowUp(followUpBody, cachedScope)).toBe(true);
 
     const rewritten = store.rewritePrimaryBody(followUpBody, cachedScope);
     expect(rewritten.replacedCompactionCount).toBe(1);
@@ -344,7 +337,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("routes the first split-mode compaction follow-up to compact once then bridges on primary", async () => {
+  it("routes the first split-mode compaction follow-up to primary with cached bridge", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
@@ -390,21 +383,13 @@ describe("CompactGate OpenAI routing", () => {
         }
       ]
     });
-    const compactFollowUpResponse = await postJson(app.url, "/v1/responses", followUpBody);
-
-    expect(compactFollowUpResponse.status).toBe(200);
-    expect(compactFollowUpResponse.headers.get("x-compactgate-route")).toBe("compact");
-    await compactFollowUpResponse.text();
-    expect(primaryRequests).toHaveLength(0);
-    expect(compactRequests).toHaveLength(2);
-    expect(compactRequests[1].url).toBe("/v1/responses");
-    expect(JSON.parse(compactRequests[1].body)).toEqual(JSON.parse(followUpBody));
-
     const primaryResponse = await postJson(app.url, "/v1/responses", followUpBody);
 
     expect(primaryResponse.status).toBe(200);
     expect(primaryResponse.headers.get("x-compactgate-route")).toBe("primary");
+    await primaryResponse.text();
     expect(primaryRequests).toHaveLength(1);
+    expect(compactRequests).toHaveLength(1);
     const primaryCapture = primaryRequests[0];
     assertCaptured(primaryCapture);
 
@@ -425,9 +410,8 @@ describe("CompactGate OpenAI routing", () => {
     ]);
 
     const page = await fetchLogPage(app.url);
-    expect(page.logs.slice(0, 3).map((entry) => entry.route)).toEqual([
+    expect(page.logs.slice(0, 2).map((entry) => entry.route)).toEqual([
       "primary",
-      "compact",
       "compact"
     ]);
     expect(page.logs[0]).toMatchObject({
@@ -437,7 +421,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(page.logs[1]).toMatchObject({
       route: "compact",
-      endpoint: "/responses",
+      endpoint: "/responses/compact",
       upstream_host: new URL(compact.url).host
     });
   });
@@ -564,12 +548,6 @@ describe("CompactGate OpenAI routing", () => {
         }
       ]
     });
-    const compactFollowUpResponse = await postJson(app.url, "/v1/responses", followUpBody);
-
-    expect(compactFollowUpResponse.status).toBe(200);
-    expect(compactFollowUpResponse.headers.get("x-compactgate-route")).toBe("compact");
-    await compactFollowUpResponse.text();
-
     const primaryResponse = await postJson(app.url, "/v1/responses", followUpBody);
 
     expect(primaryResponse.status).toBe(200);

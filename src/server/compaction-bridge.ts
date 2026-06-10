@@ -28,8 +28,6 @@ const DEFAULT_MAX_BRIDGE_ENTRIES = 512;
 export class CompactionBridgeStore {
   private readonly fallbackItemsByKey = new Map<string, CachedFallbackItems>();
 
-  private readonly pendingCompactFollowUps = new Map<string, number>();
-
   private readonly now: () => number;
 
   private readonly ttlMs: number;
@@ -44,9 +42,8 @@ export class CompactionBridgeStore {
 
   storeCompactResponse(
     responseBody: Buffer,
-    options: { armFollowUp?: boolean; scope: CompactionBridgeScope }
+    options: { scope: CompactionBridgeScope }
   ): void {
-    const armFollowUp = options.armFollowUp ?? true;
     const parsed = parseJsonRecord(responseBody);
     const output = Array.isArray(parsed?.output) ? parsed.output : null;
     const now = this.now();
@@ -63,10 +60,6 @@ export class CompactionBridgeStore {
       }
 
       const key = compactionKey(options.scope, item.encrypted_content);
-      if (armFollowUp) {
-        rememberMapEntry(this.pendingCompactFollowUps, key, expiresAt);
-      }
-
       const fallbackItems = extractFallbackItems(output, item);
       if (fallbackItems.length === 0) {
         continue;
@@ -78,37 +71,7 @@ export class CompactionBridgeStore {
       });
     }
 
-    enforceMaxEntries(this.pendingCompactFollowUps, this.maxEntries);
     enforceMaxEntries(this.fallbackItemsByKey, this.maxEntries);
-  }
-
-  consumeCompactFollowUp(rawBody: Buffer, scope: CompactionBridgeScope): boolean {
-    const parsed = parseJsonRecord(rawBody);
-    const input = Array.isArray(parsed?.input) ? parsed.input : null;
-    const now = this.now();
-    this.pruneExpired(now);
-
-    if (!input) {
-      return false;
-    }
-
-    for (const item of input) {
-      if (!isCompactionItem(item)) {
-        continue;
-      }
-
-      const key = compactionKey(scope, item.encrypted_content);
-      const expiresAt = this.pendingCompactFollowUps.get(key);
-      if (!expiresAt || expiresAt <= now) {
-        this.pendingCompactFollowUps.delete(key);
-        continue;
-      }
-
-      this.pendingCompactFollowUps.delete(key);
-      return true;
-    }
-
-    return false;
   }
 
   rewritePrimaryBody(rawBody: Buffer, scope: CompactionBridgeScope): PrimaryBridgeResult {
@@ -158,12 +121,6 @@ export class CompactionBridgeStore {
   }
 
   private pruneExpired(now: number): void {
-    for (const [key, expiresAt] of this.pendingCompactFollowUps.entries()) {
-      if (expiresAt <= now) {
-        this.pendingCompactFollowUps.delete(key);
-      }
-    }
-
     for (const [key, fallback] of this.fallbackItemsByKey.entries()) {
       if (fallback.expiresAt <= now) {
         this.fallbackItemsByKey.delete(key);

@@ -384,8 +384,8 @@ Stream disconnected before completion: stream closed before response.completed
 
 如果 primary 上游收到原始 `type: "compaction"`，但不能验证其中的 `encrypted_content`，上游可能会返回 `invalid_encrypted_content`，并且响应流里没有 Codex 需要的 `response.completed` 事件，最终就会显示上面的断流错误。
 
-当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的 compaction 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会一次性走 compact 上游，后续普通请求再回到 primary。
+当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的可读 summary 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会继续走 primary，但 CompactGate 会先把可读 compact 状态转换成 assistant summary message，再转发给 primary。
 
-如果回到 primary 后仍需要修复，CompactGate 会把可读的 compact 状态转换成 assistant summary message，再转发给 primary。这个修复支持英文和中文等 Unicode 可读摘要，可以避免把可读摘要误当成不可解密的 compact 加密状态发给 primary。
+这个修复支持英文和中文等 Unicode 可读摘要，可以避免把可读摘要误当成不可解密的 compact 加密状态发给 primary。如果 compact 上游只返回不可读的加密状态，CompactGate 不能解密它，primary 仍可能无法恢复这段压缩上下文。
 
 如果你刚更新代码，请重新执行构建并重启 CompactGate，让运行中的 `dist/server/main.js` 加载新版本。

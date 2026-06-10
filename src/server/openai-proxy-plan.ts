@@ -53,24 +53,6 @@ export function buildPrimaryOpenAiProxyPlan({
 }): OpenAiProxyPlan {
   const sourceModel = extractJsonModel(rawBody).sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
-  const useCompactFollowUp =
-    config.compact.upstream_mode === "split" &&
-    compactionBridge.consumeCompactFollowUp(rawBody, compactBridgeScope);
-
-  if (useCompactFollowUp) {
-    return withRequestHeaders(headers, resolveRouteCredential("compact", config).apiKey ?? "", rawBody, {
-      route: "compact",
-      upstream: buildUpstreamUrl(compactUpstreamBaseUrl(config), url.pathname, url.search),
-      timeoutMs: config.timeouts.compact_ms,
-      timeoutMessage: "Compact upstream request timed out.",
-      upstreamBody: rawBody,
-      sourceModel,
-      targetModel: sourceModel,
-      compactBridgeReplacements: 0,
-      compactBridgeScope,
-      primarySelection: null
-    });
-  }
 
   const primarySelection = primaryFailover.select(
     config,
