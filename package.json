@@ -14,6 +14,8 @@
     "test:scenarios": "vitest run scenarios",
     "test:isolated": "node scripts/isolated-e2e.mjs",
     "test:watch": "vitest",
+    "lint:style": "node scripts/lint-style.mjs",
+    "check": "npm run lint:style && npm run typecheck:strict && npm test && npm run build",
     "typecheck:strict": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
     "stop": "bash scripts/stop-service.sh",
     "service:stop": "bash scripts/stop-service.sh"

@@ -9,6 +9,7 @@ import type {
   StatusLogCounts
 } from "../../shared/types.js";
 import { api } from "../shared/api.js";
+import { hasTokenDetails } from "./log-token-metrics.js";
 export {
   cacheCreationInputTokens,
   cacheReadInputTokens,
@@ -18,6 +19,7 @@ export {
   formatCacheHitRate,
   hasAdditiveCachedInput,
   hasAdditiveCachedOutput,
+  hasTokenDetails,
   totalInputTokens
 } from "./log-token-metrics.js";
 
@@ -33,7 +35,12 @@ export function modelReasoningLabel(entry: RequestLogEntry): string {
 }
 
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
-  return entry.status >= 400 || Boolean(entry.error_summary) ? "error" : "normal";
+  const hasStandaloneError = (entry.status >= 400 || Boolean(entry.error_summary)) && !hasTokenDetails(entry);
+  return hasStandaloneError ? "error" : "normal";
+}
+
+export function logStatusToneClass(entry: RequestLogEntry): "is-ok" | "is-err" {
+  return logStatusKind(entry) === "error" ? "is-err" : "is-ok";
 }
 
 export function buildHostFilterOptions(

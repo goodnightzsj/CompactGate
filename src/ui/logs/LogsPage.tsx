@@ -14,6 +14,7 @@ import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
   type HostFilterOption,
+  logStatusToneClass,
   modelReasoningLabel
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
@@ -145,7 +146,7 @@ export function LogsPage({
                             {hasRewrite && <small>→ {entry.target_model}</small>}
                           </LogTextTooltip>
                         </td>
-                        <td><span className={`log-status ${entry.status < 400 ? "is-ok" : "is-err"}`}>{entry.status}</span></td>
+                        <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
                         <td><LogTextTooltip className="log-cell-code" value={modelReasoningLabel(entry)} /></td>
                         <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
                         <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>

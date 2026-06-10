@@ -59,6 +59,8 @@ export class ConfigStore {
 
   private lastSavedAt: string | null = null;
 
+  private mutationQueue: Promise<void> = Promise.resolve();
+
   private constructor(
     private readonly configPath: string,
     initial: CompactGateConfig
@@ -79,7 +81,7 @@ export class ConfigStore {
     validateConfig(config);
     const store = new ConfigStore(loaded.resolvedPath, config);
     if (shouldPersistNormalizedProfiles) {
-      await store.save();
+      await store.persist(config);
     }
     return store;
   }
@@ -97,16 +99,14 @@ export class ConfigStore {
       throw new ConfigError("Config patch must be a JSON object.");
     }
 
-    const merged = mergeConfig(this.current, patch);
-    const next = withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
-      ...merged,
-      profiles: undefined,
-      active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
-    }), routeUrlEntriesFromRuntime(merged));
-    validateConfig(next);
-    this.current = next;
-    await this.save();
-    return this.get();
+    return this.mutate(() => {
+      const merged = mergeConfig(this.current, patch);
+      return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
+        ...merged,
+        profiles: undefined,
+        active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
+      }), routeUrlEntriesFromRuntime(merged));
+    });
   }
 
   async importConfig(value: unknown): Promise<CompactGateConfig> {
@@ -114,16 +114,14 @@ export class ConfigStore {
       throw new ConfigError("Imported config must be a JSON object.");
     }
 
-    const merged = mergeConfig(DEFAULT_CONFIG, value);
-    const imported = {
-      ...merged,
-      profiles: undefined,
-      active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
-    };
-    validateConfig(imported);
-    this.current = imported;
-    await this.save();
-    return this.get();
+    return this.mutate(() => {
+      const merged = mergeConfig(DEFAULT_CONFIG, value);
+      return {
+        ...merged,
+        profiles: undefined,
+        active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
+      };
+    });
   }
 
   async saveProfile(
@@ -132,10 +130,7 @@ export class ConfigStore {
     maybePatch?: unknown
   ): Promise<CompactGateConfig> {
     const { scope, name, patch } = normalizeProfileOperationArgs(scopeOrName, nameOrPatch, maybePatch);
-    this.current = saveConfigProfile(this.current, scope, name, patch);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => saveConfigProfile(this.current, scope, name, patch));
   }
 
   async updateProfile(
@@ -150,10 +145,7 @@ export class ConfigStore {
       nameOrPatch,
       maybePatch
     );
-    this.current = updateConfigProfile(this.current, scope, profileId, name, patch);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => updateConfigProfile(this.current, scope, profileId, name, patch));
   }
 
   async duplicateProfile(
@@ -162,33 +154,21 @@ export class ConfigStore {
     maybeName?: string
   ): Promise<CompactGateConfig> {
     const { scope, profileId, name } = normalizeProfileIdNameArgs(scopeOrProfileId, profileIdOrName, maybeName);
-    this.current = duplicateConfigProfile(this.current, scope, profileId, name);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => duplicateConfigProfile(this.current, scope, profileId, name));
   }
 
   async deleteProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
     const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
-    this.current = deleteConfigProfile(this.current, scope, profileId);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => deleteConfigProfile(this.current, scope, profileId));
   }
 
   async reorderProfiles(scope: ConfigProfileScope, orderedProfileIds: string[]): Promise<CompactGateConfig> {
-    this.current = reorderConfigProfiles(this.current, scope, orderedProfileIds);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => reorderConfigProfiles(this.current, scope, orderedProfileIds));
   }
 
   async applyProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
     const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
-    this.current = applyConfigProfile(this.current, scope, profileId);
-    validateConfig(this.current);
-    await this.save();
-    return this.get();
+    return this.mutate(() => applyConfigProfile(this.current, scope, profileId));
   }
 
   toPublicConfig(): PublicConfig {
@@ -201,8 +181,21 @@ export class ConfigStore {
     });
   }
 
-  private async save(): Promise<void> {
-    this.lastSavedAt = await writeConfigFile(this.configPath, this.current);
+  private async mutate(buildNext: () => CompactGateConfig): Promise<CompactGateConfig> {
+    const mutation = this.mutationQueue.catch(() => undefined).then(async () => {
+      const next = buildNext();
+      validateConfig(next);
+      return this.persist(next);
+    });
+    this.mutationQueue = mutation.then(() => undefined, () => undefined);
+    return mutation;
+  }
+
+  private async persist(next: CompactGateConfig): Promise<CompactGateConfig> {
+    const savedAt = await writeConfigFile(this.configPath, next);
+    this.current = next;
+    this.lastSavedAt = savedAt;
+    return this.get();
   }
 }
 

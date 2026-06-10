@@ -17,7 +17,8 @@ export function cloneRuntimeConfig(config: CompactGateRuntimeConfig): CompactGat
     compact: config.compact,
     claude: config.claude,
     timeouts: config.timeouts,
-    logging: config.logging
+    logging: config.logging,
+    primary_failover: config.primary_failover
   })) as CompactGateRuntimeConfig;
 }
 

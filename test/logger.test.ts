@@ -18,6 +18,36 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("does not cap persisted SQLite logs by default", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(2, databasePath);
+
+    try {
+      for (let index = 1; index <= 6; index += 1) {
+        logger.add(logEntry(index));
+      }
+
+      const recent = logger.recent();
+      expect(recent.map((entry) => entry.source_model)).toEqual(["gpt-5.6", "gpt-5.5"]);
+
+      const page = logger.page({ limit: 10, offset: 0 });
+      expect(page.all_total).toBe(6);
+      expect(page.total).toBe(6);
+      expect(page.logs.map((entry) => entry.source_model)).toEqual([
+        "gpt-5.6",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.3",
+        "gpt-5.2",
+        "gpt-5.1"
+      ]);
+    } finally {
+      logger.close();
+    }
+  });
+
   it("bounds persisted SQLite logs independently from the visible recent window", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

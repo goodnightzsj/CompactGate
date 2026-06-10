@@ -22,7 +22,8 @@ export function emptyForm(): ConfigFormState {
     upstreamMode: "split",
     modelMode: "linked",
     modelTemplate: "{model}-openai-compact",
-    modelOverride: ""
+    modelOverride: "",
+    autoSchedulePrimaryFailover: true
   };
 }
 
@@ -46,7 +47,8 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     upstreamMode: readUpstreamMode(config.compact.upstream_mode, "split"),
     modelMode: config.compact.model_mode,
     modelTemplate: config.compact.model_template,
-    modelOverride: config.compact.model_override
+    modelOverride: config.compact.model_override,
+    autoSchedulePrimaryFailover: config.primary_failover.auto_schedule
   };
 }
 
@@ -82,7 +84,10 @@ export function formToPatch(form: ConfigFormState) {
   return {
     primary,
     compact,
-    claude
+    claude,
+    primary_failover: {
+      auto_schedule: form.autoSchedulePrimaryFailover
+    }
   };
 }
 
@@ -127,6 +132,9 @@ export function applyDraftToConfigExport(
     },
     timeouts: { ...config.timeouts },
     logging: { ...config.logging },
+    primary_failover: {
+      auto_schedule: form.autoSchedulePrimaryFailover
+    },
     profiles: config.profiles,
     active_profile_id: config.active_profile_id,
     profile_scopes: config.profile_scopes,
@@ -169,7 +177,8 @@ function draftComparisonState(form: ConfigFormState) {
     upstreamMode: form.upstreamMode,
     modelMode: form.modelMode,
     modelTemplate: form.modelTemplate,
-    modelOverride: form.modelOverride
+    modelOverride: form.modelOverride,
+    autoSchedulePrimaryFailover: form.autoSchedulePrimaryFailover
   };
 }
 

@@ -96,6 +96,7 @@ export function buildPublicConfig({
     listen: config.listen,
     timeouts: config.timeouts,
     logging: config.logging,
+    primary_failover: { ...config.primary_failover },
     profiles: codexProfileScope.profiles,
     active_profile_id: codexProfileScope.active_profile_id,
     profile_scopes: {

@@ -65,6 +65,9 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     redact_body: true,
     keep_recent: 200
   },
+  primary_failover: {
+    auto_schedule: true
+  },
   profile_scopes: {
     codex: {
       profiles: [],

@@ -48,7 +48,7 @@ export function createConfigPortableActions({
     }
   }
 
-  async function importConfig(payload: CompactGateConfig) {
+  async function importConfig(payload: unknown) {
     const nextConfig = await api<PublicConfig>("/api/config/import", {
       method: "POST",
       body: JSON.stringify(payload)

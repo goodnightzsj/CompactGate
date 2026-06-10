@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { CompactGateConfig } from "../shared/types.js";
+import type { TokenUsageMetrics } from "./usage-types.js";
 
 export type PrimaryResultCategory =
   | "success"
@@ -35,6 +36,7 @@ export interface PrimaryRouteResult {
   responseBody?: Buffer;
   firstTokenMs?: number | null;
   responseId?: string | null;
+  usage?: TokenUsageMetrics;
 }
 
 export interface PrimaryProfileHealthSnapshot {

@@ -52,6 +52,23 @@ export function extractResponseUsage(
   return usage ?? EMPTY_USAGE;
 }
 
+export function hasTokenUsage(usage: TokenUsageMetrics | null | undefined): boolean {
+  if (!usage) {
+    return false;
+  }
+
+  return (
+    usage.inputTokens !== null ||
+    usage.outputTokens !== null ||
+    usage.cachedInputTokens !== null ||
+    usage.cachedOutputTokens !== null ||
+    usage.cacheReadInputTokens !== null ||
+    usage.cacheCreationInputTokens !== null ||
+    usage.reasoningTokens !== null ||
+    usage.totalTokens !== null
+  );
+}
+
 function extractSseUsage(text: string): TokenUsageMetrics | null {
   let latestUsage: TokenUsageMetrics | null = null;
   const frames = text.split(/\r?\n\r?\n/);

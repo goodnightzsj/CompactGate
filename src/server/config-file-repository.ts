@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { CompactGateConfig } from "../shared/types.js";
 
@@ -35,11 +36,19 @@ export async function writeConfigFile(
   configPath: string,
   config: CompactGateConfig
 ): Promise<string> {
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(config, null, 2)}\n`,
-    "utf8"
-  );
+  const directory = path.dirname(configPath);
+  const temporaryPath = path.join(directory, `.${path.basename(configPath)}.${process.pid}.${randomUUID()}.tmp`);
+  await fs.mkdir(directory, { recursive: true });
+  try {
+    await fs.writeFile(
+      temporaryPath,
+      `${JSON.stringify(config, null, 2)}\n`,
+      "utf8"
+    );
+    await fs.rename(temporaryPath, configPath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true });
+    throw error;
+  }
   return new Date().toISOString();
 }

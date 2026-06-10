@@ -48,6 +48,7 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateTimeoutMs(config.timeouts.primary_ms, "timeouts.primary_ms");
   validateTimeoutMs(config.timeouts.compact_ms, "timeouts.compact_ms");
   validateTimeoutMs(config.timeouts.claude_ms, "timeouts.claude_ms");
+  validatePrimaryFailover(config.primary_failover);
 
   if (
     !Number.isInteger(config.logging.keep_recent) ||
@@ -126,6 +127,12 @@ export function mergeRuntimeConfig(
     logging: {
       redact_body: readBoolean(readChild(patchRecord.logging).redact_body, base.logging.redact_body),
       keep_recent: readNumber(readChild(patchRecord.logging).keep_recent, base.logging.keep_recent)
+    },
+    primary_failover: {
+      auto_schedule: readBoolean(
+        readChild(patchRecord.primary_failover).auto_schedule,
+        base.primary_failover.auto_schedule
+      )
     }
   };
 }
@@ -137,6 +144,12 @@ function validateListen(listen: string): void {
 function validateTimeoutMs(value: number, field: string): void {
   if (!Number.isInteger(value) || value < 1 || value > MAX_NODE_TIMER_DELAY_MS) {
     throw new ConfigError(`${field} must be between 1 and ${MAX_NODE_TIMER_DELAY_MS}.`);
+  }
+}
+
+function validatePrimaryFailover(value: CompactGateRuntimeConfig["primary_failover"]): void {
+  if (typeof value.auto_schedule !== "boolean") {
+    throw new ConfigError("primary_failover.auto_schedule must be a boolean.");
   }
 }
 

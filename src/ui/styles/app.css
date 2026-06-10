@@ -1,5 +1,13 @@
-@import "./app/base.css";
-@import "./app/theme-system.css";
+@import "./app/tokens.css";
+@import "./app/foundation.css";
+@import "./app/layout.css";
+@import "./app/primitives.css";
+@import "./app/dashboard.css";
+@import "./app/routes.css";
+@import "./app/config.css";
+@import "./app/logs.css";
+@import "./app/feedback.css";
+@import "./app/theme-overrides.css";
+@import "./app/motion.css";
 @import "./app/health.css";
-@import "./app/console.css";
 @import "./app/responsive.css";

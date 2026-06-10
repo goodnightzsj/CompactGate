@@ -9,6 +9,7 @@ import {
   displayTotalTokens,
   formatCacheHitRate,
   hasAdditiveCachedInput,
+  logStatusToneClass,
   totalInputTokens
 } from "./log-utils.js";
 
@@ -23,7 +24,7 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-kicker">请求</span>
                 <h3>{entry.method} {entry.path}</h3>
               </div>
-              <span className={`log-status ${entry.status < 400 ? "is-ok" : "is-err"}`}>{entry.status}</span>
+              <span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span>
             </div>
             <div className="log-detail-section-grid">
               <div className="log-detail-item is-wide">

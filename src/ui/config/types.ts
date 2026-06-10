@@ -38,6 +38,7 @@ export type ConfigFormState = {
   modelMode: "linked" | "custom";
   modelTemplate: string;
   modelOverride: string;
+  autoSchedulePrimaryFailover: boolean;
 };
 
 export type ConfigTab = "profiles" | "routes" | "model" | "preview" | "portable";

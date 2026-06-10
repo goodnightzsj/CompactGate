@@ -174,7 +174,7 @@ describe("CompactGate HTTP basics", () => {
     expect(firstRes.writableEnded).toBe(true);
   });
 
-  it("drops SSE clients when event writes hit backpressure", () => {
+  it("keeps SSE clients when event writes report backpressure", () => {
     const broadcaster = new StudioEventBroadcaster({ maxClients: 1 });
     const snapshot = {
       config: { listen: "127.0.0.1:0" },
@@ -183,7 +183,7 @@ describe("CompactGate HTTP basics", () => {
       log_page: { logs: [], limit: 1, offset: 0, total: 0, all_total: 0, has_more: false }
     };
     const req = new FakeRequest();
-    const res = new FakeResponse({ failWritesAfter: 2 });
+    const res = new FakeResponse({ backpressureAfter: 2 });
 
     broadcaster.subscribe(
       req as unknown as IncomingMessage,
@@ -192,7 +192,7 @@ describe("CompactGate HTTP basics", () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(res.writableEnded).toBe(true);
+    expect(res.writableEnded).toBe(false);
     expect(res.body).toContain("event: snapshot");
     const writesAfterSubscribe = res.writeCount;
 
@@ -226,7 +226,64 @@ describe("CompactGate HTTP basics", () => {
       error_summary: null
     });
 
-    expect(res.writeCount).toBe(writesAfterSubscribe);
+    expect(res.writeCount).toBeGreaterThan(writesAfterSubscribe);
+    expect(res.body).toContain("event: log");
+    broadcaster.close();
+    expect(res.writableEnded).toBe(true);
+  });
+
+  it("drops SSE clients when event writes throw", () => {
+    const broadcaster = new StudioEventBroadcaster({ maxClients: 1 });
+    const snapshot = {
+      config: { listen: "127.0.0.1:0" },
+      health: { status: "ok" },
+      logs: [],
+      log_page: { logs: [], limit: 1, offset: 0, total: 0, all_total: 0, has_more: false }
+    };
+    const req = new FakeRequest();
+    const res = new FakeResponse({ throwWritesAfter: 2 });
+
+    broadcaster.subscribe(
+      req as unknown as IncomingMessage,
+      res as unknown as ServerResponse,
+      snapshot as never
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.writableEnded).toBe(true);
+    expect(res.body).toContain("event: snapshot");
+
+    broadcaster.broadcastLog({
+      time: new Date().toISOString(),
+      route: "primary",
+      method: "POST",
+      path: "/v1/responses",
+      endpoint: "/responses",
+      request_type: "http",
+      reasoning_effort: null,
+      request_summary: null,
+      source_model: "gpt-5.5",
+      target_model: "gpt-5.5",
+      status: 200,
+      duration_ms: 1,
+      first_token_ms: null,
+      input_tokens: null,
+      output_tokens: null,
+      cached_input_tokens: null,
+      cached_output_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      reasoning_tokens: null,
+      additive_cached_input_tokens: false,
+      additive_cached_output_tokens: false,
+      total_tokens: null,
+      upstream_host: "upstream.test",
+      user_agent: null,
+      request_id: "req-1",
+      error_summary: null
+    });
+
+    expect(res.writeCount).toBe(2);
     broadcaster.close();
   });
 
@@ -451,7 +508,7 @@ class FakeResponse extends EventEmitter {
   writableEnded = false;
   writeCount = 0;
 
-  constructor(private readonly options: { failWritesAfter?: number } = {}) {
+  constructor(private readonly options: { backpressureAfter?: number; throwWritesAfter?: number } = {}) {
     super();
   }
 
@@ -467,8 +524,11 @@ class FakeResponse extends EventEmitter {
 
   write(chunk: string): boolean {
     this.writeCount += 1;
+    if (this.options.throwWritesAfter !== undefined && this.writeCount >= this.options.throwWritesAfter) {
+      throw new Error("Simulated write failure.");
+    }
     this.body += chunk;
-    return this.options.failWritesAfter === undefined || this.writeCount < this.options.failWritesAfter;
+    return this.options.backpressureAfter === undefined || this.writeCount < this.options.backpressureAfter;
   }
 
   end(chunk?: string): this {

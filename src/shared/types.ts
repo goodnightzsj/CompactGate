@@ -52,6 +52,10 @@ export interface LoggingConfig {
   keep_recent: number;
 }
 
+export interface PrimaryFailoverConfig {
+  auto_schedule: boolean;
+}
+
 export interface CompactGateRuntimeConfig {
   listen: string;
   primary: UpstreamConfig;
@@ -59,6 +63,7 @@ export interface CompactGateRuntimeConfig {
   claude: ClaudeConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
+  primary_failover: PrimaryFailoverConfig;
 }
 
 export interface SavedCodexProfileConfig {
@@ -180,6 +185,7 @@ export interface PublicConfig {
   claude: PublicClaudeConfig;
   timeouts: TimeoutConfig;
   logging: LoggingConfig;
+  primary_failover: PrimaryFailoverConfig;
   /** @deprecated Use profile_scopes.codex. */
   profiles: PublicConfigProfile[];
   /** @deprecated Use profile_scopes.codex.active_profile_id. */

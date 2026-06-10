@@ -1,0 +1,195 @@
+/* ── Theme-agnostic surface rules for new components ──
+   Uses :root[data-theme] (no mode qualifier) to apply identically in both themes.
+   Variable values are swapped by :root / :root[data-theme="dark"]. */
+:root[data-theme] .sidebar,
+:root[data-theme] .main-content,
+:root[data-theme] .card,
+:root[data-theme] .stat-card,
+:root[data-theme] .config-dashboard,
+:root[data-theme] .config-section,
+:root[data-theme] .route-rule,
+:root[data-theme] .route-slot,
+:root[data-theme] .route-mapping-row,
+:root[data-theme] .log-table,
+:root[data-theme] .log-detail-panel,
+:root[data-theme] .empty-state,
+:root[data-theme] .endpoint-display,
+:root[data-theme] .profile-item,
+:root[data-theme] .profile-card,
+:root[data-theme] .profile-empty-card,
+:root[data-theme] .token-tooltip-panel {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+:root[data-theme] .route-slot,
+:root[data-theme] .route-mapping-row,
+:root[data-theme] .log-detail-panel,
+:root[data-theme] .profile-item {
+  background: var(--paper-warm);
+}
+
+:root[data-theme] .sidebar,
+:root[data-theme] .stat-card,
+:root[data-theme] .card {
+  background: var(--surface);
+}
+
+/* Text colors — always use semantic tokens */
+:root[data-theme] .eyebrow,
+:root[data-theme] .stat-card-label,
+:root[data-theme] .stat-card-meta,
+:root[data-theme] .route-slot-label,
+:root[data-theme] .route-slot-hint,
+:root[data-theme] .field-hint,
+:root[data-theme] .log-detail-label,
+:root[data-theme] .log-filter-summary,
+:root[data-theme] .log-filter-disclaimer,
+:root[data-theme] .empty-state span,
+:root[data-theme] .sidebar-health-row,
+:root[data-theme] .route-rule p,
+:root[data-theme] .profile-card-copy p,
+:root[data-theme] .log-cell-time,
+:root[data-theme] .tag {
+  color: var(--muted);
+}
+
+:root[data-theme] h2,
+:root[data-theme] h3,
+:root[data-theme] .field-label,
+:root[data-theme] .stat-card-value,
+:root[data-theme] .route-slot-host,
+:root[data-theme] .route-rule h3,
+:root[data-theme] .empty-state strong,
+:root[data-theme] .log-detail-value,
+:root[data-theme] .sidebar-brand h1,
+:root[data-theme] .page-header h2 {
+  color: var(--ink);
+}
+
+:root[data-theme] .sidebar-nav-item {
+  color: var(--muted);
+}
+
+:root[data-theme] .sidebar-nav-item.is-active {
+  color: var(--accent);
+}
+
+:root[data-theme] .sidebar-nav-item:hover {
+  background: var(--paper-warm);
+  color: var(--ink-soft);
+}
+
+/* Route chips in both themes */
+:root[data-theme] .route-chip.codex { background: var(--accent-soft); color: var(--accent); }
+:root[data-theme] .route-chip.compact { background: var(--amber-soft); color: var(--amber); }
+:root[data-theme] .route-chip.claude { background: var(--jade-soft); color: var(--jade); }
+
+/* Claude model map must follow the active theme after the global tag rules above. */
+:root[data-theme] .claude-model-map-card {
+  border-color: color-mix(in srgb, var(--jade) 28%, var(--hairline));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--jade) 8%, transparent), transparent 44%),
+    var(--surface);
+  color: var(--ink);
+}
+
+:root[data-theme] .claude-model-map-card h3,
+:root[data-theme] .claude-model-map-row label,
+:root[data-theme] .claude-model-map-row strong {
+  color: var(--ink);
+}
+
+:root[data-theme] .claude-model-map-head p:last-child,
+:root[data-theme] .model-role-cell small,
+:root[data-theme] .model-row-hint {
+  color: var(--muted);
+}
+
+:root[data-theme] .map-counter,
+:root[data-theme] .model-fetch-note {
+  border-color: color-mix(in srgb, var(--jade) 28%, var(--hairline));
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+
+:root[data-theme] .model-fetch-note.is-error {
+  border-color: color-mix(in srgb, var(--brick) 34%, var(--hairline));
+  background: var(--brick-soft);
+  color: var(--brick);
+}
+
+:root[data-theme] .claude-model-map-row {
+  border-color: var(--hairline);
+  background: var(--paper-warm);
+}
+
+:root[data-theme] .claude-model-map-row.is-default {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+:root[data-theme] .claude-model-map-row .tag {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+:root[data-theme] .claude-model-map-row .tag.is-compat {
+  color: var(--amber);
+}
+
+:root[data-theme] .claude-model-map-row .tag.is-fallback {
+  color: var(--jade);
+}
+
+:root[data-theme] .claude-model-map-row .custom-select-trigger {
+  border-color: var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+:root[data-theme] .custom-select-menu.is-compact {
+  border-color: var(--hairline);
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option {
+  border-color: var(--hairline);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option:hover,
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option:focus-visible,
+:root[data-theme] .custom-select-menu.is-compact .custom-select-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--hairline));
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+@media (max-width: 760px) {
+  .claude-model-map-head,
+  .claude-model-map-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .claude-model-map-row {
+    grid-template-columns: 1fr;
+  }
+
+  .model-control-cell {
+    grid-template-columns: 1fr;
+  }
+
+  .model-kind-cell {
+    justify-content: flex-start;
+  }
+
+  .model-role-cell small {
+    white-space: normal;
+  }
+}

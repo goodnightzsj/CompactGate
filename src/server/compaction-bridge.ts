@@ -1,4 +1,4 @@
-import { gunzipSync } from "node:zlib";
+import { isRecord, parseJsonRecord } from "./http-utils.js";
 
 export interface PrimaryBridgeResult {
   body: Buffer;
@@ -24,7 +24,6 @@ interface CachedFallbackItems {
 
 const DEFAULT_BRIDGE_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_MAX_BRIDGE_ENTRIES = 512;
-const DEFAULT_MAX_DECODED_COMPACTION_BYTES = 8 * 1024 * 1024;
 
 export class CompactionBridgeStore {
   private readonly fallbackItemsByKey = new Map<string, CachedFallbackItems>();
@@ -217,26 +216,6 @@ function extractFallbackItems(
   return synthesizedMessage ? [synthesizedMessage] : [];
 }
 
-function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    if (!looksLikeGzip(buffer)) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(gunzipSync(buffer, {
-        maxOutputLength: DEFAULT_MAX_DECODED_COMPACTION_BYTES
-      }).toString("utf8")) as unknown;
-      return isRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-}
-
 function isCompactionItem(
   value: unknown
 ): value is { type: "compaction"; encrypted_content: string } {
@@ -305,12 +284,4 @@ function looksLikeEncodedBlob(text: string): boolean {
 
 function isReadableSummaryCharacter(character: string): boolean {
   return /^[\n\r\t ]$/.test(character) || !/\p{C}/u.test(character);
-}
-
-function looksLikeGzip(buffer: Buffer): boolean {
-  return buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

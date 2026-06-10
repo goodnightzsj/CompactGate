@@ -11,6 +11,7 @@ import type {
 import {
   buildWhereClause,
   type LogPageOptions,
+  LOG_STANDALONE_ERROR_SQL,
   normalizeLogStatus,
   normalizeRoute,
   providerCountsFromRouteCounts,
@@ -23,8 +24,6 @@ import {
   MIGRATION_COLUMNS,
   RECENT_LOG_FIELDS
 } from "./logger-schema.js";
-
-export const DEFAULT_MAX_PERSISTED_LOG_ENTRIES = 20_000;
 
 export interface RequestLoggerOptions {
   maxPersistedEntries?: number;
@@ -44,7 +43,7 @@ export class RequestLogger {
 
   private readonly databasePath: string;
 
-  private readonly maxPersistedEntries: number;
+  private readonly maxPersistedEntries: number | null;
 
   private closed = false;
 
@@ -256,7 +255,7 @@ export class RequestLogger {
       .prepare(
         `
           SELECT
-            CASE WHEN status >= 400 OR error_summary IS NOT NULL THEN 'error' ELSE 'normal' END AS status_kind,
+            CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END AS status_kind,
             COUNT(*) AS count
           FROM request_logs
           ${where.sql}
@@ -309,6 +308,10 @@ export class RequestLogger {
   }
 
   private prunePersistedEntries(): void {
+    if (this.maxPersistedEntries === null) {
+      return;
+    }
+
     this.db
       .prepare(
         `
@@ -325,11 +328,11 @@ export class RequestLogger {
   }
 }
 
-function normalizeMaxPersistedEntries(value: number | undefined): number {
-  if (!Number.isFinite(value) || value === undefined) {
-    return DEFAULT_MAX_PERSISTED_LOG_ENTRIES;
+function normalizeMaxPersistedEntries(value: number | undefined): number | null {
+  if (value === undefined || !Number.isFinite(value)) {
+    return null;
   }
 
   const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : DEFAULT_MAX_PERSISTED_LOG_ENTRIES;
+  return normalized > 0 ? normalized : null;
 }

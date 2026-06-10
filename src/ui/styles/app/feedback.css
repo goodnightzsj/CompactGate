@@ -1,0 +1,70 @@
+/* Has-error log row */
+.log-row.has-error {
+  border-left: 3px solid var(--brick);
+}
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  border: 2px dashed var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.empty-state strong {
+  display: block;
+  font-size: 1rem;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.empty-state span {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.error-banner {
+  padding: 10px 14px;
+  background: var(--brick-soft);
+  border: 1px solid color-mix(in srgb, var(--brick) 30%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--brick);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════
+   Theme Switch
+   ═══════════════════════════════════════════════════ */
+.theme-switch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--paper-warm);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.theme-switch button {
+  flex: 1;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  transition: all 120ms var(--ease);
+}
+
+.theme-switch button:hover {
+  color: var(--ink);
+}
+
+.theme-switch button.is-active {
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(26,28,30,0.06);
+}

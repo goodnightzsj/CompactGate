@@ -42,7 +42,7 @@ export function DashboardStatsGrid({
 
       <div className="stat-card">
         <div className="stat-card-label">最近流量</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginTop: 12 }}>
+        <div className="dashboard-stat-count-grid">
           <div>
             <div className="stat-card-value">{logCounts.primary}</div>
             <div className="stat-card-meta">Codex 主路由</div>
@@ -60,20 +60,20 @@ export function DashboardStatsGrid({
 
       <div className="stat-card">
         <div className="stat-card-label">上游状态</div>
-        <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
-            <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Codex 主路由</span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{primaryHost}</span>
+        <div className="dashboard-health-list">
+          <div className="dashboard-health-row">
+            <span className="dashboard-health-name">Codex 主路由</span>
+            <span className="dashboard-health-host">{primaryHost}</span>
             <span className={`status-pill ${codexPrimaryOk ? "is-good" : "is-warn"}`}>{codexPrimaryOk ? "正常" : "异常"}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
-            <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Codex 压缩</span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{compactHost}</span>
+          <div className="dashboard-health-row">
+            <span className="dashboard-health-name">Codex 压缩</span>
+            <span className="dashboard-health-host">{compactHost}</span>
             <span className={`status-pill ${codexCompactOk ? "is-good" : "is-warn"}`}>{codexCompactOk ? "正常" : "异常"}</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "var(--paper-warm)", borderRadius: "var(--radius-sm)" }}>
-            <span style={{ fontSize: "0.8rem", color: "var(--ink)" }}>Claude 主路由</span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.76rem", color: "var(--muted)" }}>{claudeHost}</span>
+          <div className="dashboard-health-row">
+            <span className="dashboard-health-name">Claude 主路由</span>
+            <span className="dashboard-health-host">{claudeHost}</span>
             <span className={`status-pill ${claudeOk ? "is-good" : "is-warn"}`}>{claudeOk ? "正常" : "异常"}</span>
           </div>
         </div>
@@ -81,7 +81,7 @@ export function DashboardStatsGrid({
 
       <div className="stat-card">
         <div className="stat-card-label">Provider 汇总</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
+        <div className="dashboard-provider-grid">
           <div>
             <div className="stat-card-value">{providerCounts.openai}</div>
             <div className="stat-card-meta">Codex / OpenAI</div>

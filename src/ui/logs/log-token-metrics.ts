@@ -1,5 +1,18 @@
 import type { RequestLogEntry } from "../../shared/types.js";
 
+export function hasTokenDetails(entry: RequestLogEntry): boolean {
+  return (
+    entry.input_tokens !== null ||
+    entry.output_tokens !== null ||
+    entry.cached_input_tokens !== null ||
+    entry.cached_output_tokens !== null ||
+    entry.cache_read_input_tokens !== null ||
+    entry.cache_creation_input_tokens !== null ||
+    entry.reasoning_tokens !== null ||
+    entry.total_tokens !== null
+  );
+}
+
 export function displayInputTokens(entry: RequestLogEntry): number | null {
   if (entry.input_tokens === null && entry.cache_creation_input_tokens === null) {
     return null;
@@ -83,16 +96,8 @@ export function displayTotalTokens(entry: RequestLogEntry): number | null {
   const outputTokens = entry.output_tokens ?? 0;
   const cachedInputTokens = cachedInputTotalTokens(entry) ?? 0;
   const cachedOutputTokens = entry.cached_output_tokens ?? 0;
-  const hasAnyToken =
-    entry.input_tokens !== null ||
-    entry.output_tokens !== null ||
-    entry.cached_input_tokens !== null ||
-    entry.cache_read_input_tokens !== null ||
-    entry.cache_creation_input_tokens !== null ||
-    entry.cached_output_tokens !== null ||
-    entry.total_tokens !== null;
 
-  if (!hasAnyToken) {
+  if (!hasTokenDetails(entry)) {
     return null;
   }
 

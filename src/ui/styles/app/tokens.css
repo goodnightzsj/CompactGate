@@ -1,0 +1,203 @@
+/* ═══════════════════════════════════════════════════════════
+   CompactGate Studio — Operator Console
+   Warm paper + ink. No AI clichés.
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Palette ── */
+:root {
+  --paper: #faf8f3;
+  --paper-warm: #f4efe5;
+  --surface: #fefdfb;
+  --surface-raised: #ffffff;
+  --ink: #1a1c1e;
+  --ink-soft: #3d4044;
+  --muted: #737578;
+  --faint: #9b9d9f;
+  --hairline: #e4dfd5;
+  --hairline-strong: #cfc8b8;
+  --accent: #314e7c;
+  --accent-soft: #edf0f6;
+  --amber: #b85c0e;
+  --amber-soft: #fef7ef;
+  --jade: #1a6b5e;
+  --jade-soft: #edf8f4;
+  --brick: #b33028;
+  --brick-soft: #fef5f4;
+  --forest: #2d6a3f;
+  --forest-soft: #edf7ef;
+  --live-profile-selected-border: color-mix(in srgb, var(--accent) 40%, var(--hairline));
+  --live-profile-selected-bg: var(--accent-soft);
+  --live-profile-selected-shadow: inset 3px 0 0 var(--accent), 0 4px 12px color-mix(in srgb, var(--accent) 12%, transparent);
+  --live-profile-active-border: color-mix(in srgb, var(--jade) 40%, var(--hairline));
+  --live-profile-active-bg: var(--jade-soft);
+  --live-profile-active-shadow: inset 3px 0 0 var(--jade), 0 4px 12px color-mix(in srgb, var(--jade) 12%, transparent);
+  --shadow-sm: 0 1px 2px rgba(26,28,30,0.04);
+  --shadow-md: 0 2px 8px rgba(26,28,30,0.06);
+  --shadow-lg: 0 4px 16px rgba(26,28,30,0.08);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* Compatibility bridges: older route styles keep their variable names,
+     but semantic tokens above remain the single source of color truth. */
+  --primary: var(--accent);
+  --compact: var(--amber);
+  --teal: var(--jade);
+  --red: var(--brick);
+  --green: var(--forest);
+  --primary-quiet: var(--accent-soft);
+  --compact-quiet: var(--amber-soft);
+  --paper-lift: var(--surface);
+  --ink-2: var(--ink-soft);
+  --soft-muted: var(--faint);
+  --rail: var(--surface-raised);
+  --theme-bg: var(--paper);
+  --theme-surface: var(--surface);
+  --theme-surface-2: var(--paper-warm);
+  --theme-elevated: var(--surface-raised);
+  --theme-ink: var(--ink);
+  --theme-muted: var(--muted);
+  --theme-faint: var(--faint);
+  --theme-line: var(--hairline);
+  --theme-line-strong: var(--hairline-strong);
+  --theme-blue: var(--accent);
+  --theme-teal: var(--jade);
+  --theme-amber: var(--amber);
+  --theme-red: var(--brick);
+  --ops-bg: var(--paper);
+  --ops-panel: var(--surface);
+  --ops-panel-2: var(--paper-warm);
+  --ops-rail: var(--surface);
+  --ops-rail-2: var(--surface-raised);
+  --ops-line: var(--hairline);
+  --ops-line-strong: var(--hairline-strong);
+  --ops-text-dim: var(--muted);
+  --app-bg: var(--paper);
+  --app-bg-2: var(--paper-warm);
+  --app-surface: var(--surface);
+  --app-surface-soft: var(--paper-warm);
+  --app-surface-raised: var(--surface-raised);
+  --app-text: var(--ink);
+  --app-muted: var(--muted);
+  --app-faint: var(--faint);
+  --app-line: var(--hairline);
+  --app-line-strong: var(--hairline-strong);
+  --app-blue: var(--accent);
+  --app-amber: var(--amber);
+  --app-teal: var(--jade);
+  --app-red: var(--brick);
+  --app-success: var(--forest);
+  --app-success-soft: var(--forest-soft);
+  --app-danger: var(--brick);
+  --app-danger-soft: var(--brick-soft);
+  --app-info-soft: var(--accent-soft);
+  --app-amber-soft: var(--amber-soft);
+  --app-shadow: var(--shadow-lg);
+  --app-shadow-soft: var(--shadow-md);
+  --shadow: var(--shadow-md);
+  --shadow-float: var(--shadow-lg);
+  --control-shadow: var(--shadow-md);
+  --panel-inset: inset 0 1px 0 rgba(255,255,255,0.38), inset 0 -1px 0 rgba(26,28,30,0.04);
+  --bg-root: var(--paper);
+  --bg-surface: var(--surface);
+  --bg-raised: var(--surface-raised);
+  --bg-inset: var(--paper-warm);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-soft);
+  --text-tertiary: var(--muted);
+  --border-default: var(--hairline);
+  --border-strong: var(--hairline-strong);
+  --accent-blue: var(--accent);
+  --accent-blue-soft: var(--accent-soft);
+  --accent-blue-glow: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-amber: var(--amber);
+  --accent-amber-soft: var(--amber-soft);
+  --accent-amber-glow: color-mix(in srgb, var(--amber) 12%, transparent);
+  --accent-teal: var(--jade);
+  --accent-teal-soft: var(--jade-soft);
+  --accent-teal-glow: color-mix(in srgb, var(--jade) 12%, transparent);
+  --accent-red: var(--brick);
+  --accent-red-soft: var(--brick-soft);
+  --accent-green: var(--forest);
+  --accent-green-soft: var(--forest-soft);
+  --accent-green-glow: color-mix(in srgb, var(--forest) 12%, transparent);
+  --shadow-card: var(--shadow-sm);
+  --shadow-card-hover: var(--shadow-md);
+  --shadow-panel: var(--shadow-md);
+  --shadow-elevated: var(--shadow-lg);
+  --shadow-tight: 0 3px 8px rgba(24, 35, 49, 0.12), 0 1px 2px rgba(24, 35, 49, 0.1);
+  --display: var(--font-display);
+  --mono: var(--font-mono);
+  --radius: 20px;
+  --radius-small: 12px;
+  --radius-full: 999px;
+  --font-sans: var(--font-ui);
+  --space-1: 0.35rem;
+  --space-2: 0.6rem;
+  --space-3: 0.9rem;
+  --space-4: 1.2rem;
+  --space-5: 1.8rem;
+  --space-6: clamp(1.8rem, 4vw, 3.5rem);
+  --transition-fast: 150ms var(--ease);
+  --transition-smooth: 240ms var(--ease);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme-mode="auto"] {
+    --paper: #16181b;
+    --paper-warm: #1c1e22;
+    --surface: #1f2125;
+    --surface-raised: #26282c;
+    --ink: #e6e7e9;
+    --ink-soft: #bcbdbf;
+    --muted: #8b8d8f;
+    --faint: #5f6063;
+    --hairline: #333538;
+    --hairline-strong: #4a4c50;
+    --accent: #7b9fd4;
+    --accent-soft: rgba(123,159,212,0.12);
+    --amber: #e09040;
+    --amber-soft: rgba(224,144,64,0.12);
+    --jade: #5aada0;
+    --jade-soft: rgba(90,173,160,0.12);
+    --brick: #e06058;
+    --brick-soft: rgba(224,96,88,0.12);
+    --forest: #5aa870;
+    --forest-soft: rgba(90,168,112,0.12);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);
+  }
+}
+
+:root[data-theme="dark"],
+:root[data-theme-mode="dark"] {
+  --paper: #16181b;
+  --paper-warm: #1c1e22;
+  --surface: #1f2125;
+  --surface-raised: #26282c;
+  --ink: #e6e7e9;
+  --ink-soft: #bcbdbf;
+  --muted: #8b8d8f;
+  --faint: #5f6063;
+  --hairline: #333538;
+  --hairline-strong: #4a4c50;
+  --accent: #7b9fd4;
+  --accent-soft: rgba(123,159,212,0.12);
+  --amber: #e09040;
+  --amber-soft: rgba(224,144,64,0.12);
+  --jade: #5aada0;
+  --jade-soft: rgba(90,173,160,0.12);
+  --brick: #e06058;
+  --brick-soft: rgba(224,96,88,0.12);
+  --forest: #5aa870;
+  --forest-soft: rgba(90,168,112,0.12);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);
+}

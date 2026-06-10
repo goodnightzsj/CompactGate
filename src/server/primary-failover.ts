@@ -35,7 +35,7 @@ export type {
   PrimaryRouteSelection
 } from "./primary-failover-types.js";
 
-const EMPTY_STREAM_FAILURE_THRESHOLD = 4;
+const FAILOVER_FAILURE_THRESHOLD = 11;
 const TRANSIENT_COOLDOWN_MS = 60 * 1000;
 const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
@@ -111,9 +111,12 @@ export class PrimaryFailoverState {
         health.successes += 1;
         health.lastFirstTokenMs = result.firstTokenMs ?? health.lastFirstTokenMs;
         if (!staleSuccess) {
+          health.authFailures = 0;
+          health.quotaFailures = 0;
           health.transientFailures = 0;
           health.emptyStreamFailures = 0;
           health.rateLimitFailures = 0;
+          health.modelIncompatibleFailuresByModel.clear();
           health.cooldownUntil = 0;
           health.rateLimitUntil = 0;
           health.version += 1;
@@ -121,18 +124,35 @@ export class PrimaryFailoverState {
         this.rememberResponseStickiness(selection, result, now);
         break;
       case "auth":
-      case "quota":
+      case "quota": {
+        if (category === "auth") {
+          health.authFailures += 1;
+        } else {
+          health.quotaFailures += 1;
+        }
         health.transientFailures = 0;
         health.emptyStreamFailures = 0;
-        health.quarantineUntil = Math.max(health.quarantineUntil, now + ACCOUNT_QUARANTINE_MS);
+        if (
+          health.authFailures >= FAILOVER_FAILURE_THRESHOLD ||
+          health.quotaFailures >= FAILOVER_FAILURE_THRESHOLD
+        ) {
+          health.quarantineUntil = Math.max(health.quarantineUntil, now + ACCOUNT_QUARANTINE_MS);
+        }
         health.version += 1;
         break;
+      }
       case "rate_limit": {
         health.rateLimitFailures += 1;
-        health.rateLimitUntil = Math.max(
-          health.rateLimitUntil,
-          now + rateLimitCooldownMs(result, health.rateLimitFailures, now)
-        );
+        if (health.rateLimitFailures >= FAILOVER_FAILURE_THRESHOLD) {
+          const cooldownFailureCount = Math.max(
+            1,
+            health.rateLimitFailures - FAILOVER_FAILURE_THRESHOLD + 1
+          );
+          health.rateLimitUntil = Math.max(
+            health.rateLimitUntil,
+            now + rateLimitCooldownMs(result, cooldownFailureCount, now)
+          );
+        }
         health.version += 1;
         break;
       }
@@ -142,10 +162,13 @@ export class PrimaryFailoverState {
           health.emptyStreamFailures += 1;
         }
         const shouldCooldown =
-          !isReconnectLikePrimaryFailure(result.status, result.errorSummary) ||
-          health.emptyStreamFailures >= EMPTY_STREAM_FAILURE_THRESHOLD;
+          health.transientFailures >= FAILOVER_FAILURE_THRESHOLD &&
+          (
+            !isReconnectLikePrimaryFailure(result.status, result.errorSummary) ||
+            health.emptyStreamFailures >= FAILOVER_FAILURE_THRESHOLD
+          );
         if (shouldCooldown) {
-          const multiplier = Math.max(1, health.transientFailures - EMPTY_STREAM_FAILURE_THRESHOLD + 1);
+          const multiplier = Math.max(1, health.transientFailures - FAILOVER_FAILURE_THRESHOLD + 1);
           health.cooldownUntil = Math.max(
             health.cooldownUntil,
             now + Math.min(TRANSIENT_COOLDOWN_MAX_MS, TRANSIENT_COOLDOWN_MS * multiplier)
@@ -156,13 +179,19 @@ export class PrimaryFailoverState {
       }
       case "model_incompatible": {
         const model = selection.context.model;
-        if (model) {
-          this.health.rememberModelCooldown(health, model, {
-            until: now + MODEL_DISABLE_MS,
-            reason: result.errorSummary ?? `HTTP ${result.status}`
-          });
-        } else {
-          health.cooldownUntil = Math.max(health.cooldownUntil, now + TRANSIENT_COOLDOWN_MS);
+        const modelFailureKey = model ?? "";
+        const modelFailures = (health.modelIncompatibleFailuresByModel.get(modelFailureKey) ?? 0) + 1;
+        health.modelIncompatibleFailuresByModel.set(modelFailureKey, modelFailures);
+        if (modelFailures >= FAILOVER_FAILURE_THRESHOLD) {
+          if (model) {
+            this.health.rememberModelCooldown(health, model, {
+              until: now + MODEL_DISABLE_MS,
+              reason: result.errorSummary ?? `HTTP ${result.status}`
+            });
+          } else {
+            health.cooldownUntil = Math.max(health.cooldownUntil, now + TRANSIENT_COOLDOWN_MS);
+          }
+          health.modelIncompatibleFailuresByModel.delete(modelFailureKey);
         }
         health.version += 1;
         break;
@@ -204,6 +233,25 @@ export class PrimaryFailoverState {
     }
 
     this.health.reconcile(candidates);
+
+    if (!config.primary_failover.auto_schedule) {
+      const selected = candidates.find((candidate) => candidate.active) ?? candidates[0];
+      const health = this.health.forProfile(selected.id);
+      if (reserve) {
+        health.inFlight += 1;
+        health.lastSelectedAt = this.now();
+      }
+
+      return {
+        config: selected.config,
+        profileId: selected.id,
+        profileName: selected.name,
+        generation: this.generation,
+        healthVersion: health.version,
+        context: normalizedContext
+      };
+    }
+
     const now = this.now();
     this.cleanupExpiredState(now);
 

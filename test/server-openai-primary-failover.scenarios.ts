@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { PublicConfig } from "../src/shared/types.js";
 import {
   captureBody,
   type CapturedRequest,
+  fetchLogPage,
   fetchRecentLogs,
   startApp,
   startUpstream
@@ -15,7 +17,7 @@ import {
 } from "./server-openai-failover-helpers.js";
 
 describe("CompactGate OpenAI routing", () => {
-  it("fails over Codex primary streams after four empty 200 responses without touching compact routing", async () => {
+  it("fails over Codex primary streams after more than ten empty 200 responses without touching compact routing", async () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
@@ -39,7 +41,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 11; index += 1) {
       const response = await fetch(`${app.url}/v1/responses`, {
         method: "POST",
         body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `empty ${index}` }),
@@ -65,7 +67,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(compactResponse.status).toBe(200);
     await compactResponse.text();
 
-    expect(firstPrimaryRequests).toHaveLength(4);
+    expect(firstPrimaryRequests).toHaveLength(11);
     expect(secondPrimaryRequests).toHaveLength(1);
     expect(compactRequests).toHaveLength(1);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
@@ -77,9 +79,12 @@ describe("CompactGate OpenAI routing", () => {
       model: "gpt-5.5-openai-compact",
       input: "compact untouched"
     });
+    const configAfterFailover = await fetch(`${app.url}/api/config`);
+    const publicConfigAfterFailover = await configAfterFailover.json() as PublicConfig;
+    expect(publicConfigAfterFailover.profile_scopes.codex.active_profile_id).toBe(secondProfileId);
 
     const logs = await fetchRecentLogs(app.url);
-    expect(logs.filter((entry) => entry.upstream_host === new URL(firstPrimary.url).host)).toHaveLength(4);
+    expect(logs.filter((entry) => entry.upstream_host === new URL(firstPrimary.url).host)).toHaveLength(11);
     expect(logs.find((entry) => entry.error_summary === "OpenAI stream closed before response.completed.")).toMatchObject({
       route: "primary",
       status: 200,
@@ -100,7 +105,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("fails over Codex primary streams after four output-only 200 responses without completion", async () => {
+  it("fails over Codex primary streams after more than ten output-only 200 responses without completion", async () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const firstPrimary = await startCapturedOpenAiUpstream(firstPrimaryRequests, (res) => writeSse(res, [
@@ -125,7 +130,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 11; index += 1) {
       const response = await fetch(`${app.url}/v1/responses`, {
         method: "POST",
         body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `partial ${index}` }),
@@ -143,7 +148,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(failoverResponse.status).toBe(200);
     expect(await failoverResponse.text()).toContain("second ok");
 
-    expect(firstPrimaryRequests).toHaveLength(4);
+    expect(firstPrimaryRequests).toHaveLength(11);
     expect(secondPrimaryRequests).toHaveLength(1);
 
     const logs = await fetchRecentLogs(app.url);
@@ -190,7 +195,74 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("avoids a Codex primary profile after an account-level failure without touching compact routing", async () => {
+  it("keeps token-bearing failed stream diagnostics on the same primary profile", async () => {
+    const firstPrimaryRequests: CapturedRequest[] = [];
+    const secondPrimaryRequests: CapturedRequest[] = [];
+    const firstPrimary = await startCapturedOpenAiUpstream(firstPrimaryRequests, (res) => writeSse(res, [
+      {
+        type: "response.failed",
+        response: {
+          usage: {
+            input_tokens: 9,
+            output_tokens: 2,
+            total_tokens: 11
+          }
+        }
+      }
+    ]));
+    const secondPrimary = await startCapturedOpenAiUpstream(secondPrimaryRequests, (res) => writeSse(res, [
+      { type: "response.output_text.delta", delta: "second ok" },
+      { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }
+    ]));
+    const compact = await startUpstream((_req, res) => writeJson(res, { ok: true }));
+    const app = await startApp(firstPrimary.url, compact.url);
+
+    const firstProfileId = await saveCodexProfile(app.url, compact.url, "token-failed-a", firstPrimary.url);
+    const secondProfileId = await saveCodexProfile(app.url, compact.url, "token-failed-b", secondPrimary.url);
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applyResponse = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyResponse.status).toBe(200);
+
+    for (let index = 0; index < 5; index += 1) {
+      const response = await fetch(`${app.url}/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `token failed ${index}` }),
+        headers: JSON_HEADERS
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+
+    expect(firstPrimaryRequests).toHaveLength(5);
+    expect(secondPrimaryRequests).toHaveLength(0);
+
+    const logPage = await fetchLogPage(app.url);
+    expect(logPage.status_counts).toEqual({
+      all: 5,
+      normal: 5,
+      error: 0
+    });
+    expect(logPage.logs[0]).toMatchObject({
+      route: "primary",
+      status: 200,
+      upstream_host: new URL(firstPrimary.url).host,
+      input_tokens: 9,
+      output_tokens: 2,
+      total_tokens: 11,
+      error_summary: "OpenAI stream ended with response.failed."
+    });
+
+    const errorPage = await fetchLogPage(app.url, "?status=error");
+    expect(errorPage.logs).toHaveLength(0);
+  });
+
+  it("avoids a Codex primary profile after more than ten account-level failures without touching compact routing", async () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
@@ -215,13 +287,15 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    const failingResponse = await fetch(`${app.url}/v1/responses`, {
-      method: "POST",
-      body: JSON.stringify({ model: "gpt-5.5", input: "first fails" }),
-      headers: JSON_HEADERS
-    });
-    expect(failingResponse.status).toBe(403);
-    await failingResponse.text();
+    for (let index = 0; index < 11; index += 1) {
+      const failingResponse = await fetch(`${app.url}/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", input: `account failure ${index}` }),
+        headers: JSON_HEADERS
+      });
+      expect(failingResponse.status).toBe(403);
+      await failingResponse.text();
+    }
 
     const recoveredResponse = await fetch(`${app.url}/v1/responses`, {
       method: "POST",
@@ -239,7 +313,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(compactResponse.status).toBe(200);
     await compactResponse.text();
 
-    expect(firstPrimaryRequests).toHaveLength(1);
+    expect(firstPrimaryRequests).toHaveLength(11);
     expect(secondPrimaryRequests).toHaveLength(1);
     expect(compactRequests).toHaveLength(1);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
@@ -256,7 +330,7 @@ describe("CompactGate OpenAI routing", () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const firstPrimary = await startCapturedOpenAiUpstream(firstPrimaryRequests, (res) => {
-      if (firstPrimaryRequests.length === 1) {
+      if (firstPrimaryRequests.length <= 11) {
         res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
         res.end(JSON.stringify({ error: { message: "rate limit" } }));
         return;
@@ -286,13 +360,15 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    const rateLimitedResponse = await fetch(`${app.url}/v1/responses`, {
-      method: "POST",
-      body: JSON.stringify({ model: "gpt-5.5", input: "prime rate limit" }),
-      headers: JSON_HEADERS
-    });
-    expect(rateLimitedResponse.status).toBe(429);
-    await rateLimitedResponse.text();
+    for (let index = 0; index < 11; index += 1) {
+      const rateLimitedResponse = await fetch(`${app.url}/v1/responses`, {
+        method: "POST",
+        body: JSON.stringify({ model: "gpt-5.5", input: `prime rate limit ${index}` }),
+        headers: JSON_HEADERS
+      });
+      expect(rateLimitedResponse.status).toBe(429);
+      await rateLimitedResponse.text();
+    }
 
     const compactionInput = [
       { type: "compaction", encrypted_content: "OPAQUE_REMOTE_STATE" },
@@ -316,7 +392,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(secondCompactionResponse.status).toBe(200);
     expect(await secondCompactionResponse.text()).toContain("second ok");
 
-    expect(firstPrimaryRequests).toHaveLength(1);
+    expect(firstPrimaryRequests).toHaveLength(11);
     expect(secondPrimaryRequests).toHaveLength(2);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
       model: "gpt-5.5",

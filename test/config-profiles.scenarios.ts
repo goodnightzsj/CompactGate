@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
@@ -221,6 +221,36 @@ describe("ConfigStore", () => {
     expect(applied.claude.compact.model_override).toBe("claude-profile-compact-model");
     expect(applied.profile_scopes?.codex?.active_profile_id).toBe(codexId);
     expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
+  });
+
+  it("serializes concurrent config mutations before persisting", async () => {
+    const dir = await makeConfigDir();
+
+    const configPath = path.join(dir, "compactgate.json");
+    const store = await ConfigStore.load(configPath);
+    await Promise.all([
+      store.patch({
+        primary: { base_url: "http://127.0.0.1:9561/v1" }
+      }),
+      store.saveProfile("codex", "Concurrent Codex", {
+        primary: { base_url: "http://127.0.0.1:9562/v1" },
+        compact: { base_url: "http://127.0.0.1:9563/v1" }
+      }),
+      store.saveProfile("claude", "Concurrent Claude", {
+        claude: {
+          primary: { base_url: "http://127.0.0.1:9564" },
+          compact: { base_url: "http://127.0.0.1:9565", upstream_mode: "split" }
+        }
+      })
+    ]);
+
+    const inMemory = store.get();
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as typeof inMemory;
+    expect(inMemory.primary.base_url).toBe("http://127.0.0.1:9561/v1");
+    expect(inMemory.profile_scopes?.codex?.profiles?.map((profile) => profile.name)).toContain("Concurrent Codex");
+    expect(inMemory.profile_scopes?.claude?.profiles?.map((profile) => profile.name)).toContain("Concurrent Claude");
+    expect(persisted).toMatchObject(inMemory);
+    expect((await readdir(dir)).filter((file) => file.endsWith(".tmp"))).toEqual([]);
   });
 
   it("reorders scoped config profiles without mutating profile content", async () => {

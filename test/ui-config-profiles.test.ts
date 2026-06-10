@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nextDuplicateProfileName } from "../src/ui/hooks/configProfileCollectionActions.js";
+import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
 import type { PublicConfig } from "../src/shared/types.js";
 
 describe("UI config profile actions", () => {
@@ -30,11 +31,58 @@ describe("UI config profile actions", () => {
       sourceName: "Local split"
     })).toBe("Manual copy");
   });
+
+  it("syncs a selected profile name after external config updates", () => {
+    expect(nextProfileNameSyncState({
+      profiles: [profile("Renamed remote", "local-split")],
+      activeProfileId: null,
+      selectedId: "local-split",
+      name: "Local split",
+      sourceProfileId: "local-split",
+      dirty: false
+    })).toMatchObject({
+      selectedId: "local-split",
+      name: "Renamed remote",
+      sourceProfileId: "local-split",
+      dirty: false
+    });
+  });
+
+  it("does not overwrite an in-progress local profile name draft", () => {
+    expect(nextProfileNameSyncState({
+      profiles: [profile("Local split remote")],
+      activeProfileId: null,
+      selectedId: "local-split-remote",
+      name: "Manual local draft",
+      sourceProfileId: "local-split-remote",
+      dirty: true
+    })).toMatchObject({
+      selectedId: "local-split-remote",
+      name: "Manual local draft",
+      dirty: true
+    });
+  });
+
+  it("falls back when the selected profile disappears", () => {
+    expect(nextProfileNameSyncState({
+      profiles: [profile("Fallback")],
+      activeProfileId: "fallback",
+      selectedId: "deleted",
+      name: "Deleted",
+      sourceProfileId: "deleted",
+      dirty: false
+    })).toMatchObject({
+      selectedId: "fallback",
+      name: "Fallback",
+      sourceProfileId: "fallback",
+      dirty: false
+    });
+  });
 });
 
-function profile(name: string): PublicConfig["profiles"][number] {
+function profile(name: string, id = name.toLowerCase().replaceAll(" ", "-")): PublicConfig["profiles"][number] {
   return {
-    id: name.toLowerCase().replaceAll(" ", "-"),
+    id,
     scope: "codex",
     name,
     created_at: "2026-06-09T00:00:00.000Z",

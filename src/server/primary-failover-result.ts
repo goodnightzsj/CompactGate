@@ -4,12 +4,17 @@ import type {
   PrimaryResultCategory,
   PrimaryRouteResult
 } from "./primary-failover-types.js";
+import { hasTokenUsage } from "./usage.js";
 
 const RATE_LIMIT_FALLBACK_MS = 60 * 1000;
 const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
 
 export function classifyPrimaryRouteResult(result: PrimaryRouteResult): PrimaryResultCategory {
   const summary = result.errorSummary?.toLowerCase() ?? "";
+
+  if (hasTokenUsage(result.usage)) {
+    return "success";
+  }
 
   if (isClientCancelSummary(summary)) {
     return "client_cancel";

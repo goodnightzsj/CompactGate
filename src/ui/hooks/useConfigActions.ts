@@ -105,3 +105,5 @@ export function useConfigActions({
     unlockCompactModel
   };
 }
+
+export type ConfigActions = ReturnType<typeof useConfigActions>;

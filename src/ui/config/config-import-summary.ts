@@ -1,4 +1,4 @@
-import type { CompactGateConfig, ConfigProfileScope } from "../../shared/types.js";
+import type { ConfigProfileScope } from "../../shared/types.js";
 
 export type ImportState = "idle" | "ready" | "importing" | "imported" | "error";
 
@@ -17,11 +17,12 @@ export type ConfigImportSummary = {
 export type ImportCandidate = {
   fileName: string;
   sizeBytes: number;
-  config: CompactGateConfig;
+  config: Record<string, unknown>;
   summary: ConfigImportSummary;
 };
 
-export function summarizeConfigImport(config: CompactGateConfig): ConfigImportSummary {
+export function summarizeConfigImport(config: Record<string, unknown>): ConfigImportSummary {
+  const logging = readRecord(config.logging);
   return {
     listen: typeof config.listen === "string" && config.listen.trim() ? config.listen.trim() : "默认或未声明",
     codexPrimaryHost: hostLabel(readNestedString(config, ["primary", "base_url"])),
@@ -30,13 +31,15 @@ export function summarizeConfigImport(config: CompactGateConfig): ConfigImportSu
     codexProfileCount: countProfiles(config, "codex"),
     claudeProfileCount: countProfiles(config, "claude"),
     presetCount: Array.isArray(config.route_url_presets) ? config.route_url_presets.length : 0,
-    keepRecent: typeof config.logging?.keep_recent === "number" ? config.logging.keep_recent : null,
+    keepRecent: typeof logging?.keep_recent === "number" ? logging.keep_recent : null,
     hasDirectApiKeys: hasDirectApiKey(config)
   };
 }
 
-function countProfiles(config: CompactGateConfig, scope: ConfigProfileScope): number {
-  const scopedProfiles = config.profile_scopes?.[scope]?.profiles;
+function countProfiles(config: Record<string, unknown>, scope: ConfigProfileScope): number {
+  const profileScopes = readRecord(config.profile_scopes);
+  const scopeState = readRecord(profileScopes?.[scope]);
+  const scopedProfiles = scopeState?.profiles;
   if (Array.isArray(scopedProfiles)) {
     return scopedProfiles.length;
   }
@@ -72,6 +75,10 @@ function readNestedString(value: unknown, path: string[]): string | null {
   }
 
   return typeof current === "string" ? current : null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
 }
 
 function hostLabel(value: string | null): string {

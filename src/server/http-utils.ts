@@ -243,22 +243,13 @@ export function decodeBodyText(body: Buffer): string {
 }
 
 export function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null {
+  const text = decodeBodyText(buffer);
+
   try {
-    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
+    const parsed = JSON.parse(text) as unknown;
     return isRecord(parsed) ? parsed : null;
   } catch {
-    if (!looksLikeGzip(buffer)) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(gunzipSync(buffer, {
-        maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES
-      }).toString("utf8")) as unknown;
-      return isRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 

@@ -49,6 +49,7 @@ describe("architecture boundaries", () => {
       "src/server/config-profile-mutations.ts": ["node:fs", "node:fs/promises"],
       "src/server/config-profile-scope.ts": ["node:fs", "node:fs/promises"],
       "src/server/config-profile-scope-merge.ts": ["node:fs", "node:fs/promises"],
+      "src/server/compaction-bridge.ts": ["node:zlib"],
       "src/server/openai-proxy-transaction.ts": [
         "./openai-proxy.js",
         "./claude-proxy.js",

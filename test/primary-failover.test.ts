@@ -16,11 +16,11 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    recordRequests(state, config, 3, 200, "OpenAI stream closed before response.completed.");
+    recordRequests(state, config, 10, 200, "OpenAI stream closed before response.completed.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     state.recordResult(state.select(config, { model: "gpt-5.5" }), 200, null);
-    recordRequests(state, config, 3, 200, "OpenAI stream closed before response.completed.");
+    recordRequests(state, config, 10, 200, "OpenAI stream closed before response.completed.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     state.recordResult(
@@ -31,12 +31,21 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
   });
 
-  it("quarantines auth and balance failures instead of waiting for reconnect threshold", () => {
+  it("quarantines auth and balance failures after more than ten standalone errors", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
     ]);
     const { state } = createState();
+
+    recordRequests(
+      state,
+      config,
+      10,
+      403,
+      "Upstream returned HTTP 403: insufficient balance."
+    );
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     state.recordResult(
       state.select(config, { model: "gpt-5.5" }),
@@ -49,10 +58,38 @@ describe("PrimaryFailoverState", () => {
       quarantineUntil: expect.any(Number)
     });
 
+    recordRequests(
+      state,
+      config,
+      10,
+      401,
+      "Upstream returned HTTP 401: invalid token."
+    );
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+
     state.recordResult(
       state.select(config, { model: "gpt-5.5" }),
       401,
       "Upstream returned HTTP 401: invalid token."
+    );
+
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
+  it("keeps the active profile when automatic scheduling is disabled", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    config.primary_failover.auto_schedule = false;
+    const { state } = createState();
+
+    recordRequests(
+      state,
+      config,
+      12,
+      403,
+      "Upstream returned HTTP 403: insufficient balance."
     );
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
@@ -65,8 +102,10 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+    recordRequests(
+      state,
+      config,
+      11,
       401,
       "Upstream returned HTTP 401: invalid token."
     );
@@ -92,8 +131,10 @@ describe("PrimaryFailoverState", () => {
     const { state } = createState();
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
-    state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+    recordRequests(
+      state,
+      config,
+      11,
       403,
       "Upstream returned HTTP 403: insufficient balance."
     );
@@ -108,14 +149,19 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000);
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    for (let index = 0; index < 10; index += 1) {
+      clock.state.recordResult(
+        clock.state.select(config, { model: "gpt-5.5" }),
+        {
+          status: 429,
+          errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+          responseHeaders: { "retry-after": "2" }
+        }
+      );
+    }
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+
+    recordRateLimitFailures(clock.state, config, 1);
 
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
     clock.advance(2_100);
@@ -128,6 +174,18 @@ describe("PrimaryFailoverState", () => {
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
     ]);
     const clock = createState(1_000);
+
+    for (let index = 0; index < 10; index += 1) {
+      clock.state.recordResult(
+        clock.state.select(config, { model: "gpt-5.5" }),
+        {
+          status: 429,
+          errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+          responseHeaders: { "retry-after": "1e6" }
+        }
+      );
+    }
+    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     clock.state.recordResult(
       clock.state.select(config, { model: "gpt-5.5" }),
@@ -149,6 +207,16 @@ describe("PrimaryFailoverState", () => {
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
     ]);
     const { state } = createState();
+
+    recordModelRequests(
+      state,
+      config,
+      "gpt-missing",
+      10,
+      404,
+      "Upstream returned HTTP 404: model gpt-missing not found."
+    );
+    expect(state.preview(config, { model: "gpt-missing" }).profileId).toBe("codex-a");
 
     state.recordResult(
       state.select(config, { model: "gpt-missing" }),
@@ -188,14 +256,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000);
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(clock.state, config);
 
     const selection = clock.state.select(config, {
       model: "gpt-5.5",
@@ -219,14 +280,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000);
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(clock.state, config);
 
     const selection = clock.state.select(config, { model: "gpt-5.5" });
     expect(selection.profileId).toBe("codex-b");
@@ -252,14 +306,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000);
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(clock.state, config);
 
     const selection = clock.state.select(config, { model: "gpt-5.5" });
     expect(selection.profileId).toBe("codex-b");
@@ -292,14 +339,7 @@ describe("PrimaryFailoverState", () => {
       compactionStateKey: "sha256:opaque-compact-state"
     };
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(clock.state, config);
 
     const selection = clock.state.select(config, compactionContext);
     expect(selection.profileId).toBe("codex-b");
@@ -317,14 +357,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000, { maxStickyEntries: 2 });
 
-    clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(clock.state, config);
 
     for (const sessionKey of ["session-0", "session-1", "session-2"]) {
       const selection = clock.state.select(config, { model: "gpt-5.5", sessionKey });
@@ -341,14 +374,7 @@ describe("PrimaryFailoverState", () => {
       .toBe("codex-b");
 
     const continuationClock = createState(1_000, { maxStickyEntries: 2 });
-    continuationClock.state.recordResult(
-      continuationClock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(continuationClock.state, config);
 
     for (const responseId of ["resp-0", "resp-1", "resp-2"]) {
       const selection = continuationClock.state.select(config, { model: "gpt-5.5" });
@@ -375,14 +401,7 @@ describe("PrimaryFailoverState", () => {
     }).profileId).toBe("codex-b");
 
     const compactionClock = createState(1_000, { maxStickyEntries: 2 });
-    compactionClock.state.recordResult(
-      compactionClock.state.select(config, { model: "gpt-5.5" }),
-      {
-        status: 429,
-        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-        responseHeaders: { "retry-after": "2" }
-      }
-    );
+    recordRateLimitFailures(compactionClock.state, config);
 
     for (const compactionStateKey of ["sha256:state-0", "sha256:state-1", "sha256:state-2"]) {
       const selection = compactionClock.state.select(config, { model: "gpt-5.5", compactionStateKey });
@@ -412,20 +431,24 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState(1_000, { maxModelCooldownEntries: 2 });
 
-    state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+    recordRequests(
+      state,
+      config,
+      11,
       403,
       "Upstream returned HTTP 403: insufficient balance."
     );
 
     for (const model of ["missing-0", "missing-1", "missing-2"]) {
-      const selection = state.select(config, { model });
-      expect(selection.profileId).toBe("codex-b");
-      state.recordResult(
-        selection,
-        404,
-        `Upstream returned HTTP 404: model ${model} not found.`
-      );
+      for (let index = 0; index < 11; index += 1) {
+        const selection = state.select(config, { model });
+        expect(selection.profileId).toBe("codex-b");
+        state.recordResult(
+          selection,
+          404,
+          `Upstream returned HTTP 404: model ${model} not found.`
+        );
+      }
     }
 
     expect(state.preview(config, { model: "missing-0" }).profileId).toBe("codex-b");
@@ -469,6 +492,20 @@ describe("primary route result classification", () => {
       status: 502,
       errorSummary: "Client disconnected before upstream response completed."
     })).toBe("client_cancel");
+    expect(classifyPrimaryRouteResult({
+      status: 200,
+      errorSummary: "OpenAI stream ended with response.failed.",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 3,
+        cachedInputTokens: null,
+        cachedOutputTokens: null,
+        cacheReadInputTokens: null,
+        cacheCreationInputTokens: null,
+        reasoningTokens: null,
+        totalTokens: 13
+      }
+    })).toBe("success");
   });
 });
 
@@ -553,6 +590,36 @@ function recordRequests(
 ): void {
   for (let index = 0; index < count; index += 1) {
     state.recordResult(state.select(config, { model: "gpt-5.5" }), status, errorSummary);
+  }
+}
+
+function recordModelRequests(
+  state: PrimaryFailoverState,
+  config: CompactGateConfig,
+  model: string,
+  count: number,
+  status: number,
+  errorSummary: string | null
+): void {
+  for (let index = 0; index < count; index += 1) {
+    state.recordResult(state.select(config, { model }), status, errorSummary);
+  }
+}
+
+function recordRateLimitFailures(
+  state: PrimaryFailoverState,
+  config: CompactGateConfig,
+  count = 11
+): void {
+  for (let index = 0; index < count; index += 1) {
+    state.recordResult(
+      state.select(config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
   }
 }
 

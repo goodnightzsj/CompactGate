@@ -84,6 +84,29 @@ export function RouteConfigPanel({
             <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
           </div>
         </div>
+        <section className="auto-schedule-card" aria-labelledby="auto-schedule-title">
+          <div className="auto-schedule-copy">
+            <span className="profile-item-kicker">主路由保护</span>
+            <h3 id="auto-schedule-title">错误自动调度</h3>
+            <p>
+              开启后，Codex 主路由同类错误超过 10 次才会自动调度到下一个账号，并同步当前运行时档案。
+            </p>
+          </div>
+          <label className="auto-schedule-switch">
+            <input
+              type="checkbox"
+              checked={form.autoSchedulePrimaryFailover}
+              onChange={(event) => onFormChange((previous) => ({
+                ...previous,
+                autoSchedulePrimaryFailover: event.target.checked
+              }))}
+            />
+            <span className="auto-schedule-track" aria-hidden="true">
+              <span className="auto-schedule-thumb" />
+            </span>
+            <span>{form.autoSchedulePrimaryFailover ? "已开启" : "已关闭"}</span>
+          </label>
+        </section>
       </div>
     </div>
   );

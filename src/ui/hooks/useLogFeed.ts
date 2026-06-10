@@ -20,6 +20,8 @@ import {
 } from "../logs/log-utils.js";
 import { errorSummary } from "../shared/api.js";
 
+const STREAM_RECONNECTING_MESSAGE = "实时日志流暂时断开，浏览器正在重连。";
+
 export function useLogFeed({
   enabled,
   hasConfig,
@@ -117,8 +119,47 @@ export function useLogFeed({
     }
 
     const stream = new EventSource("/api/events");
-    const handleOpen = () => {
+    let streamInterrupted = false;
+    let pollingFallbackActive = false;
+    let closed = false;
+
+    async function pollWhileStreamInterrupted() {
+      if (!streamInterrupted || closed) {
+        return;
+      }
+
+      try {
+        const nextPage = await fetchLogPage({
+          route: deferredFilter,
+          status: deferredStatusFilter,
+          host: deferredHostFilter,
+          limit: logPageLimit,
+          offset: 0
+        });
+        if (!closed && streamInterrupted) {
+          setLogPage(nextPage);
+          setLogError(null);
+          pollingFallbackActive = true;
+        }
+      } catch (error) {
+        if (!closed) {
+          setLogError(errorSummary(error));
+        }
+      }
+    }
+
+    const recoveryPollTimer = window.setInterval(() => {
+      void pollWhileStreamInterrupted();
+    }, 2500);
+
+    function markStreamConnected() {
+      streamInterrupted = false;
+      pollingFallbackActive = false;
       setLogError(null);
+    }
+
+    const handleOpen = () => {
+      markStreamConnected();
     };
     const handleSnapshot = (event: MessageEvent<string>) => {
       try {
@@ -132,7 +173,7 @@ export function useLogFeed({
         ) {
           setLogPage((previous) => mergeSnapshotLogPage(previous, snapshot.log_page));
         }
-        setLogError(null);
+        markStreamConnected();
       } catch (error) {
         setLogError(errorSummary(error));
       }
@@ -143,13 +184,17 @@ export function useLogFeed({
         setLogPage((previous) =>
           mergeLiveLogPage(previous, payload.entry, routeFilter, statusFilter, hostFilter)
         );
-        setLogError(null);
+        markStreamConnected();
       } catch (error) {
         setLogError(errorSummary(error));
       }
     };
     const handleError = () => {
-      setLogError("实时日志流暂时断开，浏览器正在重连。");
+      streamInterrupted = true;
+      if (!pollingFallbackActive) {
+        setLogError(STREAM_RECONNECTING_MESSAGE);
+      }
+      void pollWhileStreamInterrupted();
     };
 
     stream.addEventListener("open", handleOpen);
@@ -158,6 +203,8 @@ export function useLogFeed({
     stream.addEventListener("error", handleError as EventListener);
 
     return () => {
+      closed = true;
+      window.clearInterval(recoveryPollTimer);
       stream.removeEventListener("open", handleOpen);
       stream.removeEventListener("snapshot", handleSnapshot as EventListener);
       stream.removeEventListener("log", handleLog as EventListener);

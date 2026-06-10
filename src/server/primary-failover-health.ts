@@ -15,9 +15,12 @@ export interface ProfileHealth {
   inFlight: number;
   successes: number;
   failures: number;
+  authFailures: number;
+  quotaFailures: number;
   transientFailures: number;
   emptyStreamFailures: number;
   rateLimitFailures: number;
+  modelIncompatibleFailuresByModel: Map<string, number>;
   cooldownUntil: number;
   quarantineUntil: number;
   rateLimitUntil: number;
@@ -62,9 +65,12 @@ export class PrimaryProfileHealthStore {
       inFlight: 0,
       successes: 0,
       failures: 0,
+      authFailures: 0,
+      quotaFailures: 0,
       transientFailures: 0,
       emptyStreamFailures: 0,
       rateLimitFailures: 0,
+      modelIncompatibleFailuresByModel: new Map(),
       cooldownUntil: 0,
       quarantineUntil: 0,
       rateLimitUntil: 0,

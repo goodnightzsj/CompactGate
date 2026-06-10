@@ -16,11 +16,27 @@ export type ScopedProfileAccessors = {
   name: string;
   selectedId: string;
   state: ProfileActionState;
-  setName: Dispatch<SetStateAction<string>>;
+  setName: (name: string) => void;
   setSelectedId: Dispatch<SetStateAction<string>>;
   setState: Dispatch<SetStateAction<ProfileActionState>>;
   setError: Dispatch<SetStateAction<string | null>>;
 };
+
+export interface ProfileNameSyncInput {
+  profiles: Array<{ id: string; name: string }>;
+  activeProfileId: string | null;
+  selectedId: string;
+  name: string;
+  sourceProfileId: string | null;
+  dirty: boolean;
+}
+
+export interface ProfileNameSyncResult {
+  selectedId: string;
+  name: string;
+  sourceProfileId: string | null;
+  dirty: boolean;
+}
 
 export function useScopedProfileControls(config: PublicConfig | null) {
   const [profileName, setProfileName] = useState("");
@@ -32,76 +48,87 @@ export function useScopedProfileControls(config: PublicConfig | null) {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [claudeProfileError, setClaudeProfileError] = useState<string | null>(null);
   const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<ProfileDeleteCandidate | null>(null);
-  const profileNameHydratedRef = useRef(false);
-  const claudeProfileNameHydratedRef = useRef(false);
+  const profileNameSyncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
+  const claudeProfileNameSyncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
 
   useEffect(() => {
     if (!config) {
       return;
     }
 
-    const codexProfiles = profileScopeState(config, "codex").profiles;
-    const claudeProfiles = profileScopeState(config, "claude").profiles;
-    const activeCodexProfileId = profileScopeState(config, "codex").active_profile_id;
-    const activeClaudeProfileId = profileScopeState(config, "claude").active_profile_id;
-
-    setSelectedProfileId((previous) => {
-      if (previous && codexProfiles.some((profile) => profile.id === previous)) {
-        return previous;
-      }
-
-      return activeCodexProfileId ?? codexProfiles[0]?.id ?? "";
-    });
-
-    setSelectedClaudeProfileId((previous) => {
-      if (previous && claudeProfiles.some((profile) => profile.id === previous)) {
-        return previous;
-      }
-
-      return activeClaudeProfileId ?? claudeProfiles[0]?.id ?? "";
-    });
-  }, [config]);
-
-  useEffect(() => {
-    if (!config || profileNameHydratedRef.current) {
-      return;
-    }
-
     const scope = profileScopeState(config, "codex");
-    const initialProfileId = scope.active_profile_id ?? scope.profiles[0]?.id ?? "";
-    const initialProfile = scope.profiles.find((profile) => profile.id === initialProfileId);
-    if (!initialProfile) {
-      return;
+    const next = nextProfileNameSyncState({
+      profiles: scope.profiles,
+      activeProfileId: scope.active_profile_id,
+      selectedId: selectedProfileId,
+      name: profileName,
+      sourceProfileId: profileNameSyncRef.current.sourceProfileId,
+      dirty: profileNameSyncRef.current.dirty
+    });
+    profileNameSyncRef.current = {
+      sourceProfileId: next.sourceProfileId,
+      dirty: next.dirty
+    };
+    if (next.selectedId !== selectedProfileId) {
+      setSelectedProfileId(next.selectedId);
     }
-
-    profileNameHydratedRef.current = true;
-    setSelectedProfileId(initialProfile.id);
-    setProfileName(initialProfile.name);
-  }, [config]);
+    if (next.name !== profileName) {
+      setProfileName(next.name);
+    }
+  }, [config, profileName, selectedProfileId]);
 
   useEffect(() => {
-    if (!config || claudeProfileNameHydratedRef.current) {
+    if (!config) {
       return;
     }
 
     const scope = profileScopeState(config, "claude");
-    const initialProfileId = scope.active_profile_id ?? scope.profiles[0]?.id ?? "";
-    const initialProfile = scope.profiles.find((profile) => profile.id === initialProfileId);
-    if (!initialProfile) {
-      return;
+    const next = nextProfileNameSyncState({
+      profiles: scope.profiles,
+      activeProfileId: scope.active_profile_id,
+      selectedId: selectedClaudeProfileId,
+      name: claudeProfileName,
+      sourceProfileId: claudeProfileNameSyncRef.current.sourceProfileId,
+      dirty: claudeProfileNameSyncRef.current.dirty
+    });
+    claudeProfileNameSyncRef.current = {
+      sourceProfileId: next.sourceProfileId,
+      dirty: next.dirty
+    };
+    if (next.selectedId !== selectedClaudeProfileId) {
+      setSelectedClaudeProfileId(next.selectedId);
     }
+    if (next.name !== claudeProfileName) {
+      setClaudeProfileName(next.name);
+    }
+  }, [claudeProfileName, config, selectedClaudeProfileId]);
 
-    claudeProfileNameHydratedRef.current = true;
-    setSelectedClaudeProfileId(initialProfile.id);
-    setClaudeProfileName(initialProfile.name);
-  }, [config]);
+  function setProfileNameDraft(name: string): void {
+    profileNameSyncRef.current.dirty = true;
+    setProfileName(name);
+  }
+
+  function setClaudeProfileNameDraft(name: string): void {
+    claudeProfileNameSyncRef.current.dirty = true;
+    setClaudeProfileName(name);
+  }
+
+  function setSyncedProfileName(name: string): void {
+    profileNameSyncRef.current = { sourceProfileId: null, dirty: false };
+    setProfileName(name);
+  }
+
+  function setSyncedClaudeProfileName(name: string): void {
+    claudeProfileNameSyncRef.current = { sourceProfileId: null, dirty: false };
+    setClaudeProfileName(name);
+  }
 
   function scopedProfileAccessors(scope: ConfigProfileScope): ScopedProfileAccessors {
     return scope === "codex"
       ? {
           name: profileName,
           selectedId: selectedProfileId,
-          setName: setProfileName,
+          setName: setSyncedProfileName,
           setSelectedId: setSelectedProfileId,
           state: profileState,
           setState: setProfileState,
@@ -110,7 +137,7 @@ export function useScopedProfileControls(config: PublicConfig | null) {
       : {
           name: claudeProfileName,
           selectedId: selectedClaudeProfileId,
-          setName: setClaudeProfileName,
+          setName: setSyncedClaudeProfileName,
           setSelectedId: setSelectedClaudeProfileId,
           state: claudeProfileState,
           setState: setClaudeProfileState,
@@ -129,8 +156,41 @@ export function useScopedProfileControls(config: PublicConfig | null) {
     scopedProfileAccessors,
     selectedClaudeProfileId,
     selectedProfileId,
-    setClaudeProfileName,
+    setClaudeProfileName: setClaudeProfileNameDraft,
     setProfileDeleteCandidate,
-    setProfileName
+    setProfileName: setProfileNameDraft
+  };
+}
+
+export function nextProfileNameSyncState(input: ProfileNameSyncInput): ProfileNameSyncResult {
+  const selectedProfileExists = input.profiles.some((profile) => profile.id === input.selectedId);
+  const selectedId = selectedProfileExists
+    ? input.selectedId
+    : input.activeProfileId ?? input.profiles[0]?.id ?? "";
+  const selectedProfile = input.profiles.find((profile) => profile.id === selectedId) ?? null;
+
+  if (!selectedProfile) {
+    return {
+      selectedId,
+      name: input.dirty ? input.name : "",
+      sourceProfileId: null,
+      dirty: input.dirty
+    };
+  }
+
+  if (input.dirty && input.sourceProfileId === selectedProfile.id) {
+    return {
+      selectedId,
+      name: input.name,
+      sourceProfileId: input.sourceProfileId,
+      dirty: true
+    };
+  }
+
+  return {
+    selectedId,
+    name: selectedProfile.name,
+    sourceProfileId: selectedProfile.id,
+    dirty: false
   };
 }

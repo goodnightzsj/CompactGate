@@ -31,7 +31,10 @@ import {
   extractJsonModel,
   routeForPath
 } from "./routing.js";
-import { StudioEventBroadcaster } from "./studio-events.js";
+import {
+  createStudioSnapshot,
+  StudioEventBroadcaster
+} from "./studio-events.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
@@ -79,6 +82,7 @@ export async function proxyOpenAiRequest(
     res,
     url,
     config,
+    configStore,
     logger,
     captureWriter,
     compactionBridge,
@@ -94,6 +98,7 @@ async function proxyPrimaryRequest(
   res: ServerResponse,
   url: URL,
   config: CompactGateConfig,
+  configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
@@ -123,6 +128,13 @@ async function proxyPrimaryRequest(
     route = plan.route;
     upstream = plan.upstream;
     primarySelection = plan.primarySelection;
+    await syncScheduledPrimaryProfile({
+      config,
+      configStore,
+      logger,
+      primarySelection,
+      studioEvents
+    });
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
@@ -172,7 +184,8 @@ async function proxyPrimaryRequest(
         errorSummary: transaction.errorSummary,
         responseBody: transaction.responseBody,
         responseHeaders: transaction.responseHeaders,
-        firstTokenMs: transaction.firstTokenMs
+        firstTokenMs: transaction.firstTokenMs,
+        usage: transaction.usage
       });
     }
 
@@ -202,6 +215,33 @@ async function proxyPrimaryRequest(
       responseHeaders: transaction.responseHeaders
     });
   }
+}
+
+async function syncScheduledPrimaryProfile({
+  config,
+  configStore,
+  logger,
+  primarySelection,
+  studioEvents
+}: {
+  config: CompactGateConfig;
+  configStore: ConfigStore;
+  logger: RequestLogger;
+  primarySelection: PrimaryRouteSelection | null;
+  studioEvents: StudioEventBroadcaster;
+}): Promise<void> {
+  const selectedProfileId = primarySelection?.profileId;
+  const activeProfileId = config.profile_scopes?.codex?.active_profile_id ?? null;
+  if (
+    !config.primary_failover.auto_schedule ||
+    !selectedProfileId ||
+    selectedProfileId === activeProfileId
+  ) {
+    return;
+  }
+
+  await configStore.applyProfile("codex", selectedProfileId);
+  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
 }
 
 async function proxyCompactRequest(

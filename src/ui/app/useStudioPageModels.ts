@@ -1,0 +1,134 @@
+import { useEffect, useMemo, useState } from "react";
+import type { PageMode, StudioPage } from "../app-types.js";
+import {
+  isFormDirty,
+  renderLinkedModel
+} from "../config/config-form-state.js";
+import { useConfigActions } from "../hooks/useConfigActions.js";
+import { useHealthRefresh } from "../hooks/useHealthRefresh.js";
+import { useLogFeed } from "../hooks/useLogFeed.js";
+import { useStudioBootstrap } from "../hooks/useStudioBootstrap.js";
+import { DEFAULT_LOG_PAGE_LIMIT } from "../logs/log-utils.js";
+import type { HealthResponse } from "../../shared/types.js";
+import type { ProfileDeleteDialogHostProps } from "./ProfileDeleteDialogHost.js";
+import type { StudioPageOutletProps } from "./StudioPageOutlet.js";
+import {
+  buildConfigPageModel,
+  buildDashboardPageModel,
+  buildHealthPageModel,
+  buildLogsPageModel,
+  buildProfileDeleteDialogModel,
+  buildRoutesPageModel
+} from "./studioPageModelBuilders.js";
+
+export function useStudioPageModels({
+  currentPage,
+  healthMode,
+  pageMode
+}: {
+  currentPage: StudioPage;
+  healthMode: boolean;
+  pageMode: PageMode;
+}): {
+  pageOutlet: StudioPageOutletProps;
+  profileDeleteDialog: ProfileDeleteDialogHostProps | null;
+  sidebarHealth: HealthResponse | null;
+} {
+  const {
+    config,
+    setConfig,
+    health,
+    setHealth,
+    form,
+    setForm,
+    pageError,
+    setPageError
+  } = useStudioBootstrap(pageMode);
+  const [currentModel, setCurrentModel] = useState("gpt-5.5");
+  const hasConfig = config !== null;
+  const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
+  const logFeed = useLogFeed({
+    enabled: !healthMode,
+    hasConfig,
+    logPageLimit,
+    setConfig,
+    setHealth
+  });
+  const healthRefresh = useHealthRefresh({
+    enabled: healthMode,
+    setHealth,
+    setPageError
+  });
+  const logs = logFeed.logPage.logs;
+  const latestLog = logs[0] ?? null;
+  const linkedCompactModel = renderLinkedModel(currentModel, form.modelTemplate);
+  const configActions = useConfigActions({
+    config,
+    form,
+    linkedCompactModel,
+    setConfig,
+    setForm,
+    setHealth,
+    setPageError
+  });
+  const effectiveCompactModel =
+    form.modelMode === "linked" ? linkedCompactModel : form.modelOverride || "手动模型";
+  const activeRoute = configActions.preview?.route ?? latestLog?.route ?? "compact";
+  const hasPendingChanges = useMemo(() => {
+    return config ? isFormDirty(config, form) : false;
+  }, [config, form]);
+
+  useEffect(() => {
+    if (latestLog?.source_model) {
+      setCurrentModel(latestLog.source_model);
+    }
+  }, [latestLog?.source_model]);
+
+  return {
+    pageOutlet: {
+      currentPage,
+      healthMode,
+      pageError,
+      healthPage: buildHealthPageModel({
+        health,
+        healthRefresh,
+        pageError
+      }),
+      dashboardPage: buildDashboardPageModel({
+        config,
+        configActions,
+        hasPendingChanges,
+        health,
+        logFeed,
+        logs
+      }),
+      routesPage: buildRoutesPageModel({
+        activeRoute,
+        compactModel: effectiveCompactModel,
+        config,
+        currentModel,
+        form,
+        latestLog
+      }),
+      configPage: buildConfigPageModel({
+        config,
+        configActions,
+        currentModel,
+        form,
+        hasPendingChanges,
+        linkedCompactModel,
+        setCurrentModel,
+        setForm
+      }),
+      logsPage: buildLogsPageModel({
+        logFeed,
+        logs,
+      })
+    },
+    profileDeleteDialog: buildProfileDeleteDialogModel({
+      configActions,
+      healthMode
+    }),
+    sidebarHealth: health
+  };
+}

@@ -15,6 +15,22 @@ export interface LogPageOptions {
   offset: number;
 }
 
+export const LOG_TOKEN_DETAILS_SQL = `(
+  input_tokens IS NOT NULL OR
+  output_tokens IS NOT NULL OR
+  cached_input_tokens IS NOT NULL OR
+  cached_output_tokens IS NOT NULL OR
+  cache_read_input_tokens IS NOT NULL OR
+  cache_creation_input_tokens IS NOT NULL OR
+  reasoning_tokens IS NOT NULL OR
+  total_tokens IS NOT NULL
+)`;
+
+export const LOG_STANDALONE_ERROR_SQL = `(
+  (status >= 400 OR error_summary IS NOT NULL) AND
+  NOT ${LOG_TOKEN_DETAILS_SQL}
+)`;
+
 export function providerCountsFromRouteCounts(
   counts: Record<"all" | RouteKind, number>
 ): ProviderLogCounts {
@@ -44,9 +60,9 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
   }
 
   if (options.status === "normal") {
-    conditions.push("status < 400 AND error_summary IS NULL");
+    conditions.push(`NOT ${LOG_STANDALONE_ERROR_SQL}`);
   } else if (options.status === "error") {
-    conditions.push("(status >= 400 OR error_summary IS NOT NULL)");
+    conditions.push(LOG_STANDALONE_ERROR_SQL);
   }
 
   if (options.host) {

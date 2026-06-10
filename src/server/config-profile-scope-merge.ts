@@ -91,7 +91,8 @@ function profileScopeNeedsNormalization(
         Object.hasOwn(profile.config, "claude") ||
         Object.hasOwn(profile.config, "listen") ||
         Object.hasOwn(profile.config, "timeouts") ||
-        Object.hasOwn(profile.config, "logging")
+        Object.hasOwn(profile.config, "logging") ||
+        Object.hasOwn(profile.config, "primary_failover")
       );
     }
 
@@ -100,7 +101,8 @@ function profileScopeNeedsNormalization(
       Object.hasOwn(profile.config, "compact") ||
       Object.hasOwn(profile.config, "listen") ||
       Object.hasOwn(profile.config, "timeouts") ||
-      Object.hasOwn(profile.config, "logging")
+      Object.hasOwn(profile.config, "logging") ||
+      Object.hasOwn(profile.config, "primary_failover")
     );
   });
 }

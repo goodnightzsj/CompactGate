@@ -18,13 +18,15 @@ describe("ConfigStore", () => {
         model_mode: "custom",
         model_override: "manual-compact"
       },
-      logging: { keep_recent: 17 }
+      logging: { keep_recent: 17 },
+      primary_failover: { auto_schedule: false }
     });
 
     expect(next.primary.base_url).toBe("http://127.0.0.1:9001/v1");
     expect(next.compact.model_mode).toBe("custom");
     expect(next.compact.model_override).toBe("manual-compact");
     expect(next.logging.keep_recent).toBe(17);
+    expect(next.primary_failover.auto_schedule).toBe(false);
     expect(next.route_url_presets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:9001/v1" }),
@@ -33,7 +35,8 @@ describe("ConfigStore", () => {
     );
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       primary: { base_url: "http://127.0.0.1:9001/v1" },
-      compact: { model_override: "manual-compact" }
+      compact: { model_override: "manual-compact" },
+      primary_failover: { auto_schedule: false }
     });
   });
 

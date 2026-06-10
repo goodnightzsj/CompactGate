@@ -139,7 +139,8 @@ function writeSseEvent(
 
 function writeSseChunk(res: ServerResponse, chunk: string): boolean {
   try {
-    return res.write(chunk);
+    res.write(chunk);
+    return true;
   } catch {
     return false;
   }
