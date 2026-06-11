@@ -37,9 +37,28 @@ export function RouteConfigPanel({
           storedApiKey={config?.primary.stored_api_key ?? false}
           clearApiKey={form.clearCodexPrimaryApiKey}
           routeUrlSuggestions={routeUrlSuggestions(config, "codex_primary")}
-          onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, codexPrimaryBaseUrl: value }))}
-          onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, codexPrimaryApiKey: value, clearCodexPrimaryApiKey: false }))}
-          onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, codexPrimaryApiKey: "", clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey }))}
+          onBaseUrlChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            codexPrimaryBaseUrl: value,
+            codexPrimaryCredentialPresetId: ""
+          }))}
+          onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
+            ...previous,
+            codexPrimaryBaseUrl: suggestion.baseUrl,
+            codexPrimaryCredentialPresetId: suggestion.credentialPresetId
+          }))}
+          onApiKeyChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            codexPrimaryApiKey: value,
+            clearCodexPrimaryApiKey: false,
+            codexPrimaryCredentialPresetId: ""
+          }))}
+          onToggleClearApiKey={() => onFormChange((previous) => ({
+            ...previous,
+            codexPrimaryApiKey: "",
+            clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey,
+            codexPrimaryCredentialPresetId: ""
+          }))}
         />
         <RouteCredentialFields
           title="Codex 压缩路由" badge="压缩" tone="compact"
@@ -49,16 +68,27 @@ export function RouteConfigPanel({
           storedApiKey={config?.compact.stored_api_key ?? false}
           clearApiKey={form.clearCodexCompactApiKey}
           routeUrlSuggestions={routeUrlSuggestions(config, "codex_compact")}
-          onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, codexCompactBaseUrl: value }))}
+          onBaseUrlChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            codexCompactBaseUrl: value,
+            codexCompactCredentialPresetId: ""
+          }))}
+          onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
+            ...previous,
+            codexCompactBaseUrl: suggestion.baseUrl,
+            codexCompactCredentialPresetId: suggestion.credentialPresetId
+          }))}
           onApiKeyChange={(value) => onFormChange((previous) => ({
             ...previous,
             codexCompactApiKey: value,
-            clearCodexCompactApiKey: false
+            clearCodexCompactApiKey: false,
+            codexCompactCredentialPresetId: ""
           }))}
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             codexCompactApiKey: "",
-            clearCodexCompactApiKey: !previous.clearCodexCompactApiKey
+            clearCodexCompactApiKey: !previous.clearCodexCompactApiKey,
+            codexCompactCredentialPresetId: ""
           }))}
         />
       </div>
@@ -71,9 +101,28 @@ export function RouteConfigPanel({
           storedApiKey={config?.claude.primary.stored_api_key ?? false}
           clearApiKey={form.clearClaudePrimaryApiKey}
           routeUrlSuggestions={routeUrlSuggestions(config, "claude_primary")}
-          onBaseUrlChange={(value) => onFormChange((previous) => ({ ...previous, claudePrimaryBaseUrl: value }))}
-          onApiKeyChange={(value) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: value, clearClaudePrimaryApiKey: false }))}
-          onToggleClearApiKey={() => onFormChange((previous) => ({ ...previous, claudePrimaryApiKey: "", clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey }))}
+          onBaseUrlChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            claudePrimaryBaseUrl: value,
+            claudePrimaryCredentialPresetId: ""
+          }))}
+          onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
+            ...previous,
+            claudePrimaryBaseUrl: suggestion.baseUrl,
+            claudePrimaryCredentialPresetId: suggestion.credentialPresetId
+          }))}
+          onApiKeyChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            claudePrimaryApiKey: value,
+            clearClaudePrimaryApiKey: false,
+            claudePrimaryCredentialPresetId: ""
+          }))}
+          onToggleClearApiKey={() => onFormChange((previous) => ({
+            ...previous,
+            claudePrimaryApiKey: "",
+            clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey,
+            claudePrimaryCredentialPresetId: ""
+          }))}
         />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
@@ -157,6 +206,10 @@ export function routeUrlSuggestions(
     seen.add(key);
     suggestions.push({
       baseUrl: preset.base_url,
+      credentialPresetId: preset.id,
+      apiKeyEnv: preset.api_key_env ?? "",
+      storedApiKey: preset.stored_api_key ?? false,
+      apiKeyConfigured: preset.api_key_configured ?? false,
       host: preset.host || hostLabel(preset.base_url),
       label: `已保存 ${preset.usage_count} 次`,
       updatedAt: preset.updated_at
@@ -177,6 +230,10 @@ export function routeUrlSuggestions(
     seen.add(key);
     suggestions.push({
       baseUrl,
+      credentialPresetId: "",
+      apiKeyEnv: "",
+      storedApiKey: false,
+      apiKeyConfigured: false,
       host: hostLabel(baseUrl),
       label: `档案：${profile.name}`,
       updatedAt: profile.updated_at

@@ -39,7 +39,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-compactgate-route")).toBe("compact");
     assertCaptured(captured.current);
-    expect(captured.current.url).toBe("/v1/responses");
+    expect(captured.current.url).toBe("/v1/responses/compact");
     expect(JSON.parse(captured.current.body)).toEqual({
       model: "gpt-5.5-openai-compact",
       stream: true

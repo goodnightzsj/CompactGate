@@ -77,6 +77,7 @@ describe("ConfigStore", () => {
       }
     });
     const publicConfig = store.toPublicConfig();
+    const savedPreset = store.get().route_url_presets?.find((preset) => preset.kind === "codex_primary");
 
     expect(JSON.stringify(publicConfig)).not.toContain("secret-primary");
     expect(JSON.stringify(publicConfig)).not.toContain("saved-primary-key");
@@ -84,6 +85,64 @@ describe("ConfigStore", () => {
     expect("api_key" in publicConfig.primary).toBe(false);
     expect(publicConfig.primary.stored_api_key).toBe(true);
     expect(publicConfig.primary.api_key_configured).toBe(true);
+    expect(savedPreset).toMatchObject({
+      api_key: "saved-primary-key",
+      api_key_env: "PRIMARY_API_KEY"
+    });
+    expect(publicConfig.route_url_presets.find((preset) => preset.kind === "codex_primary")).toMatchObject({
+      stored_api_key: true,
+      api_key_env: "PRIMARY_API_KEY"
+    });
+  });
+
+  it("restores route credentials from selected URL presets without overriding manual keys", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    const presetBaseUrl = "http://127.0.0.1:9051/v1";
+
+    await store.patch({
+      primary: {
+        base_url: presetBaseUrl,
+        api_key: "preset-primary-key",
+        api_key_env: "PRESET_PRIMARY_KEY"
+      }
+    });
+    const credentialPresetId =
+      store.get().route_url_presets?.find((preset) => preset.kind === "codex_primary" && preset.base_url === presetBaseUrl)?.id ?? "";
+
+    await store.patch({
+      primary: {
+        base_url: "http://127.0.0.1:9052/v1",
+        api_key: "",
+        api_key_env: ""
+      }
+    });
+    await store.patch({
+      primary: {
+        base_url: presetBaseUrl,
+        credential_preset_id: credentialPresetId
+      }
+    });
+
+    expect(store.get().primary).toMatchObject({
+      base_url: presetBaseUrl,
+      api_key: "preset-primary-key",
+      api_key_env: "PRESET_PRIMARY_KEY"
+    });
+
+    await store.patch({
+      primary: {
+        base_url: presetBaseUrl,
+        credential_preset_id: credentialPresetId,
+        api_key: "manual-primary-key",
+        api_key_env: "MANUAL_PRIMARY_KEY"
+      }
+    });
+
+    expect(store.get().primary).toMatchObject({
+      api_key: "manual-primary-key",
+      api_key_env: "MANUAL_PRIMARY_KEY"
+    });
   });
 
   it("bounds persisted route URL presets per route kind", async () => {

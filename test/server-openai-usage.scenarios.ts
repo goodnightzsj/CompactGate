@@ -282,7 +282,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(response.headers.get("x-compactgate-route")).toBe("compact");
     expect(response.headers.get("x-compactgate-model")).toBe("gpt-5.5-openai-compact");
     assertCaptured(captured.current);
-    expect(captured.current.url).toBe("/v1/responses");
+    expect(captured.current.url).toBe("/v1/responses/compact");
     expect(JSON.parse(captured.current.body)).toEqual({
       model: "gpt-5.5-openai-compact",
       stream: true,
@@ -316,7 +316,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(response.headers.get("x-compactgate-route")).toBe("compact");
     expect(response.headers.get("x-compactgate-model")).toBe("gpt-5.5-openai-compact");
     assertCaptured(captured.current);
-    expect(captured.current.url).toBe("/v1/responses");
+    expect(captured.current.url).toBe("/v1/responses/compact");
     expect(captured.current.headers["content-encoding"]).toBeUndefined();
     expect(captured.current.headers["content-length"]).toBe(String(Buffer.byteLength(captured.current.body)));
     expect(JSON.parse(captured.current.body)).toEqual({
@@ -364,7 +364,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(body).toContain('"type":"response.output_text.delta"');
     expect(body).toContain('"type":"response.completed"');
     assertCaptured(captured.current);
-    expect(captured.current.url).toBe("/v1/responses");
+    expect(captured.current.url).toBe("/v1/responses/compact");
     expect(JSON.parse(captured.current.body)).toEqual({
       model: "gpt-5.5-openai-compact",
       stream: true,

@@ -54,7 +54,7 @@ describe("ConfigStore", () => {
         expect.objectContaining({ kind: "codex_compact", base_url: "http://127.0.0.1:9202/v1" })
       ])
     );
-    expect(JSON.stringify(saved.route_url_presets)).not.toContain("profile-compact-key");
+    expect(JSON.stringify(saved.route_url_presets)).toContain("profile-compact-key");
 
     const publicConfig = store.toPublicConfig();
     expect(publicConfig.profiles).toHaveLength(1);
@@ -76,6 +76,7 @@ describe("ConfigStore", () => {
     });
     expect(JSON.stringify(publicConfig)).not.toContain("profile-primary-key");
     expect(JSON.stringify(publicConfig)).not.toContain("profile-claude-compact-key");
+    expect(JSON.stringify(publicConfig.route_url_presets)).not.toContain("profile-compact-key");
 
     await store.applyProfile(profileId ?? "");
     const applied = store.get();

@@ -9,7 +9,7 @@ import type {
   SavedConfigProfileScopeState
 } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
-import { cloneRouteUrlPreset } from "./config-route-presets.js";
+import { publicRouteUrlPreset } from "./config-route-presets.js";
 import { safeHost } from "./config-url.js";
 
 export function buildPublicConfig({
@@ -103,7 +103,7 @@ export function buildPublicConfig({
       codex: codexProfileScope,
       claude: claudeProfileScope
     },
-    route_url_presets: (config.route_url_presets ?? []).map(cloneRouteUrlPreset),
+    route_url_presets: (config.route_url_presets ?? []).map(publicRouteUrlPreset),
     config_path: configPath,
     last_saved_at: lastSavedAt
   };

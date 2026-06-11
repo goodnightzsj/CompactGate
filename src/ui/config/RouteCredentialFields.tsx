@@ -4,6 +4,10 @@ import { Field } from "./Field.js";
 
 export type RouteUrlSuggestion = {
   baseUrl: string;
+  credentialPresetId: string;
+  apiKeyEnv: string;
+  storedApiKey: boolean;
+  apiKeyConfigured: boolean;
   host: string;
   label: string;
   updatedAt: string;
@@ -23,6 +27,7 @@ export function RouteCredentialFields({
   clearApiKey,
   routeUrlSuggestions = [],
   onBaseUrlChange,
+  onSuggestionSelect,
   onApiKeyChange,
   onToggleClearApiKey
 }: {
@@ -39,6 +44,7 @@ export function RouteCredentialFields({
   clearApiKey: boolean;
   routeUrlSuggestions?: RouteUrlSuggestion[];
   onBaseUrlChange: (value: string) => void;
+  onSuggestionSelect?: (suggestion: RouteUrlSuggestion) => void;
   onApiKeyChange: (value: string) => void;
   onToggleClearApiKey: () => void;
 }) {
@@ -64,7 +70,11 @@ export function RouteCredentialFields({
   }, [showSuggestions, visibleSuggestions.length]);
 
   function selectSuggestion(suggestion: RouteUrlSuggestion) {
-    onBaseUrlChange(suggestion.baseUrl);
+    if (onSuggestionSelect) {
+      onSuggestionSelect(suggestion);
+    } else {
+      onBaseUrlChange(suggestion.baseUrl);
+    }
     setUrlSuggestionsOpen(false);
     setActiveSuggestionIndex(-1);
   }
@@ -159,6 +169,7 @@ export function RouteCredentialFields({
                   </span>
                   <span className="route-url-suggestion-meta">
                     <span>{suggestion.label}</span>
+                    <span>{credentialSummary(suggestion)}</span>
                     <span>{formatClock(suggestion.updatedAt)}</span>
                   </span>
                 </button>
@@ -192,4 +203,18 @@ export function RouteCredentialFields({
       </Field>
     </section>
   );
+}
+
+function credentialSummary(suggestion: RouteUrlSuggestion): string {
+  if (suggestion.storedApiKey) {
+    return "含直填密钥";
+  }
+
+  if (suggestion.apiKeyEnv) {
+    return suggestion.apiKeyConfigured
+      ? `环境变量 ${suggestion.apiKeyEnv}`
+      : `环境变量 ${suggestion.apiKeyEnv} 未设置`;
+  }
+
+  return "无绑定密钥";
 }

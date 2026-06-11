@@ -88,10 +88,6 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
 }
 
 export function compactUpstreamPath(_config: CompactGateConfig, requestPath: string): string {
-  if (requestPath === "/v1/responses/compact") {
-    return "/v1/responses";
-  }
-
   return requestPath;
 }
 

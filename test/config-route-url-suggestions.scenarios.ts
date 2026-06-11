@@ -13,7 +13,11 @@ describe("Route URL suggestions", () => {
     ];
     const config = {
       route_url_presets: [
-        routeUrlPreset("codex_compact", persistedOnlyUrl, 3, "2026-06-07T00:00:03.000Z"),
+        routeUrlPreset("codex_compact", persistedOnlyUrl, 3, "2026-06-07T00:00:03.000Z", {
+          apiKeyEnv: "COMPACT_PRESET_KEY",
+          storedApiKey: true,
+          apiKeyConfigured: true
+        }),
         routeUrlPreset("codex_compact", profileUrl, 2, "2026-06-07T00:00:02.000Z"),
         routeUrlPreset("codex_primary", "http://127.0.0.1:7101/v1", 4, "2026-06-07T00:00:04.000Z")
       ],
@@ -39,10 +43,15 @@ describe("Route URL suggestions", () => {
       fallbackProfileUrl
     ]);
     expect(suggestions[0]).toMatchObject({
+      credentialPresetId: "codex_compact-3",
       host: "127.0.0.1:7001",
-      label: "已保存 3 次"
+      label: "已保存 3 次",
+      apiKeyEnv: "COMPACT_PRESET_KEY",
+      storedApiKey: true,
+      apiKeyConfigured: true
     });
     expect(suggestions[2]).toMatchObject({
+      credentialPresetId: "",
       host: "127.0.0.1:7003",
       label: "档案：Fallback profile"
     });
@@ -77,12 +86,20 @@ function routeUrlPreset(
   kind: "codex_primary" | "codex_compact",
   baseUrl: string,
   usageCount: number,
-  updatedAt: string
+  updatedAt: string,
+  credentials: {
+    apiKeyEnv?: string;
+    storedApiKey?: boolean;
+    apiKeyConfigured?: boolean;
+  } = {}
 ) {
   return {
     id: `${kind}-${usageCount}`,
     kind,
     base_url: baseUrl,
+    api_key_env: credentials.apiKeyEnv ?? "",
+    stored_api_key: credentials.storedApiKey ?? false,
+    api_key_configured: credentials.apiKeyConfigured ?? false,
     host: new URL(baseUrl).host,
     created_at: "2026-06-07T00:00:00.000Z",
     updated_at: updatedAt,

@@ -58,7 +58,7 @@ describe("routing helpers", () => {
     );
 
     expect(preview.route).toBe("compact");
-    expect(preview.upstream_url).toBe("https://compact.example/v1/responses");
+    expect(preview.upstream_url).toBe("https://compact.example/v1/responses/compact");
     expect(preview.source_model).toBe("gpt-5.5");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
     expect(preview.body_rewritten).toBe(true);
@@ -84,7 +84,7 @@ describe("routing helpers", () => {
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
   });
 
-  it("rewrites the local compact endpoint to the standard upstream responses path", () => {
+  it("preserves the native compact endpoint when forwarding upstream", () => {
     const config: CompactGateConfig = {
       ...DEFAULT_CONFIG,
       primary: {
@@ -103,9 +103,9 @@ describe("routing helpers", () => {
       config
     );
 
-    expect(compactUpstreamPath(config, "/v1/responses/compact")).toBe("/v1/responses");
+    expect(compactUpstreamPath(config, "/v1/responses/compact")).toBe("/v1/responses/compact");
     expect(preview.route).toBe("compact");
-    expect(preview.upstream_url).toBe("https://compact-route.example/v1/responses?trace=1");
+    expect(preview.upstream_url).toBe("https://compact-route.example/v1/responses/compact?trace=1");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
   });
 });

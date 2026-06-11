@@ -2,6 +2,7 @@ import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
   ConfigProfileScope,
+  PublicRouteUrlPreset,
   RouteUrlPreset,
   RouteUrlPresetKind,
   SavedConfigProfileConfig
@@ -17,7 +18,13 @@ const ROUTE_URL_PRESET_KINDS: RouteUrlPresetKind[] = [
 ];
 const MAX_ROUTE_URL_PRESETS_PER_KIND = 24;
 
-type RouteUrlPresetEntry = Pick<RouteUrlPreset, "kind" | "base_url">;
+type RouteUrlPresetEntry = Pick<RouteUrlPreset, "kind" | "base_url" | "api_key" | "api_key_env">;
+type RouteConfigWithCredentialPreset = {
+  base_url?: unknown;
+  api_key?: unknown;
+  api_key_env?: unknown;
+  credential_preset_id?: unknown;
+};
 
 export function isRouteUrlPresetKind(value: string): value is RouteUrlPresetKind {
   return ROUTE_URL_PRESET_KINDS.includes(value as RouteUrlPresetKind);
@@ -25,10 +32,10 @@ export function isRouteUrlPresetKind(value: string): value is RouteUrlPresetKind
 
 export function routeUrlEntriesFromRuntime(config: CompactGateRuntimeConfig): RouteUrlPresetEntry[] {
   return [
-    { kind: "codex_primary", base_url: config.primary.base_url },
-    { kind: "codex_compact", base_url: config.compact.base_url },
-    { kind: "claude_primary", base_url: config.claude.primary.base_url },
-    { kind: "claude_compact", base_url: config.claude.compact.base_url }
+    routeUrlEntry("codex_primary", config.primary),
+    routeUrlEntry("codex_compact", config.compact),
+    routeUrlEntry("claude_primary", config.claude.primary),
+    routeUrlEntry("claude_compact", config.claude.compact)
   ];
 }
 
@@ -40,15 +47,46 @@ export function routeUrlEntriesFromProfileConfig(
   const runtime = profileConfigToRuntime(config);
   if (scope === "codex") {
     return [
-      { kind: "codex_primary", base_url: runtime.primary.base_url },
-      { kind: "codex_compact", base_url: runtime.compact.base_url }
+      routeUrlEntry("codex_primary", runtime.primary),
+      routeUrlEntry("codex_compact", runtime.compact)
     ];
   }
 
   return [
-    { kind: "claude_primary", base_url: runtime.claude.primary.base_url },
-    { kind: "claude_compact", base_url: runtime.claude.compact.base_url }
+    routeUrlEntry("claude_primary", runtime.claude.primary),
+    routeUrlEntry("claude_compact", runtime.claude.compact)
   ];
+}
+
+export function publicRouteUrlPreset(preset: RouteUrlPreset): PublicRouteUrlPreset {
+  return {
+    id: preset.id,
+    kind: preset.kind,
+    base_url: preset.base_url,
+    api_key_env: preset.api_key_env,
+    stored_api_key: directApiKeyConfigured(preset.api_key),
+    api_key_configured: directApiKeyConfigured(preset.api_key) || envApiKeyConfigured(preset.api_key_env),
+    host: preset.host,
+    created_at: preset.created_at,
+    updated_at: preset.updated_at,
+    usage_count: preset.usage_count
+  };
+}
+
+export function applyRouteUrlCredentialPresetBindings(
+  config: CompactGateConfig,
+  patch: unknown
+): unknown {
+  if (!isRecord(patch)) {
+    return patch;
+  }
+
+  return {
+    ...patch,
+    primary: applyCredentialPresetToRoutePatch(config, "codex_primary", readChild(patch.primary)),
+    compact: applyCredentialPresetToRoutePatch(config, "codex_compact", readChild(patch.compact)),
+    claude: applyClaudeCredentialPresetPatch(config, readChild(patch.claude))
+  };
 }
 
 export function withRecordedRouteUrlPresets(
@@ -72,6 +110,8 @@ export function withRecordedRouteUrlPresets(
     if (!baseUrl) {
       continue;
     }
+    const apiKey = entry.api_key.trim();
+    const apiKeyEnv = entry.api_key_env.trim();
 
     if (!isRouteUrlPresetKind(kind)) {
       throw new ConfigError("route_url_presets.kind must be a known route URL preset kind.");
@@ -90,6 +130,8 @@ export function withRecordedRouteUrlPresets(
     const existing = presets.find((preset) => routeUrlPresetKey(preset.kind, preset.base_url) === key);
     if (existing) {
       existing.base_url = baseUrl;
+      existing.api_key = apiKey;
+      existing.api_key_env = apiKeyEnv;
       existing.host = safeHost(baseUrl);
       existing.updated_at = now;
       existing.usage_count += 1;
@@ -102,6 +144,8 @@ export function withRecordedRouteUrlPresets(
       id: createRouteUrlPresetId(kind, baseUrl),
       kind,
       base_url: baseUrl,
+      api_key: apiKey,
+      api_key_env: apiKeyEnv,
       host: safeHost(baseUrl),
       created_at: now,
       updated_at: now,
@@ -131,6 +175,63 @@ export function cloneRouteUrlPreset(preset: RouteUrlPreset): RouteUrlPreset {
   return { ...preset };
 }
 
+function routeUrlEntry(
+  kind: RouteUrlPresetKind,
+  config: CompactGateRuntimeConfig["primary"]
+): RouteUrlPresetEntry {
+  return {
+    kind,
+    base_url: config.base_url,
+    api_key: config.api_key,
+    api_key_env: config.api_key_env
+  };
+}
+
+function applyClaudeCredentialPresetPatch(
+  config: CompactGateConfig,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  if (Object.keys(patch).length === 0) {
+    return patch;
+  }
+
+  return {
+    ...patch,
+    primary: applyCredentialPresetToRoutePatch(config, "claude_primary", readChild(patch.primary)),
+    compact: applyCredentialPresetToRoutePatch(config, "claude_compact", readChild(patch.compact))
+  };
+}
+
+function applyCredentialPresetToRoutePatch(
+  config: CompactGateConfig,
+  kind: RouteUrlPresetKind,
+  patch: RouteConfigWithCredentialPreset
+): Record<string, unknown> {
+  const presetId = readString(patch.credential_preset_id, "");
+  if (!presetId) {
+    return patch as Record<string, unknown>;
+  }
+
+  const preset = (config.route_url_presets ?? []).find((candidate) =>
+    candidate.kind === kind && candidate.id === presetId
+  );
+  if (!preset) {
+    throw new ConfigError(`${kind}.credential_preset_id must reference a saved URL preset.`);
+  }
+
+  const patchBaseUrl = readString(patch.base_url, "");
+  if (patchBaseUrl && normalizeRouteUrl(patchBaseUrl) !== normalizeRouteUrl(preset.base_url)) {
+    throw new ConfigError(`${kind}.credential_preset_id must match the selected base_url.`);
+  }
+
+  return {
+    ...patch,
+    base_url: patchBaseUrl || preset.base_url,
+    ...(!Object.hasOwn(patch, "api_key") ? { api_key: preset.api_key } : {}),
+    ...(!Object.hasOwn(patch, "api_key_env") ? { api_key_env: preset.api_key_env } : {})
+  };
+}
+
 function readRouteUrlPreset(value: unknown): RouteUrlPreset | null {
   if (!isRecord(value)) {
     return null;
@@ -154,6 +255,8 @@ function readRouteUrlPreset(value: unknown): RouteUrlPreset | null {
     id: readString(value.id, createRouteUrlPresetId(kind, baseUrl)),
     kind,
     base_url: baseUrl,
+    api_key: readString(value.api_key, ""),
+    api_key_env: readString(value.api_key_env, ""),
     host: safeHost(baseUrl),
     created_at: createdAt,
     updated_at: updatedAt,
@@ -233,4 +336,17 @@ function readNumber(value: unknown, fallback: number): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readChild(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function directApiKeyConfigured(value: string): boolean {
+  return value.trim().length > 0;
+}
+
+function envApiKeyConfigured(value: string): boolean {
+  const envName = value.trim();
+  return envName.length > 0 && typeof process.env[envName] === "string" && process.env[envName].length > 0;
 }

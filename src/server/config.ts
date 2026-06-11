@@ -38,6 +38,7 @@ import {
 } from "./config-profile-scope.js";
 import { buildPublicConfig } from "./config-public.js";
 import {
+  applyRouteUrlCredentialPresetBindings,
   isRouteUrlPresetKind,
   mergeRouteUrlPresets,
   routeUrlEntriesFromRuntime,
@@ -100,7 +101,7 @@ export class ConfigStore {
     }
 
     return this.mutate(() => {
-      const merged = mergeConfig(this.current, patch);
+      const merged = mergeConfig(this.current, applyRouteUrlCredentialPresetBindings(this.current, patch));
       return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
         ...merged,
         profiles: undefined,
@@ -130,7 +131,9 @@ export class ConfigStore {
     maybePatch?: unknown
   ): Promise<CompactGateConfig> {
     const { scope, name, patch } = normalizeProfileOperationArgs(scopeOrName, nameOrPatch, maybePatch);
-    return this.mutate(() => saveConfigProfile(this.current, scope, name, patch));
+    return this.mutate(() =>
+      saveConfigProfile(this.current, scope, name, applyRouteUrlCredentialPresetBindings(this.current, patch))
+    );
   }
 
   async updateProfile(
@@ -145,7 +148,15 @@ export class ConfigStore {
       nameOrPatch,
       maybePatch
     );
-    return this.mutate(() => updateConfigProfile(this.current, scope, profileId, name, patch));
+    return this.mutate(() =>
+      updateConfigProfile(
+        this.current,
+        scope,
+        profileId,
+        name,
+        applyRouteUrlCredentialPresetBindings(this.current, patch)
+      )
+    );
   }
 
   async duplicateProfile(
@@ -232,6 +243,13 @@ function validateRouteUrlPreset(preset: RouteUrlPreset): void {
 
   if (!Number.isInteger(preset.usage_count) || preset.usage_count < 1) {
     throw new ConfigError("route_url_presets.usage_count must be a positive integer.");
+  }
+
+  if (
+    preset.api_key_env.trim().length > 0 &&
+    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(preset.api_key_env)
+  ) {
+    throw new ConfigError("route_url_presets.api_key_env must be an environment variable name.");
   }
 }
 

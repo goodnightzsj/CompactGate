@@ -102,6 +102,21 @@ export interface RouteUrlPreset {
   id: string;
   kind: RouteUrlPresetKind;
   base_url: string;
+  api_key: string;
+  api_key_env: string;
+  host: string;
+  created_at: string;
+  updated_at: string;
+  usage_count: number;
+}
+
+export interface PublicRouteUrlPreset {
+  id: string;
+  kind: RouteUrlPresetKind;
+  base_url: string;
+  api_key_env: string;
+  stored_api_key: boolean;
+  api_key_configured: boolean;
   host: string;
   created_at: string;
   updated_at: string;
@@ -191,7 +206,7 @@ export interface PublicConfig {
   /** @deprecated Use profile_scopes.codex.active_profile_id. */
   active_profile_id: string | null;
   profile_scopes: PublicConfigProfileScopes;
-  route_url_presets: RouteUrlPreset[];
+  route_url_presets: PublicRouteUrlPreset[];
   config_path: string;
   last_saved_at: string | null;
 }
