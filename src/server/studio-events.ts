@@ -3,6 +3,7 @@ import type { RequestLogEntry, StudioLogEvent, StudioSnapshotEvent } from "../sh
 import type { ConfigStore } from "./config.js";
 import { healthForConfig } from "./health.js";
 import type { RequestLogger } from "./logger.js";
+import { stripLogEntryBodies } from "./logger-helpers.js";
 
 interface StudioSseClient {
   keepAliveTimer: ReturnType<typeof setInterval>;
@@ -68,7 +69,7 @@ export class StudioEventBroadcaster {
   }
 
   broadcastLog(entry: RequestLogEntry): void {
-    this.broadcast("log", { entry });
+    this.broadcast("log", { entry: stripLogEntryBodies(entry) });
   }
 
   broadcastSnapshot(snapshot: StudioSnapshotEvent): void {

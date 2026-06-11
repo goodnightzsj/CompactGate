@@ -1,9 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { RequestLogger } from "../src/server/logger.js";
+import {
+  DEFAULT_MAX_LOG_DATABASE_BYTES,
+  RequestLogger
+} from "../src/server/logger.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -18,6 +22,10 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("defaults the persisted SQLite database cap to 20 GiB", () => {
+    expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(20 * 1024 * 1024 * 1024);
+  });
+
   it("does not cap persisted SQLite logs by default", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -112,6 +120,30 @@ describe("RequestLogger", () => {
       ]);
     } finally {
       reopenedLogger.close();
+    }
+  });
+
+  it("prunes oldest persisted logs when the database exceeds the byte cap", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const maxDatabaseBytes = 120 * 1024;
+    const logger = new RequestLogger(10, databasePath, {
+      maxDatabaseBytes
+    });
+
+    try {
+      for (let index = 1; index <= 6; index += 1) {
+        logger.add(logEntry(index, "x".repeat(16 * 1024)));
+      }
+
+      const page = logger.page({ limit: 10, offset: 0 });
+      expect(page.all_total).toBeLessThan(6);
+      expect(page.logs[0].source_model).toBe("gpt-5.6");
+      expect(page.logs.some((entry) => entry.source_model === "gpt-5.1")).toBe(false);
+      expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(maxDatabaseBytes);
+    } finally {
+      logger.close();
     }
   });
 
@@ -266,7 +298,7 @@ describe("RequestLogger", () => {
   });
 });
 
-function logEntry(index: number): RequestLogEntry {
+function logEntry(index: number, body = ""): RequestLogEntry {
   return {
     time: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
     route: "compact",
@@ -276,6 +308,9 @@ function logEntry(index: number): RequestLogEntry {
     request_type: "http",
     reasoning_effort: null,
     request_summary: null,
+    incoming_request_body: body.length > 0 ? body : null,
+    upstream_request_body: body.length > 0 ? body : null,
+    upstream_response_body: body.length > 0 ? body : null,
     source_model: `gpt-5.${index}`,
     target_model: `gpt-5.${index}-compact`,
     status: 200,
@@ -296,4 +331,14 @@ function logEntry(index: number): RequestLogEntry {
     request_id: `request-${index}`,
     error_summary: null
   };
+}
+
+function databaseFootprintBytes(databasePath: string): number {
+  return [
+    databasePath,
+    `${databasePath}-wal`,
+    `${databasePath}-shm`
+  ].reduce((total, filePath) => {
+    return total + (existsSync(filePath) ? statSync(filePath).size : 0);
+  }, 0);
 }

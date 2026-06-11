@@ -86,6 +86,7 @@ export async function proxyClaudeRequest(
           "x-compactgate-claude-route": "primary",
           "x-compactgate-request-id": requestId
         },
+        maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
         writeResponse: true
       });
 

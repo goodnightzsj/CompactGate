@@ -50,6 +50,7 @@ export async function startAppInDir(
   }
 
   return {
+    dir,
     url: `http://127.0.0.1:${address.port}`,
     close: closeServer
   };

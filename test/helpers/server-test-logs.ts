@@ -56,6 +56,40 @@ export function readLogCount(databasePath: string): number {
   }
 }
 
+export function readLatestLogBodyFields(databasePath: string): {
+  incoming_request_body: string | null;
+  upstream_request_body: string | null;
+  upstream_response_body: string | null;
+} {
+  const db = new DatabaseSync(databasePath);
+  try {
+    const row = db
+      .prepare(
+        `
+          SELECT
+            incoming_request_body,
+            upstream_request_body,
+            upstream_response_body
+          FROM request_logs
+          ORDER BY id DESC
+          LIMIT 1
+        `
+      )
+      .get() as {
+        incoming_request_body: string | null;
+        upstream_request_body: string | null;
+        upstream_response_body: string | null;
+      } | undefined;
+    if (!row) {
+      throw new Error("Expected at least one persisted request log.");
+    }
+
+    return row;
+  } finally {
+    db.close();
+  }
+}
+
 export function seedLegacyLogDatabase(databasePath: string): void {
   const db = new DatabaseSync(databasePath);
   try {

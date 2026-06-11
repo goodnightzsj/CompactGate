@@ -90,7 +90,9 @@ describe("CompactGate OpenAI routing", () => {
       total_tokens: 64113
     });
     expect(entry.first_token_ms).toEqual(expect.any(Number));
-    expect(JSON.stringify(entry)).not.toContain("sensitive prompt");
+    expect(entry.incoming_request_body).toBeNull();
+    expect(entry.upstream_request_body).toBeNull();
+    expect(entry.upstream_response_body).toBeNull();
     expect("cost" in entry).toBe(false);
     expect("billing_mode" in entry).toBe(false);
   });

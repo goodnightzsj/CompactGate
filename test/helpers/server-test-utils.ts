@@ -9,6 +9,7 @@ export {
 export {
   fetchLogPage,
   fetchRecentLogs,
+  readLatestLogBodyFields,
   readLogCount,
   seedLegacyLogDatabase,
   sendCompactRequest,

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
@@ -26,8 +26,15 @@ import {
 } from "./logger-schema.js";
 
 export interface RequestLoggerOptions {
+  maxDatabaseBytes?: number;
   maxPersistedEntries?: number;
 }
+
+export const DEFAULT_MAX_LOG_DATABASE_BYTES = 20 * 1024 * 1024 * 1024;
+
+const STORAGE_PRUNE_DELETE_FRACTION = 0.1;
+const STORAGE_PRUNE_MIN_DELETE_ROWS = 100;
+const STORAGE_PRUNE_MAX_PASSES = 20;
 
 export function resolveDefaultLogDatabasePath(configPath: string): string {
   const configBaseName = path.basename(configPath, path.extname(configPath));
@@ -45,6 +52,8 @@ export class RequestLogger {
 
   private readonly maxPersistedEntries: number | null;
 
+  private readonly maxDatabaseBytes: number | null;
+
   private closed = false;
 
   constructor(
@@ -56,12 +65,14 @@ export class RequestLogger {
     mkdirSync(path.dirname(resolvedPath), { recursive: true });
     this.databasePath = resolvedPath;
     this.maxPersistedEntries = normalizeMaxPersistedEntries(options.maxPersistedEntries);
+    this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
     this.db = new DatabaseSync(resolvedPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
     this.prunePersistedEntries();
+    this.prunePersistedStorage();
   }
 
   resize(keepRecent: number): void {
@@ -86,6 +97,9 @@ export class RequestLogger {
               request_type,
               reasoning_effort,
               request_summary,
+              incoming_request_body,
+              upstream_request_body,
+              upstream_response_body,
               source_model,
               target_model,
               status,
@@ -105,7 +119,7 @@ export class RequestLogger {
               user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -117,6 +131,9 @@ export class RequestLogger {
           entry.request_type,
           entry.reasoning_effort,
           entry.request_summary,
+          entry.incoming_request_body,
+          entry.upstream_request_body,
+          entry.upstream_response_body,
           entry.source_model,
           entry.target_model,
           entry.status,
@@ -136,8 +153,9 @@ export class RequestLogger {
           entry.user_agent,
           entry.request_id,
           entry.error_summary
-        );
+      );
       this.prunePersistedEntries();
+      this.prunePersistedStorage();
     } catch (error) {
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
@@ -326,6 +344,101 @@ export class RequestLogger {
       )
       .run(this.maxPersistedEntries);
   }
+
+  private prunePersistedStorage(): void {
+    if (this.maxDatabaseBytes === null) {
+      return;
+    }
+
+    try {
+      let passes = 0;
+      while (
+        this.databaseFootprintBytes() > this.maxDatabaseBytes &&
+        passes < STORAGE_PRUNE_MAX_PASSES
+      ) {
+        const rowCount = this.persistedRowCount();
+        if (rowCount <= 1) {
+          this.reclaimSqliteStorage();
+          return;
+        }
+
+        const rowsToDelete = Math.min(
+          rowCount - 1,
+          Math.max(
+            STORAGE_PRUNE_MIN_DELETE_ROWS,
+            Math.ceil(rowCount * STORAGE_PRUNE_DELETE_FRACTION)
+          )
+        );
+        this.deleteOldestPersistedRows(rowsToDelete);
+        this.reclaimSqliteStorage();
+        passes += 1;
+      }
+    } catch (error) {
+      console.error(
+        `Failed to prune request log database below ${this.maxDatabaseBytes} bytes.`,
+        error
+      );
+    }
+  }
+
+  private persistedRowCount(): number {
+    return readCount(this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
+  }
+
+  private deleteOldestPersistedRows(limit: number): void {
+    this.db
+      .prepare(
+        `
+          DELETE FROM request_logs
+          WHERE id IN (
+            SELECT id
+            FROM request_logs
+            ORDER BY id ASC
+            LIMIT ?
+          )
+        `
+      )
+      .run(limit);
+  }
+
+  private reclaimSqliteStorage(): void {
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.db.exec("VACUUM;");
+    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  }
+
+  private databaseFootprintBytes(): number {
+    return sumExistingFileSizes([
+      this.databasePath,
+      `${this.databasePath}-wal`,
+      `${this.databasePath}-shm`
+    ]);
+  }
+}
+
+function sumExistingFileSizes(paths: string[]): number {
+  let total = 0;
+
+  for (const filePath of paths) {
+    if (existsSync(filePath)) {
+      total += statSync(filePath).size;
+    }
+  }
+
+  return total;
+}
+
+function normalizeMaxDatabaseBytes(value: number | undefined): number | null {
+  if (value === undefined) {
+    return DEFAULT_MAX_LOG_DATABASE_BYTES;
+  }
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : null;
 }
 
 function normalizeMaxPersistedEntries(value: number | undefined): number | null {

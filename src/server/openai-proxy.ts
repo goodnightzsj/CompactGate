@@ -154,6 +154,7 @@ async function proxyPrimaryRequest(
         "x-compactgate-route": route,
         "x-compactgate-request-id": requestId
       },
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       retryEmptyStreamError: transaction.requestType === "stream"
     });
 
@@ -287,6 +288,7 @@ async function proxyCompactRequest(
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       retryEmptyStreamError: transaction.requestType === "stream"
     });
 

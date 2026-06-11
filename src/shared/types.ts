@@ -223,6 +223,9 @@ export interface RequestLogEntry {
   request_type: RequestTransport;
   reasoning_effort: string | null;
   request_summary: string | null;
+  incoming_request_body: string | null;
+  upstream_request_body: string | null;
+  upstream_response_body: string | null;
   source_model: string | null;
   target_model: string | null;
   status: number;

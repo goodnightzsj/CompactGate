@@ -7,7 +7,7 @@ import type {
   RouteKind
 } from "../shared/types.js";
 import type { TokenUsageMetrics } from "./usage.js";
-import { readHeaderString } from "./http-utils.js";
+import { decodeBodyText, readHeaderString } from "./http-utils.js";
 
 export function addLog(
   logger: RequestLogger,
@@ -21,6 +21,9 @@ export function addLog(
     requestType: RequestTransport;
     reasoningEffort: string | null;
     requestSummary: string | null;
+    incomingRequestBody: Buffer;
+    upstreamRequestBody: Buffer;
+    upstreamResponseBody: Buffer;
     upstreamHost: string;
     requestId: string;
     sourceModel: string | null;
@@ -39,6 +42,9 @@ export function addLog(
     request_type: input.requestType,
     reasoning_effort: input.reasoningEffort,
     request_summary: input.requestSummary,
+    incoming_request_body: bodyText(input.incomingRequestBody),
+    upstream_request_body: bodyText(input.upstreamRequestBody),
+    upstream_response_body: bodyText(input.upstreamResponseBody),
     source_model: input.sourceModel,
     target_model: input.targetModel,
     status: input.status,
@@ -61,6 +67,10 @@ export function addLog(
   };
   logger.add(entry);
   return entry;
+}
+
+function bodyText(body: Buffer): string {
+  return decodeBodyText(body);
 }
 
 export function emptyUsageMetrics(): TokenUsageMetrics {

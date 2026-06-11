@@ -20,7 +20,7 @@ CompactGate 是一个给 Codex CLI 用的本地代理。
 1. 你的主上游能跑正常对话，但不支持 compact 模型。
 2. 你想把 compact 请求单独走另一家兼容 OpenAI API 的服务。
 3. 你想保留原来的 Codex 使用方式，只在中间加一层本地代理。
-4. 你想在本地看最近请求都走到了哪条路由，但又不想默认记录 prompt 正文。
+4. 你想在本地看最近请求都走到了哪条路由，并保留完整请求 / 响应正文方便排查。
 
 CompactGate 就是为这个场景做的。
 
@@ -150,7 +150,7 @@ wire_api = "responses"
 }
 ```
 
-`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。历史日志会继续保存在本地数据库里，页面可以继续加载更早记录。
+`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 20 GiB；超过后会按时间顺序删除最早的请求记录。
 
 最重要的字段只有这些：
 
@@ -222,7 +222,7 @@ my-compact-model
 
 日志是实时刷新的，使用的是 SSE。
 
-默认情况下，日志只记录这些信息：
+默认情况下，日志会记录这些信息：
 
 - 路由类型
 - 状态码
@@ -230,12 +230,15 @@ my-compact-model
 - 上游主机
 - 耗时
 - request id
+- 客户端请求体
+- 实际上游请求体
+- 上游响应体
 
-默认不会记录 prompt 正文。
+这些日志会持久化到本地 SQLite，用来确认 compact 之后 primary 实际收到了什么上下文。Studio 日志详情页默认不展示这三段正文。
 
 ## 日志和本地数据库
 
-请求日志会持久化到 SQLite，不按页面展示数量自动删除。
+请求日志会持久化到 SQLite，不按页面展示数量自动删除。数据库文件、WAL 和 SHM 侧写文件合计超过 20 GiB 时，CompactGate 会优先删除最早的请求记录，并执行 SQLite checkpoint/vacuum 回收磁盘空间。
 
 默认文件位置是：
 
@@ -251,13 +254,13 @@ COMPACTGATE_LOG_DB=/path/to/compactgate-logs.sqlite npm start
 
 ## 调试抓包
 
-如果你需要抓完整的上游请求和响应内容，可以临时打开调试捕获：
+如果你需要把单次请求写成独立 JSON 文件，包含脱敏后的请求头和正文，可以临时打开调试捕获：
 
 ```bash
 COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 ```
 
-只有在你明确设置这个环境变量时，CompactGate 才会把完整正文写到本地文件里。
+只有在你明确设置这个环境变量时，CompactGate 才会额外把抓包记录写到本地文件里。
 
 默认不开启。
 
@@ -362,11 +365,11 @@ wire_api = "responses"
 
 这样 compact 请求也走主上游。
 
-### 4. 日志里为什么没有 prompt 正文
+### 4. 日志会保存哪些正文
 
-这是默认设计，出于安全和隐私考虑，普通日志只记录路由元信息。
+普通 SQLite 日志会保存客户端请求体、实际发送给上游的请求体，以及上游响应体。这个设计方便排查 compact 后 primary 是否收到了可读 summary、continuation note 或原始 `compaction` 状态。
 
-如果你确实要抓完整正文，请临时启用：
+如果你还需要独立文件形式的完整抓包，可以临时启用：
 
 ```bash
 COMPACTGATE_CAPTURE_DIR=/path/to/captures

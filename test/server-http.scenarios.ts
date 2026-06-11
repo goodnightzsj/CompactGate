@@ -133,8 +133,12 @@ describe("CompactGate HTTP basics", () => {
       route: "primary",
       source_model: "gpt-5.5",
       target_model: "gpt-5.5",
-      status: 200
+      status: 200,
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null
     });
+    expect(JSON.stringify(logEvent)).not.toContain("stream me");
 
     await sse.close();
   });
@@ -205,6 +209,9 @@ describe("CompactGate HTTP basics", () => {
       request_type: "http",
       reasoning_effort: null,
       request_summary: null,
+      incoming_request_body: "large incoming body",
+      upstream_request_body: "large upstream body",
+      upstream_response_body: "large response body",
       source_model: "gpt-5.5",
       target_model: "gpt-5.5",
       status: 200,
@@ -228,6 +235,9 @@ describe("CompactGate HTTP basics", () => {
 
     expect(res.writeCount).toBeGreaterThan(writesAfterSubscribe);
     expect(res.body).toContain("event: log");
+    expect(res.body).not.toContain("large incoming body");
+    expect(res.body).not.toContain("large upstream body");
+    expect(res.body).not.toContain("large response body");
     broadcaster.close();
     expect(res.writableEnded).toBe(true);
   });
@@ -262,6 +272,9 @@ describe("CompactGate HTTP basics", () => {
       request_type: "http",
       reasoning_effort: null,
       request_summary: null,
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null,
       source_model: "gpt-5.5",
       target_model: "gpt-5.5",
       status: 200,

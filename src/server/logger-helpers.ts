@@ -86,6 +86,9 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     request_type: readRequestTransport(row.request_type),
     reasoning_effort: readNullableString(row.reasoning_effort),
     request_summary: readNullableString(row.request_summary),
+    incoming_request_body: readNullableString(row.incoming_request_body),
+    upstream_request_body: readNullableString(row.upstream_request_body),
+    upstream_response_body: readNullableString(row.upstream_response_body),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
     status: readRequiredNumber(row.status),
@@ -105,6 +108,15 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     user_agent: readNullableString(row.user_agent),
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary)
+  };
+}
+
+export function stripLogEntryBodies(entry: RequestLogEntry): RequestLogEntry {
+  return {
+    ...entry,
+    incoming_request_body: null,
+    upstream_request_body: null,
+    upstream_response_body: null
   };
 }
 

@@ -27,7 +27,15 @@ export function appendBufferedResponseChunk(
 }
 
 export function normalizeMaxBufferedResponseBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
+  if (value === undefined) {
+    return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
+  }
+
+  if (value === Number.POSITIVE_INFINITY) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  if (!Number.isFinite(value)) {
     return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
   }
 

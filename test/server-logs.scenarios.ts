@@ -11,6 +11,7 @@ import {
   cleanupEnvKeys,
   fetchLogPage,
   fetchRecentLogs,
+  readLatestLogBodyFields,
   readLogCount,
   seedLegacyLogDatabase,
   sendCompactRequest,
@@ -67,7 +68,7 @@ describe("CompactGate logs and capture", () => {
     expect(built).toBe(false);
   });
 
-  it("logs compact requests without request body content", async () => {
+  it("persists compact request body content without returning it in recent log payloads", async () => {
     const primary = await startUpstream((_req, res) => res.end("{}"));
     const compact = await startJsonUpstream({ ok: true });
     const app = await startApp(primary.url, compact.url);
@@ -79,18 +80,24 @@ describe("CompactGate logs and capture", () => {
       "user-agent": "CompactGateTest/1.0"
     });
 
-    const response = await fetch(`${app.url}/api/logs/recent`);
-    const body = await response.json();
-    const serialized = JSON.stringify(body);
+    const [entry] = await fetchRecentLogs(app.url);
 
-    expect(body.logs[0]).toMatchObject({
+    expect(entry).toMatchObject({
       route: "compact",
       status: 200,
       source_model: "gpt-5.4",
       target_model: "gpt-5.4-openai-compact",
-      user_agent: "CompactGateTest/1.0"
+      user_agent: "CompactGateTest/1.0",
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null
     });
-    expect(serialized).not.toContain("sensitive prompt");
+
+    const persistedBodies = readLatestLogBodyFields(path.join(app.dir, "compactgate-logs.sqlite"));
+    expect(persistedBodies.incoming_request_body).toContain("sensitive prompt");
+    expect(persistedBodies.upstream_request_body).toContain("sensitive prompt");
+    expect(persistedBodies.upstream_request_body).toContain("gpt-5.4-openai-compact");
+    expect(persistedBodies.upstream_response_body).toBe(JSON.stringify({ ok: true }));
   });
 
   it("returns faceted route, status, and host counts with upstream error summaries", async () => {
@@ -220,6 +227,11 @@ describe("CompactGate logs and capture", () => {
       [new URL(primary.url).host, new URL(claude.url).host].sort()
     );
     expect(JSON.stringify(allPage)).not.toContain("do not expose");
+    expect(primaryHostPage.logs[0]).toMatchObject({
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null
+    });
   });
 
 
@@ -447,6 +459,9 @@ describe("CompactGate logs and capture", () => {
       path: "/v1/responses/compact",
       endpoint: "/responses/compact",
       request_type: "http",
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null,
       input_tokens: null,
       output_tokens: null,
       cached_input_tokens: null,
