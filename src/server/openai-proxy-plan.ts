@@ -59,10 +59,12 @@ export function buildPrimaryOpenAiProxyPlan({
     primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
   );
   const selectedPrimaryConfig = primarySelection.config;
-  const bridgeResult =
-    config.compact.upstream_mode === "split"
-      ? compactionBridge.rewritePrimaryBody(rawBody, compactBridgeScope)
-      : { body: rawBody, replacedCompactionCount: 0 };
+  const splitCompactMode = config.compact.upstream_mode === "split";
+  const bridgeResult = compactionBridge.rewritePrimaryBody(rawBody, compactBridgeScope, {
+    includeStandardFallbacks: splitCompactMode,
+    includeSyntheticFallbacks: true,
+    allowReadableFallback: splitCompactMode
+  });
 
   return withRequestHeaders(headers, resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "", rawBody, {
     route: "primary",

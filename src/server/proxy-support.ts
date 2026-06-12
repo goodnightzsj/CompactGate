@@ -2,6 +2,8 @@ import type { IncomingMessage } from "node:http";
 import type { CaptureRecord, DebugCaptureWriter } from "./debug-capture.js";
 import type { RequestLogger } from "./logger.js";
 import type {
+  CompactResponseNormalizeReason,
+  CompactResponseSyntheticSource,
   RequestLogEntry,
   RequestTransport,
   RouteKind
@@ -17,6 +19,8 @@ export function addLog(
     url: URL;
     status: number;
     startedAt: number;
+    startedAtIso: string;
+    completedAtIso: string;
     endpoint: string;
     requestType: RequestTransport;
     reasoningEffort: string | null;
@@ -24,6 +28,7 @@ export function addLog(
     incomingRequestBody: Buffer;
     upstreamRequestBody: Buffer;
     upstreamResponseBody: Buffer;
+    clientResponseBody: Buffer | null;
     upstreamHost: string;
     requestId: string;
     sourceModel: string | null;
@@ -31,10 +36,14 @@ export function addLog(
     firstTokenMs: number | null;
     usage: TokenUsageMetrics;
     errorSummary: string | null;
+    compactResponseNormalized: boolean;
+    compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
+    compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
   }
 ): RequestLogEntry {
   const entry: RequestLogEntry = {
-    time: new Date().toISOString(),
+    time: input.startedAtIso,
+    completed_at: input.completedAtIso,
     route: input.route,
     method: input.req.method ?? "GET",
     path: `${input.url.pathname}${input.url.search}`,
@@ -45,6 +54,10 @@ export function addLog(
     incoming_request_body: bodyText(input.incomingRequestBody),
     upstream_request_body: bodyText(input.upstreamRequestBody),
     upstream_response_body: bodyText(input.upstreamResponseBody),
+    client_response_body: input.clientResponseBody ? bodyText(input.clientResponseBody) : null,
+    compact_response_normalized: input.compactResponseNormalized,
+    compact_response_normalize_reason: input.compactResponseNormalizeReason,
+    compact_response_synthetic_source: input.compactResponseSyntheticSource,
     source_model: input.sourceModel,
     target_model: input.targetModel,
     status: input.status,

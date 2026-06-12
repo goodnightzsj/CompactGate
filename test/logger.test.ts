@@ -1,13 +1,15 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MAX_LOG_DATABASE_BYTES,
   RequestLogger
 } from "../src/server/logger.js";
+import { addLog, emptyUsageMetrics } from "../src/server/proxy-support.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -52,6 +54,84 @@ describe("RequestLogger", () => {
         "gpt-5.1"
       ]);
     } finally {
+      logger.close();
+    }
+  });
+
+  it("records request start time instead of log write time", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(2, databasePath);
+    const startedAtIso = "2026-06-12T04:04:52.000Z";
+    const completedAtIso = "2026-06-12T04:05:03.000Z";
+
+    try {
+      const entry = addLog(logger, {
+        route: "compact",
+        req: {
+          method: "POST",
+          headers: { "user-agent": "CompactGateTest/1.0" }
+        } as IncomingMessage,
+        url: new URL("http://compactgate.local/v1/responses/compact"),
+        status: 200,
+        startedAt: performance.now(),
+        startedAtIso,
+        completedAtIso,
+        endpoint: "/responses/compact",
+        requestType: "http",
+        reasoningEffort: null,
+        requestSummary: null,
+        incomingRequestBody: Buffer.alloc(0),
+        upstreamRequestBody: Buffer.alloc(0),
+        upstreamResponseBody: Buffer.from("{}"),
+        clientResponseBody: null,
+        upstreamHost: "compact.example",
+        requestId: "request-start-time",
+        sourceModel: "gpt-5.5",
+        targetModel: "gpt-5.5-openai-compact",
+        firstTokenMs: null,
+        usage: emptyUsageMetrics(),
+        errorSummary: null,
+        compactResponseNormalized: false,
+        compactResponseNormalizeReason: null,
+        compactResponseSyntheticSource: null
+      });
+
+      expect(entry.time).toBe(startedAtIso);
+      expect(entry.completed_at).toBe(completedAtIso);
+      expect(logger.recent()[0].time).toBe(startedAtIso);
+      expect(logger.recent()[0].completed_at).toBe(completedAtIso);
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("exposes request log persistence failures through logger health", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(2, databasePath);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      expect(logger.getPersistenceHealth()).toMatchObject({
+        database_path: databasePath,
+        persist_error_count: 0,
+        last_persist_error: null,
+        last_persist_error_at: null
+      });
+
+      logger.close();
+      logger.add(logEntry(1));
+
+      const health = logger.getPersistenceHealth();
+      expect(health.database_path).toBe(databasePath);
+      expect(health.persist_error_count).toBe(1);
+      expect(health.last_persist_error).toContain("persist request log");
+      expect(health.last_persist_error_at).toEqual(expect.any(String));
+    } finally {
+      consoleError.mockRestore();
       logger.close();
     }
   });
@@ -301,6 +381,7 @@ describe("RequestLogger", () => {
 function logEntry(index: number, body = ""): RequestLogEntry {
   return {
     time: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+    completed_at: new Date(Date.UTC(2026, 0, 1, 0, 1, index)).toISOString(),
     route: "compact",
     method: "POST",
     path: "/v1/responses/compact",
@@ -311,6 +392,10 @@ function logEntry(index: number, body = ""): RequestLogEntry {
     incoming_request_body: body.length > 0 ? body : null,
     upstream_request_body: body.length > 0 ? body : null,
     upstream_response_body: body.length > 0 ? body : null,
+    client_response_body: null,
+    compact_response_normalized: false,
+    compact_response_normalize_reason: null,
+    compact_response_synthetic_source: null,
     source_model: `gpt-5.${index}`,
     target_model: `gpt-5.${index}-compact`,
     status: 200,

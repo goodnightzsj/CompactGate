@@ -58,24 +58,6 @@
   font-size: 0.74rem;
 }
 
-.log-table-grid th:nth-child(3),
-.log-table-grid th:nth-child(7),
-.log-table-grid th:nth-child(8),
-.log-table-grid th:nth-child(9),
-.log-table-grid th:nth-child(10),
-.log-table-grid td:nth-child(3),
-.log-table-grid td:nth-child(7),
-.log-table-grid td:nth-child(8),
-.log-table-grid td:nth-child(9),
-.log-table-grid td:nth-child(10) {
-  width: 1%;
-}
-
-.log-table-summary .log-table-grid th:nth-child(6),
-.log-table-summary .log-table-grid td:nth-child(6) {
-  width: 1%;
-}
-
 .log-table .log-row {
   display: table-row;
   border: 0;
@@ -470,52 +452,38 @@
   overflow: hidden;
 }
 
-.log-table-full .log-table-grid th:nth-child(1),
-.log-table-full .log-table-grid td:nth-child(1) {
-  width: 12%;
+.log-table-full .log-col-started { width: 11%; }
+.log-table-full .log-col-completed { width: 11%; }
+.log-table-full .log-col-model-route { width: 18%; }
+.log-table-full .log-col-status { width: 6%; }
+.log-table-full .log-col-reasoning { width: 11%; }
+.log-table-full .log-col-host { width: 13%; }
+.log-table-full .log-col-endpoint { width: 7%; }
+.log-table-full .log-col-type { width: 6%; }
+.log-table-full .log-col-token { width: 7%; }
+.log-table-full .log-col-first-token { width: 5%; }
+.log-table-full .log-col-duration { width: 5%; }
+
+.log-table-summary .log-table-body {
+  overflow-x: hidden;
 }
 
-.log-table-full .log-table-grid th:nth-child(2),
-.log-table-full .log-table-grid td:nth-child(2) {
-  width: 18%;
+.log-table-summary .log-table-grid {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  table-layout: fixed;
 }
 
-.log-table-full .log-table-grid th:nth-child(3),
-.log-table-full .log-table-grid td:nth-child(3) {
-  width: 5%;
-}
-
-.log-table-full .log-table-grid th:nth-child(4),
-.log-table-full .log-table-grid td:nth-child(4) {
-  width: 15%;
-}
-
-.log-table-full .log-table-grid th:nth-child(5),
-.log-table-full .log-table-grid td:nth-child(5) {
-  width: 12%;
-}
-
-.log-table-full .log-table-grid th:nth-child(6),
-.log-table-full .log-table-grid td:nth-child(6) {
-  width: 12%;
-}
-
-.log-table-full .log-table-grid th:nth-child(7),
-.log-table-full .log-table-grid td:nth-child(7) {
-  width: 7%;
-}
-
-.log-table-full .log-table-grid th:nth-child(8),
-.log-table-full .log-table-grid td:nth-child(8) {
-  width: 8%;
-}
-
-.log-table-full .log-table-grid th:nth-child(9),
-.log-table-full .log-table-grid td:nth-child(9),
-.log-table-full .log-table-grid th:nth-child(10),
-.log-table-full .log-table-grid td:nth-child(10) {
-  width: 5.5%;
-}
+.log-table-summary .log-summary-col-started { width: 14%; }
+.log-table-summary .log-summary-col-completed { width: 14%; }
+.log-table-summary .log-summary-col-model { width: 16%; }
+.log-table-summary .log-summary-col-status { width: 7%; }
+.log-table-summary .log-summary-col-host { width: 17%; }
+.log-table-summary .log-summary-col-endpoint { width: 10%; }
+.log-table-summary .log-summary-col-route { width: 8%; }
+.log-table-summary .log-summary-col-type { width: 7%; }
+.log-table-summary .log-summary-col-duration { width: 7%; }
 
 .log-table-full .log-detail-row > td {
   overflow: visible;
@@ -626,7 +594,7 @@
 
 @media (max-width: 720px) {
   .log-table-full .log-table-grid {
-    min-width: 760px;
+    min-width: 980px;
   }
 
   .log-table-full .log-table-body {

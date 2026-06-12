@@ -26,10 +26,22 @@ export function DashboardRecentRequests({
         <div className="log-table log-table-summary">
           <div className="log-table-body" style={{ maxHeight: "300px" }}>
             <table className="log-table-grid">
+              <colgroup>
+                <col className="log-summary-col-started" />
+                <col className="log-summary-col-completed" />
+                <col className="log-summary-col-model" />
+                <col className="log-summary-col-status" />
+                <col className="log-summary-col-host" />
+                <col className="log-summary-col-endpoint" />
+                <col className="log-summary-col-route" />
+                <col className="log-summary-col-type" />
+                <col className="log-summary-col-duration" />
+              </colgroup>
               <tbody>
                 {logs.slice(0, 8).map((entry, i) => (
                   <tr key={`${entry.request_id}-${i}`} className="log-row">
                     <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
+                    <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.completed_at)} /></td>
                     <td><LogTextTooltip className="log-cell-model" value={entry.source_model ?? "-"} /></td>
                     <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
                     <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>

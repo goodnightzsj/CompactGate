@@ -47,6 +47,7 @@ export async function proxyClaudeRequest(
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster
 ): Promise<void> {
+  const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
   const config = configStore.get();
   const route: RouteKind = "claude";
@@ -131,6 +132,7 @@ export async function proxyClaudeRequest(
       url: logUrl,
       status: transaction.status,
       startedAt,
+      startedAtIso,
       requestMetadata: transaction.requestMetadata,
       requestType: transaction.requestType,
       upstream,
@@ -147,7 +149,12 @@ export async function proxyClaudeRequest(
         ? transaction.upstreamBody
         : transaction.rawBody,
       responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders
+      responseHeaders: transaction.responseHeaders,
+      clientResponseBody: transaction.clientResponseBody,
+      clientResponseHeaders: transaction.clientResponseHeaders,
+      compactResponseNormalized: transaction.compactResponseNormalized,
+      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
     });
   }
 }

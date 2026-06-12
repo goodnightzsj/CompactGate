@@ -90,7 +90,11 @@ describe("CompactGate logs and capture", () => {
       user_agent: "CompactGateTest/1.0",
       incoming_request_body: null,
       upstream_request_body: null,
-      upstream_response_body: null
+      upstream_response_body: null,
+      client_response_body: null,
+      compact_response_normalized: true,
+      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_synthetic_source: "request_input"
     });
 
     const persistedBodies = readLatestLogBodyFields(path.join(app.dir, "compactgate-logs.sqlite"));
@@ -98,6 +102,71 @@ describe("CompactGate logs and capture", () => {
     expect(persistedBodies.upstream_request_body).toContain("sensitive prompt");
     expect(persistedBodies.upstream_request_body).toContain("gpt-5.4-openai-compact");
     expect(persistedBodies.upstream_response_body).toBe(JSON.stringify({ ok: true }));
+    expect(persistedBodies.client_response_body).toContain('"object":"response.compaction"');
+  });
+
+  it("audits normalized compact responses with upstream and client bodies", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    setEnv("COMPACTGATE_CAPTURE_DIR", captureDir);
+    const summaryText = [
+      "- Audit summary from a non-standard compact response.",
+      "- CompactGate should return this as local compaction state.",
+      "- Logs should preserve both upstream and client response bodies."
+    ].join("\n");
+    const primary = await startUpstream((_req, res) => res.end("{}"));
+    const compact = await startJsonUpstream({
+      id: "resp_audit_normalized",
+      object: "response",
+      output: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: summaryText }]
+        }
+      ]
+    });
+    const app = await startApp(primary.url, compact.url);
+
+    const response = await postJson(app.url, "/v1/responses/compact", {
+      model: "gpt-5.5",
+      input: "audit normalized compact response"
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      object: "response.compaction",
+      output: [{ type: "compaction", encrypted_content: summaryText }]
+    });
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      compact_response_normalized: true,
+      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_synthetic_source: "upstream_response",
+      upstream_response_body: null,
+      client_response_body: null
+    });
+
+    const persistedBodies = readLatestLogBodyFields(path.join(app.dir, "compactgate-logs.sqlite"));
+    expect(persistedBodies.upstream_response_body).toContain('"object":"response"');
+    expect(persistedBodies.client_response_body).toContain('"object":"response.compaction"');
+    expect(JSON.parse(persistedBodies.client_response_body ?? "{}")).toMatchObject({
+      output: [{ type: "compaction", encrypted_content: summaryText }]
+    });
+
+    const [capture] = await waitForCaptureRecords(captureDir, 1);
+    expect(capture).toMatchObject({
+      route: "compact",
+      compact_response_normalized: true,
+      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_synthetic_source: "upstream_response"
+    });
+    expect(capture.upstream_response.body.text).toContain('"object":"response"');
+    expect(capture.client_response?.body.text).toContain('"object":"response.compaction"');
+    expect(JSON.parse(capture.client_response?.body.text ?? "{}")).toMatchObject({
+      output: [{ type: "compaction", encrypted_content: summaryText }]
+    });
   });
 
   it("returns faceted route, status, and host counts with upstream error summaries", async () => {

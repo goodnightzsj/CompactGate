@@ -1,11 +1,16 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { RouteKind } from "../shared/types.js";
+import type {
+  CompactResponseNormalizeReason,
+  CompactResponseSyntheticSource,
+  RouteKind
+} from "../shared/types.js";
 
 export interface CaptureRecord {
   request_id: string;
   time: string;
+  completed_at: string;
   route: RouteKind;
   method: string;
   path: string;
@@ -14,9 +19,13 @@ export interface CaptureRecord {
   source_model: string | null;
   target_model: string | null;
   compact_bridge_replacements: number;
+  compact_response_normalized: boolean;
+  compact_response_normalize_reason: CompactResponseNormalizeReason | null;
+  compact_response_synthetic_source: CompactResponseSyntheticSource | null;
   incoming_request: CapturePayload;
   upstream_request: CapturePayload;
   upstream_response: CaptureResponsePayload;
+  client_response: CaptureResponsePayload | null;
 }
 
 interface CapturePayload {

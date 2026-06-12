@@ -1,6 +1,6 @@
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
-import { formatDurationMs, formatMetricNumber } from "../shared/format.js";
+import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
 import {
   cacheCreationInputTokens,
   cacheReadInputTokens,
@@ -16,7 +16,7 @@ import {
 export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
   return (
     <tr className="log-detail-row">
-      <td colSpan={10}>
+      <td colSpan={11}>
         <div className="log-detail-panel">
           <section className="log-detail-section is-primary" aria-label="请求上下文">
             <div className="log-detail-section-head">
@@ -32,8 +32,12 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value is-small">{entry.request_id}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">采样时间</span>
-                <span className="log-detail-value is-medium">{entry.time}</span>
+                <span className="log-detail-label">开始时间</span>
+                <span className="log-detail-value is-medium">{formatDateTime(entry.time)}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">完成时间</span>
+                <span className="log-detail-value is-medium">{formatDateTime(entry.completed_at)}</span>
               </div>
               <div className="log-detail-item is-full">
                 <span className="log-detail-label">请求摘要</span>
@@ -170,6 +174,16 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-label">User Agent</span>
                 <span className="log-detail-value is-tiny">{entry.user_agent ?? "-"}</span>
               </div>
+              {entry.compact_response_normalized && (
+                <div className="log-detail-item is-full">
+                  <span className="log-detail-label">Compact 响应替换</span>
+                  <span className="log-detail-value is-tiny">
+                    {entry.compact_response_normalize_reason ?? "normalized"}
+                    {" / "}
+                    {entry.compact_response_synthetic_source ?? "unknown"}
+                  </span>
+                </div>
+              )}
             </div>
           </section>
         </div>

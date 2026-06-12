@@ -325,9 +325,9 @@ describe("CompactGate OpenAI routing", () => {
       input: "compact abort after headers"
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toContain("partial compact");
-    expect(response.completed).toBe(false);
+    expect(response.statusCode).toBe(502);
+    expect(response.body).toContain("Upstream response aborted before completion.");
+    expect(response.completed).toBe(true);
 
     const page = await fetchLogPage(app.url);
     expect(page.logs[0]).toMatchObject({
@@ -345,6 +345,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
       writeJsonResponse(res, {
+        object: "response.compaction",
         output: [
           {
             type: "message",
@@ -426,6 +427,90 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it("bridges locally normalized compact responses into primary requests", async () => {
+    const summaryText = [
+      "- Local synthetic compact summary.",
+      "- The compact upstream returned a normal response instead of response.compaction.",
+      "- The next primary request should receive this as an assistant message."
+    ].join("\n");
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      writeJsonResponse(res, {
+        id: "resp_local_normalized",
+        object: "response",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: summaryText }]
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const compactResponse = await postJson(app.url, "/v1/responses/compact", {
+      model: "gpt-5.5",
+      input: "hello synthetic compact"
+    });
+    expect(compactResponse.status).toBe(200);
+    const compactBody = await compactResponse.json() as {
+      output: Array<{ type: string; encrypted_content?: string }>;
+    };
+    expect(compactBody.output).toEqual([
+      {
+        type: "compaction",
+        encrypted_content: summaryText
+      }
+    ]);
+
+    const primaryResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: summaryText
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "after synthetic compact" }]
+        }
+      ]
+    });
+
+    expect(primaryResponse.status).toBe(200);
+    await primaryResponse.text();
+    expect(compactRequests).toHaveLength(1);
+    expect(primaryRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "after synthetic compact" }]
+      }
+    ]);
+
+    const page = await fetchLogPage(app.url);
+    expect(page.logs[1]).toMatchObject({
+      route: "compact",
+      compact_response_normalized: true,
+      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_synthetic_source: "upstream_response"
+    });
+  });
+
   it("does not reuse cached compaction state after the compact upstream changes", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const firstCompactRequests: CapturedRequest[] = [];
@@ -435,6 +520,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     const firstCompact = await startCapturedOpenAiUpstream(firstCompactRequests, (_req, res) => {
       writeJsonResponse(res, {
+        object: "response.compaction",
         output: [
           {
             type: "message",

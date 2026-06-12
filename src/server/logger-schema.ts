@@ -2,6 +2,7 @@ export const LOG_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS request_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     time TEXT NOT NULL,
+    completed_at TEXT NOT NULL DEFAULT '',
     route TEXT NOT NULL,
     method TEXT NOT NULL,
     path TEXT NOT NULL,
@@ -12,6 +13,10 @@ export const LOG_TABLE_SQL = `
     incoming_request_body TEXT,
     upstream_request_body TEXT,
     upstream_response_body TEXT,
+    client_response_body TEXT,
+    compact_response_normalized INTEGER NOT NULL DEFAULT 0,
+    compact_response_normalize_reason TEXT,
+    compact_response_synthetic_source TEXT,
     source_model TEXT,
     target_model TEXT,
     status INTEGER NOT NULL,
@@ -37,6 +42,7 @@ export const LOG_TABLE_SQL = `
 
 export const RECENT_LOG_FIELDS = `
   time,
+  completed_at,
   route,
   method,
   path,
@@ -47,6 +53,10 @@ export const RECENT_LOG_FIELDS = `
   NULL AS incoming_request_body,
   NULL AS upstream_request_body,
   NULL AS upstream_response_body,
+  NULL AS client_response_body,
+  compact_response_normalized,
+  compact_response_normalize_reason,
+  compact_response_synthetic_source,
   source_model,
   target_model,
   status,
@@ -69,6 +79,7 @@ export const RECENT_LOG_FIELDS = `
 `;
 
 export const MIGRATION_COLUMNS: Record<string, string> = {
+  completed_at: "TEXT NOT NULL DEFAULT ''",
   endpoint: "TEXT NOT NULL DEFAULT ''",
   request_type: "TEXT NOT NULL DEFAULT 'http'",
   reasoning_effort: "TEXT",
@@ -76,6 +87,10 @@ export const MIGRATION_COLUMNS: Record<string, string> = {
   incoming_request_body: "TEXT",
   upstream_request_body: "TEXT",
   upstream_response_body: "TEXT",
+  client_response_body: "TEXT",
+  compact_response_normalized: "INTEGER NOT NULL DEFAULT 0",
+  compact_response_normalize_reason: "TEXT",
+  compact_response_synthetic_source: "TEXT",
   error_summary: "TEXT",
   first_token_ms: "INTEGER",
   input_tokens: "INTEGER",

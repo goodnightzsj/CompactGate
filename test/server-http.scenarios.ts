@@ -27,6 +27,12 @@ describe("CompactGate HTTP basics", () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe("ok");
+    expect(body.logger).toMatchObject({
+      persist_error_count: 0,
+      last_persist_error: null,
+      last_persist_error_at: null
+    });
+    expect(body.logger.database_path).toContain("compactgate-logs.sqlite");
   });
 
   it("serves static assets without falling back missing files to the SPA index", async () => {
@@ -202,6 +208,7 @@ describe("CompactGate HTTP basics", () => {
 
     broadcaster.broadcastLog({
       time: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
       route: "primary",
       method: "POST",
       path: "/v1/responses",
@@ -212,6 +219,10 @@ describe("CompactGate HTTP basics", () => {
       incoming_request_body: "large incoming body",
       upstream_request_body: "large upstream body",
       upstream_response_body: "large response body",
+      client_response_body: null,
+      compact_response_normalized: false,
+      compact_response_normalize_reason: null,
+      compact_response_synthetic_source: null,
       source_model: "gpt-5.5",
       target_model: "gpt-5.5",
       status: 200,
@@ -265,6 +276,7 @@ describe("CompactGate HTTP basics", () => {
 
     broadcaster.broadcastLog({
       time: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
       route: "primary",
       method: "POST",
       path: "/v1/responses",
@@ -275,6 +287,10 @@ describe("CompactGate HTTP basics", () => {
       incoming_request_body: null,
       upstream_request_body: null,
       upstream_response_body: null,
+      client_response_body: null,
+      compact_response_normalized: false,
+      compact_response_normalize_reason: null,
+      compact_response_synthetic_source: null,
       source_model: "gpt-5.5",
       target_model: "gpt-5.5",
       status: 200,

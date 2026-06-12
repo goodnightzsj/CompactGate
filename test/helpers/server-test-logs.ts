@@ -60,6 +60,7 @@ export function readLatestLogBodyFields(databasePath: string): {
   incoming_request_body: string | null;
   upstream_request_body: string | null;
   upstream_response_body: string | null;
+  client_response_body: string | null;
 } {
   const db = new DatabaseSync(databasePath);
   try {
@@ -69,7 +70,8 @@ export function readLatestLogBodyFields(databasePath: string): {
           SELECT
             incoming_request_body,
             upstream_request_body,
-            upstream_response_body
+            upstream_response_body,
+            client_response_body
           FROM request_logs
           ORDER BY id DESC
           LIMIT 1
@@ -79,6 +81,7 @@ export function readLatestLogBodyFields(databasePath: string): {
         incoming_request_body: string | null;
         upstream_request_body: string | null;
         upstream_response_body: string | null;
+        client_response_body: string | null;
       } | undefined;
     if (!row) {
       throw new Error("Expected at least one persisted request log.");

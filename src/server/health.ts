@@ -1,7 +1,8 @@
 import type { CompactGateConfig, HealthResponse } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
+import type { RequestLogger } from "./logger.js";
 
-export function healthForConfig(config: CompactGateConfig): HealthResponse {
+export function healthForConfig(config: CompactGateConfig, logger: RequestLogger): HealthResponse {
   const primaryCredential = resolveRouteCredential("primary", config);
   const compactCredential = resolveRouteCredential("compact", config);
   const claudePrimaryCredential = resolveRouteCredential("claude_primary", config);
@@ -11,6 +12,7 @@ export function healthForConfig(config: CompactGateConfig): HealthResponse {
     status: "ok",
     time: new Date().toISOString(),
     listen: config.listen,
+    logger: logger.getPersistenceHealth(),
     primary: {
       status: statusForBaseUrl(config.primary.base_url),
       base_url: config.primary.base_url,

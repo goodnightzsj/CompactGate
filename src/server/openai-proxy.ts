@@ -8,6 +8,7 @@ import { CompactionBridgeStore } from "./compaction-bridge.js";
 import type { ConfigStore } from "./config.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
+  copyResponseHeaders,
   RequestBodyTooLargeError,
   readRawBody,
   sendJson,
@@ -35,6 +36,7 @@ import {
   createStudioSnapshot,
   StudioEventBroadcaster
 } from "./studio-events.js";
+import { normalizeCompactResponse } from "./compact-response-normalizer.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
@@ -56,6 +58,7 @@ export async function proxyOpenAiRequest(
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState
 ): Promise<void> {
+  const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
   const config = configStore.get();
   const route = routeForPath(url.pathname);
@@ -72,6 +75,7 @@ export async function proxyOpenAiRequest(
       compactionBridge,
       studioEvents,
       requestId,
+      startedAtIso,
       startedAt
     );
     return;
@@ -89,6 +93,7 @@ export async function proxyOpenAiRequest(
     studioEvents,
     primaryFailover,
     requestId,
+    startedAtIso,
     startedAt
   );
 }
@@ -105,6 +110,7 @@ async function proxyPrimaryRequest(
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
   requestId: string,
+  startedAtIso: string,
   startedAt: number
 ): Promise<void> {
   let route: RouteKind = "primary";
@@ -193,6 +199,7 @@ async function proxyPrimaryRequest(
       url,
       status: transaction.status,
       startedAt,
+      startedAtIso,
       requestMetadata: transaction.requestMetadata,
       requestType: transaction.requestType,
       upstream,
@@ -207,7 +214,12 @@ async function proxyPrimaryRequest(
       requestHeaders: transaction.requestHeaders,
       upstreamBody: transaction.upstreamBody,
       responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders
+      responseHeaders: transaction.responseHeaders,
+      clientResponseBody: transaction.clientResponseBody,
+      clientResponseHeaders: transaction.clientResponseHeaders,
+      compactResponseNormalized: transaction.compactResponseNormalized,
+      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
     });
   }
 }
@@ -249,6 +261,7 @@ async function proxyCompactRequest(
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
   requestId: string,
+  startedAtIso: string,
   startedAt: number
 ): Promise<void> {
   const route: RouteKind = "compact";
@@ -289,15 +302,35 @@ async function proxyCompactRequest(
         "x-compactgate-request-id": requestId
       },
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-      retryEmptyStreamError: transaction.requestType === "stream"
+      writeResponse: false
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
+    const normalizedResponse = normalizeCompactResponse({
+      status: transaction.status,
+      responseBody: transaction.responseBody,
+      responseHeaders: transaction.responseHeaders,
+      requestBody: transaction.upstreamBody
+    });
+    transaction.compactResponseNormalized = normalizedResponse.normalized;
+    transaction.compactResponseNormalizeReason = normalizedResponse.reason;
+    transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
+    if (normalizedResponse.normalized) {
+      transaction.clientResponseBody = normalizedResponse.body;
+      transaction.clientResponseHeaders = normalizedResponse.headers;
+    }
+
+    writeBufferedProxyResponse(res, transaction.status, normalizedResponse.headers, normalizedResponse.body, {
+      "x-compactgate-route": route,
+      "x-compactgate-model": transaction.targetModel ?? "",
+      "x-compactgate-request-id": requestId
+    });
+    transaction.requestType = responseTransport(normalizedResponse.headers) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
     if (transaction.status >= 200 && transaction.status < 300 && plan.compactBridgeScope) {
-      compactionBridge.storeCompactResponse(transaction.responseBody, {
-        scope: plan.compactBridgeScope
+      compactionBridge.storeCompactResponse(normalizedResponse.body, {
+        scope: plan.compactBridgeScope,
+        source: normalizedResponse.normalized ? "synthetic" : "standard"
       });
     }
   } catch (error) {
@@ -323,6 +356,7 @@ async function proxyCompactRequest(
       url,
       status: transaction.status,
       startedAt,
+      startedAtIso,
       requestMetadata: transaction.requestMetadata,
       requestType: transaction.requestType,
       upstream,
@@ -337,7 +371,31 @@ async function proxyCompactRequest(
       requestHeaders: transaction.requestHeaders,
       upstreamBody: transaction.upstreamBody,
       responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders
+      responseHeaders: transaction.responseHeaders,
+      clientResponseBody: transaction.clientResponseBody,
+      clientResponseHeaders: transaction.clientResponseHeaders,
+      compactResponseNormalized: transaction.compactResponseNormalized,
+      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
     });
   }
+}
+
+function writeBufferedProxyResponse(
+  res: ServerResponse,
+  status: number,
+  headers: IncomingMessage["headers"],
+  body: Buffer,
+  extraResponseHeaders: Record<string, string>
+): void {
+  if (res.headersSent || res.writableEnded) {
+    return;
+  }
+
+  copyResponseHeaders(headers, res);
+  for (const [name, value] of Object.entries(extraResponseHeaders)) {
+    res.setHeader(name, value);
+  }
+  res.writeHead(status);
+  res.end(body);
 }

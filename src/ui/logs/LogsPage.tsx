@@ -111,9 +111,23 @@ export function LogsPage({
             aria-busy={isLoadingLogs || isLoadingMoreLogs}
           >
             <table className="log-table-grid">
+              <colgroup>
+                <col className="log-col-started" />
+                <col className="log-col-completed" />
+                <col className="log-col-model-route" />
+                <col className="log-col-status" />
+                <col className="log-col-reasoning" />
+                <col className="log-col-host" />
+                <col className="log-col-endpoint" />
+                <col className="log-col-type" />
+                <col className="log-col-token" />
+                <col className="log-col-first-token" />
+                <col className="log-col-duration" />
+              </colgroup>
               <thead>
                 <tr className="log-table-header">
-                  <th scope="col">时间</th>
+                  <th scope="col">开始时间</th>
+                  <th scope="col">完成时间</th>
                   <th scope="col">模型 / 通道</th>
                   <th scope="col">状态</th>
                   <th scope="col">模型 / 思考</th>
@@ -139,6 +153,7 @@ export function LogsPage({
                         }
                       >
                         <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
+                        <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.completed_at)} /></td>
                         <td>
                           <LogTextTooltip className="log-model-cell" value={modelMapping}>
                             <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>

@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   HostLogCount,
+  LogPersistenceHealth,
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
@@ -56,6 +57,12 @@ export class RequestLogger {
 
   private closed = false;
 
+  private persistErrorCount = 0;
+
+  private lastPersistError: string | null = null;
+
+  private lastPersistErrorAt: string | null = null;
+
   constructor(
     private keepRecent: number,
     databasePath: string,
@@ -83,6 +90,15 @@ export class RequestLogger {
     return this.databasePath;
   }
 
+  getPersistenceHealth(): LogPersistenceHealth {
+    return {
+      database_path: this.databasePath,
+      persist_error_count: this.persistErrorCount,
+      last_persist_error: this.lastPersistError,
+      last_persist_error_at: this.lastPersistErrorAt
+    };
+  }
+
   add(entry: RequestLogEntry): void {
     try {
       this.db
@@ -90,6 +106,7 @@ export class RequestLogger {
           `
             INSERT INTO request_logs (
               time,
+              completed_at,
               route,
               method,
               path,
@@ -100,6 +117,10 @@ export class RequestLogger {
               incoming_request_body,
               upstream_request_body,
               upstream_response_body,
+              client_response_body,
+              compact_response_normalized,
+              compact_response_normalize_reason,
+              compact_response_synthetic_source,
               source_model,
               target_model,
               status,
@@ -119,11 +140,12 @@ export class RequestLogger {
               user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
           entry.time,
+          entry.completed_at,
           entry.route,
           entry.method,
           entry.path,
@@ -134,6 +156,10 @@ export class RequestLogger {
           entry.incoming_request_body,
           entry.upstream_request_body,
           entry.upstream_response_body,
+          entry.client_response_body,
+          entry.compact_response_normalized ? 1 : 0,
+          entry.compact_response_normalize_reason,
+          entry.compact_response_synthetic_source,
           entry.source_model,
           entry.target_model,
           entry.status,
@@ -157,6 +183,7 @@ export class RequestLogger {
       this.prunePersistedEntries();
       this.prunePersistedStorage();
     } catch (error) {
+      this.recordPersistenceFailure("persist request log", error);
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
   }
@@ -374,6 +401,7 @@ export class RequestLogger {
         passes += 1;
       }
     } catch (error) {
+      this.recordPersistenceFailure("prune request log database", error);
       console.error(
         `Failed to prune request log database below ${this.maxDatabaseBytes} bytes.`,
         error
@@ -414,6 +442,12 @@ export class RequestLogger {
       `${this.databasePath}-shm`
     ]);
   }
+
+  private recordPersistenceFailure(operation: string, error: unknown): void {
+    this.persistErrorCount += 1;
+    this.lastPersistError = `${operation}: ${errorSummary(error)}`;
+    this.lastPersistErrorAt = new Date().toISOString();
+  }
 }
 
 function sumExistingFileSizes(paths: string[]): number {
@@ -426,6 +460,10 @@ function sumExistingFileSizes(paths: string[]): number {
   }
 
   return total;
+}
+
+function errorSummary(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeMaxDatabaseBytes(value: number | undefined): number | null {

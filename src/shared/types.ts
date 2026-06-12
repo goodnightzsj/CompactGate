@@ -6,6 +6,11 @@ export type CredentialSource = "config" | "env" | "missing";
 export type ConfigProfileScope = "codex" | "claude";
 export type RouteUrlPresetKind = "codex_primary" | "codex_compact" | "claude_primary" | "claude_compact";
 export type RequestTransport = "http" | "stream";
+export type CompactResponseNormalizeReason =
+  | "malformed_json"
+  | "missing_response_compaction_object"
+  | "missing_compaction_output";
+export type CompactResponseSyntheticSource = "upstream_response" | "request_input";
 
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
@@ -231,6 +236,7 @@ export interface RoutePreviewResponse {
 
 export interface RequestLogEntry {
   time: string;
+  completed_at: string;
   route: RouteKind;
   method: string;
   path: string;
@@ -241,6 +247,10 @@ export interface RequestLogEntry {
   incoming_request_body: string | null;
   upstream_request_body: string | null;
   upstream_response_body: string | null;
+  client_response_body: string | null;
+  compact_response_normalized: boolean;
+  compact_response_normalize_reason: CompactResponseNormalizeReason | null;
+  compact_response_synthetic_source: CompactResponseSyntheticSource | null;
   source_model: string | null;
   target_model: string | null;
   status: number;
@@ -260,6 +270,13 @@ export interface RequestLogEntry {
   user_agent: string | null;
   request_id: string;
   error_summary: string | null;
+}
+
+export interface LogPersistenceHealth {
+  database_path: string;
+  persist_error_count: number;
+  last_persist_error: string | null;
+  last_persist_error_at: string | null;
 }
 
 export interface HostLogCount {
@@ -290,6 +307,7 @@ export interface HealthResponse {
   status: "ok";
   time: string;
   listen: string;
+  logger: LogPersistenceHealth;
   primary: {
     status: "configured" | "invalid";
     base_url: string;

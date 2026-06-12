@@ -11,10 +11,20 @@ export interface CapturedRequest {
 }
 
 export interface CaptureFixtureRecord {
+  request_id: string;
+  time: string;
+  completed_at: string;
   route: string;
+  method: string;
+  path: string;
+  upstream_url: string;
+  upstream_host: string;
   source_model: string | null;
   target_model: string | null;
   compact_bridge_replacements: number;
+  compact_response_normalized: boolean;
+  compact_response_normalize_reason: string | null;
+  compact_response_synthetic_source: string | null;
   incoming_request: {
     headers: Record<string, string | string[]>;
     body: {
@@ -46,6 +56,17 @@ export interface CaptureFixtureRecord {
       base64: string;
     };
   };
+  client_response: {
+    headers: Record<string, string | string[]>;
+    status: number;
+    body: {
+      byte_length: number;
+      captured_byte_length: number;
+      truncated: boolean;
+      text: string;
+      base64: string;
+    };
+  } | null;
 }
 
 export function assertCaptured(request: CapturedRequest | null): asserts request is CapturedRequest {

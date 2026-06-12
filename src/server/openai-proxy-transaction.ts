@@ -1,5 +1,7 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type {
+  CompactResponseNormalizeReason,
+  CompactResponseSyntheticSource,
   RequestTransport,
   RouteKind
 } from "../shared/types.js";
@@ -21,6 +23,8 @@ export interface OpenAiProxyTransactionState {
   upstreamBody: Buffer;
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
+  clientResponseBody: Buffer | null;
+  clientResponseHeaders: IncomingHttpHeaders | null;
   requestHeaders: Record<string, string>;
   requestMetadata: RequestMetadata | null;
   requestType: RequestTransport;
@@ -29,6 +33,9 @@ export interface OpenAiProxyTransactionState {
   sourceModel: string | null;
   targetModel: string | null;
   compactBridgeReplacements: number;
+  compactResponseNormalized: boolean;
+  compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
+  compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
 }
 
 export interface OpenAiProxyUpstreamResult {
@@ -48,6 +55,7 @@ export interface OpenAiProxyTransactionInput {
   route: RouteKind;
   status: number;
   startedAt: number;
+  startedAtIso: string;
   requestMetadata: RequestMetadata | null;
   requestType: RequestTransport;
   upstream: URL;
@@ -63,6 +71,11 @@ export interface OpenAiProxyTransactionInput {
   upstreamBody: Buffer;
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
+  clientResponseBody: Buffer | null;
+  clientResponseHeaders: IncomingHttpHeaders | null;
+  compactResponseNormalized: boolean;
+  compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
+  compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
 }
 
 export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState {
@@ -73,6 +86,8 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
     upstreamBody: Buffer.alloc(0),
     responseBody: Buffer.alloc(0),
     responseHeaders: {},
+    clientResponseBody: null,
+    clientResponseHeaders: null,
     requestHeaders: {},
     requestMetadata: null,
     requestType: "http",
@@ -80,7 +95,10 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
     usage: emptyUsageMetrics(),
     sourceModel: null,
     targetModel: null,
-    compactBridgeReplacements: 0
+    compactBridgeReplacements: 0,
+    compactResponseNormalized: false,
+    compactResponseNormalizeReason: null,
+    compactResponseSyntheticSource: null
   };
 }
 
@@ -96,12 +114,15 @@ export function applyOpenAiProxyUpstreamResult(
 }
 
 export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransactionInput): Promise<void> {
+  const completedAtIso = new Date().toISOString();
   const logEntry = addLog(input.logger, {
     route: input.route,
     req: input.req,
     url: input.url,
     status: input.status,
     startedAt: input.startedAt,
+    startedAtIso: input.startedAtIso,
+    completedAtIso,
     endpoint: input.requestMetadata?.endpoint ?? endpointFromPath(input.url.pathname),
     requestType: input.requestType,
     reasoningEffort: input.requestMetadata?.reasoningEffort ?? null,
@@ -109,19 +130,24 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     incomingRequestBody: input.rawBody,
     upstreamRequestBody: input.upstreamBody,
     upstreamResponseBody: input.responseBody,
+    clientResponseBody: input.clientResponseBody,
     upstreamHost: input.upstream.host,
     requestId: input.requestId,
     sourceModel: input.sourceModel,
     targetModel: input.targetModel,
     firstTokenMs: input.firstTokenMs,
     usage: input.usage,
-    errorSummary: input.errorSummary
+    errorSummary: input.errorSummary,
+    compactResponseNormalized: input.compactResponseNormalized,
+    compactResponseNormalizeReason: input.compactResponseNormalizeReason,
+    compactResponseSyntheticSource: input.compactResponseSyntheticSource
   });
   input.studioEvents.broadcastLog(logEntry);
 
   await persistCapture(input.captureWriter, () => ({
     request_id: input.requestId,
-    time: new Date().toISOString(),
+    time: input.startedAtIso,
+    completed_at: completedAtIso,
     route: input.route,
     method: input.req.method ?? "GET",
     path: `${input.url.pathname}${input.url.search}`,
@@ -130,6 +156,9 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     source_model: input.sourceModel,
     target_model: input.targetModel,
     compact_bridge_replacements: input.compactBridgeReplacements,
+    compact_response_normalized: input.compactResponseNormalized,
+    compact_response_normalize_reason: input.compactResponseNormalizeReason,
+    compact_response_synthetic_source: input.compactResponseSyntheticSource,
     incoming_request: {
       headers: serializeHeaders(input.req.headers),
       body: input.captureWriter.serializeBody(input.rawBody)
@@ -142,6 +171,13 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       status: input.status,
       headers: serializeHeaders(input.responseHeaders),
       body: input.captureWriter.serializeBody(input.responseBody)
-    }
+    },
+    client_response: input.clientResponseBody
+      ? {
+          status: input.status,
+          headers: serializeHeaders(input.clientResponseHeaders ?? {}),
+          body: input.captureWriter.serializeBody(input.clientResponseBody)
+        }
+      : null
   }));
 }

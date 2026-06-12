@@ -17,9 +17,18 @@ export interface CompactionBridgeStoreOptions {
   maxEntries?: number;
 }
 
+export type CompactionBridgeFallbackSource = "standard" | "synthetic";
+
 interface CachedFallbackItems {
   items: unknown[];
   expiresAt: number;
+  source: CompactionBridgeFallbackSource;
+}
+
+export interface PrimaryBridgeRewriteOptions {
+  includeStandardFallbacks?: boolean;
+  includeSyntheticFallbacks?: boolean;
+  allowReadableFallback?: boolean;
 }
 
 const DEFAULT_BRIDGE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -42,7 +51,7 @@ export class CompactionBridgeStore {
 
   storeCompactResponse(
     responseBody: Buffer,
-    options: { scope: CompactionBridgeScope }
+    options: { scope: CompactionBridgeScope; source?: CompactionBridgeFallbackSource }
   ): void {
     const parsed = parseJsonRecord(responseBody);
     const output = Array.isArray(parsed?.output) ? parsed.output : null;
@@ -67,17 +76,25 @@ export class CompactionBridgeStore {
 
       rememberMapEntry(this.fallbackItemsByKey, key, {
         items: deepCloneJsonArray(fallbackItems),
-        expiresAt
+        expiresAt,
+        source: options.source ?? "standard"
       });
     }
 
     enforceMaxEntries(this.fallbackItemsByKey, this.maxEntries);
   }
 
-  rewritePrimaryBody(rawBody: Buffer, scope: CompactionBridgeScope): PrimaryBridgeResult {
+  rewritePrimaryBody(
+    rawBody: Buffer,
+    scope: CompactionBridgeScope,
+    options: PrimaryBridgeRewriteOptions = {}
+  ): PrimaryBridgeResult {
     const parsed = parseJsonRecord(rawBody);
     const input = Array.isArray(parsed?.input) ? parsed.input : null;
     this.pruneExpired(this.now());
+    const includeStandardFallbacks = options.includeStandardFallbacks ?? true;
+    const includeSyntheticFallbacks = options.includeSyntheticFallbacks ?? true;
+    const allowReadableFallback = options.allowReadableFallback ?? true;
 
     if (!parsed || !input) {
       return { body: rawBody, replacedCompactionCount: 0 };
@@ -93,9 +110,18 @@ export class CompactionBridgeStore {
       }
 
       const fallback = this.fallbackItemsByKey.get(compactionKey(scope, item.encrypted_content));
-      if (fallback) {
+      if (
+        fallback &&
+        ((fallback.source === "standard" && includeStandardFallbacks) ||
+          (fallback.source === "synthetic" && includeSyntheticFallbacks))
+      ) {
         rewrittenInput.push(...deepCloneJsonArray(fallback.items));
         replacedCompactionCount += 1;
+        continue;
+      }
+
+      if (!allowReadableFallback) {
+        rewrittenInput.push(item);
         continue;
       }
 

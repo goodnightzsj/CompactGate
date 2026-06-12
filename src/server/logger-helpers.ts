@@ -1,5 +1,7 @@
 import { routeProvider } from "../shared/route-meta.js";
 import type {
+  CompactResponseNormalizeReason,
+  CompactResponseSyntheticSource,
   LogStatusKind,
   ProviderLogCounts,
   RequestLogEntry,
@@ -79,6 +81,7 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
 export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
   return {
     time: String(row.time),
+    completed_at: readCompletedAt(row.completed_at, row.time),
     route: normalizeRoute(row.route),
     method: String(row.method),
     path: String(row.path),
@@ -89,6 +92,14 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     incoming_request_body: readNullableString(row.incoming_request_body),
     upstream_request_body: readNullableString(row.upstream_request_body),
     upstream_response_body: readNullableString(row.upstream_response_body),
+    client_response_body: readNullableString(row.client_response_body),
+    compact_response_normalized: readBoolean(row.compact_response_normalized),
+    compact_response_normalize_reason: readCompactResponseNormalizeReason(
+      row.compact_response_normalize_reason
+    ),
+    compact_response_synthetic_source: readCompactResponseSyntheticSource(
+      row.compact_response_synthetic_source
+    ),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
     status: readRequiredNumber(row.status),
@@ -116,7 +127,8 @@ export function stripLogEntryBodies(entry: RequestLogEntry): RequestLogEntry {
     ...entry,
     incoming_request_body: null,
     upstream_request_body: null,
-    upstream_response_body: null
+    upstream_response_body: null,
+    client_response_body: null
   };
 }
 
@@ -170,8 +182,29 @@ function readBoolean(value: unknown): boolean {
   return value === true || value === 1 || value === "1";
 }
 
+function readCompletedAt(value: unknown, fallback: unknown): string {
+  const completedAt = readNullableString(value);
+  return completedAt ?? String(fallback);
+}
+
 function readRequestTransport(value: unknown): RequestTransport {
   return value === "stream" ? "stream" : "http";
+}
+
+function readCompactResponseNormalizeReason(
+  value: unknown
+): CompactResponseNormalizeReason | null {
+  return value === "malformed_json" ||
+    value === "missing_response_compaction_object" ||
+    value === "missing_compaction_output"
+    ? value
+    : null;
+}
+
+function readCompactResponseSyntheticSource(
+  value: unknown
+): CompactResponseSyntheticSource | null {
+  return value === "upstream_response" || value === "request_input" ? value : null;
 }
 
 function readEndpoint(value: unknown, pathValue: string): string {

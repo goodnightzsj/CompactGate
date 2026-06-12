@@ -40,6 +40,7 @@ describe("UI log status helpers", () => {
 function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {
     time: "2026-06-09T00:00:00.000Z",
+    completed_at: "2026-06-09T00:00:01.000Z",
     route: "primary",
     method: "POST",
     path: "/v1/responses",
@@ -50,6 +51,10 @@ function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     incoming_request_body: null,
     upstream_request_body: null,
     upstream_response_body: null,
+    client_response_body: null,
+    compact_response_normalized: false,
+    compact_response_normalize_reason: null,
+    compact_response_synthetic_source: null,
     source_model: "gpt-5.5",
     target_model: "gpt-5.5",
     status: 200,

@@ -113,7 +113,7 @@ export function createStudioSnapshot(
 
   return {
     config: configStore.toPublicConfig(),
-    health: healthForConfig(configStore.get()),
+    health: healthForConfig(configStore.get(), logger),
     logs: logPage.logs,
     log_page: logPage
   };

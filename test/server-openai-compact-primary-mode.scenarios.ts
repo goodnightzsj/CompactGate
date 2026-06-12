@@ -59,6 +59,7 @@ describe("CompactGate OpenAI routing", () => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const primary = await startCapturedOpenAiUpstream(primaryRequests, (res) => writeJson(res, {
+      object: "response.compaction",
       output: [
         {
           type: "message",
@@ -113,5 +114,91 @@ describe("CompactGate OpenAI routing", () => {
     expect(primaryRequests).toHaveLength(2);
     expect(primaryRequests[1].url).toBe("/v1/responses");
     expect(JSON.parse(primaryRequests[1].body)).toEqual(JSON.parse(followUpBody));
+  });
+
+  it("rewrites locally normalized primary-mode compact follow-ups before primary", async () => {
+    const summaryText = [
+      "- Primary-mode local compact summary.",
+      "- The compact response was synthesized by CompactGate.",
+      "- The follow-up must reach primary as an assistant message."
+    ].join("\n");
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (res) => {
+      if (primaryRequests.length === 1) {
+        writeJson(res, {
+          id: "resp_primary_mode_normalized",
+          object: "response",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: summaryText }]
+            }
+          ]
+        });
+        return;
+      }
+
+      writeJson(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (res) => {
+      writeJson(res, { should_not_be_called: true });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "primary" }
+    });
+
+    const compactResponse = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "primary synthetic compact" }),
+      headers: JSON_HEADERS
+    });
+    expect(compactResponse.status).toBe(200);
+    const compactBody = await compactResponse.json() as {
+      output: Array<{ type: string; encrypted_content?: string }>;
+    };
+    expect(compactBody.output).toEqual([
+      {
+        type: "compaction",
+        encrypted_content: summaryText
+      }
+    ]);
+
+    const followUpResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        input: [
+          {
+            type: "compaction",
+            encrypted_content: summaryText
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "after primary synthetic compact" }]
+          }
+        ]
+      }),
+      headers: JSON_HEADERS
+    });
+
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
+    expect(compactRequests).toHaveLength(0);
+    expect(primaryRequests).toHaveLength(2);
+    expect(JSON.parse(primaryRequests[1].body).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "after primary synthetic compact" }]
+      }
+    ]);
   });
 });

@@ -52,7 +52,7 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, healthForConfig(configStore.get()));
+    sendJson(res, 200, healthForConfig(configStore.get(), logger));
     return true;
   }
 
