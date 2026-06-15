@@ -61,7 +61,7 @@ export async function proxyClaudeRequest(
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
-    transaction.targetModel = resolveClaudeMappedModel(transaction.sourceModel, config) ?? transaction.sourceModel;
+    transaction.targetModel = resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ?? transaction.sourceModel;
     upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
     transaction.upstreamBody = rewriteClaudeModelBody(transaction.rawBody, transaction.targetModel ?? "");
     const auth = resolveClaudeCredential(config);

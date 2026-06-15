@@ -1,6 +1,14 @@
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import type { PublicConfig } from "../src/shared/types.js";
+import {
+  MIMO_IMAGE_INPUT_MODEL,
+  resolveClaudeMappedModel
+} from "../src/server/claude-models.js";
+import { DEFAULT_CONFIG } from "../src/server/config-defaults.js";
+import type {
+  CompactGateConfig,
+  PublicConfig
+} from "../src/shared/types.js";
 import {
   assertCaptured,
   type CapturedRequest,
@@ -144,6 +152,38 @@ describe("CompactGate Claude routing", () => {
     });
   });
 
+  it("uses the image-capable Mimo model for image input sent to the Mimo upstream host", () => {
+    const imageBody = Buffer.from(JSON.stringify({
+      model: "claude-opus-4-8",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "check this image" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "iVBORw0KGgo="
+              }
+            }
+          ]
+        }
+      ]
+    }));
+    const textBody = Buffer.from(JSON.stringify({
+      model: "claude-opus-4-8",
+      messages: [{ role: "user", content: "plain text keeps mapped model" }]
+    }));
+    const mimoHostConfig = buildMappedClaudeConfig("https://token-plan-sgp.xiaomimimo.com/anthropic");
+    const otherHostConfig = buildMappedClaudeConfig("https://other.example/anthropic");
+
+    expect(resolveClaudeMappedModel("claude-opus-4-8", mimoHostConfig, imageBody)).toBe(MIMO_IMAGE_INPUT_MODEL);
+    expect(resolveClaudeMappedModel("claude-opus-4-8", mimoHostConfig, textBody)).toBe("mimo-v2.5-pro");
+    expect(resolveClaudeMappedModel("claude-opus-4-8", otherHostConfig, imageBody)).toBe("mimo-v2.5-pro");
+  });
+
   it("drops stale gzip encoding headers when rewritten Claude bodies become plain JSON", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startCapturedClaudeUpstream(captured, (_req, res) => {
@@ -191,3 +231,28 @@ describe("CompactGate Claude routing", () => {
     });
   });
 });
+
+function buildMappedClaudeConfig(baseUrl: string): CompactGateConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    claude: {
+      primary: {
+        ...DEFAULT_CONFIG.claude.primary,
+        base_url: baseUrl,
+        model_override: "mimo-v2.5-pro"
+      },
+      compact: {
+        ...DEFAULT_CONFIG.claude.compact,
+        base_url: baseUrl
+      },
+      model_map: {
+        default: "mimo-v2.5-pro",
+        opus: "mimo-v2.5-pro",
+        sonnet: "mimo-v2.5-pro",
+        haiku: "mimo-v2.5-pro",
+        reasoning: "mimo-v2.5-pro",
+        subagent: "mimo-v2.5-pro"
+      }
+    }
+  };
+}

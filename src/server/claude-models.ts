@@ -22,6 +22,9 @@ export type FetchClaudeModels = (config: CompactGateConfig) => Promise<{
   error: string | null;
 }>;
 
+export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
+const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
+
 export async function fetchClaudeModels(config: CompactGateConfig): Promise<{
   models: string[];
   upstream_host: string;
@@ -92,8 +95,13 @@ export function resolveClaudeCredential(config: CompactGateConfig) {
 
 export function resolveClaudeMappedModel(
   sourceModel: string | null,
-  config: CompactGateConfig
+  config: CompactGateConfig,
+  rawBody?: Buffer
 ): string | null {
+  if (rawBody && isMimoClaudeUpstreamHost(config) && hasClaudeImageInput(rawBody)) {
+    return MIMO_IMAGE_INPUT_MODEL;
+  }
+
   const role = classifyClaudeModelRole(sourceModel);
   const roleTarget = role ? readStringField(config.claude.model_map[role]) : null;
   if (roleTarget) {
@@ -118,6 +126,37 @@ export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): 
     ...parsed,
     model
   }));
+}
+
+function isMimoClaudeUpstreamHost(config: CompactGateConfig): boolean {
+  try {
+    return new URL(config.claude.primary.base_url).hostname.toLowerCase() === MIMO_IMAGE_INPUT_HOSTNAME;
+  } catch {
+    return false;
+  }
+}
+
+function hasClaudeImageInput(rawBody: Buffer): boolean {
+  const parsed = parseJsonRecord(rawBody);
+  return Array.isArray(parsed?.messages) && parsed.messages.some((message) =>
+    isRecord(message) && containsClaudeImageContent(message.content)
+  );
+}
+
+function containsClaudeImageContent(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsClaudeImageContent);
+  }
+
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (readStringField(value.type)?.toLowerCase() === "image") {
+    return true;
+  }
+
+  return Object.hasOwn(value, "content") && containsClaudeImageContent(value.content);
 }
 
 function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole | null {
