@@ -24,6 +24,9 @@ export type FetchClaudeModels = (config: CompactGateConfig) => Promise<{
 
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
+const HUB_DS_PROFILE_NAME = "hub ds";
+const HUB_DS_MAX_EFFORT = "max";
+const HUB_DS_SAFE_EFFORT = "high";
 
 export async function fetchClaudeModels(config: CompactGateConfig): Promise<{
   models: string[];
@@ -111,21 +114,31 @@ export function resolveClaudeMappedModel(
   return readStringField(config.claude.model_map.default);
 }
 
-export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): Buffer {
+export function rewriteClaudeModelBody(
+  rawBody: Buffer,
+  modelOverride: string,
+  config?: CompactGateConfig
+): Buffer {
   const model = readStringField(modelOverride);
-  if (!model) {
-    return rawBody;
-  }
-
+  const shouldClampHubDsEffort = Boolean(config && isActiveClaudeProfileNamed(config, HUB_DS_PROFILE_NAME));
   const parsed = parseJsonRecord(rawBody);
   if (!parsed) {
     return rawBody;
   }
 
-  return Buffer.from(JSON.stringify({
-    ...parsed,
-    model
-  }));
+  const next = { ...parsed };
+  let rewritten = false;
+
+  if (model) {
+    next.model = model;
+    rewritten = true;
+  }
+
+  if (shouldClampHubDsEffort && clampOutputConfigEffort(next, HUB_DS_MAX_EFFORT, HUB_DS_SAFE_EFFORT)) {
+    rewritten = true;
+  }
+
+  return rewritten ? Buffer.from(JSON.stringify(next)) : rawBody;
 }
 
 function isMimoClaudeUpstreamHost(config: CompactGateConfig): boolean {
@@ -134,6 +147,37 @@ function isMimoClaudeUpstreamHost(config: CompactGateConfig): boolean {
   } catch {
     return false;
   }
+}
+
+function isActiveClaudeProfileNamed(config: CompactGateConfig, name: string): boolean {
+  const state = config.profile_scopes?.claude;
+  const activeProfileId = state?.active_profile_id;
+  if (!activeProfileId) {
+    return false;
+  }
+
+  const activeProfile = state?.profiles?.find((profile) => profile.id === activeProfileId);
+  return activeProfile?.name.trim().toLowerCase() === name;
+}
+
+function clampOutputConfigEffort(
+  body: Record<string, unknown>,
+  sourceEffort: string,
+  targetEffort: string
+): boolean {
+  if (!isRecord(body.output_config)) {
+    return false;
+  }
+
+  if (readStringField(body.output_config.effort)?.toLowerCase() !== sourceEffort) {
+    return false;
+  }
+
+  body.output_config = {
+    ...body.output_config,
+    effort: targetEffort
+  };
+  return true;
 }
 
 function hasClaudeImageInput(rawBody: Buffer): boolean {
