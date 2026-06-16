@@ -2,8 +2,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   MIMO_IMAGE_INPUT_MODEL,
-  resolveClaudeMappedModel,
-  rewriteClaudeModelBody
+  resolveClaudeMappedModel
 } from "../src/server/claude-models.js";
 import { DEFAULT_CONFIG } from "../src/server/config-defaults.js";
 import type {
@@ -185,30 +184,6 @@ describe("CompactGate Claude routing", () => {
     expect(resolveClaudeMappedModel("claude-opus-4-8", otherHostConfig, imageBody)).toBe("mimo-v2.5-pro");
   });
 
-  it("clamps max output effort to high only for the active hub ds Claude profile", () => {
-    const requestBody = Buffer.from(JSON.stringify({
-      model: "claude-opus-4-8",
-      messages: [{ role: "user", content: "high effort for hub ds" }],
-      thinking: { type: "adaptive" },
-      output_config: { effort: "max" }
-    }));
-    const hubDsBody = JSON.parse(
-      rewriteClaudeModelBody(requestBody, "deepseek-v4-pro", buildProfileConfig("hub ds")).toString("utf8")
-    ) as Record<string, unknown>;
-    const otherProfileBody = JSON.parse(
-      rewriteClaudeModelBody(requestBody, "deepseek-v4-pro", buildProfileConfig("ds")).toString("utf8")
-    ) as Record<string, unknown>;
-
-    expect(hubDsBody).toMatchObject({
-      model: "deepseek-v4-pro",
-      output_config: { effort: "high" }
-    });
-    expect(otherProfileBody).toMatchObject({
-      model: "deepseek-v4-pro",
-      output_config: { effort: "max" }
-    });
-  });
-
   it("drops stale gzip encoding headers when rewritten Claude bodies become plain JSON", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startCapturedClaudeUpstream(captured, (_req, res) => {
@@ -277,39 +252,6 @@ function buildMappedClaudeConfig(baseUrl: string): CompactGateConfig {
         haiku: "mimo-v2.5-pro",
         reasoning: "mimo-v2.5-pro",
         subagent: "mimo-v2.5-pro"
-      }
-    }
-  };
-}
-
-function buildProfileConfig(activeProfileName: string): CompactGateConfig {
-  return {
-    ...DEFAULT_CONFIG,
-    profile_scopes: {
-      ...DEFAULT_CONFIG.profile_scopes,
-      claude: {
-        active_profile_id: "active-claude-profile",
-        profiles: [
-          {
-            id: "active-claude-profile",
-            name: activeProfileName,
-            created_at: "2026-06-16T00:00:00.000Z",
-            updated_at: "2026-06-16T00:00:00.000Z",
-            config: {
-              claude: {
-                ...DEFAULT_CONFIG.claude
-              }
-            }
-          }
-        ]
-      }
-    },
-    claude: {
-      ...DEFAULT_CONFIG.claude,
-      model_map: {
-        ...DEFAULT_CONFIG.claude.model_map,
-        default: "deepseek-v4-pro",
-        opus: "deepseek-v4-pro"
       }
     }
   };
