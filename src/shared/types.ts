@@ -54,6 +54,7 @@ export interface TimeoutConfig {
 
 export interface LoggingConfig {
   redact_body: boolean;
+  persist_body: boolean;
   keep_recent: number;
 }
 

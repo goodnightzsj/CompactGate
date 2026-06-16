@@ -86,6 +86,7 @@ describe("RequestLogger", () => {
         upstreamRequestBody: Buffer.alloc(0),
         upstreamResponseBody: Buffer.from("{}"),
         clientResponseBody: null,
+        persistBody: false,
         upstreamHost: "compact.example",
         requestId: "request-start-time",
         sourceModel: "gpt-5.5",

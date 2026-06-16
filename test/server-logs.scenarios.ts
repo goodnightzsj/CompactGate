@@ -68,10 +68,30 @@ describe("CompactGate logs and capture", () => {
     expect(built).toBe(false);
   });
 
-  it("persists compact request body content without returning it in recent log payloads", async () => {
+  it("does not persist raw request and response bodies by default", async () => {
     const primary = await startUpstream((_req, res) => res.end("{}"));
     const compact = await startJsonUpstream({ ok: true });
     const app = await startApp(primary.url, compact.url);
+
+    await postJson(app.url, "/v1/responses/compact", {
+      model: "gpt-5.4",
+      input: "sensitive prompt"
+    });
+
+    expect(readLatestLogBodyFields(path.join(app.dir, "compactgate-logs.sqlite"))).toEqual({
+      incoming_request_body: null,
+      upstream_request_body: null,
+      upstream_response_body: null,
+      client_response_body: null
+    });
+  });
+
+  it("persists compact request body content without returning it in recent log payloads", async () => {
+    const primary = await startUpstream((_req, res) => res.end("{}"));
+    const compact = await startJsonUpstream({ ok: true });
+    const app = await startApp(primary.url, compact.url, {
+      logging: { persist_body: true }
+    });
 
     await postJson(app.url, "/v1/responses/compact", {
       model: "gpt-5.4",
@@ -126,7 +146,9 @@ describe("CompactGate logs and capture", () => {
         }
       ]
     });
-    const app = await startApp(primary.url, compact.url);
+    const app = await startApp(primary.url, compact.url, {
+      logging: { persist_body: true }
+    });
 
     const response = await postJson(app.url, "/v1/responses/compact", {
       model: "gpt-5.5",

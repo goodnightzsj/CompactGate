@@ -217,6 +217,7 @@ async function proxyPrimaryRequest(
       responseHeaders: transaction.responseHeaders,
       clientResponseBody: transaction.clientResponseBody,
       clientResponseHeaders: transaction.clientResponseHeaders,
+      persistBody: config.logging.persist_body,
       compactResponseNormalized: transaction.compactResponseNormalized,
       compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
       compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
@@ -374,6 +375,7 @@ async function proxyCompactRequest(
       responseHeaders: transaction.responseHeaders,
       clientResponseBody: transaction.clientResponseBody,
       clientResponseHeaders: transaction.clientResponseHeaders,
+      persistBody: config.logging.persist_body,
       compactResponseNormalized: transaction.compactResponseNormalized,
       compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
       compactResponseSyntheticSource: transaction.compactResponseSyntheticSource

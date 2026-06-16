@@ -63,6 +63,7 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
   },
   logging: {
     redact_body: true,
+    persist_body: false,
     keep_recent: 200
   },
   primary_failover: {

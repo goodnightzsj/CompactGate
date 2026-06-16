@@ -159,6 +159,7 @@ describe("ConfigStore", () => {
       },
       logging: {
         redact_body: false,
+        persist_body: true,
         keep_recent: 77
       },
       profile_scopes: {
@@ -202,6 +203,7 @@ describe("ConfigStore", () => {
     expect(imported.primary.base_url).toBe("http://127.0.0.1:9961/v1");
     expect(imported.primary.api_key).toBe("import-primary-key");
     expect(imported.compact.model_override).toBe("imported-compact-model");
+    expect(imported.logging.persist_body).toBe(true);
     expect(imported.profile_scopes?.codex?.active_profile_id).toBe("codex-import");
     expect(imported.profile_scopes?.codex?.profiles?.[0]?.config).toMatchObject({
       primary: {

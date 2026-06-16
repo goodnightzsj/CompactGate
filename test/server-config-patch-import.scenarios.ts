@@ -135,6 +135,7 @@ describe("CompactGate config API", () => {
         },
         logging: {
           redact_body: true,
+          persist_body: true,
           keep_recent: 33
         },
         profile_scopes: {
@@ -168,6 +169,7 @@ describe("CompactGate config API", () => {
     expect(importedConfig.compact.model_override).toBe("import-api-compact-model");
     expect(importedConfig.claude.primary.base_url).toBe("http://127.0.0.1:56203");
     expect(importedConfig.logging.keep_recent).toBe(33);
+    expect(importedConfig.logging.persist_body).toBe(true);
     expect(importedConfig.route_url_presets).toEqual([
       expect.objectContaining({
         kind: "codex_primary",

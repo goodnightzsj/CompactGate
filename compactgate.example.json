@@ -18,6 +18,7 @@
   },
   "logging": {
     "redact_body": true,
+    "persist_body": false,
     "keep_recent": 200
   }
 }

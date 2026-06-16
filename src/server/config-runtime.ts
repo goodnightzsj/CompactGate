@@ -126,6 +126,7 @@ export function mergeRuntimeConfig(
     },
     logging: {
       redact_body: readBoolean(readChild(patchRecord.logging).redact_body, base.logging.redact_body),
+      persist_body: readBoolean(readChild(patchRecord.logging).persist_body, base.logging.persist_body),
       keep_recent: readNumber(readChild(patchRecord.logging).keep_recent, base.logging.keep_recent)
     },
     primary_failover: {

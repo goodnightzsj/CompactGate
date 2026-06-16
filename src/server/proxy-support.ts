@@ -29,6 +29,7 @@ export function addLog(
     upstreamRequestBody: Buffer;
     upstreamResponseBody: Buffer;
     clientResponseBody: Buffer | null;
+    persistBody: boolean;
     upstreamHost: string;
     requestId: string;
     sourceModel: string | null;
@@ -51,10 +52,10 @@ export function addLog(
     request_type: input.requestType,
     reasoning_effort: input.reasoningEffort,
     request_summary: input.requestSummary,
-    incoming_request_body: bodyText(input.incomingRequestBody),
-    upstream_request_body: bodyText(input.upstreamRequestBody),
-    upstream_response_body: bodyText(input.upstreamResponseBody),
-    client_response_body: input.clientResponseBody ? bodyText(input.clientResponseBody) : null,
+    incoming_request_body: input.persistBody ? bodyText(input.incomingRequestBody) : null,
+    upstream_request_body: input.persistBody ? bodyText(input.upstreamRequestBody) : null,
+    upstream_response_body: input.persistBody ? bodyText(input.upstreamResponseBody) : null,
+    client_response_body: input.persistBody && input.clientResponseBody ? bodyText(input.clientResponseBody) : null,
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,
     compact_response_synthetic_source: input.compactResponseSyntheticSource,

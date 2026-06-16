@@ -18,7 +18,7 @@ describe("ConfigStore", () => {
         model_mode: "custom",
         model_override: "manual-compact"
       },
-      logging: { keep_recent: 17 },
+      logging: { keep_recent: 17, persist_body: true },
       primary_failover: { auto_schedule: false }
     });
 
@@ -26,6 +26,7 @@ describe("ConfigStore", () => {
     expect(next.compact.model_mode).toBe("custom");
     expect(next.compact.model_override).toBe("manual-compact");
     expect(next.logging.keep_recent).toBe(17);
+    expect(next.logging.persist_body).toBe(true);
     expect(next.primary_failover.auto_schedule).toBe(false);
     expect(next.route_url_presets).toEqual(
       expect.arrayContaining([
@@ -36,8 +37,18 @@ describe("ConfigStore", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       primary: { base_url: "http://127.0.0.1:9001/v1" },
       compact: { model_override: "manual-compact" },
+      logging: { persist_body: true },
       primary_failover: { auto_schedule: false }
     });
+  });
+
+  it("disables raw body persistence by default", async () => {
+    const dir = await makeConfigDir();
+
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    expect(store.get().logging.persist_body).toBe(false);
+    expect(store.toPublicConfig().logging.persist_body).toBe(false);
   });
 
   it("rejects listen ports with trailing characters", async () => {

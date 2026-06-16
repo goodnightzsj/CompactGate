@@ -118,6 +118,7 @@ function validateImportCandidateShape(config: Record<string, unknown>): void {
   validateOptionalStringPath(config, ["compact", "base_url"]);
   validateOptionalStringPath(config, ["claude", "primary", "base_url"]);
   validateOptionalStringPath(config, ["logging", "keep_recent"], "number");
+  validateOptionalStringPath(config, ["logging", "persist_body"], "boolean");
   validateOptionalStringPath(config, ["primary_failover", "auto_schedule"], "boolean");
 }
 
