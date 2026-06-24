@@ -93,6 +93,11 @@
   box-shadow: var(--shadow-sm);
 }
 
+.btn:active {
+  transform: scale(0.98);
+  box-shadow: none;
+}
+
 .btn-primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -103,6 +108,12 @@
 .btn-primary:hover {
   opacity: 0.9;
   box-shadow: var(--shadow-md);
+}
+
+.btn-primary:active {
+  opacity: 1;
+  transform: scale(0.98);
+  box-shadow: var(--shadow-sm);
 }
 
 .btn-ghost {
@@ -117,10 +128,21 @@
   border-color: var(--hairline);
 }
 
+.btn-ghost:active {
+  background: var(--hairline);
+  transform: scale(0.98);
+}
+
 .btn-danger {
   border-color: var(--brick);
   color: var(--brick);
   background: var(--brick-soft);
+}
+
+.btn-danger:active {
+  background: var(--brick);
+  color: #fff;
+  transform: scale(0.98);
 }
 
 .btn-sm {
@@ -165,6 +187,12 @@
   border-color: var(--hairline-strong);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+.solid-button:active,
+.ghost-button:active {
+  box-shadow: var(--shadow-sm);
+  transform: scale(0.98);
 }
 
 .solid-button:disabled,
@@ -270,6 +298,11 @@ textarea:hover,
   border-color: var(--hairline-strong);
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
+}
+
+.field-inline-button:active {
+  box-shadow: none;
+  transform: scale(0.98);
 }
 
 .field-inline-button.is-danger {

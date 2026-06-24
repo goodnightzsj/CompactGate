@@ -36,7 +36,7 @@ export function HealthPage({
   const claudeEndpoint = health ? `http://${health.listen}/anthropic` : "等待健康数据";
 
   return (
-    <main className="shell shell-health">
+    <main className="shell shell-health page-appear">
       <header className="topbar health-topbar">
         <div className="brand-lockup">
           <div className="mark" aria-hidden="true">
