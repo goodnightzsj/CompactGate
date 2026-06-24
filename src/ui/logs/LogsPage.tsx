@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
@@ -18,6 +19,17 @@ import {
   modelReasoningLabel
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
+import { useStaggeredLogs } from "./useStaggeredLogs.js";
+
+const MotionTr = motion.tr;
+
+const rowTransition = {
+  type: "spring" as const,
+  stiffness: 500,
+  damping: 30,
+  mass: 1,
+  opacity: { duration: 0.15 },
+};
 
 export function LogsPage({
   logs, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
@@ -36,11 +48,12 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
+  const displayedLogs = useStaggeredLogs(logs);
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
     isLoadingMoreLogs,
-    logs,
+    logs: displayedLogs,
     onLoadMore
   });
 
@@ -52,7 +65,7 @@ export function LogsPage({
           <h2>请求日志</h2>
         </div>
         <span className="status-pill">
-          显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
+          显示 {displayedLogs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
         </span>
       </div>
 
@@ -95,9 +108,9 @@ export function LogsPage({
 
       {error && <div className="error-banner">{error}</div>}
 
-      {isLoadingLogs && logs.length === 0 ? (
+      {isLoadingLogs && displayedLogs.length === 0 ? (
         <div className="empty-state"><strong>正在加载日志...</strong></div>
-      ) : logs.length === 0 ? (
+      ) : displayedLogs.length === 0 ? (
         <div className="empty-state">
           <strong>暂无请求记录</strong>
           <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
@@ -140,40 +153,47 @@ export function LogsPage({
                 </tr>
               </thead>
               <tbody>
-                {logs.map((entry) => {
-                  const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
-                  const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
-                  const hasError = Boolean(entry.error_summary) || entry.status >= 400;
-                  return (
-                    <Fragment key={entry.request_id}>
-                      <tr
-                        className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
-                        onClick={() =>
-                          setExpandedRequestId((currentId) => currentId === entry.request_id ? null : entry.request_id)
-                        }
-                      >
-                        <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
-                        <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.completed_at)} /></td>
-                        <td>
-                          <LogTextTooltip className="log-model-cell" value={modelMapping}>
-                            <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-                            <strong>{entry.source_model ?? "-"}</strong>
-                            {hasRewrite && <small>→ {entry.target_model}</small>}
-                          </LogTextTooltip>
-                        </td>
-                        <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
-                        <td><LogTextTooltip className="log-cell-code" value={modelReasoningLabel(entry)} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
-                        <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
-                        <td><TokenTooltip entry={entry} /></td>
-                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
-                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
-                      </tr>
-                      {expandedRequestId === entry.request_id && <LogDetailRow entry={entry} />}
-                    </Fragment>
-                  );
-                })}
+                <AnimatePresence initial={false} mode="popLayout">
+                  {displayedLogs.map((entry) => {
+                    const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
+                    const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
+                    const hasError = Boolean(entry.error_summary) || entry.status >= 400;
+                    return (
+                      <Fragment key={entry.request_id}>
+                        <MotionTr
+                          initial={{ opacity: 0, y: -16 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          transition={rowTransition}
+                          layout
+                          className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
+                          onClick={() =>
+                            setExpandedRequestId((currentId) => currentId === entry.request_id ? null : entry.request_id)
+                          }
+                        >
+                          <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
+                          <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.completed_at)} /></td>
+                          <td>
+                            <LogTextTooltip className="log-model-cell" value={modelMapping}>
+                              <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                              <strong>{entry.source_model ?? "-"}</strong>
+                              {hasRewrite && <small>→ {entry.target_model}</small>}
+                            </LogTextTooltip>
+                          </td>
+                          <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
+                          <td><LogTextTooltip className="log-cell-code" value={modelReasoningLabel(entry)} /></td>
+                          <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
+                          <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
+                          <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
+                          <td><TokenTooltip entry={entry} /></td>
+                          <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
+                          <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
+                        </MotionTr>
+                        {expandedRequestId === entry.request_id && <LogDetailRow entry={entry} />}
+                      </Fragment>
+                    );
+                  })}
+                </AnimatePresence>
               </tbody>
             </table>
           </div>
@@ -183,7 +203,7 @@ export function LogsPage({
       {hasMoreLogs && (
         <div style={{ textAlign: "center", marginTop: 12 }}>
           <button className="btn" onClick={onLoadMore} disabled={isLoadingMoreLogs}>
-            {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${logs.length}/${totalLogCount})`}
+            {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${displayedLogs.length}/${totalLogCount})`}
           </button>
         </div>
       )}

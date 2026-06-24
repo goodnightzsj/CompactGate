@@ -32,7 +32,7 @@ export function StudioPageOutlet({
   }
 
   return (
-    <>
+    <div className="page-appear">
       {pageError && <div className="error-banner">{pageError}</div>}
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}
@@ -42,6 +42,6 @@ export function StudioPageOutlet({
       {currentPage === "config" && <ConfigWorkspace {...configPage} />}
 
       {currentPage === "logs" && <LogsPage {...logsPage} />}
-    </>
+    </div>
   );
 }
