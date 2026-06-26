@@ -16,22 +16,18 @@ import type { ConfigActions } from "../hooks/useConfigActions.js";
 export type ConfigWorkspaceProps = {
   actions: ConfigActions;
   config: PublicConfig | null;
-  currentModel: string;
   form: ConfigFormState;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
-  onCurrentModelChange: (model: string) => void;
   onFormChange: Dispatch<SetStateAction<ConfigFormState>>;
 };
 
 export function ConfigWorkspace({
   actions,
   config,
-  currentModel,
   form,
   hasPendingChanges,
   linkedCompactModel,
-  onCurrentModelChange,
   onFormChange
 }: ConfigWorkspaceProps) {
   const [configTab, setConfigTab] = useState<ConfigTab>("profiles");
@@ -42,9 +38,7 @@ export function ConfigWorkspace({
       form={form}
       onFormChange={onFormChange}
       model={{
-        currentModel,
         linkedCompactModel,
-        onCurrentModelChange,
         onUnlockCompactModel: actions.unlockCompactModel,
         onRestoreLinkedMode: actions.restoreLinkedMode
       }}

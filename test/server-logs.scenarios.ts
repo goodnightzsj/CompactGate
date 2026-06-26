@@ -90,7 +90,8 @@ describe("CompactGate logs and capture", () => {
     const primary = await startUpstream((_req, res) => res.end("{}"));
     const compact = await startJsonUpstream({ ok: true });
     const app = await startApp(primary.url, compact.url, {
-      logging: { persist_body: true }
+      logging: { persist_body: true },
+      primary: { model_override: "gpt-5.4" }
     });
 
     await postJson(app.url, "/v1/responses/compact", {

@@ -64,20 +64,18 @@ export function buildRoutesPageModel({
   activeRoute,
   compactModel,
   config,
-  currentModel,
   form,
   latestLog
 }: {
   activeRoute: RouteKind;
   compactModel: string;
   config: PublicConfig | null;
-  currentModel: string;
   form: ConfigFormState;
   latestLog: RequestLogEntry | null;
 }): StudioPageOutletProps["routesPage"] {
   return {
     config,
-    currentModel,
+    currentModel: form.primaryModelOverride,
     compactModel,
     compactMode: form.upstreamMode,
     activeRoute,
@@ -88,30 +86,24 @@ export function buildRoutesPageModel({
 export function buildConfigPageModel({
   config,
   configActions,
-  currentModel,
   form,
   hasPendingChanges,
   linkedCompactModel,
-  setCurrentModel,
   setForm
 }: {
   config: PublicConfig | null;
   configActions: ConfigActions;
-  currentModel: string;
   form: ConfigFormState;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
-  setCurrentModel: Dispatch<SetStateAction<string>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
 }): ConfigWorkspaceProps {
   return {
     actions: configActions,
     config,
-    currentModel,
     form,
     hasPendingChanges,
     linkedCompactModel,
-    onCurrentModelChange: setCurrentModel,
     onFormChange: setForm
   };
 }

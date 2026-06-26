@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { PageMode, StudioPage } from "../app-types.js";
 import {
   isFormDirty,
@@ -44,7 +44,6 @@ export function useStudioPageModels({
     pageError,
     setPageError
   } = useStudioBootstrap(pageMode);
-  const [currentModel, setCurrentModel] = useState("gpt-5.5");
   const hasConfig = config !== null;
   const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
   const logFeed = useLogFeed({
@@ -61,7 +60,7 @@ export function useStudioPageModels({
   });
   const logs = logFeed.logPage.logs;
   const latestLog = logs[0] ?? null;
-  const linkedCompactModel = renderLinkedModel(currentModel, form.modelTemplate);
+  const linkedCompactModel = renderLinkedModel(form.primaryModelOverride, form.modelTemplate);
   const configActions = useConfigActions({
     config,
     form,
@@ -77,12 +76,6 @@ export function useStudioPageModels({
   const hasPendingChanges = useMemo(() => {
     return config ? isFormDirty(config, form) : false;
   }, [config, form]);
-
-  useEffect(() => {
-    if (latestLog?.source_model) {
-      setCurrentModel(latestLog.source_model);
-    }
-  }, [latestLog?.source_model]);
 
   return {
     pageOutlet: {
@@ -106,18 +99,15 @@ export function useStudioPageModels({
         activeRoute,
         compactModel: effectiveCompactModel,
         config,
-        currentModel,
         form,
         latestLog
       }),
       configPage: buildConfigPageModel({
         config,
         configActions,
-        currentModel,
         form,
         hasPendingChanges,
         linkedCompactModel,
-        setCurrentModel,
         setForm
       }),
       logsPage: buildLogsPageModel({

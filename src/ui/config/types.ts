@@ -23,6 +23,7 @@ export type ConfigFormState = {
   codexPrimaryApiKey: string;
   clearCodexPrimaryApiKey: boolean;
   codexPrimaryCredentialPresetId: string;
+  primaryModelOverride: string;
   codexCompactBaseUrl: string;
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;

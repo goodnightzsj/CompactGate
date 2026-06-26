@@ -347,6 +347,100 @@ describe("CompactGate HTTP basics", () => {
     });
   });
 
+  it("rewrites primary request model overrides before forwarding upstream", async () => {
+    const upstreamBodies: string[] = [];
+    const primary = await startUpstream(async (req, res) => {
+      upstreamBodies.push(await captureBody(req));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url, {
+      primary: {
+        model_override: "gpt-5.5"
+      }
+    });
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.4", input: "rewrite me" }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(upstreamBodies[0])).toMatchObject({
+      model: "gpt-5.5",
+      input: "rewrite me"
+    });
+
+    const logs = await fetchRecentLogs(app.url);
+    expect(logs[0]).toMatchObject({
+      route: "primary",
+      source_model: "gpt-5.4",
+      target_model: "gpt-5.5"
+    });
+  });
+
+  it("does not inject a primary model override into no-model request bodies", async () => {
+    const upstreamBodies: string[] = [];
+    const primary = await startUpstream(async (req, res) => {
+      upstreamBodies.push(await captureBody(req));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url, {
+      primary: {
+        model_override: "gpt-5.5"
+      }
+    });
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ input: "no model here" }),
+      headers: { "content-type": "application/json" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(upstreamBodies[0])).toEqual({ input: "no model here" });
+
+    const logs = await fetchRecentLogs(app.url);
+    expect(logs[0]).toMatchObject({
+      route: "primary",
+      source_model: null,
+      target_model: null
+    });
+  });
+
+  it("passes through bodyless primary requests when a model override is configured", async () => {
+    const upstreamRequests: Array<{ method: string | undefined; url: string | undefined; body: string }> = [];
+    const primary = await startUpstream(async (req, res) => {
+      upstreamRequests.push({
+        method: req.method,
+        url: req.url,
+        body: await captureBody(req)
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url, {
+      primary: {
+        model_override: "gpt-5.5"
+      }
+    });
+
+    const response = await fetch(`${app.url}/v1/models`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: [] });
+    expect(upstreamRequests[0]).toEqual({
+      method: "GET",
+      url: "/v1/models",
+      body: ""
+    });
+  });
+
   it("returns a controlled error for oversized OpenAI request bodies", async () => {
     const app = await startApp();
     const body = Buffer.concat([

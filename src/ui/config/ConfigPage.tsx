@@ -17,9 +17,7 @@ import type { ConfigFormState, ConfigTab, ProfileActionState, SaveState } from "
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
 
 type ConfigPageModelProps = {
-  currentModel: string;
   linkedCompactModel: string;
-  onCurrentModelChange: (model: string) => void;
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
 };
@@ -162,9 +160,7 @@ export function ConfigPage({
           {tab.configTab === "model" && (
             <ConfigModelPanel
               form={form}
-              currentModel={model.currentModel}
               linkedCompactModel={model.linkedCompactModel}
-              onCurrentModelChange={model.onCurrentModelChange}
               onFormChange={onFormChange}
               onUnlockCompactModel={model.onUnlockCompactModel}
               onRestoreLinkedMode={model.onRestoreLinkedMode}

@@ -34,7 +34,44 @@ export function deriveCompactModel(sourceModel: string, config: CompactGateConfi
     return config.compact.model_override;
   }
 
-  return config.compact.model_template.replaceAll("{model}", sourceModel);
+  const linkedSource = config.primary.model_override?.trim() || sourceModel;
+  return config.compact.model_template.replaceAll("{model}", linkedSource);
+}
+
+export function rewritePrimaryBody(rawBody: Buffer, config: CompactGateConfig): RewriteResult {
+  const modelOverride = config.primary.model_override?.trim();
+  if (!modelOverride) {
+    const extracted = extractJsonModel(rawBody);
+    return {
+      sourceModel: extracted.sourceModel,
+      targetModel: extracted.sourceModel,
+      body: rawBody,
+      bodyRewritten: false,
+      streamRemoved: false
+    };
+  }
+
+  const parsed = parseJsonRecord(rawBody);
+  const sourceModel = typeof parsed?.model === "string" ? parsed.model : null;
+  if (!parsed || sourceModel === null) {
+    return {
+      sourceModel,
+      targetModel: sourceModel,
+      body: rawBody,
+      bodyRewritten: false,
+      streamRemoved: false
+    };
+  }
+
+  parsed.model = modelOverride;
+
+  return {
+    sourceModel,
+    targetModel: modelOverride,
+    body: Buffer.from(JSON.stringify(parsed)),
+    bodyRewritten: sourceModel !== modelOverride,
+    streamRemoved: false
+  };
 }
 
 export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): RewriteResult {
@@ -104,17 +141,17 @@ export function previewRoute(
   const upstream = buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
 
   if (route === "primary") {
-    const sourceModel = extractModelFromUnknown(body);
+    const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config);
     return {
       route,
       method,
       path,
       upstream_url: upstream.toString(),
       upstream_host: upstream.host,
-      source_model: sourceModel,
-      target_model: sourceModel,
-      body_rewritten: false,
-      stream_removed: false
+      source_model: rewrite.sourceModel,
+      target_model: rewrite.targetModel,
+      body_rewritten: rewrite.bodyRewritten,
+      stream_removed: rewrite.streamRemoved
     };
   }
 
@@ -131,6 +168,19 @@ export function previewRoute(
     body_rewritten: Boolean(sourceModel && sourceModel !== targetModel),
     stream_removed: false
   };
+}
+
+function previewBodyToBuffer(body: unknown): Buffer {
+  if (typeof body === "string") {
+    return Buffer.from(body);
+  }
+
+  if (body === undefined) {
+    return Buffer.alloc(0);
+  }
+
+  const serialized = JSON.stringify(body);
+  return typeof serialized === "string" ? Buffer.from(serialized) : Buffer.alloc(0);
 }
 
 function extractModelFromUnknown(body: unknown): string | null {

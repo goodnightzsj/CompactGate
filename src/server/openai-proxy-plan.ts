@@ -16,8 +16,8 @@ import {
   compactUpstreamBaseUrl,
   compactUpstreamPath,
   deriveCompactModel,
-  extractJsonModel,
-  rewriteCompactBody
+  rewriteCompactBody,
+  rewritePrimaryBody
 } from "./routing.js";
 
 export interface OpenAiProxyPlan {
@@ -51,7 +51,8 @@ export function buildPrimaryOpenAiProxyPlan({
   compactionBridge: CompactionBridgeStore;
   primaryFailover: PrimaryFailoverState;
 }): OpenAiProxyPlan {
-  const sourceModel = extractJsonModel(rawBody).sourceModel;
+  const modelRewrite = rewritePrimaryBody(rawBody, config);
+  const sourceModel = modelRewrite.sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
 
   const primarySelection = primaryFailover.select(
@@ -60,7 +61,7 @@ export function buildPrimaryOpenAiProxyPlan({
   );
   const selectedPrimaryConfig = primarySelection.config;
   const splitCompactMode = config.compact.upstream_mode === "split";
-  const bridgeResult = compactionBridge.rewritePrimaryBody(rawBody, compactBridgeScope, {
+  const bridgeResult = compactionBridge.rewritePrimaryBody(modelRewrite.body, compactBridgeScope, {
     includeStandardFallbacks: splitCompactMode,
     includeSyntheticFallbacks: true,
     allowReadableFallback: splitCompactMode
@@ -73,7 +74,7 @@ export function buildPrimaryOpenAiProxyPlan({
     timeoutMessage: "Primary upstream request timed out.",
     upstreamBody: bridgeResult.body,
     sourceModel,
-    targetModel: sourceModel,
+    targetModel: modelRewrite.targetModel,
     compactBridgeReplacements: bridgeResult.replacedCompactionCount,
     compactBridgeScope,
     primarySelection

@@ -27,6 +27,7 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateEnvName(config.compact.api_key_env, "compact.api_key_env");
   validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
   validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
+  validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
   validateClaudeModelMap(config.claude.model_map);
@@ -195,7 +196,8 @@ function mergeUpstreamConfig(
   return {
     base_url: readString(patch.base_url, base.base_url),
     api_key: readSensitiveString(patch.api_key, base.api_key),
-    api_key_env: readString(patch.api_key_env, base.api_key_env)
+    api_key_env: readString(patch.api_key_env, base.api_key_env),
+    model_override: readString(patch.model_override, base.model_override ?? "")
   };
 }
 

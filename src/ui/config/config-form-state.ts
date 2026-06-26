@@ -8,6 +8,7 @@ export function emptyForm(): ConfigFormState {
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
+    primaryModelOverride: "",
     codexCompactBaseUrl: "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -37,6 +38,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
+    primaryModelOverride: config.primary.model_override ?? "",
     codexCompactBaseUrl: config.compact.base_url,
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -65,7 +67,8 @@ export function formToPatch(form: ConfigFormState) {
   const primary = {
     base_url: form.codexPrimaryBaseUrl,
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
-    ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey)
+    ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
+    model_override: form.primaryModelOverride
   };
   const compact = {
     base_url: form.codexCompactBaseUrl,
@@ -118,7 +121,8 @@ export function applyDraftToConfigExport(
     listen: config.listen,
     primary: {
       ...config.primary,
-      base_url: form.codexPrimaryBaseUrl
+      base_url: form.codexPrimaryBaseUrl,
+      model_override: form.primaryModelOverride
     },
     compact: {
       ...config.compact,
@@ -203,6 +207,7 @@ function draftComparisonState(form: ConfigFormState) {
     codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),
     clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
+    primaryModelOverride: form.primaryModelOverride,
     codexCompactBaseUrl: form.codexCompactBaseUrl,
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,

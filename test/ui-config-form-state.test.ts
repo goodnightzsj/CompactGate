@@ -1,8 +1,12 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { ConfigStore } from "../src/server/config.js";
 import {
   emptyForm,
+  formFromConfig,
   formToPatch
 } from "../src/ui/config/config-form-state.js";
+import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 describe("UI config form state", () => {
   it("serializes the primary failover auto scheduling switch", () => {
@@ -45,5 +49,30 @@ describe("UI config form state", () => {
         }
       }
     });
+  });
+
+  it("serializes an empty primary model override as passthrough", () => {
+    const form = {
+      ...emptyForm(),
+      primaryModelOverride: ""
+    };
+
+    expect(formToPatch(form)).toMatchObject({
+      primary: {
+        model_override: ""
+      }
+    });
+  });
+
+  it("keeps an empty primary model override empty when reloading config", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.patch({
+      primary: {
+        model_override: ""
+      }
+    });
+
+    expect(formFromConfig(store.toPublicConfig()).primaryModelOverride).toBe("");
   });
 });

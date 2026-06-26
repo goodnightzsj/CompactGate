@@ -5,17 +5,13 @@ import type { ConfigFormState } from "./types.js";
 
 export function ConfigModelPanel({
   form,
-  currentModel,
   linkedCompactModel,
-  onCurrentModelChange,
   onFormChange,
   onUnlockCompactModel,
   onRestoreLinkedMode
 }: {
   form: ConfigFormState;
-  currentModel: string;
   linkedCompactModel: string;
-  onCurrentModelChange: (model: string) => void;
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
@@ -33,14 +29,17 @@ export function ConfigModelPanel({
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div className="field">
-        <span className="field-label">当前 Codex 模型</span>
+        <span className="field-label">Primary 模型</span>
         <input
           className="input"
-          value={currentModel}
-          onChange={(event) => onCurrentModelChange(event.target.value)}
+          value={form.primaryModelOverride}
+          onChange={(event) => onFormChange((previous) => ({
+            ...previous,
+            primaryModelOverride: event.target.value
+          }))}
           spellCheck={false}
         />
-        <span className="field-hint">可手动输入，也会从最近一次请求体自动学习。</span>
+        <span className="field-hint">留空则 Primary 原样透传；压缩联动会使用请求中的模型名。</span>
       </div>
       <ClaudeModelMapEditor
         modelMap={form.claudeModelMap}
@@ -89,7 +88,7 @@ export function ConfigModelPanel({
           onChange={(event) => onFormChange((previous) => ({ ...previous, modelTemplate: event.target.value }))}
           spellCheck={false}
         />
-        <span className="field-hint">{"{model}"} 会被替换为请求中的原始模型名。</span>
+        <span className="field-hint">{"{model}"} 会被替换为 Primary 覆盖模型；留空覆盖时使用请求模型。</span>
       </div>
     </div>
   );

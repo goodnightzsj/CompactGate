@@ -12,6 +12,7 @@ export type CompactResponseNormalizeReason =
   | "missing_compaction_output";
 export type CompactResponseSyntheticSource = "upstream_response" | "request_input";
 
+export type PrimaryModelMode = "passthrough" | "linked" | "custom";
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
 export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reasoning" | "subagent";
@@ -22,6 +23,7 @@ export interface UpstreamConfig {
   base_url: string;
   api_key: string;
   api_key_env: string;
+  model_override?: string;
 }
 
 export interface ClaudeCompactConfig extends UpstreamConfig {
@@ -172,6 +174,7 @@ export interface PublicCredentialState {
 export interface PublicUpstreamConfig extends PublicCredentialState {
   base_url: string;
   host: string;
+  model_override: string;
 }
 
 export interface PublicCompactConfig extends PublicCredentialState {

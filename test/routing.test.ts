@@ -4,7 +4,8 @@ import {
   buildUpstreamUrl,
   compactUpstreamPath,
   previewRoute,
-  rewriteCompactBody
+  rewriteCompactBody,
+  rewritePrimaryBody
 } from "../src/server/routing.js";
 import type { CompactGateConfig } from "../src/shared/types.js";
 
@@ -13,9 +14,13 @@ describe("routing helpers", () => {
     ["gpt-5.5", "gpt-5.5-openai-compact"],
     ["gpt-5.4", "gpt-5.4-openai-compact"]
   ])("rewrites linked compact model %s", (sourceModel, targetModel) => {
+    const config: CompactGateConfig = {
+      ...DEFAULT_CONFIG,
+      primary: { ...DEFAULT_CONFIG.primary, model_override: sourceModel }
+    };
     const result = rewriteCompactBody(
       Buffer.from(JSON.stringify({ model: sourceModel, stream: true, input: "redacted" })),
-      DEFAULT_CONFIG
+      config
     );
 
     expect(result.sourceModel).toBe(sourceModel);
@@ -43,6 +48,41 @@ describe("routing helpers", () => {
     expect(result.targetModel).toBe("manual-compact");
   });
 
+  it("rewrites primary request models when a primary override is configured", () => {
+    const result = rewritePrimaryBody(
+      Buffer.from(JSON.stringify({ model: "gpt-5.4", input: "redacted" })),
+      DEFAULT_CONFIG
+    );
+
+    expect(result.sourceModel).toBe("gpt-5.4");
+    expect(result.targetModel).toBe("gpt-5.5");
+    expect(result.bodyRewritten).toBe(true);
+    expect(JSON.parse(result.body.toString("utf8"))).toEqual({
+      model: "gpt-5.5",
+      input: "redacted"
+    });
+  });
+
+  it("passes through primary request bodies that do not contain a string model", () => {
+    const rawBody = Buffer.from(JSON.stringify({ input: "redacted" }));
+    const result = rewritePrimaryBody(rawBody, DEFAULT_CONFIG);
+
+    expect(result.sourceModel).toBeNull();
+    expect(result.targetModel).toBeNull();
+    expect(result.bodyRewritten).toBe(false);
+    expect(result.body).toBe(rawBody);
+  });
+
+  it("passes through non-JSON primary request bodies", () => {
+    const rawBody = Buffer.from("not json");
+    const result = rewritePrimaryBody(rawBody, DEFAULT_CONFIG);
+
+    expect(result.sourceModel).toBeNull();
+    expect(result.targetModel).toBeNull();
+    expect(result.bodyRewritten).toBe(false);
+    expect(result.body).toBe(rawBody);
+  });
+
   it("builds upstream URLs under the configured /v1 base", () => {
     expect(
       buildUpstreamUrl("https://compact.example/v1", "/v1/responses/compact", "?trace=1").toString()
@@ -63,6 +103,40 @@ describe("routing helpers", () => {
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
     expect(preview.body_rewritten).toBe(true);
     expect(preview.stream_removed).toBe(false);
+  });
+
+  it("previews primary model override rewrites", () => {
+    const preview = previewRoute(
+      "POST",
+      "/v1/responses",
+      { model: "gpt-5.4", input: "redacted" },
+      DEFAULT_CONFIG
+    );
+
+    expect(preview.route).toBe("primary");
+    expect(preview.source_model).toBe("gpt-5.4");
+    expect(preview.target_model).toBe("gpt-5.5");
+    expect(preview.body_rewritten).toBe(true);
+  });
+
+  it("previews primary passthrough mode without a target rewrite", () => {
+    const preview = previewRoute(
+      "POST",
+      "/v1/responses",
+      { model: "gpt-5.4", input: "redacted" },
+      {
+        ...DEFAULT_CONFIG,
+        primary: {
+          ...DEFAULT_CONFIG.primary,
+          model_override: ""
+        }
+      }
+    );
+
+    expect(preview.route).toBe("primary");
+    expect(preview.source_model).toBe("gpt-5.4");
+    expect(preview.target_model).toBe("gpt-5.4");
+    expect(preview.body_rewritten).toBe(false);
   });
 
   it("previews compact routing against primary when upstream mode is primary", () => {
