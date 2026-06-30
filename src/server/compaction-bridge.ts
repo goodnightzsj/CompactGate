@@ -3,6 +3,8 @@ import { isRecord, parseJsonRecord } from "./http-utils.js";
 export interface PrimaryBridgeResult {
   body: Buffer;
   replacedCompactionCount: number;
+  remainingCompactionCount: number;
+  knownMissingCompactionCount: number;
 }
 
 export interface CompactionBridgeScope {
@@ -31,11 +33,24 @@ export interface PrimaryBridgeRewriteOptions {
   allowReadableFallback?: boolean;
 }
 
+export class UnresolvedCompactionStateError extends Error {
+  constructor(remainingCompactionCount: number) {
+    super(
+      remainingCompactionCount === 1
+        ? "Split compact follow-up still contains opaque compaction state that CompactGate could not bridge into a primary request."
+        : `Split compact follow-up still contains ${remainingCompactionCount} opaque compaction items that CompactGate could not bridge into a primary request.`
+    );
+    this.name = "UnresolvedCompactionStateError";
+  }
+}
+
 const DEFAULT_BRIDGE_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_MAX_BRIDGE_ENTRIES = 512;
 
 export class CompactionBridgeStore {
   private readonly fallbackItemsByKey = new Map<string, CachedFallbackItems>();
+
+  private readonly knownCompactionStateByContent = new Map<string, number>();
 
   private readonly now: () => number;
 
@@ -70,6 +85,7 @@ export class CompactionBridgeStore {
 
       const key = compactionKey(options.scope, item.encrypted_content);
       const fallbackItems = extractFallbackItems(output, item);
+      rememberMapEntry(this.knownCompactionStateByContent, item.encrypted_content, expiresAt);
       if (fallbackItems.length === 0) {
         continue;
       }
@@ -97,10 +113,17 @@ export class CompactionBridgeStore {
     const allowReadableFallback = options.allowReadableFallback ?? true;
 
     if (!parsed || !input) {
-      return { body: rawBody, replacedCompactionCount: 0 };
+      return {
+        body: rawBody,
+        replacedCompactionCount: 0,
+        remainingCompactionCount: 0,
+        knownMissingCompactionCount: 0
+      };
     }
 
     let replacedCompactionCount = 0;
+    let remainingCompactionCount = 0;
+    let knownMissingCompactionCount = 0;
     const rewrittenInput: unknown[] = [];
 
     for (const item of input) {
@@ -122,12 +145,16 @@ export class CompactionBridgeStore {
 
       if (!allowReadableFallback) {
         rewrittenInput.push(item);
+        remainingCompactionCount += 1;
+        knownMissingCompactionCount += this.knownCompactionStateByContent.has(item.encrypted_content) ? 1 : 0;
         continue;
       }
 
       const synthesizedMessage = synthesizeAssistantMessage(item.encrypted_content);
       if (!synthesizedMessage) {
         rewrittenInput.push(item);
+        remainingCompactionCount += 1;
+        knownMissingCompactionCount += this.knownCompactionStateByContent.has(item.encrypted_content) ? 1 : 0;
         continue;
       }
 
@@ -136,13 +163,20 @@ export class CompactionBridgeStore {
     }
 
     if (replacedCompactionCount === 0) {
-      return { body: rawBody, replacedCompactionCount: 0 };
+      return {
+        body: rawBody,
+        replacedCompactionCount: 0,
+        remainingCompactionCount,
+        knownMissingCompactionCount
+      };
     }
 
     parsed.input = rewrittenInput;
     return {
       body: Buffer.from(JSON.stringify(parsed)),
-      replacedCompactionCount
+      replacedCompactionCount,
+      remainingCompactionCount,
+      knownMissingCompactionCount
     };
   }
 
@@ -150,6 +184,12 @@ export class CompactionBridgeStore {
     for (const [key, fallback] of this.fallbackItemsByKey.entries()) {
       if (fallback.expiresAt <= now) {
         this.fallbackItemsByKey.delete(key);
+      }
+    }
+
+    for (const [encryptedContent, expiresAt] of this.knownCompactionStateByContent.entries()) {
+      if (expiresAt <= now) {
+        this.knownCompactionStateByContent.delete(encryptedContent);
       }
     }
   }

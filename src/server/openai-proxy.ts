@@ -4,7 +4,10 @@ import type {
   CompactGateConfig,
   RouteKind
 } from "../shared/types.js";
-import { CompactionBridgeStore } from "./compaction-bridge.js";
+import {
+  CompactionBridgeStore,
+  UnresolvedCompactionStateError
+} from "./compaction-bridge.js";
 import type { ConfigStore } from "./config.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
@@ -40,7 +43,8 @@ import { normalizeCompactResponse } from "./compact-response-normalizer.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
-  responseTransport
+  responseTransport,
+  type RequestMetadata
 } from "./usage.js";
 import {
   sendOpenAiUpstreamRequest,
@@ -114,6 +118,7 @@ async function proxyPrimaryRequest(
   startedAt: number
 ): Promise<void> {
   let route: RouteKind = "primary";
+  let delegatedToCompact = false;
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
   const transaction = createOpenAiProxyTransactionState();
@@ -122,6 +127,28 @@ async function proxyPrimaryRequest(
     transaction.rawBody = await readRawBody(req);
     transaction.requestMetadata = extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
+    if (routeForPath(url.pathname, transaction.rawBody) === "compact") {
+      delegatedToCompact = true;
+      await proxyCompactRequest(
+        req,
+        res,
+        url,
+        config,
+        logger,
+        captureWriter,
+        compactionBridge,
+        studioEvents,
+        requestId,
+        startedAtIso,
+        startedAt,
+        {
+          rawBody: transaction.rawBody,
+          requestMetadata: transaction.requestMetadata
+        }
+      );
+      return;
+    }
+
     const plan = buildPrimaryOpenAiProxyPlan({
       config,
       url,
@@ -171,7 +198,11 @@ async function proxyPrimaryRequest(
       transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
     }
   } catch (error) {
-    transaction.status = error instanceof RequestBodyTooLargeError ? 413 : 502;
+    transaction.status = error instanceof RequestBodyTooLargeError
+      ? 413
+      : error instanceof UnresolvedCompactionStateError
+        ? 422
+        : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
       sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
@@ -179,6 +210,10 @@ async function proxyPrimaryRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
+    if (delegatedToCompact) {
+      return;
+    }
+
     if (route === "primary" && primarySelection) {
       primaryFailover.recordResult(primarySelection, {
         status: transaction.status,
@@ -263,7 +298,11 @@ async function proxyCompactRequest(
   studioEvents: StudioEventBroadcaster,
   requestId: string,
   startedAtIso: string,
-  startedAt: number
+  startedAt: number,
+  prepared?: {
+    rawBody: Buffer;
+    requestMetadata: RequestMetadata;
+  }
 ): Promise<void> {
   const route: RouteKind = "compact";
   let upstream = new URL(config.compact.base_url);
@@ -271,8 +310,8 @@ async function proxyCompactRequest(
   const transaction = createOpenAiProxyTransactionState();
 
   try {
-    transaction.rawBody = await readRawBody(req);
-    transaction.requestMetadata = extractRequestMetadata(url.pathname, transaction.rawBody);
+    transaction.rawBody = prepared?.rawBody ?? await readRawBody(req);
+    transaction.requestMetadata = prepared?.requestMetadata ?? extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     const plan = buildCompactOpenAiProxyPlan({
       config,

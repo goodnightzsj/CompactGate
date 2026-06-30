@@ -29,6 +29,12 @@ export interface CompactResponseNormalizationOptions {
 
 const MAX_SYNTHETIC_SUMMARY_CHARS = 200_000;
 
+interface RawCompactResponseExtraction {
+  outputItems: Array<Record<string, unknown>>;
+  summaryText: string | null;
+  usage: Record<string, unknown> | null;
+}
+
 export function normalizeCompactResponse({
   status,
   responseBody,
@@ -47,16 +53,22 @@ export function normalizeCompactResponse({
     return unchangedCompactResponse(responseBody, responseHeaders);
   }
 
+  const rawResponseExtraction = parsedResponse
+    ? null
+    : extractRawCompactResponse(responseBody, responseHeaders);
   const upstreamSummary = parsedResponse
     ? usableSummaryOrNull(extractSummaryFromResponse(parsedResponse))
     : usableSummaryOrNull(extractSummaryFromRawResponse(responseBody, responseHeaders));
+  const hasUpstreamStructuredOutput = Boolean(rawResponseExtraction && rawResponseExtraction.outputItems.length > 0);
   const requestSummary = upstreamSummary ? null : usableSummaryOrNull(extractSummaryFromRequest(requestBody));
-  const syntheticSource: CompactResponseSyntheticSource = upstreamSummary
+  const syntheticSource: CompactResponseSyntheticSource = upstreamSummary || hasUpstreamStructuredOutput
     ? "upstream_response"
     : "request_input";
   const summaryText = upstreamSummary ?? requestSummary ?? "Compact response did not include readable context.";
   const synthetic = buildSyntheticCompactResponse({
     parsedResponse,
+    outputItems: rawResponseExtraction?.outputItems ?? [],
+    rawUsage: rawResponseExtraction?.usage ?? null,
     summaryText: truncateSyntheticSummary(summaryText),
     now,
     idFactory
@@ -102,11 +114,15 @@ function compactResponseNormalizeReason(
 
 function buildSyntheticCompactResponse({
   parsedResponse,
+  outputItems,
+  rawUsage,
   summaryText,
   now,
   idFactory
 }: {
   parsedResponse: Record<string, unknown> | null;
+  outputItems: Array<Record<string, unknown>>;
+  rawUsage: Record<string, unknown> | null;
   summaryText: string;
   now: () => number;
   idFactory: () => string;
@@ -117,20 +133,25 @@ function buildSyntheticCompactResponse({
   const createdAt = typeof parsedResponse?.created_at === "number"
     ? parsedResponse.created_at
     : Math.floor(now() / 1000);
+  const normalizedOutput = outputItems.some(isCompactionItem)
+    ? outputItems
+    : [
+        {
+          type: "compaction",
+          encrypted_content: summaryText
+        }
+      ];
   const synthetic: Record<string, unknown> = {
     id: responseId,
     object: "response.compaction",
     created_at: createdAt,
-    output: [
-      {
-        type: "compaction",
-        encrypted_content: summaryText
-      }
-    ]
+    output: normalizedOutput
   };
 
   if (isRecord(parsedResponse?.usage)) {
     synthetic.usage = parsedResponse.usage;
+  } else if (rawUsage) {
+    synthetic.usage = rawUsage;
   }
 
   return synthetic;
@@ -188,21 +209,50 @@ function extractChatChoiceText(response: Record<string, unknown>): string | null
   return text.length > 0 ? text : null;
 }
 
+function extractOutputItemFromStreamEvent(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value) || value.type !== "response.output_item.done" || !isRecord(value.item)) {
+    return null;
+  }
+
+  return isSyntheticOutputItem(value.item) ? value.item : null;
+}
+
+function extractUsageFromStreamEvent(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (isRecord(value.usage)) {
+    return value.usage;
+  }
+
+  return isRecord(value.response) && isRecord(value.response.usage) ? value.response.usage : null;
+}
+
 function extractSummaryFromRawResponse(
   responseBody: Buffer,
   responseHeaders: IncomingHttpHeaders
 ): string | null {
+  return extractRawCompactResponse(responseBody, responseHeaders).summaryText;
+}
+
+function extractRawCompactResponse(
+  responseBody: Buffer,
+  responseHeaders: IncomingHttpHeaders
+): RawCompactResponseExtraction {
   const contentType = headerText(responseHeaders["content-type"]).toLowerCase();
   const text = decodeBodyText(responseBody).trim();
   if (!text) {
-    return null;
+    return { outputItems: [], summaryText: null, usage: null };
   }
 
   if (!contentType.includes("text/event-stream")) {
-    return text;
+    return { outputItems: [], summaryText: text, usage: null };
   }
 
   const deltas: string[] = [];
+  const outputItems: Array<Record<string, unknown>> = [];
+  let usage: Record<string, unknown> | null = null;
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data:")) {
@@ -219,13 +269,29 @@ function extractSummaryFromRawResponse(
       if (isRecord(event) && event.type === "response.output_text.delta" && typeof event.delta === "string") {
         deltas.push(event.delta);
       }
+      const outputItem = extractOutputItemFromStreamEvent(event);
+      if (outputItem) {
+        outputItems.push(outputItem);
+      }
+      const eventUsage = extractUsageFromStreamEvent(event);
+      if (eventUsage) {
+        usage = eventUsage;
+      }
     } catch {
       continue;
     }
   }
 
+  const itemSummary = outputItems
+    .flatMap((item) => extractAssistantMessageText(item))
+    .join("\n\n")
+    .trim();
   const streamedText = deltas.join("").trim();
-  return streamedText.length > 0 ? streamedText : null;
+  return {
+    outputItems,
+    summaryText: itemSummary || streamedText || null,
+    usage
+  };
 }
 
 function extractSummaryFromRequest(requestBody: Buffer): string | null {
@@ -282,6 +348,14 @@ function extractContentText(content: unknown): string[] {
     const text = part.text.trim();
     return text.length > 0 ? [text] : [];
   });
+}
+
+function isSyntheticOutputItem(value: Record<string, unknown>): boolean {
+  return isCompactionItem(value) || isAssistantMessageItem(value);
+}
+
+function isAssistantMessageItem(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.type === "message" && value.role === "assistant";
 }
 
 function truncateSyntheticSummary(text: string): string {

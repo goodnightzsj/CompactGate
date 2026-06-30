@@ -103,6 +103,7 @@ function extractRequestSummary(endpoint: string, parsed: Record<string, unknown>
     return joinSummaryParts([
       describeInput(parsed.input),
       countCompactionItems(parsed.input),
+      countCompactionTriggers(parsed.input),
       describePresence("instructions", parsed.instructions),
       countArray("tools", parsed.tools),
       describeNumber("max", parsed.max_output_tokens),
@@ -169,6 +170,15 @@ function countCompactionItems(value: unknown): string | null {
 
   const count = value.filter((item) => isRecord(item) && item.type === "compaction").length;
   return count > 0 ? `compactions ${count}` : null;
+}
+
+function countCompactionTriggers(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const count = value.filter((item) => isRecord(item) && item.type === "compaction_trigger").length;
+  return count > 0 ? `compaction_triggers ${count}` : null;
 }
 
 function describePresence(label: string, value: unknown): string | null {

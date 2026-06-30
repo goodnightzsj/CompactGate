@@ -427,6 +427,96 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it("routes /v1/responses compaction_trigger requests through compact and bridges follow-ups", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "BODY AWARE COMPACT SUMMARY" }]
+          },
+          {
+            type: "compaction",
+            encrypted_content: "BODY_AWARE_COMPACT_STATE"
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const triggerResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction_trigger",
+          content: [{ type: "input_text", text: "summarize before continuing" }]
+        }
+      ]
+    });
+
+    expect(triggerResponse.status).toBe(200);
+    expect(triggerResponse.headers.get("x-compactgate-route")).toBe("compact");
+    await triggerResponse.text();
+    expect(primaryRequests).toHaveLength(0);
+    expect(compactRequests).toHaveLength(1);
+    expect(compactRequests[0].url).toBe("/v1/responses");
+    expect(JSON.parse(compactRequests[0].body)).toEqual({
+      model: "gpt-5.5-openai-compact",
+      input: [
+        {
+          type: "compaction_trigger",
+          content: [{ type: "input_text", text: "summarize before continuing" }]
+        }
+      ]
+    });
+
+    const followUpResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: "BODY_AWARE_COMPACT_STATE"
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue after body-aware compact" }]
+        }
+      ]
+    });
+
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
+    expect(primaryRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "BODY AWARE COMPACT SUMMARY" }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after body-aware compact" }]
+      }
+    ]);
+
+    const page = await fetchLogPage(app.url);
+    expect(page.logs.slice(0, 2).map((entry) => [entry.route, entry.endpoint])).toEqual([
+      ["primary", "/responses"],
+      ["compact", "/responses"]
+    ]);
+  });
+
   it("bridges locally normalized compact responses into primary requests", async () => {
     const summaryText = [
       "- Local synthetic compact summary.",
@@ -576,13 +666,13 @@ describe("CompactGate OpenAI routing", () => {
     };
     const followUpResponse = await postJson(app.url, "/v1/responses", followUpBody);
 
-    expect(followUpResponse.status).toBe(200);
-    expect(followUpResponse.headers.get("x-compactgate-route")).toBe("primary");
-    await followUpResponse.text();
+    expect(followUpResponse.status).toBe(422);
+    expect(await followUpResponse.json()).toMatchObject({
+      error: expect.stringContaining("could not bridge into a primary request")
+    });
     expect(firstCompactRequests).toHaveLength(1);
     expect(secondCompactRequests).toHaveLength(0);
-    expect(primaryRequests).toHaveLength(1);
-    expect(JSON.parse(primaryRequests[0].body)).toEqual(followUpBody);
+    expect(primaryRequests).toHaveLength(0);
   });
 
   it("synthesizes assistant summaries from readable gzip compaction payloads", async () => {
@@ -816,5 +906,120 @@ describe("CompactGate OpenAI routing", () => {
         content: [{ type: "input_text", text: "continue old session" }]
       }
     ]);
+  });
+
+  it("bridges streamed output_item.done compact payloads into primary follow-ups", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(
+        `data: ${JSON.stringify({
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY" }]
+          }
+        })}\n\n`
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          type: "response.output_item.done",
+          item: {
+            type: "compaction",
+            encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
+          }
+        })}\n\n`
+      );
+      res.end(
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 9,
+              output_tokens: 4,
+              total_tokens: 13
+            }
+          }
+        })}\n\n`
+      );
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const compactResponse = await postJson(app.url, "/v1/responses/compact", {
+      model: "gpt-5.5",
+      stream: true,
+      input: "streamed item done compact"
+    });
+
+    expect(compactResponse.status).toBe(200);
+    const compactBody = await compactResponse.json() as {
+      object: string;
+      output: Array<Record<string, unknown>>;
+      usage?: Record<string, unknown>;
+    };
+    expect(compactBody.object).toBe("response.compaction");
+    expect(compactBody.output).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY" }]
+      },
+      {
+        type: "compaction",
+        encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
+      }
+    ]);
+    expect(compactBody.usage).toMatchObject({ total_tokens: 13 });
+
+    const followUpResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue after streamed compact" }]
+        }
+      ]
+    });
+
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
+    expect(compactRequests).toHaveLength(1);
+    expect(primaryRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY" }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after streamed compact" }]
+      }
+    ]);
+
+    const page = await fetchLogPage(app.url);
+    expect(page.logs[1]).toMatchObject({
+      route: "compact",
+      request_type: "stream",
+      compact_response_normalized: true,
+      compact_response_normalize_reason: "malformed_json",
+      compact_response_synthetic_source: "upstream_response",
+      input_tokens: 9,
+      output_tokens: 4,
+      total_tokens: 13
+    });
   });
 });

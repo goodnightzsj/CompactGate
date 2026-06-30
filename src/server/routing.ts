@@ -17,8 +17,8 @@ export interface ExtractedModel {
   sourceModel: string | null;
 }
 
-export function routeForPath(pathname: string): RouteKind {
-  return isCompactPath(pathname) ? "compact" : "primary";
+export function routeForPath(pathname: string, body?: unknown): RouteKind {
+  return isCompactPath(pathname) || isBodyAwareCompactRequest(pathname, body) ? "compact" : "primary";
 }
 
 export function isV1Path(pathname: string): boolean {
@@ -27,6 +27,16 @@ export function isV1Path(pathname: string): boolean {
 
 export function isCompactPath(pathname: string): boolean {
   return pathname === "/v1/responses/compact";
+}
+
+export function isBodyAwareCompactRequest(pathname: string, body?: unknown): boolean {
+  if (pathname !== "/v1/responses") {
+    return false;
+  }
+
+  const parsed = parseJsonBody(body);
+  const input = Array.isArray(parsed?.input) ? parsed.input : null;
+  return Boolean(input?.some((item) => isRecord(item) && item.type === "compaction_trigger"));
 }
 
 export function deriveCompactModel(sourceModel: string, config: CompactGateConfig): string {
@@ -135,7 +145,7 @@ export function previewRoute(
   config: CompactGateConfig
 ): RoutePreviewResponse {
   const parsedUrl = new URL(path, "http://compactgate.local");
-  const route = routeForPath(parsedUrl.pathname);
+  const route = routeForPath(parsedUrl.pathname, body);
   const upstreamBase = route === "compact" ? compactUpstreamBaseUrl(config) : config.primary.base_url;
   const upstreamPath = route === "compact" ? compactUpstreamPath(config, parsedUrl.pathname) : parsedUrl.pathname;
   const upstream = buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
@@ -184,19 +194,25 @@ function previewBodyToBuffer(body: unknown): Buffer {
 }
 
 function extractModelFromUnknown(body: unknown): string | null {
+  const parsed = parseJsonBody(body);
+  return typeof parsed?.model === "string" ? parsed.model : null;
+}
+
+function parseJsonBody(body: unknown): Record<string, unknown> | null {
+  if (Buffer.isBuffer(body)) {
+    return parseJsonRecord(body);
+  }
+
   if (typeof body === "string") {
     try {
-      return extractModelFromUnknown(JSON.parse(body));
+      const parsed = JSON.parse(body) as unknown;
+      return isRecord(parsed) ? parsed : null;
     } catch {
       return null;
     }
   }
 
-  if (!isRecord(body)) {
-    return null;
-  }
-
-  return typeof body.model === "string" ? body.model : null;
+  return isRecord(body) ? body : null;
 }
 
 function parseJsonObject(rawBody: Buffer): Record<string, unknown> {

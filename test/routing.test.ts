@@ -4,6 +4,7 @@ import {
   buildUpstreamUrl,
   compactUpstreamPath,
   previewRoute,
+  routeForPath,
   rewriteCompactBody,
   rewritePrimaryBody
 } from "../src/server/routing.js";
@@ -103,6 +104,27 @@ describe("routing helpers", () => {
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
     expect(preview.body_rewritten).toBe(true);
     expect(preview.stream_removed).toBe(false);
+  });
+
+  it("treats /v1/responses compaction_trigger requests as compact route traffic", () => {
+    const body = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction_trigger",
+          content: [{ type: "input_text", text: "summarize the conversation" }]
+        }
+      ]
+    };
+
+    expect(routeForPath("/v1/responses", Buffer.from(JSON.stringify(body)))).toBe("compact");
+
+    const preview = previewRoute("POST", "/v1/responses", body, DEFAULT_CONFIG);
+    expect(preview.route).toBe("compact");
+    expect(preview.upstream_url).toBe("https://compact.example/v1/responses");
+    expect(preview.source_model).toBe("gpt-5.5");
+    expect(preview.target_model).toBe("gpt-5.5-openai-compact");
+    expect(preview.body_rewritten).toBe(true);
   });
 
   it("previews primary model override rewrites", () => {

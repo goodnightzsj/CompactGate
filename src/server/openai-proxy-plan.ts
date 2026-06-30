@@ -1,8 +1,9 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { CompactGateConfig, RouteKind } from "../shared/types.js";
-import type {
+import {
   CompactionBridgeScope,
-  CompactionBridgeStore
+  CompactionBridgeStore,
+  UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { buildUpstreamHeaders } from "./http-utils.js";
@@ -54,18 +55,21 @@ export function buildPrimaryOpenAiProxyPlan({
   const modelRewrite = rewritePrimaryBody(rawBody, config);
   const sourceModel = modelRewrite.sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
-
-  const primarySelection = primaryFailover.select(
-    config,
-    primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
-  );
-  const selectedPrimaryConfig = primarySelection.config;
   const splitCompactMode = config.compact.upstream_mode === "split";
   const bridgeResult = compactionBridge.rewritePrimaryBody(modelRewrite.body, compactBridgeScope, {
     includeStandardFallbacks: splitCompactMode,
     includeSyntheticFallbacks: true,
     allowReadableFallback: splitCompactMode
   });
+  if (splitCompactMode && bridgeResult.knownMissingCompactionCount > 0) {
+    throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
+  }
+
+  const primarySelection = primaryFailover.select(
+    config,
+    primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
+  );
+  const selectedPrimaryConfig = primarySelection.config;
 
   return withRequestHeaders(headers, resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "", rawBody, {
     route: "primary",
