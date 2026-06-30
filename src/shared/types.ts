@@ -257,6 +257,7 @@ export interface RequestLogEntry {
   compact_response_synthetic_source: CompactResponseSyntheticSource | null;
   source_model: string | null;
   target_model: string | null;
+  response_model: string | null;
   status: number;
   duration_ms: number;
   first_token_ms: number | null;

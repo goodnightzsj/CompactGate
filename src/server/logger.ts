@@ -25,6 +25,7 @@ import {
   MIGRATION_COLUMNS,
   RECENT_LOG_FIELDS
 } from "./logger-schema.js";
+import { extractResponseModelFromText } from "./response-model.js";
 
 export interface RequestLoggerOptions {
   maxDatabaseBytes?: number;
@@ -78,6 +79,7 @@ export class RequestLogger {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
+    this.backfillResponseModels();
     this.prunePersistedEntries();
     this.prunePersistedStorage();
   }
@@ -123,6 +125,7 @@ export class RequestLogger {
               compact_response_synthetic_source,
               source_model,
               target_model,
+              response_model,
               status,
               duration_ms,
               first_token_ms,
@@ -140,7 +143,7 @@ export class RequestLogger {
               user_agent,
               request_id,
               error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -162,6 +165,7 @@ export class RequestLogger {
           entry.compact_response_synthetic_source,
           entry.source_model,
           entry.target_model,
+          entry.response_model,
           entry.status,
           entry.duration_ms,
           entry.first_token_ms,
@@ -262,6 +266,48 @@ export class RequestLogger {
       if (!existingColumns.has(name)) {
         this.db.exec(`ALTER TABLE request_logs ADD COLUMN ${name} ${definition};`);
       }
+    }
+  }
+
+  private backfillResponseModels(): void {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT id, upstream_response_body, client_response_body
+          FROM request_logs
+          WHERE response_model IS NULL
+            AND (
+              (upstream_response_body IS NOT NULL AND length(upstream_response_body) > 0) OR
+              (client_response_body IS NOT NULL AND length(client_response_body) > 0)
+            )
+        `
+      )
+      .all() as Array<{
+        id: number;
+        upstream_response_body: string | null;
+        client_response_body: string | null;
+      }>;
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const update = this.db.prepare("UPDATE request_logs SET response_model = ? WHERE id = ?");
+    this.db.exec("BEGIN");
+    try {
+      for (const row of rows) {
+        const responseModel =
+          extractResponseModelFromText(row.upstream_response_body ?? "") ??
+          extractResponseModelFromText(row.client_response_body ?? "");
+        if (responseModel) {
+          update.run(responseModel, row.id);
+        }
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      this.recordPersistenceFailure("backfill response models", error);
+      console.error(`Failed to backfill response models in ${this.databasePath}.`, error);
     }
   }
 

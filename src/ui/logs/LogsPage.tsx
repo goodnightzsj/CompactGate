@@ -130,6 +130,7 @@ export function LogsPage({
                 <col className="log-col-model-route" />
                 <col className="log-col-status" />
                 <col className="log-col-reasoning" />
+                <col className="log-col-response-model" />
                 <col className="log-col-host" />
                 <col className="log-col-endpoint" />
                 <col className="log-col-type" />
@@ -144,6 +145,7 @@ export function LogsPage({
                   <th scope="col">模型 / 通道</th>
                   <th scope="col">状态</th>
                   <th scope="col">模型 / 思考</th>
+                  <th scope="col">响应模型</th>
                   <th scope="col">上游 Host</th>
                   <th scope="col">端点</th>
                   <th scope="col">类型</th>
@@ -182,6 +184,7 @@ export function LogsPage({
                           </td>
                           <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
                           <td><LogTextTooltip className="log-cell-code" value={modelReasoningLabel(entry)} /></td>
+                          <td><LogTextTooltip className="log-cell-code" value={entry.response_model ?? "-"} /></td>
                           <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
                           <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
                           <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>

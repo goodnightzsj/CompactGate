@@ -102,6 +102,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     ),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
+    response_model: readNullableString(row.response_model),
     status: readRequiredNumber(row.status),
     duration_ms: readRequiredNumber(row.duration_ms),
     first_token_ms: readNullableNumber(row.first_token_ms),

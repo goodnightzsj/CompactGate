@@ -57,6 +57,7 @@ function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     compact_response_synthetic_source: null,
     source_model: "gpt-5.5",
     target_model: "gpt-5.5",
+    response_model: null,
     status: 200,
     duration_ms: 1,
     first_token_ms: null,

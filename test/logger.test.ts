@@ -108,6 +108,87 @@ describe("RequestLogger", () => {
     }
   });
 
+  it("extracts response model from streamed Responses API events", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(2, databasePath);
+    const upstreamResponseBody = [
+      "event: response.created",
+      "data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-5.5\",\"status\":\"in_progress\"}}",
+      "",
+      "event: response.completed",
+      "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.5-2026-04-23\",\"status\":\"completed\"}}",
+      ""
+    ].join("\n");
+
+    try {
+      const entry = addLog(logger, {
+        route: "primary",
+        req: {
+          method: "POST",
+          headers: { "user-agent": "CompactGateTest/1.0" }
+        } as IncomingMessage,
+        url: new URL("http://compactgate.local/v1/responses"),
+        status: 200,
+        startedAt: performance.now(),
+        startedAtIso: "2026-06-12T04:04:52.000Z",
+        completedAtIso: "2026-06-12T04:05:03.000Z",
+        endpoint: "/responses",
+        requestType: "stream",
+        reasoningEffort: null,
+        requestSummary: null,
+        incomingRequestBody: Buffer.alloc(0),
+        upstreamRequestBody: Buffer.alloc(0),
+        upstreamResponseBody: Buffer.from(upstreamResponseBody),
+        clientResponseBody: null,
+        persistBody: false,
+        upstreamHost: "primary.example",
+        requestId: "response-model-stream",
+        sourceModel: "gpt-5.5",
+        targetModel: "gpt-5.5",
+        firstTokenMs: 12,
+        usage: emptyUsageMetrics(),
+        errorSummary: null,
+        compactResponseNormalized: false,
+        compactResponseNormalizeReason: null,
+        compactResponseSyntheticSource: null
+      });
+
+      expect(entry.response_model).toBe("gpt-5.5-2026-04-23");
+      expect(logger.recent()[0].response_model).toBe("gpt-5.5-2026-04-23");
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("backfills missing response model values from persisted response bodies", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const seedingLogger = new RequestLogger(2, databasePath);
+
+    try {
+      seedingLogger.add(logEntry(1, JSON.stringify({ model: "gpt-5.5-actual" })));
+    } finally {
+      seedingLogger.close();
+    }
+
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.prepare("UPDATE request_logs SET response_model = NULL").run();
+    } finally {
+      db.close();
+    }
+
+    const reopenedLogger = new RequestLogger(2, databasePath);
+    try {
+      expect(reopenedLogger.recent()[0].response_model).toBe("gpt-5.5-actual");
+    } finally {
+      reopenedLogger.close();
+    }
+  });
+
   it("exposes request log persistence failures through logger health", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -312,6 +393,7 @@ describe("RequestLogger", () => {
       const [entry] = reopenedLogger.page({ limit: 1, offset: 0 }).logs;
       expect(entry).toMatchObject({
         input_tokens: 123,
+        response_model: null,
         first_token_ms: null,
         output_tokens: null,
         cached_input_tokens: null,
@@ -399,6 +481,7 @@ function logEntry(index: number, body = ""): RequestLogEntry {
     compact_response_synthetic_source: null,
     source_model: `gpt-5.${index}`,
     target_model: `gpt-5.${index}-compact`,
+    response_model: null,
     status: 200,
     duration_ms: index,
     first_token_ms: null,

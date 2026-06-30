@@ -10,6 +10,7 @@ import type {
 } from "../shared/types.js";
 import type { TokenUsageMetrics } from "./usage.js";
 import { decodeBodyText, readHeaderString } from "./http-utils.js";
+import { extractResponseModelFromBodies } from "./response-model.js";
 
 export function addLog(
   logger: RequestLogger,
@@ -61,6 +62,7 @@ export function addLog(
     compact_response_synthetic_source: input.compactResponseSyntheticSource,
     source_model: input.sourceModel,
     target_model: input.targetModel,
+    response_model: extractResponseModelFromBodies(input.upstreamResponseBody, input.clientResponseBody),
     status: input.status,
     duration_ms: Math.max(0, Math.round(performance.now() - input.startedAt)),
     first_token_ms: input.firstTokenMs,

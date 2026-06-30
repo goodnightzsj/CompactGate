@@ -16,7 +16,7 @@ import {
 export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
   return (
     <tr className="log-detail-row">
-      <td colSpan={11}>
+      <td colSpan={12}>
         <div className="log-detail-panel">
           <section className="log-detail-section is-primary" aria-label="请求上下文">
             <div className="log-detail-section-head">
@@ -62,6 +62,10 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
               <div className="log-detail-item">
                 <span className="log-detail-label">目标模型</span>
                 <span className="log-detail-value is-medium">{entry.target_model ?? entry.source_model ?? "-"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">响应模型</span>
+                <span className="log-detail-value is-medium">{entry.response_model ?? "-"}</span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">上游 Host</span>
