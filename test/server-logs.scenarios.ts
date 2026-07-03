@@ -123,7 +123,8 @@ describe("CompactGate logs and capture", () => {
     expect(persistedBodies.upstream_request_body).toContain("sensitive prompt");
     expect(persistedBodies.upstream_request_body).toContain("gpt-5.4-openai-compact");
     expect(persistedBodies.upstream_response_body).toBe(JSON.stringify({ ok: true }));
-    expect(persistedBodies.client_response_body).toContain('"object":"response.compaction"');
+    // 方案 B:客户端透明收原始上游流,client_response_body 为空。
+    expect(persistedBodies.client_response_body).toBeNull();
   });
 
   it("audits normalized compact responses with upstream and client bodies", async () => {
@@ -156,10 +157,11 @@ describe("CompactGate logs and capture", () => {
       input: "audit normalized compact response"
     });
 
+    // 方案 B:客户端收原始上游 JSON(非归一化)。
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      object: "response.compaction",
-      output: [{ type: "compaction", encrypted_content: summaryText }]
+      object: "response",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: summaryText }] }]
     });
 
     const [entry] = await fetchRecentLogs(app.url);
@@ -172,11 +174,9 @@ describe("CompactGate logs and capture", () => {
     });
 
     const persistedBodies = readLatestLogBodyFields(path.join(app.dir, "compactgate-logs.sqlite"));
+    // 方案 B:客户端透明收原始上游流,upstream_response_body 为原始上游,client_response_body 为空。
     expect(persistedBodies.upstream_response_body).toContain('"object":"response"');
-    expect(persistedBodies.client_response_body).toContain('"object":"response.compaction"');
-    expect(JSON.parse(persistedBodies.client_response_body ?? "{}")).toMatchObject({
-      output: [{ type: "compaction", encrypted_content: summaryText }]
-    });
+    expect(persistedBodies.client_response_body).toBeNull();
 
     const [capture] = await waitForCaptureRecords(captureDir, 1);
     expect(capture).toMatchObject({
@@ -186,10 +186,8 @@ describe("CompactGate logs and capture", () => {
       compact_response_synthetic_source: "upstream_response"
     });
     expect(capture.upstream_response.body.text).toContain('"object":"response"');
-    expect(capture.client_response?.body.text).toContain('"object":"response.compaction"');
-    expect(JSON.parse(capture.client_response?.body.text ?? "{}")).toMatchObject({
-      output: [{ type: "compaction", encrypted_content: summaryText }]
-    });
+    // 方案 B:无独立客户端响应体(透明转发),capture 的 client_response 为空。
+    expect(capture.client_response).toBeNull();
   });
 
   it("returns faceted route, status, and host counts with upstream error summaries", async () => {

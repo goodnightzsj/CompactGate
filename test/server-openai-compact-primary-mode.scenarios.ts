@@ -155,13 +155,15 @@ describe("CompactGate OpenAI routing", () => {
       headers: JSON_HEADERS
     });
     expect(compactResponse.status).toBe(200);
+    // 方案 B:客户端收原始上游 JSON,归一化仅用于桥接存储。
     const compactBody = await compactResponse.json() as {
-      output: Array<{ type: string; encrypted_content?: string }>;
+      output: Array<{ type: string; role?: string; content?: unknown }>;
     };
     expect(compactBody.output).toEqual([
       {
-        type: "compaction",
-        encrypted_content: summaryText
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
       }
     ]);
 

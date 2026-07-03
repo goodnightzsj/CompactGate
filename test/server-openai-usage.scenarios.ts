@@ -163,12 +163,14 @@ describe("CompactGate OpenAI routing", () => {
       output: Array<{ type: string; encrypted_content?: string }>;
       usage?: Record<string, unknown>;
     };
+    // 方案 B:客户端收原始上游 JSON,归一化仅用于桥接存储。
     expect(body.id).toBe("resp_non_compaction");
-    expect(body.object).toBe("response.compaction");
+    expect(body.object).toBe("response");
     expect(body.output).toEqual([
       {
-        type: "compaction",
-        encrypted_content: summaryText
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
       }
     ]);
     expect(body.usage).toMatchObject({ total_tokens: 18 });
@@ -481,16 +483,9 @@ describe("CompactGate OpenAI routing", () => {
     const body = await response.text();
     expect(response.status).toBe(200);
     expect(response.headers.get("x-compactgate-route")).toBe("compact");
-    expect(response.headers.get("content-type")).toContain("application/json");
-    expect(JSON.parse(body)).toMatchObject({
-      object: "response.compaction",
-      output: [
-        {
-          type: "compaction",
-          encrypted_content: summaryText
-        }
-      ]
-    });
+    // 方案 B:客户端收原始上游 SSE 流(非归一化 JSON)。
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(body).toContain(summaryText);
     assertCaptured(captured.current);
     expect(captured.current.url).toBe("/v1/responses/compact");
     expect(JSON.parse(captured.current.body)).toEqual({

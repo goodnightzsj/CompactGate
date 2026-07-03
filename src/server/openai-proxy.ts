@@ -5,6 +5,7 @@ import type {
   RouteKind
 } from "../shared/types.js";
 import {
+  type CachedCompactResponse,
   CompactionBridgeStore,
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
@@ -325,8 +326,37 @@ async function proxyCompactRequest(
     transaction.upstreamBody = plan.upstreamBody;
     transaction.requestHeaders = plan.requestHeaders;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
+
+    const dedupeInput = {
+      upstream: plan.upstream,
+      authorization: transaction.requestHeaders.authorization ?? null,
+      body: transaction.upstreamBody
+    };
+    const cachedCompactResponse = compactionBridge.getCachedCompactResponse(dedupeInput);
+    if (cachedCompactResponse) {
+      applyCachedCompactResponse(transaction, cachedCompactResponse);
+      // 方案 B:Codex compact 期望原始上游 SSE 流,重放缓存的原始响应体而非归一化 JSON。
+      transaction.clientResponseBody = null;
+      transaction.clientResponseHeaders = null;
+      writeBufferedProxyResponse(
+        res,
+        transaction.status,
+        transaction.responseHeaders,
+        transaction.responseBody,
+        {
+          "x-compactgate-route": route,
+          "x-compactgate-model": transaction.targetModel ?? "",
+          "x-compactgate-request-id": requestId
+        }
+      );
+      return;
+    }
     attemptedUpstream = true;
 
+    // 方案 B:流式转发原始上游 SSE 流给客户端。Codex compact 用 collect_compaction_output 逐事件消费,
+    // 需要 response.created / response.output_item.done / response.completed 事件;缓冲后转 JSON 会让客户端
+    // 长时间收不到任何字节而断开(Client disconnected before upstream response completed)。
+    // 完整响应同时缓冲在 transaction.responseBody,供归一化、桥接存储与 dedupe 重放使用。
     const result = await sendOpenAiUpstreamRequest({
       req,
       res,
@@ -341,11 +371,12 @@ async function proxyCompactRequest(
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-      writeResponse: false
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
+    // 归一化仅用于桥接存储(提取 compaction item 与可读 summary)和诊断日志,不再写回客户端。
+    // 客户端已通过上面的流式转发收到原始上游响应。
     const normalizedResponse = normalizeCompactResponse({
       status: transaction.status,
       responseBody: transaction.responseBody,
@@ -355,22 +386,23 @@ async function proxyCompactRequest(
     transaction.compactResponseNormalized = normalizedResponse.normalized;
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
-    if (normalizedResponse.normalized) {
-      transaction.clientResponseBody = normalizedResponse.body;
-      transaction.clientResponseHeaders = normalizedResponse.headers;
-    }
-
-    writeBufferedProxyResponse(res, transaction.status, normalizedResponse.headers, normalizedResponse.body, {
-      "x-compactgate-route": route,
-      "x-compactgate-model": transaction.targetModel ?? "",
-      "x-compactgate-request-id": requestId
-    });
-    transaction.requestType = responseTransport(normalizedResponse.headers) ?? transaction.requestType;
+    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
     if (transaction.status >= 200 && transaction.status < 300 && plan.compactBridgeScope) {
       compactionBridge.storeCompactResponse(normalizedResponse.body, {
         scope: plan.compactBridgeScope,
         source: normalizedResponse.normalized ? "synthetic" : "standard"
+      });
+      compactionBridge.storeCompactDedupeResponse(dedupeInput, {
+        status: transaction.status,
+        responseBody: transaction.responseBody,
+        responseHeaders: transaction.responseHeaders,
+        clientResponseBody: normalizedResponse.body,
+        clientResponseHeaders: normalizedResponse.headers,
+        compactResponseNormalized: transaction.compactResponseNormalized,
+        compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+        compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+        firstTokenMs: transaction.firstTokenMs
       });
     }
   } catch (error) {
@@ -420,6 +452,21 @@ async function proxyCompactRequest(
       compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
     });
   }
+}
+
+function applyCachedCompactResponse(
+  transaction: ReturnType<typeof createOpenAiProxyTransactionState>,
+  cached: CachedCompactResponse
+): void {
+  transaction.status = cached.status;
+  transaction.responseBody = cached.responseBody;
+  transaction.responseHeaders = cached.responseHeaders;
+  transaction.clientResponseBody = cached.clientResponseBody;
+  transaction.clientResponseHeaders = cached.clientResponseHeaders;
+  transaction.compactResponseNormalized = cached.compactResponseNormalized;
+  transaction.compactResponseNormalizeReason = cached.compactResponseNormalizeReason;
+  transaction.compactResponseSyntheticSource = cached.compactResponseSyntheticSource;
+  transaction.firstTokenMs = cached.firstTokenMs;
 }
 
 function writeBufferedProxyResponse(

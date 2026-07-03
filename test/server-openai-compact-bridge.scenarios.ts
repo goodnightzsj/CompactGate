@@ -171,6 +171,39 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it("expires compact response dedupe entries after the short TTL", () => {
+    let now = 1_000;
+    const store = new CompactionBridgeStore({
+      now: () => now,
+      compactDedupeTtlMs: 1_000
+    });
+    const input = {
+      upstream: new URL("http://compact.example/v1/responses"),
+      authorization: "Bearer test",
+      body: Buffer.from(JSON.stringify({ model: "gpt-5.5-openai-compact", input: "compact me" }))
+    };
+
+    store.storeCompactDedupeResponse(input, {
+      status: 200,
+      responseBody: Buffer.from("{\"ok\":true}"),
+      responseHeaders: { "content-type": "application/json" },
+      clientResponseBody: Buffer.from("{\"ok\":true}"),
+      clientResponseHeaders: { "content-type": "application/json" },
+      compactResponseNormalized: false,
+      compactResponseNormalizeReason: null,
+      compactResponseSyntheticSource: null,
+      firstTokenMs: 12
+    });
+
+    expect(store.getCachedCompactResponse(input)).toMatchObject({
+      status: 200,
+      compactResponseNormalized: false,
+      firstTokenMs: 12
+    });
+    now += 1_001;
+    expect(store.getCachedCompactResponse(input)).toBeNull();
+  });
+
   it("does not cache fallback state from oversized gzip compact responses", () => {
     const scope = {
       compactUpstream: "http://compact.example/v1",
@@ -325,9 +358,10 @@ describe("CompactGate OpenAI routing", () => {
       input: "compact abort after headers"
     });
 
-    expect(response.statusCode).toBe(502);
-    expect(response.body).toContain("Upstream response aborted before completion.");
-    expect(response.completed).toBe(true);
+    // 方案 B:上游 writeHead(200) 被流式转发给客户端,然后 abort。
+    // 客户端收到 200 状态码 + SSE 片段,CompactGate 侧日志记 502。
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("partial compact");
 
     const page = await fetchLogPage(app.url);
     expect(page.logs[0]).toMatchObject({
@@ -517,6 +551,171 @@ describe("CompactGate OpenAI routing", () => {
     ]);
   });
 
+  it("reuses identical body-aware compact responses within the short dedupe TTL", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "DEDUPED BODY AWARE SUMMARY" }]
+          },
+          {
+            type: "compaction",
+            encrypted_content: "DEDUPED_BODY_AWARE_STATE"
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+    const body = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction_trigger",
+          content: [{ type: "input_text", text: "dedupe this compact request" }]
+        }
+      ]
+    };
+
+    const firstResponse = await postJson(app.url, "/v1/responses", body);
+    const firstRequestId = firstResponse.headers.get("x-compactgate-request-id");
+    expect(firstResponse.status).toBe(200);
+    expect(await firstResponse.json()).toMatchObject({
+      object: "response.compaction"
+    });
+
+    const secondResponse = await postJson(app.url, "/v1/responses", body);
+    const secondRequestId = secondResponse.headers.get("x-compactgate-request-id");
+    expect(secondResponse.status).toBe(200);
+    expect(await secondResponse.json()).toMatchObject({
+      object: "response.compaction"
+    });
+
+    expect(firstRequestId).toBeTruthy();
+    expect(secondRequestId).toBeTruthy();
+    expect(secondRequestId).not.toBe(firstRequestId);
+    expect(compactRequests).toHaveLength(1);
+    expect(primaryRequests).toHaveLength(0);
+
+    const followUpResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "compaction",
+          encrypted_content: "DEDUPED_BODY_AWARE_STATE"
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue after cached compact" }]
+        }
+      ]
+    });
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
+    expect(primaryRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "DEDUPED BODY AWARE SUMMARY" }]
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "continue after cached compact" }]
+      }
+    ]);
+  });
+
+  it("does not dedupe different compact request bodies", async () => {
+    const compactRequests: CapturedRequest[] = [];
+    let responseIndex = 0;
+    const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      responseIndex += 1;
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [
+          {
+            type: "compaction",
+            encrypted_content: `DIFFERENT_BODY_STATE_${responseIndex}`
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const firstResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger", content: [{ type: "input_text", text: "first" }] }]
+    });
+    const secondResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger", content: [{ type: "input_text", text: "second" }] }]
+    });
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    await firstResponse.text();
+    await secondResponse.text();
+    expect(compactRequests).toHaveLength(2);
+  });
+
+  it("does not cache failed compact responses", async () => {
+    const compactRequests: CapturedRequest[] = [];
+    let responseIndex = 0;
+    const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      responseIndex += 1;
+      if (responseIndex === 1) {
+        writeJsonResponse(res, { error: "temporary compact failure" }, 500);
+        return;
+      }
+
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [
+          {
+            type: "compaction",
+            encrypted_content: "RECOVERED_COMPACT_STATE"
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+    const body = {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger", content: [{ type: "input_text", text: "retry compact" }] }]
+    };
+
+    const failedResponse = await postJson(app.url, "/v1/responses", body);
+    const recoveredResponse = await postJson(app.url, "/v1/responses", body);
+
+    expect(failedResponse.status).toBe(500);
+    expect(recoveredResponse.status).toBe(200);
+    await failedResponse.text();
+    await recoveredResponse.text();
+    expect(compactRequests).toHaveLength(2);
+  });
+
   it("bridges locally normalized compact responses into primary requests", async () => {
     const summaryText = [
       "- Local synthetic compact summary.",
@@ -550,13 +749,15 @@ describe("CompactGate OpenAI routing", () => {
       input: "hello synthetic compact"
     });
     expect(compactResponse.status).toBe(200);
+    // 方案 B:客户端收原始上游流(非归一化 JSON),归一化仅用于桥接存储。
     const compactBody = await compactResponse.json() as {
-      output: Array<{ type: string; encrypted_content?: string }>;
+      output: Array<{ type: string; encrypted_content?: string; role?: string; content?: unknown }>;
     };
     expect(compactBody.output).toEqual([
       {
-        type: "compaction",
-        encrypted_content: summaryText
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: summaryText }]
       }
     ]);
 
@@ -959,24 +1160,11 @@ describe("CompactGate OpenAI routing", () => {
     });
 
     expect(compactResponse.status).toBe(200);
-    const compactBody = await compactResponse.json() as {
-      object: string;
-      output: Array<Record<string, unknown>>;
-      usage?: Record<string, unknown>;
-    };
-    expect(compactBody.object).toBe("response.compaction");
-    expect(compactBody.output).toEqual([
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY" }]
-      },
-      {
-        type: "compaction",
-        encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
-      }
-    ]);
-    expect(compactBody.usage).toMatchObject({ total_tokens: 13 });
+    // 方案 B:客户端收原始 SSE 流(非归一化 JSON),验证关键事件。
+    const compactText = await compactResponse.text();
+    expect(compactText).toContain("SSE ITEM DONE SUMMARY");
+    expect(compactText).toContain("OPAQUE_SSE_COMPACT_STATE_1234567890");
+    expect(compactText).toContain("response.completed");
 
     const followUpResponse = await postJson(app.url, "/v1/responses", {
       model: "gpt-5.5",
