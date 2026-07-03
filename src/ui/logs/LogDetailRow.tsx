@@ -16,7 +16,7 @@ import {
 export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
   return (
     <tr className="log-detail-row">
-      <td colSpan={12}>
+      <td colSpan={10}>
         <div className="log-detail-panel">
           <section className="log-detail-section is-primary" aria-label="请求上下文">
             <div className="log-detail-section-head">

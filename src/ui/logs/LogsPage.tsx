@@ -16,7 +16,7 @@ import {
   ALL_HOSTS_FILTER,
   type HostFilterOption,
   logStatusToneClass,
-  modelReasoningLabel
+  reasoningEffortLabel
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useStaggeredLogs } from "./useStaggeredLogs.js";
@@ -126,13 +126,11 @@ export function LogsPage({
             <table className="log-table-grid">
               <colgroup>
                 <col className="log-col-started" />
-                <col className="log-col-completed" />
-                <col className="log-col-model-route" />
                 <col className="log-col-status" />
+                <col className="log-col-model-route" />
                 <col className="log-col-reasoning" />
                 <col className="log-col-response-model" />
                 <col className="log-col-host" />
-                <col className="log-col-endpoint" />
                 <col className="log-col-type" />
                 <col className="log-col-token" />
                 <col className="log-col-first-token" />
@@ -141,13 +139,11 @@ export function LogsPage({
               <thead>
                 <tr className="log-table-header">
                   <th scope="col">开始时间</th>
-                  <th scope="col">完成时间</th>
-                  <th scope="col">模型 / 通道</th>
                   <th scope="col">状态</th>
-                  <th scope="col">模型 / 思考</th>
+                  <th scope="col">模型 / 通道</th>
+                  <th scope="col">思考</th>
                   <th scope="col">响应模型</th>
                   <th scope="col">上游 Host</th>
-                  <th scope="col">端点</th>
                   <th scope="col">类型</th>
                   <th scope="col">Token</th>
                   <th scope="col">首 Token</th>
@@ -174,7 +170,7 @@ export function LogsPage({
                           }
                         >
                           <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
-                          <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.completed_at)} /></td>
+                          <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
                           <td>
                             <LogTextTooltip className="log-model-cell" value={modelMapping}>
                               <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
@@ -182,11 +178,9 @@ export function LogsPage({
                               {hasRewrite && <small>→ {entry.target_model}</small>}
                             </LogTextTooltip>
                           </td>
-                          <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
-                          <td><LogTextTooltip className="log-cell-code" value={modelReasoningLabel(entry)} /></td>
+                          <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
                           <td><LogTextTooltip className="log-cell-code" value={entry.response_model ?? "-"} /></td>
                           <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
-                          <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
                           <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
                           <td><TokenTooltip entry={entry} /></td>
                           <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>

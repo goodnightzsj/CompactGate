@@ -34,6 +34,10 @@ export function modelReasoningLabel(entry: RequestLogEntry): string {
   return `${model}\u2009·\u2009${reasoning}`;
 }
 
+export function reasoningEffortLabel(entry: RequestLogEntry): string {
+  return entry.reasoning_effort ?? "standard";
+}
+
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
   const hasStandaloneError = (entry.status >= 400 || Boolean(entry.error_summary)) && !hasTokenDetails(entry);
   return hasStandaloneError ? "error" : "normal";
