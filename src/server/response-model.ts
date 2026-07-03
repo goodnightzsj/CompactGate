@@ -78,7 +78,8 @@ function extractModelFromResponseObject(value: unknown): string | null {
   }
 
   const responseModel = isRecord(value.response) ? readModel(value.response.model) : null;
-  return responseModel ?? readModel(value.model);
+  const messageModel = isRecord(value.message) ? readModel(value.message.model) : null;
+  return responseModel ?? messageModel ?? readModel(value.model);
 }
 
 function eventType(value: unknown): string | null {

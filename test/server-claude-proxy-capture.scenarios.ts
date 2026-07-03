@@ -30,6 +30,7 @@ describe("CompactGate Claude routing", () => {
         `event: message_start\ndata: ${JSON.stringify({
           type: "message_start",
           message: {
+            model: "claude-opus-4-8",
             usage: {
               input_tokens: 0,
               cache_read_input_tokens: 28_032,
@@ -92,6 +93,7 @@ describe("CompactGate Claude routing", () => {
       request_type: "stream",
       source_model: "claude-opus-4-8",
       target_model: "claude-opus-4-8",
+      response_model: "claude-opus-4-8",
       input_tokens: 0,
       output_tokens: 202,
       cached_input_tokens: 28_043,
