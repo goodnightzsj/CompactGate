@@ -17,21 +17,26 @@ export interface LogPageOptions {
   offset: number;
 }
 
-export const LOG_TOKEN_DETAILS_SQL = `(
-  input_tokens IS NOT NULL OR
-  output_tokens IS NOT NULL OR
-  cached_input_tokens IS NOT NULL OR
-  cached_output_tokens IS NOT NULL OR
-  cache_read_input_tokens IS NOT NULL OR
-  cache_creation_input_tokens IS NOT NULL OR
-  reasoning_tokens IS NOT NULL OR
-  total_tokens IS NOT NULL
-)`;
+export function logStandaloneErrorSql(columnPrefix = ""): string {
+  const column = (name: string) => `${columnPrefix}${name}`;
+  const tokenDetailsSql = `(
+    ${column("input_tokens")} IS NOT NULL OR
+    ${column("output_tokens")} IS NOT NULL OR
+    ${column("cached_input_tokens")} IS NOT NULL OR
+    ${column("cached_output_tokens")} IS NOT NULL OR
+    ${column("cache_read_input_tokens")} IS NOT NULL OR
+    ${column("cache_creation_input_tokens")} IS NOT NULL OR
+    ${column("reasoning_tokens")} IS NOT NULL OR
+    ${column("total_tokens")} IS NOT NULL
+  )`;
 
-export const LOG_STANDALONE_ERROR_SQL = `(
-  (status >= 400 OR error_summary IS NOT NULL) AND
-  NOT ${LOG_TOKEN_DETAILS_SQL}
-)`;
+  return `(
+    (${column("status")} >= 400 OR ${column("error_summary")} IS NOT NULL) AND
+    NOT ${tokenDetailsSql}
+  )`;
+}
+
+export const LOG_STANDALONE_ERROR_SQL = logStandaloneErrorSql();
 
 export function providerCountsFromRouteCounts(
   counts: Record<"all" | RouteKind, number>
@@ -78,6 +83,36 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
   };
 }
 
+export function buildFacetWhereClause(
+  options: Pick<LogPageOptions, "route" | "status" | "host">
+): {
+  sql: string;
+  params: Array<RouteKind | string>;
+} {
+  const conditions: string[] = [];
+  const params: Array<RouteKind | string> = [];
+
+  if (options.route) {
+    conditions.push("route = ?");
+    params.push(options.route);
+  }
+
+  if (options.status) {
+    conditions.push("log_status = ?");
+    params.push(options.status);
+  }
+
+  if (options.host) {
+    conditions.push("upstream_host = ?");
+    params.push(options.host);
+  }
+
+  return {
+    sql: conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "",
+    params
+  };
+}
+
 export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
   return {
     time: String(row.time),
@@ -93,6 +128,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     upstream_request_body: readNullableString(row.upstream_request_body),
     upstream_response_body: readNullableString(row.upstream_response_body),
     client_response_body: readNullableString(row.client_response_body),
+    body_status: readBodyStatus(row.body_status),
     compact_response_normalized: readBoolean(row.compact_response_normalized),
     compact_response_normalize_reason: readCompactResponseNormalizeReason(
       row.compact_response_normalize_reason
@@ -155,6 +191,10 @@ export function readCaptureStatus(value: unknown): RequestLogEntry["capture_stat
   return value === "pending" || value === "present" || value === "purged" || value === "none"
     ? value
     : "none";
+}
+
+export function readBodyStatus(value: unknown): RequestLogEntry["body_status"] {
+  return value === "present" || value === "purged" ? value : "none";
 }
 
 export function readNullableNumber(value: unknown): number | null {

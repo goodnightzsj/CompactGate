@@ -16,7 +16,8 @@ import {
   openSseStream,
   startApp,
   startAppInDir,
-  startUpstream
+  startUpstream,
+  waitForCaptureRecords
 } from "./helpers/server-test-utils.js";
 
 describe("CompactGate HTTP basics", () => {
@@ -100,6 +101,167 @@ describe("CompactGate HTTP basics", () => {
     expect(duplicateResponse.status).toBe(409);
     expect(await duplicateResponse.json()).toMatchObject({
       request_id: "duplicate-api-request-id"
+    });
+  });
+
+  it("serves managed captures without exposing filesystem paths", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-api-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    const primary = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(primary.url, primary.url, {
+      logging: {
+        capture_dir: captureDir
+      }
+    });
+
+    const proxyResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", input: "capture api" })
+    });
+    expect(proxyResponse.status).toBe(200);
+    await proxyResponse.text();
+    const requestId = proxyResponse.headers.get("x-compactgate-request-id");
+    expect(requestId).toEqual(expect.any(String));
+    await waitForCaptureRecords(captureDir, 1);
+
+    const metadataResponse = await fetch(`${app.url}/api/logs/${requestId}`);
+    expect(metadataResponse.status).toBe(200);
+    expect(await metadataResponse.json()).toMatchObject({
+      request_id: requestId,
+      capture_path: null,
+      capture_status: "present"
+    });
+
+    const viewResponse = await fetch(`${app.url}/api/logs/${requestId}/capture`);
+    expect(viewResponse.status).toBe(200);
+    expect(await viewResponse.json()).toMatchObject({
+      request_id: requestId,
+      incoming_request: {
+        body: {
+          text: expect.stringContaining("capture api")
+        }
+      }
+    });
+
+    const downloadResponse = await fetch(
+      `${app.url}/api/logs/${requestId}/capture/download`
+    );
+    expect(downloadResponse.status).toBe(200);
+    expect(downloadResponse.headers.get("content-disposition")).toContain(
+      `compactgate-capture-${requestId}.json`
+    );
+    expect(await downloadResponse.json()).toMatchObject({
+      request_id: requestId
+    });
+  });
+
+  it("returns deterministic capture lifecycle statuses and converges missing files to purged", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-api-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    const app = await startApp(undefined, undefined, {
+      logging: {
+        capture_dir: captureDir
+      }
+    });
+    const databasePath = path.join(app.dir, "compactgate-logs.sqlite");
+    const db = new DatabaseSync(databasePath);
+
+    try {
+      const insert = db.prepare(`
+        INSERT INTO request_logs (
+          time,
+          route,
+          method,
+          path,
+          status,
+          duration_ms,
+          upstream_host,
+          request_id,
+          capture_path,
+          capture_status
+        ) VALUES (?, 'primary', 'POST', '/v1/responses', 200, 1, 'test.example', ?, ?, ?)
+      `);
+      insert.run(new Date().toISOString(), "capture-none", null, "none");
+      insert.run(new Date().toISOString(), "capture-pending", null, "pending");
+      insert.run(new Date().toISOString(), "capture-purged", null, "purged");
+      const missingPath = path.join(
+        captureDir,
+        "compactgate-capture-0001-primary-v1-responses-00000000-0000-0000-0000-000000000004.json"
+      );
+      insert.run(new Date().toISOString(), "capture-missing", missingPath, "present");
+      insert.run(new Date().toISOString(), "capture-duplicate", null, "none");
+      insert.run(new Date().toISOString(), "capture-duplicate", null, "none");
+    } finally {
+      db.close();
+    }
+
+    expect((await fetch(`${app.url}/api/logs/unknown/capture`)).status).toBe(404);
+    expect((await fetch(`${app.url}/api/logs/capture-none/capture`)).status).toBe(404);
+    expect((await fetch(`${app.url}/api/logs/capture-pending/capture`)).status).toBe(202);
+    expect((await fetch(`${app.url}/api/logs/capture-purged/capture`)).status).toBe(410);
+    expect((await fetch(`${app.url}/api/logs/capture-duplicate/capture`)).status).toBe(409);
+    expect((await fetch(`${app.url}/api/logs/capture-missing/capture`)).status).toBe(410);
+
+    const convergedResponse = await fetch(`${app.url}/api/logs/capture-missing`);
+    expect(convergedResponse.status).toBe(200);
+    expect(await convergedResponse.json()).toMatchObject({
+      capture_path: null,
+      capture_status: "purged"
+    });
+  });
+
+  it("requires confirmation before purging SQLite bodies and preserves metadata rows", async () => {
+    const app = await startApp();
+    const databasePath = path.join(app.dir, "compactgate-logs.sqlite");
+    const db = new DatabaseSync(databasePath);
+
+    try {
+      db.prepare(`
+        INSERT INTO request_logs (
+          time,
+          route,
+          method,
+          path,
+          incoming_request_body,
+          body_status,
+          status,
+          duration_ms,
+          upstream_host,
+          request_id
+        ) VALUES (?, 'primary', 'POST', '/v1/responses', 'stored body', 'present', 200, 1, 'test.example', 'purge-body-api')
+      `).run(new Date().toISOString());
+    } finally {
+      db.close();
+    }
+
+    const rejectedResponse = await fetch(`${app.url}/api/logs/maintenance/purge-bodies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: false })
+    });
+    expect(rejectedResponse.status).toBe(400);
+
+    const purgeResponse = await fetch(`${app.url}/api/logs/maintenance/purge-bodies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true })
+    });
+    expect(purgeResponse.status).toBe(200);
+    expect(await purgeResponse.json()).toMatchObject({
+      rows_cleared: 1,
+      row_count_before: 1,
+      row_count_after: 1
+    });
+
+    const metadataResponse = await fetch(`${app.url}/api/logs/purge-body-api`);
+    expect(metadataResponse.status).toBe(200);
+    expect(await metadataResponse.json()).toMatchObject({
+      body_status: "purged"
     });
   });
 
@@ -288,6 +450,7 @@ describe("CompactGate HTTP basics", () => {
       upstream_request_body: "large upstream body",
       upstream_response_body: "large response body",
       client_response_body: null,
+      body_status: "present",
       compact_response_normalized: false,
       compact_response_normalize_reason: null,
       compact_response_synthetic_source: null,
@@ -359,6 +522,7 @@ describe("CompactGate HTTP basics", () => {
       upstream_request_body: null,
       upstream_response_body: null,
       client_response_body: null,
+      body_status: "none",
       compact_response_normalized: false,
       compact_response_normalize_reason: null,
       compact_response_synthetic_source: null,

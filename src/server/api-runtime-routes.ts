@@ -13,6 +13,7 @@ import {
   sendJson
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
+import type { DebugCaptureWriter } from "./debug-capture.js";
 import { previewRoute } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 
@@ -28,6 +29,7 @@ export async function handleRuntimeApi(
   url: URL,
   configStore: ConfigStore,
   logger: RequestLogger,
+  captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
   fetchClaudeModels: FetchClaudeModels
 ): Promise<boolean> {
@@ -66,6 +68,33 @@ export async function handleRuntimeApi(
     return true;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/logs/maintenance/purge-bodies") {
+    const body = await readJsonBody(req);
+    if (!isRecord(body) || body.confirm !== true) {
+      sendJson(res, 400, {
+        error: "Body purge requires confirm: true."
+      });
+      return true;
+    }
+
+    sendJson(res, 200, logger.purgeStoredBodies());
+    return true;
+  }
+
+  const captureMatch = url.pathname.match(
+    /^\/api\/logs\/([^/]+)\/capture(?:\/(download))?$/
+  );
+  if (req.method === "GET" && captureMatch) {
+    await sendCaptureResponse(
+      res,
+      captureMatch[1],
+      captureMatch[2] === "download",
+      logger,
+      captureWriter
+    );
+    return true;
+  }
+
   const logByIdMatch = url.pathname.match(/^\/api\/logs\/([^/]+)$/);
   if (req.method === "GET" && logByIdMatch) {
     const requestId = logByIdMatch[1];
@@ -94,6 +123,82 @@ export async function handleRuntimeApi(
   }
 
   return false;
+}
+
+async function sendCaptureResponse(
+  res: ServerResponse,
+  requestId: string,
+  download: boolean,
+  logger: RequestLogger,
+  captureWriter: DebugCaptureWriter
+): Promise<void> {
+  const lookup = logger.getCaptureByRequestId(requestId);
+  if (lookup.status === "not_found") {
+    sendJson(res, 404, {
+      error: "Request ID not found",
+      request_id: requestId
+    });
+    return;
+  }
+  if (lookup.status === "multiple") {
+    sendJson(res, 409, {
+      error: "Request ID not unique",
+      request_id: requestId
+    });
+    return;
+  }
+  if (lookup.captureStatus === "pending") {
+    sendJson(res, 202, {
+      request_id: requestId,
+      capture_status: "pending"
+    });
+    return;
+  }
+  if (lookup.captureStatus === "none") {
+    sendJson(res, 404, {
+      error: "Capture not available",
+      request_id: requestId,
+      capture_status: "none"
+    });
+    return;
+  }
+  if (lookup.captureStatus === "purged") {
+    sendJson(res, 410, {
+      error: "Capture has been purged",
+      request_id: requestId,
+      capture_status: "purged"
+    });
+    return;
+  }
+
+  const capture = lookup.capturePath
+    ? await captureWriter.readCapture(lookup.capturePath, requestId)
+    : { status: "unavailable" as const };
+  if (capture.status === "unavailable") {
+    logger.markCapturePurgedByRequestId(requestId);
+    sendJson(res, 410, {
+      error: "Capture is no longer available",
+      request_id: requestId,
+      capture_status: "purged"
+    });
+    return;
+  }
+
+  res.setHeader("cache-control", "no-store");
+  if (!download) {
+    sendJson(res, 200, capture.record);
+    return;
+  }
+
+  const safeRequestId = requestId.replace(/[^a-z0-9-]/gi, "") || "capture";
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader(
+    "content-disposition",
+    `attachment; filename="compactgate-capture-${safeRequestId}.json"`
+  );
+  res.setHeader("content-length", String(capture.content.byteLength));
+  res.end(capture.content);
 }
 
 function readLogPageQuery(url: URL, configStore: ConfigStore) {

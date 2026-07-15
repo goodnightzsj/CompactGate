@@ -12,6 +12,7 @@ import {
   logStatusToneClass,
   totalInputTokens
 } from "./log-utils.js";
+import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
 export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
   return (
@@ -190,6 +191,8 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
               )}
             </div>
           </section>
+
+          <LogCaptureViewer entry={entry} />
         </div>
       </td>
     </tr>

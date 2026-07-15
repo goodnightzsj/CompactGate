@@ -32,7 +32,10 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
   return new RequestLogger(
     config.logging.keep_recent,
     resolveLogDatabasePath(configStore.getConfigPath()),
-    { maxDatabaseBytes: config.logging.max_database_bytes }
+    {
+      maxDatabaseBytes: config.logging.max_database_bytes,
+      deferStoragePrune: true
+    }
   );
 }
 

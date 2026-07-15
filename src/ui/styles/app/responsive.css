@@ -107,6 +107,10 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .logging-mode-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .profile-item {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -302,8 +306,55 @@
   .route-config-grid,
   .route-config-cards,
   .config-row,
-  .provider-summary {
+  .provider-summary,
+  .logging-storage-intro,
+  .logging-mode-grid,
+  .logging-settings-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .logging-storage-summary {
+    width: 100%;
+  }
+
+  .logging-storage-intro,
+  .logging-settings-section,
+  .logging-maintenance-section {
+    padding: 12px;
+  }
+
+  .logging-capture-dir-field {
+    grid-column: auto;
+  }
+
+  .logging-section-head,
+  .logging-cleanup-confirm {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .logging-section-head .auto-schedule-switch,
+  .logging-cleanup-button,
+  .logging-cleanup-confirm > div,
+  .logging-maintenance-feedback {
+    width: 100%;
+  }
+
+  .logging-section-head .auto-schedule-switch {
+    justify-content: space-between;
+  }
+
+  .logging-cleanup-confirm > div,
+  .logging-maintenance-feedback {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .logging-cleanup-confirm .solid-button,
+  .logging-cleanup-confirm .ghost-button,
+  .logging-maintenance-feedback .ghost-button {
+    width: 100%;
+    min-height: 44px;
   }
 
   .route-board,

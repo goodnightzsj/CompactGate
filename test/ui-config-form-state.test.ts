@@ -4,7 +4,8 @@ import { ConfigStore } from "../src/server/config.js";
 import {
   emptyForm,
   formFromConfig,
-  formToPatch
+  formToPatch,
+  isFormDirty
 } from "../src/ui/config/config-form-state.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
@@ -74,5 +75,46 @@ describe("UI config form state", () => {
     });
 
     expect(formFromConfig(store.toPublicConfig()).primaryModelOverride).toBe("");
+  });
+
+  it("round-trips bounded logging storage settings in readable units", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.patch({
+      logging: {
+        redact_body: false,
+        persist_body: false,
+        keep_recent: 321,
+        capture_dir: "./captures",
+        capture_body_max_bytes: 2 * 1024 * 1024,
+        capture_dir_max_bytes: 12 * 1024 * 1024 * 1024,
+        max_database_bytes: 768 * 1024 * 1024
+      }
+    });
+    const config = store.toPublicConfig();
+    const form = formFromConfig(config);
+
+    expect(form).toMatchObject({
+      loggingRedactBody: false,
+      loggingPersistBody: false,
+      loggingKeepRecent: 321,
+      loggingCaptureDir: "./captures",
+      loggingCaptureBodyMaxMiB: 2,
+      loggingCaptureDirMaxGiB: 12,
+      loggingMaxDatabaseMiB: 768
+    });
+    expect(formToPatch(form)).toMatchObject({
+      logging: {
+        redact_body: false,
+        persist_body: false,
+        keep_recent: 321,
+        capture_dir: "./captures",
+        capture_body_max_bytes: 2 * 1024 * 1024,
+        capture_dir_max_bytes: 12 * 1024 * 1024 * 1024,
+        max_database_bytes: 768 * 1024 * 1024
+      }
+    });
+    expect(isFormDirty(config, form)).toBe(false);
+    expect(isFormDirty(config, { ...form, loggingKeepRecent: 322 })).toBe(true);
   });
 });

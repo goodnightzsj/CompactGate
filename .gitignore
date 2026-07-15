@@ -13,6 +13,7 @@ compactgate.json
 !.env.example
 /compactgate-logs.sqlite*
 /compactgate-claude-summaries.sqlite*
+/compactgate-captures/
 
 # Local task and agent state
 .codex-tasks/

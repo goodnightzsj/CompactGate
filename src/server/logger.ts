@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
   HostLogCount,
+  LogBodyPurgeResult,
   LogPersistenceHealth,
   RequestLogEntry,
   RequestLogPage,
@@ -10,17 +11,20 @@ import type {
   StatusLogCounts
 } from "../shared/types.js";
 import {
+  buildFacetWhereClause,
   buildWhereClause,
   type LogPageOptions,
-  LOG_STANDALONE_ERROR_SQL,
   normalizeLogStatus,
   normalizeRoute,
   providerCountsFromRouteCounts,
   readCount,
+  readCaptureStatus,
   readNullableNumber,
   rowToLogEntry
 } from "./logger-helpers.js";
 import {
+  LOG_FACET_REBUILD_SQL,
+  LOG_FACET_SCHEMA_SQL,
   LOG_TABLE_SQL,
   MIGRATION_COLUMNS,
   RECENT_LOG_FIELDS
@@ -30,6 +34,7 @@ import { extractResponseModelFromText } from "./response-model.js";
 export interface RequestLoggerOptions {
   maxDatabaseBytes?: number;
   maxPersistedEntries?: number;
+  deferStoragePrune?: boolean;
 }
 
 export const DEFAULT_MAX_LOG_DATABASE_BYTES = 1024 * 1024 * 1024;
@@ -58,6 +63,12 @@ export class RequestLogger {
 
   private closed = false;
 
+  private readonly deferStoragePrune: boolean;
+
+  private scheduledStoragePrune: NodeJS.Immediate | null = null;
+
+  private storagePruneInProgress = false;
+
   private persistErrorCount = 0;
 
   private lastPersistError: string | null = null;
@@ -76,22 +87,28 @@ export class RequestLogger {
     this.databasePath = resolvedPath;
     this.maxPersistedEntries = normalizeMaxPersistedEntries(options.maxPersistedEntries);
     this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
+    this.deferStoragePrune = options.deferStoragePrune === true;
     this.db = new DatabaseSync(resolvedPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
+    this.ensureFacetSummary();
     this.reconcileInterruptedCaptures();
     this.backfillResponseModels();
     this.prunePersistedEntries();
-    this.prunePersistedStorage();
+    if (this.deferStoragePrune) {
+      this.checkDatabaseSize();
+    } else {
+      this.prunePersistedStorage();
+    }
   }
 
   configure(options: { keepRecent: number; maxDatabaseBytes: number }): void {
     this.keepRecent = options.keepRecent;
     this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
     this.sizeWarningIssued = false;
-    this.prunePersistedStorage();
+    this.requestStoragePrune();
     this.checkDatabaseSize();
   }
 
@@ -127,6 +144,7 @@ export class RequestLogger {
               upstream_request_body,
               upstream_response_body,
               client_response_body,
+              body_status,
               compact_response_normalized,
               compact_response_normalize_reason,
               compact_response_synthetic_source,
@@ -152,7 +170,7 @@ export class RequestLogger {
               error_summary,
               capture_path,
               capture_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -169,6 +187,7 @@ export class RequestLogger {
           entry.upstream_request_body,
           entry.upstream_response_body,
           entry.client_response_body,
+          entry.body_status,
           entry.compact_response_normalized ? 1 : 0,
           entry.compact_response_normalize_reason,
           entry.compact_response_synthetic_source,
@@ -196,7 +215,7 @@ export class RequestLogger {
           entry.capture_status
       );
       this.prunePersistedEntries();
-      this.prunePersistedStorage();
+      this.requestStoragePrune();
       this.checkDatabaseSize();
     } catch (error) {
       this.recordPersistenceFailure("persist request log", error);
@@ -231,14 +250,8 @@ export class RequestLogger {
         )
         .all(...where.params, limit, offset) as Array<Record<string, unknown>>
     ).map(rowToLogEntry);
-    const total = readCount(
-      this.db
-        .prepare(`SELECT COUNT(*) AS count FROM request_logs ${where.sql}`)
-        .get(...where.params)
-    );
-    const allTotal = readCount(
-      this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
-    );
+    const total = this.facetTotal(options);
+    const allTotal = this.facetTotal({});
     const counts = this.routeCounts(options);
     const statusCounts = this.statusCounts(options);
 
@@ -282,13 +295,97 @@ export class RequestLogger {
     return { status: "found", entry: rows[0] };
   }
 
+  getCaptureByRequestId(requestId: string):
+    | {
+        status: "found";
+        capturePath: string | null;
+        captureStatus: RequestLogEntry["capture_status"];
+      }
+    | { status: "not_found" }
+    | { status: "multiple" } {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT capture_path, capture_status
+          FROM request_logs
+          WHERE request_id = ?
+          LIMIT 2
+        `
+      )
+      .all(requestId) as Array<Record<string, unknown>>;
+
+    if (rows.length === 0) {
+      return { status: "not_found" };
+    }
+    if (rows.length > 1) {
+      return { status: "multiple" };
+    }
+
+    return {
+      status: "found",
+      capturePath: typeof rows[0].capture_path === "string" ? rows[0].capture_path : null,
+      captureStatus: readCaptureStatus(rows[0].capture_status)
+    };
+  }
+
+  purgeStoredBodies(): LogBodyPurgeResult {
+    const databaseBytesBefore = this.databaseFootprintBytes();
+    const rowCountBefore = this.persistedRowCount();
+    const rowsCleared = this.clearPersistedBodies();
+    if (rowsCleared > 0) {
+      this.reclaimSqliteStorage();
+    }
+
+    return {
+      rows_cleared: rowsCleared,
+      row_count_before: rowCountBefore,
+      row_count_after: this.persistedRowCount(),
+      database_bytes_before: databaseBytesBefore,
+      database_bytes_after: this.databaseFootprintBytes()
+    };
+  }
+
   close(): void {
     if (this.closed) {
       return;
     }
 
     this.closed = true;
+    if (this.scheduledStoragePrune) {
+      clearImmediate(this.scheduledStoragePrune);
+      this.scheduledStoragePrune = null;
+    }
     this.db.close();
+  }
+
+  private requestStoragePrune(): void {
+    if (this.maxDatabaseBytes === null) {
+      return;
+    }
+
+    if (!this.deferStoragePrune) {
+      this.prunePersistedStorage();
+      return;
+    }
+
+    if (this.closed || this.scheduledStoragePrune || this.storagePruneInProgress) {
+      return;
+    }
+
+    this.scheduledStoragePrune = setImmediate(() => {
+      this.scheduledStoragePrune = null;
+
+      if (this.closed || this.storagePruneInProgress) {
+        return;
+      }
+
+      this.storagePruneInProgress = true;
+      try {
+        this.prunePersistedStorage();
+      } finally {
+        this.storagePruneInProgress = false;
+      }
+    });
   }
 
   private migratePersistedSchema(): void {
@@ -306,7 +403,59 @@ export class RequestLogger {
       }
     }
 
+    this.reconcileBodyStatuses();
     this.ensureRequestIdIndex();
+  }
+
+  private reconcileBodyStatuses(): void {
+    this.db
+      .prepare(
+        `
+          UPDATE request_logs
+          SET body_status = 'present'
+          WHERE (
+            incoming_request_body IS NOT NULL OR
+            upstream_request_body IS NOT NULL OR
+            upstream_response_body IS NOT NULL OR
+            client_response_body IS NOT NULL
+          )
+          AND body_status <> 'present'
+        `
+      )
+      .run();
+    this.db
+      .prepare(
+        `
+          UPDATE request_logs
+          SET body_status = 'none'
+          WHERE incoming_request_body IS NULL
+            AND upstream_request_body IS NULL
+            AND upstream_response_body IS NULL
+            AND client_response_body IS NULL
+            AND body_status NOT IN ('none', 'purged')
+        `
+      )
+      .run();
+  }
+
+  private ensureFacetSummary(): void {
+    this.db.exec(LOG_FACET_SCHEMA_SQL);
+    const persistedTotal = readCount(
+      this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
+    );
+    const facetTotal = this.facetTotal({});
+    if (facetTotal === persistedTotal) {
+      return;
+    }
+
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec(LOG_FACET_REBUILD_SQL);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private ensureRequestIdIndex(): void {
@@ -378,12 +527,12 @@ export class RequestLogger {
   }
 
   private routeCounts(options: Pick<LogPageOptions, "status" | "host">): Record<"all" | RouteKind, number> {
-    const where = buildWhereClause({ status: options.status, host: options.host });
+    const where = buildFacetWhereClause({ status: options.status, host: options.host });
     const rows = this.db
       .prepare(
         `
-          SELECT route, COUNT(*) AS count
-          FROM request_logs
+          SELECT route, SUM(count) AS count
+          FROM request_log_facets
           ${where.sql}
           GROUP BY route
         `
@@ -407,14 +556,12 @@ export class RequestLogger {
   }
 
   private statusCounts(options: Pick<LogPageOptions, "route" | "host">): StatusLogCounts {
-    const where = buildWhereClause({ route: options.route, host: options.host });
+    const where = buildFacetWhereClause({ route: options.route, host: options.host });
     const rows = this.db
       .prepare(
         `
-          SELECT
-            CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END AS status_kind,
-            COUNT(*) AS count
-          FROM request_logs
+          SELECT log_status AS status_kind, SUM(count) AS count
+          FROM request_log_facets
           ${where.sql}
           GROUP BY status_kind
         `
@@ -437,17 +584,17 @@ export class RequestLogger {
   }
 
   private hostCounts(options: Pick<LogPageOptions, "route" | "status">): HostLogCount[] {
-    const where = buildWhereClause({ route: options.route, status: options.status });
+    const where = buildFacetWhereClause({ route: options.route, status: options.status });
     const rows = this.db
       .prepare(
         `
           SELECT
             upstream_host AS host,
-            COUNT(*) AS total,
-            SUM(CASE WHEN route = 'primary' THEN 1 ELSE 0 END) AS primary_count,
-            SUM(CASE WHEN route = 'compact' THEN 1 ELSE 0 END) AS compact_count,
-            SUM(CASE WHEN route = 'claude' THEN 1 ELSE 0 END) AS claude_count
-          FROM request_logs
+            SUM(count) AS total,
+            SUM(CASE WHEN route = 'primary' THEN count ELSE 0 END) AS primary_count,
+            SUM(CASE WHEN route = 'compact' THEN count ELSE 0 END) AS compact_count,
+            SUM(CASE WHEN route = 'claude' THEN count ELSE 0 END) AS claude_count
+          FROM request_log_facets
           ${where.sql}
           GROUP BY upstream_host
           ORDER BY total DESC, upstream_host ASC
@@ -462,6 +609,15 @@ export class RequestLogger {
       compact: readNullableNumber(row.compact_count) ?? 0,
       claude: readNullableNumber(row.claude_count) ?? 0
     }));
+  }
+
+  private facetTotal(options: Pick<LogPageOptions, "route" | "status" | "host">): number {
+    const where = buildFacetWhereClause(options);
+    return readCount(
+      this.db
+        .prepare(`SELECT COALESCE(SUM(count), 0) AS count FROM request_log_facets ${where.sql}`)
+        .get(...where.params)
+    );
   }
 
   private prunePersistedEntries(): void {
@@ -490,6 +646,13 @@ export class RequestLogger {
     }
 
     try {
+      if (this.databaseFootprintBytes() > this.maxDatabaseBytes) {
+        const rowsCleared = this.clearPersistedBodies();
+        if (rowsCleared > 0) {
+          this.reclaimSqliteStorage();
+        }
+      }
+
       let passes = 0;
       while (
         this.databaseFootprintBytes() > this.maxDatabaseBytes &&
@@ -523,6 +686,27 @@ export class RequestLogger {
 
   private persistedRowCount(): number {
     return readCount(this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get());
+  }
+
+  private clearPersistedBodies(): number {
+    const result = this.db
+      .prepare(
+        `
+          UPDATE request_logs
+          SET
+            incoming_request_body = NULL,
+            upstream_request_body = NULL,
+            upstream_response_body = NULL,
+            client_response_body = NULL,
+            body_status = 'purged'
+          WHERE incoming_request_body IS NOT NULL
+            OR upstream_request_body IS NOT NULL
+            OR upstream_response_body IS NOT NULL
+            OR client_response_body IS NOT NULL
+        `
+      )
+      .run();
+    return Number(result.changes);
   }
 
   private deleteOldestPersistedRows(limit: number): void {
@@ -564,10 +748,24 @@ export class RequestLogger {
   markCapturePurged(capturePath: string): void {
     try {
       this.db
-        .prepare("UPDATE request_logs SET capture_status = 'purged' WHERE capture_path = ?")
+        .prepare(
+          "UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE capture_path = ?"
+        )
         .run(capturePath);
     } catch (error) {
       this.recordPersistenceFailure("mark capture purged", error);
+    }
+  }
+
+  markCapturePurgedByRequestId(requestId: string): void {
+    try {
+      this.db
+        .prepare(
+          "UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE request_id = ?"
+        )
+        .run(requestId);
+    } catch (error) {
+      this.recordPersistenceFailure("mark request capture purged", error);
     }
   }
 

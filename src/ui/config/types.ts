@@ -44,9 +44,22 @@ export type ConfigFormState = {
   modelTemplate: string;
   modelOverride: string;
   autoSchedulePrimaryFailover: boolean;
+  loggingRedactBody: boolean;
+  loggingPersistBody: boolean;
+  loggingKeepRecent: number;
+  loggingCaptureDir: string;
+  loggingCaptureBodyMaxMiB: number;
+  loggingCaptureDirMaxGiB: number;
+  loggingMaxDatabaseMiB: number;
 };
 
-export type ConfigTab = "profiles" | "routes" | "model" | "preview" | "portable";
+export type ConfigTab =
+  | "profiles"
+  | "routes"
+  | "model"
+  | "logging"
+  | "preview"
+  | "portable";
 export type PublicConfigProfile = PublicConfig["profiles"][number];
 export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
 export type ProfileDropPosition = "before" | "after";

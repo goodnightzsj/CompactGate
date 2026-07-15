@@ -21,7 +21,18 @@ export async function handleApi(
     return;
   }
 
-  if (await handleRuntimeApi(req, res, url, configStore, logger, studioEvents, fetchClaudeModels)) {
+  if (
+    await handleRuntimeApi(
+      req,
+      res,
+      url,
+      configStore,
+      logger,
+      captureWriter,
+      studioEvents,
+      fetchClaudeModels
+    )
+  ) {
     return;
   }
 

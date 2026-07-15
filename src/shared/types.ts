@@ -256,6 +256,7 @@ export interface RequestLogEntry {
   upstream_request_body: string | null;
   upstream_response_body: string | null;
   client_response_body: string | null;
+  body_status: "none" | "present" | "purged";
   compact_response_normalized: boolean;
   compact_response_normalize_reason: CompactResponseNormalizeReason | null;
   compact_response_synthetic_source: CompactResponseSyntheticSource | null;
@@ -281,6 +282,52 @@ export interface RequestLogEntry {
   error_summary: string | null;
   capture_path: string | null;
   capture_status: "none" | "pending" | "present" | "purged";
+}
+
+export interface LogBodyPurgeResult {
+  rows_cleared: number;
+  row_count_before: number;
+  row_count_after: number;
+  database_bytes_before: number;
+  database_bytes_after: number;
+}
+
+export interface CaptureSerializedBody {
+  byte_length: number;
+  captured_byte_length: number;
+  truncated: boolean;
+  text: string;
+  base64: string;
+}
+
+export interface CapturePayload {
+  headers: Record<string, string | string[]>;
+  body: CaptureSerializedBody;
+}
+
+export interface CaptureResponsePayload extends CapturePayload {
+  status: number;
+}
+
+export interface CaptureRecord {
+  request_id: string;
+  time: string;
+  completed_at: string;
+  route: RouteKind;
+  method: string;
+  path: string;
+  upstream_url: string;
+  upstream_host: string;
+  source_model: string | null;
+  target_model: string | null;
+  compact_bridge_replacements: number;
+  compact_response_normalized: boolean;
+  compact_response_normalize_reason: CompactResponseNormalizeReason | null;
+  compact_response_synthetic_source: CompactResponseSyntheticSource | null;
+  incoming_request: CapturePayload;
+  upstream_request: CapturePayload;
+  upstream_response: CaptureResponsePayload;
+  client_response: CaptureResponsePayload | null;
 }
 
 export interface LogPersistenceHealth {

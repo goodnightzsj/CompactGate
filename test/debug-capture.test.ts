@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -75,6 +75,81 @@ describe("DebugCaptureWriter pruning", () => {
       `written:${capturePath}`,
       `purged:${capturePath}`
     ]);
+  });
+});
+
+describe("DebugCaptureWriter safe reads", () => {
+  it("reads only managed regular captures with a matching request ID", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const requestId = "00000000-0000-0000-0000-000000000001";
+    const capturePath = await writer.write(captureRecord(requestId));
+
+    expect(capturePath).not.toBeNull();
+    await expect(writer.readCapture(capturePath ?? "", requestId)).resolves.toMatchObject({
+      status: "found",
+      record: {
+        request_id: requestId
+      }
+    });
+    await expect(
+      writer.readCapture(capturePath ?? "", "00000000-0000-0000-0000-000000000002")
+    ).resolves.toEqual({ status: "unavailable" });
+    await expect(
+      writer.readCapture(path.join(dir, "important-user-data.json"), requestId)
+    ).resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("keeps registered historical captures readable after capture is disabled", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const requestId = "00000000-0000-0000-0000-000000000005";
+    const capturePath = await writer.write(captureRecord(requestId));
+    writer.configure(null);
+
+    await expect(writer.readCapture(capturePath ?? "", requestId)).resolves.toMatchObject({
+      status: "found",
+      record: {
+        request_id: requestId
+      }
+    });
+  });
+
+  it("rejects symbolic links while allowing registered captures from an older directory", async () => {
+    const dir = await makeCaptureDir();
+    const outsideDir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const requestId = "00000000-0000-0000-0000-000000000003";
+    const filename = `compactgate-capture-0001-primary-v1-responses-${requestId}.json`;
+    const outsidePath = path.join(outsideDir, filename);
+    const symlinkPath = path.join(dir, filename);
+    await writeFile(outsidePath, JSON.stringify(captureRecord(requestId)));
+    await symlink(outsidePath, symlinkPath);
+
+    await expect(writer.readCapture(symlinkPath, requestId)).resolves.toEqual({
+      status: "unavailable"
+    });
+    await expect(writer.readCapture(outsidePath, requestId)).resolves.toMatchObject({
+      status: "found",
+      record: {
+        request_id: requestId
+      }
+    });
+  });
+
+  it("rejects malformed managed JSON instead of returning partial capture records", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const requestId = "00000000-0000-0000-0000-000000000006";
+    const capturePath = path.join(
+      dir,
+      `compactgate-capture-0001-primary-v1-responses-${requestId}.json`
+    );
+    await writeFile(capturePath, JSON.stringify({ request_id: requestId }));
+
+    await expect(writer.readCapture(capturePath, requestId)).resolves.toEqual({
+      status: "unavailable"
+    });
   });
 });
 

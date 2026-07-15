@@ -2,6 +2,9 @@ import type { CompactGateConfig, PublicConfig, RouteUrlPresetKind } from "../../
 import { emptyClaudeModelMap, normalizeClaudeModelMap } from "./model-map.js";
 import type { ConfigFormState } from "./types.js";
 
+const MEBIBYTE = 1024 * 1024;
+const GIBIBYTE = 1024 * 1024 * 1024;
+
 export function emptyForm(): ConfigFormState {
   return {
     codexPrimaryBaseUrl: "",
@@ -28,7 +31,14 @@ export function emptyForm(): ConfigFormState {
     modelMode: "linked",
     modelTemplate: "{model}-openai-compact",
     modelOverride: "",
-    autoSchedulePrimaryFailover: true
+    autoSchedulePrimaryFailover: true,
+    loggingRedactBody: true,
+    loggingPersistBody: false,
+    loggingKeepRecent: 200,
+    loggingCaptureDir: "",
+    loggingCaptureBodyMaxMiB: 1,
+    loggingCaptureDirMaxGiB: 20,
+    loggingMaxDatabaseMiB: 1024
   };
 }
 
@@ -58,7 +68,14 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     modelMode: config.compact.model_mode,
     modelTemplate: config.compact.model_template,
     modelOverride: config.compact.model_override,
-    autoSchedulePrimaryFailover: config.primary_failover.auto_schedule
+    autoSchedulePrimaryFailover: config.primary_failover.auto_schedule,
+    loggingRedactBody: config.logging.redact_body,
+    loggingPersistBody: config.logging.persist_body,
+    loggingKeepRecent: config.logging.keep_recent,
+    loggingCaptureDir: config.logging.capture_dir ?? "",
+    loggingCaptureBodyMaxMiB: config.logging.capture_body_max_bytes / MEBIBYTE,
+    loggingCaptureDirMaxGiB: config.logging.capture_dir_max_bytes / GIBIBYTE,
+    loggingMaxDatabaseMiB: config.logging.max_database_bytes / MEBIBYTE
   };
 }
 
@@ -102,6 +119,15 @@ export function formToPatch(form: ConfigFormState) {
     claude,
     primary_failover: {
       auto_schedule: form.autoSchedulePrimaryFailover
+    },
+    logging: {
+      redact_body: form.loggingRedactBody,
+      persist_body: form.loggingPersistBody,
+      keep_recent: form.loggingKeepRecent,
+      capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
+      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
+      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
+      max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
     }
   };
 }
@@ -147,7 +173,15 @@ export function applyDraftToConfigExport(
       model_map: claudeModelMap
     },
     timeouts: { ...config.timeouts },
-    logging: { ...config.logging },
+    logging: {
+      redact_body: form.loggingRedactBody,
+      persist_body: form.loggingPersistBody,
+      keep_recent: form.loggingKeepRecent,
+      capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
+      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
+      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
+      max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
+    },
     primary_failover: {
       auto_schedule: form.autoSchedulePrimaryFailover
     },
@@ -227,7 +261,14 @@ function draftComparisonState(form: ConfigFormState) {
     modelMode: form.modelMode,
     modelTemplate: form.modelTemplate,
     modelOverride: form.modelOverride,
-    autoSchedulePrimaryFailover: form.autoSchedulePrimaryFailover
+    autoSchedulePrimaryFailover: form.autoSchedulePrimaryFailover,
+    loggingRedactBody: form.loggingRedactBody,
+    loggingPersistBody: form.loggingPersistBody,
+    loggingKeepRecent: form.loggingKeepRecent,
+    loggingCaptureDir: normalizedCaptureDir(form.loggingCaptureDir),
+    loggingCaptureBodyMaxMiB: form.loggingCaptureBodyMaxMiB,
+    loggingCaptureDirMaxGiB: form.loggingCaptureDirMaxGiB,
+    loggingMaxDatabaseMiB: form.loggingMaxDatabaseMiB
   };
 }
 
@@ -275,6 +316,15 @@ function applyApiKeyDraft(
 
 function normalizedApiKey(value: string): string {
   return value.trim();
+}
+
+function normalizedCaptureDir(value: string): string | null {
+  const captureDir = value.trim();
+  return captureDir.length > 0 ? captureDir : null;
+}
+
+function bytesFromUnit(value: number, unitBytes: number): number {
+  return Math.round(value * unitBytes);
 }
 
 function normalizeRouteUrl(value: string): string {

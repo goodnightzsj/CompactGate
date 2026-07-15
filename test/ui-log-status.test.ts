@@ -52,6 +52,7 @@ function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     upstream_request_body: null,
     upstream_response_body: null,
     client_response_body: null,
+    body_status: "none",
     compact_response_normalized: false,
     compact_response_normalize_reason: null,
     compact_response_synthetic_source: null,

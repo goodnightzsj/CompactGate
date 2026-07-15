@@ -1,49 +1,17 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { mkdir, open, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  CompactResponseNormalizeReason,
-  CompactResponseSyntheticSource,
-  RouteKind
+  CaptureRecord,
+  CaptureSerializedBody
 } from "../shared/types.js";
 
-export interface CaptureRecord {
-  request_id: string;
-  time: string;
-  completed_at: string;
-  route: RouteKind;
-  method: string;
-  path: string;
-  upstream_url: string;
-  upstream_host: string;
-  source_model: string | null;
-  target_model: string | null;
-  compact_bridge_replacements: number;
-  compact_response_normalized: boolean;
-  compact_response_normalize_reason: CompactResponseNormalizeReason | null;
-  compact_response_synthetic_source: CompactResponseSyntheticSource | null;
-  incoming_request: CapturePayload;
-  upstream_request: CapturePayload;
-  upstream_response: CaptureResponsePayload;
-  client_response: CaptureResponsePayload | null;
-}
+export type { CaptureRecord } from "../shared/types.js";
 
-interface CapturePayload {
-  headers: Record<string, string | string[]>;
-  body: SerializedBody;
-}
-
-interface CaptureResponsePayload extends CapturePayload {
-  status: number;
-}
-
-interface SerializedBody {
-  byte_length: number;
-  captured_byte_length: number;
-  truncated: boolean;
-  text: string;
-  base64: string;
-}
+export type CaptureReadResult =
+  | { status: "found"; record: CaptureRecord; content: Buffer }
+  | { status: "unavailable" };
 
 const DEFAULT_MAX_CAPTURE_BODY_BYTES = 1 * 1024 * 1024;
 const DEFAULT_MAX_CAPTURE_DIR_BYTES = 20 * 1024 * 1024 * 1024;
@@ -123,8 +91,45 @@ export class DebugCaptureWriter {
     return this.captureDir !== null;
   }
 
-  serializeBody(buffer: Buffer): SerializedBody {
+  serializeBody(buffer: Buffer): CaptureSerializedBody {
     return serializeBody(buffer, this.maxBodyBytes);
+  }
+
+  async readCapture(capturePath: string, requestId: string): Promise<CaptureReadResult> {
+    if (!path.isAbsolute(capturePath)) {
+      return { status: "unavailable" };
+    }
+
+    const resolvedPath = path.resolve(capturePath);
+    if (!isManagedCaptureFilename(path.basename(resolvedPath))) {
+      return { status: "unavailable" };
+    }
+
+    try {
+      const handle = await open(resolvedPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const stats = await handle.stat();
+        if (!stats.isFile()) {
+          return { status: "unavailable" };
+        }
+
+        const content = await handle.readFile();
+        const parsed = JSON.parse(content.toString("utf8")) as unknown;
+        if (!isCaptureRecord(parsed) || parsed.request_id !== requestId) {
+          return { status: "unavailable" };
+        }
+
+        return {
+          status: "found",
+          record: parsed,
+          content
+        };
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      return { status: "unavailable" };
+    }
   }
 
   async write(
@@ -261,6 +266,76 @@ function isManagedCaptureFilename(filename: string): boolean {
   return CAPTURE_FILE_PATTERN.test(filename);
 }
 
+function isCaptureRecord(value: unknown): value is CaptureRecord {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.request_id === "string" &&
+    typeof value.time === "string" &&
+    typeof value.completed_at === "string" &&
+    isRouteKind(value.route) &&
+    typeof value.method === "string" &&
+    typeof value.path === "string" &&
+    typeof value.upstream_url === "string" &&
+    typeof value.upstream_host === "string" &&
+    isNullableString(value.source_model) &&
+    isNullableString(value.target_model) &&
+    typeof value.compact_bridge_replacements === "number" &&
+    typeof value.compact_response_normalized === "boolean" &&
+    isNullableString(value.compact_response_normalize_reason) &&
+    isNullableString(value.compact_response_synthetic_source) &&
+    isCapturePayload(value.incoming_request) &&
+    isCapturePayload(value.upstream_request) &&
+    isCaptureResponsePayload(value.upstream_response) &&
+    (value.client_response === null || isCaptureResponsePayload(value.client_response))
+  );
+}
+
+function isCapturePayload(value: unknown): boolean {
+  return isRecord(value) && isHeaders(value.headers) && isSerializedBody(value.body);
+}
+
+function isCaptureResponsePayload(value: unknown): boolean {
+  return isCapturePayload(value) && typeof (value as Record<string, unknown>).status === "number";
+}
+
+function isSerializedBody(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.byte_length === "number" &&
+    typeof value.captured_byte_length === "number" &&
+    typeof value.truncated === "boolean" &&
+    typeof value.text === "string" &&
+    typeof value.base64 === "string"
+  );
+}
+
+function isHeaders(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Object.values(value).every(
+    (header) =>
+      typeof header === "string" ||
+      (Array.isArray(header) && header.every((item) => typeof item === "string"))
+  );
+}
+
+function isRouteKind(value: unknown): boolean {
+  return value === "primary" || value === "compact" || value === "claude";
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function serializeHeaders(
   headers: IncomingHttpHeaders | Record<string, string | string[]>
 ): Record<string, string | string[]> {
@@ -301,7 +376,7 @@ function isSensitiveHeader(name: string): boolean {
 export function serializeBody(
   buffer: Buffer,
   maxBodyBytes = DEFAULT_MAX_CAPTURE_BODY_BYTES
-): SerializedBody {
+): CaptureSerializedBody {
   const capturedBody = buffer.subarray(0, Math.max(0, maxBodyBytes));
   return {
     byte_length: buffer.byteLength,

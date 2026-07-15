@@ -86,9 +86,14 @@ describe("finalizeOpenAiProxyTransaction", () => {
       const result = logger.getByRequestId("request-visible-before-capture");
       expect(result.status).toBe("found");
       if (result.status === "found") {
-        expect(result.entry.capture_path).toBe(path.join(dir, "capture.json"));
+        expect(result.entry.capture_path).toBeNull();
         expect(result.entry.capture_status).toBe("present");
       }
+      expect(logger.getCaptureByRequestId("request-visible-before-capture")).toMatchObject({
+        status: "found",
+        capturePath: path.join(dir, "capture.json"),
+        captureStatus: "present"
+      });
     } finally {
       logger.close();
       studioEvents.close();
@@ -157,9 +162,14 @@ describe("finalizeOpenAiProxyTransaction", () => {
       const result = logger.getByRequestId("request-purged-during-capture");
       expect(result.status).toBe("found");
       if (result.status === "found") {
-        expect(result.entry.capture_path).toBe(capturePath);
+        expect(result.entry.capture_path).toBeNull();
         expect(result.entry.capture_status).toBe("purged");
       }
+      expect(logger.getCaptureByRequestId("request-purged-during-capture")).toMatchObject({
+        status: "found",
+        capturePath: null,
+        captureStatus: "purged"
+      });
     } finally {
       logger.close();
       studioEvents.close();

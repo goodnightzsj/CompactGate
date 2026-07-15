@@ -217,7 +217,7 @@ describe("CompactGate config API", () => {
       (entry) => entry.request_id === requestId && entry.capture_status === "purged"
     );
 
-    expect(logEntry.capture_path).toEqual(expect.any(String));
+    expect(logEntry.capture_path).toBeNull();
     expect((await readdir(captureDir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
   });
 

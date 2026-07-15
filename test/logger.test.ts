@@ -58,6 +58,167 @@ describe("RequestLogger", () => {
     }
   });
 
+  it("tracks body lifecycle for new and legacy persisted rows", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const legacyDb = new DatabaseSync(databasePath);
+
+    try {
+      legacyDb.exec(`
+        CREATE TABLE request_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          time TEXT NOT NULL,
+          route TEXT NOT NULL,
+          method TEXT NOT NULL,
+          path TEXT NOT NULL,
+          incoming_request_body TEXT,
+          source_model TEXT,
+          target_model TEXT,
+          status INTEGER NOT NULL,
+          duration_ms INTEGER NOT NULL,
+          upstream_host TEXT NOT NULL,
+          request_id TEXT NOT NULL
+        );
+      `);
+      legacyDb
+        .prepare(
+          `
+            INSERT INTO request_logs (
+              time,
+              route,
+              method,
+              path,
+              incoming_request_body,
+              source_model,
+              target_model,
+              status,
+              duration_ms,
+              upstream_host,
+              request_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+        )
+        .run(
+          "2026-01-01T00:00:00.000Z",
+          "primary",
+          "POST",
+          "/v1/responses",
+          "{\"legacy\":true}",
+          "gpt-5.5",
+          "gpt-5.5",
+          200,
+          1,
+          "legacy.example",
+          "legacy-body"
+        );
+    } finally {
+      legacyDb.close();
+    }
+
+    const logger = new RequestLogger(10, databasePath);
+    try {
+      expect(logger.getByRequestId("legacy-body")).toMatchObject({
+        status: "found",
+        entry: {
+          body_status: "present"
+        }
+      });
+
+      logger.add(logEntry(1, "{\"new\":true}"));
+      logger.add(logEntry(2));
+
+      expect(logger.getByRequestId("request-1")).toMatchObject({
+        status: "found",
+        entry: {
+          body_status: "present"
+        }
+      });
+      expect(logger.getByRequestId("request-2")).toMatchObject({
+        status: "found",
+        entry: {
+          body_status: "none"
+        }
+      });
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("builds facet summaries for existing databases and keeps them updated", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const seedingLogger = new RequestLogger(10, databasePath);
+
+    try {
+      seedingLogger.add({
+        ...logEntry(1),
+        route: "primary",
+        upstream_host: "primary.example"
+      });
+      seedingLogger.add({
+        ...logEntry(2),
+        status: 500,
+        error_summary: "upstream failed"
+      });
+    } finally {
+      seedingLogger.close();
+    }
+
+    const legacyDb = new DatabaseSync(databasePath);
+    try {
+      legacyDb.exec(`
+        DROP TRIGGER trg_request_log_facets_insert;
+        DROP TRIGGER trg_request_log_facets_delete;
+        DROP TABLE request_log_facets;
+      `);
+    } finally {
+      legacyDb.close();
+    }
+
+    const logger = new RequestLogger(10, databasePath);
+    try {
+      expect(logger.page({ limit: 10, offset: 0 })).toMatchObject({
+        total: 2,
+        all_total: 2,
+        counts: {
+          all: 2,
+          primary: 1,
+          compact: 1,
+          claude: 0
+        },
+        status_counts: {
+          all: 2,
+          normal: 1,
+          error: 1
+        }
+      });
+      expect(logger.page({ status: "error", limit: 10, offset: 0 })).toMatchObject({
+        total: 1,
+        all_total: 2
+      });
+
+      logger.add({
+        ...logEntry(3),
+        route: "claude",
+        upstream_host: "claude.example"
+      });
+      expect(logger.page({ limit: 10, offset: 0 })).toMatchObject({
+        total: 3,
+        all_total: 3,
+        counts: {
+          all: 3,
+          primary: 1,
+          compact: 1,
+          claude: 1
+        }
+      });
+    } finally {
+      logger.close();
+    }
+  });
+
   it("records request start time instead of log write time", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -289,7 +450,7 @@ describe("RequestLogger", () => {
     }
   });
 
-  it("prunes oldest persisted logs when the database exceeds the byte cap", async () => {
+  it("purges stored bodies before deleting metadata when the database exceeds the byte cap", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
     const databasePath = path.join(dir, "compactgate-logs.sqlite");
@@ -304,12 +465,101 @@ describe("RequestLogger", () => {
       }
 
       const page = logger.page({ limit: 10, offset: 0 });
-      expect(page.all_total).toBeLessThan(6);
+      expect(page.all_total).toBe(6);
       expect(page.logs[0].source_model).toBe("gpt-5.6");
-      expect(page.logs.some((entry) => entry.source_model === "gpt-5.1")).toBe(false);
+      expect(page.logs.every((entry) => entry.body_status === "purged")).toBe(true);
       expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(maxDatabaseBytes);
+
+      const db = new DatabaseSync(databasePath);
+      try {
+        const row = db
+          .prepare(
+            `
+              SELECT
+                COUNT(*) AS row_count,
+                COUNT(incoming_request_body) AS incoming_body_count,
+                COUNT(upstream_request_body) AS upstream_request_body_count,
+                COUNT(upstream_response_body) AS upstream_response_body_count,
+                COUNT(client_response_body) AS client_response_body_count
+              FROM request_logs
+            `
+          )
+          .get() as Record<string, number>;
+        expect(row).toMatchObject({
+          row_count: 6,
+          incoming_body_count: 0,
+          upstream_request_body_count: 0,
+          upstream_response_body_count: 0,
+          client_response_body_count: 0
+        });
+      } finally {
+        db.close();
+      }
     } finally {
       logger.close();
+    }
+  });
+
+  it("purges persisted bodies explicitly without deleting metadata rows", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath, {
+      maxDatabaseBytes: 10 * 1024 * 1024
+    });
+
+    try {
+      logger.add(logEntry(1, "body-1"));
+      logger.add(logEntry(2, "body-2"));
+      logger.add(logEntry(3));
+
+      const result = logger.purgeStoredBodies();
+      expect(result).toMatchObject({
+        rows_cleared: 2,
+        row_count_before: 3,
+        row_count_after: 3
+      });
+      expect(result.database_bytes_after).toBeLessThanOrEqual(result.database_bytes_before);
+      expect(logger.page({ limit: 10, offset: 0 }).logs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ request_id: "request-1", body_status: "purged" }),
+          expect.objectContaining({ request_id: "request-2", body_status: "purged" }),
+          expect.objectContaining({ request_id: "request-3", body_status: "none" })
+        ])
+      );
+
+      expect(logger.purgeStoredBodies()).toMatchObject({
+        rows_cleared: 0,
+        row_count_before: 3,
+        row_count_after: 3
+      });
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("skips startup storage pruning when deferred mode is enabled", async () => {
+    vi.useFakeTimers();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const loggerPrototype = RequestLogger.prototype as unknown as {
+      prunePersistedStorage(): void;
+    };
+    const pruneSpy = vi.spyOn(loggerPrototype, "prunePersistedStorage");
+    const logger = new RequestLogger(10, databasePath, {
+      maxDatabaseBytes: 1024,
+      deferStoragePrune: true
+    });
+
+    try {
+      expect(pruneSpy).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(pruneSpy).not.toHaveBeenCalled();
+    } finally {
+      logger.close();
+      pruneSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 
@@ -480,6 +730,7 @@ function logEntry(index: number, body = ""): RequestLogEntry {
     upstream_request_body: body.length > 0 ? body : null,
     upstream_response_body: body.length > 0 ? body : null,
     client_response_body: null,
+    body_status: body.length > 0 ? "present" : "none",
     compact_response_normalized: false,
     compact_response_normalize_reason: null,
     compact_response_synthetic_source: null,
@@ -650,7 +901,9 @@ describe("runtime configuration", () => {
         maxDatabaseBytes: 120 * 1024
       });
 
-      expect(logger.page({ limit: 10, offset: 0 }).all_total).toBeLessThan(6);
+      const page = logger.page({ limit: 10, offset: 0 });
+      expect(page.all_total).toBe(6);
+      expect(page.logs.every((entry) => entry.body_status === "purged")).toBe(true);
       expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(120 * 1024);
     } finally {
       logger.close();
@@ -675,10 +928,16 @@ describe("markCapturePurged", () => {
       logger.markCapturePurged("/path/to/capture.json");
       const result = logger.getByRequestId(entry.request_id);
       if (result.status === "found") {
+        expect(result.entry.capture_path).toBeNull();
         expect(result.entry.capture_status).toBe("purged");
       } else {
         throw new Error("Expected found status");
       }
+      expect(logger.getCaptureByRequestId(entry.request_id)).toMatchObject({
+        status: "found",
+        capturePath: null,
+        captureStatus: "purged"
+      });
     } finally {
       logger.close();
     }

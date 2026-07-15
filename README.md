@@ -155,9 +155,9 @@ wire_api = "responses"
 }
 ```
 
-`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；超过后会按时间顺序删除最早的请求记录。
+`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，范围是 1 到 2000，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；超过后先清空历史正文并保留元数据，仍超限时才按时间顺序删除最早的元数据行。
 
-调试抓包默认关闭。设置 `logging.capture_dir` 后，每个代理请求会写入一份独立 JSON，单段正文默认最多 1 MiB，受管抓包文件合计默认最多 20 GiB。把 `capture_dir` 热更新为 `null` 可关闭抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
+推荐使用分离存储：保持 `logging.persist_body = false`，再设置 `logging.capture_dir`。每个代理请求会写入一份独立 JSON，单段正文默认最多 1 MiB，受管抓包文件合计默认最多 20 GiB。目录超限时只删除最旧抓包，SQLite 元数据继续保留并把 `capture_status` 标为 `purged`。把 `capture_dir` 热更新为 `null` 可停止新抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
 
 最重要的字段只有这些：
 
@@ -237,15 +237,15 @@ my-compact-model
 - 上游主机
 - 耗时
 - request id
-- 客户端请求体
-- 实际上游请求体
-- 上游响应体
+- 可选的客户端请求体
+- 可选的实际上游请求体
+- 可选的上游响应体
 
-这些日志会持久化到本地 SQLite，用来确认 compact 之后 primary 实际收到了什么上下文。Studio 日志详情页默认不展示这三段正文。
+元数据始终持久化到本地 SQLite。只有 `logging.persist_body = true` 时正文才进入 SQLite；推荐保持关闭并通过有界抓包目录按需诊断。Studio 日志列表不返回正文或本机抓包路径，展开详情后也只有点击“查看抓包”才会加载原始内容。
 
 ## 日志和本地数据库
 
-请求日志会持久化到 SQLite，不按页面展示数量自动删除。数据库文件、WAL 和 SHM 侧写文件合计超过 20 GiB 时，CompactGate 会优先删除最早的请求记录，并执行 SQLite checkpoint/vacuum 回收磁盘空间。
+请求元数据会持久化到 SQLite，不按页面展示数量自动删除。数据库文件、WAL 和 SHM 侧写文件合计默认上限为 1 GiB。超过上限时，CompactGate 先清空四段历史正文并把 `body_status` 标为 `purged`；回收后仍超限才删除最早的元数据行。维护任务执行 SQLite checkpoint/vacuum 回收磁盘空间。
 
 默认文件位置是：
 
@@ -253,11 +253,7 @@ my-compact-model
 compactgate-logs.sqlite
 ```
 
-如果你想自定义位置，可以这样启动：
-
-```bash
-COMPACTGATE_LOG_DB=/path/to/compactgate-logs.sqlite npm start
-```
+日志库路径固定由配置文件路径派生。例如 `compactgate.json` 对应同目录的 `compactgate-logs.sqlite`。
 
 ## 调试抓包
 
@@ -267,9 +263,7 @@ COMPACTGATE_LOG_DB=/path/to/compactgate-logs.sqlite npm start
 COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 ```
 
-只有在你明确设置这个环境变量时，CompactGate 才会额外把抓包记录写到本地文件里。
-
-默认不开启。
+也可以在 Studio 的“配置 → 日志存储”中选择“分离存储”并设置目录。默认不开启抓包。
 
 ## 管理 API
 
@@ -312,7 +306,19 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 ### `GET /api/logs/:request_id`
 
-按响应头 `x-compactgate-request-id` 查询单条日志及抓包路径、状态。不存在返回 404；旧数据库中若有重复请求 ID，返回 409 且不会删除历史日志。
+按响应头 `x-compactgate-request-id` 查询单条元数据日志、正文状态与抓包生命周期状态。本机抓包路径和正文内容不会返回。不存在返回 404；旧数据库中若有重复请求 ID，返回 409 且不会删除历史日志。
+
+### `GET /api/logs/:request_id/capture`
+
+按需读取受管抓包。写入中返回 202，从未保存返回 404，已清理或文件丢失返回 410，重复请求 ID 返回 409。
+
+### `GET /api/logs/:request_id/capture/download`
+
+下载同一条受管抓包的 JSON 文件，不暴露本机路径。
+
+### `POST /api/logs/maintenance/purge-bodies`
+
+请求体必须包含 `{ "confirm": true }`。清空 SQLite 中四段历史正文、保留元数据行，并返回清理条数和清理前后数据库大小。
 
 ### `GET /api/events`
 
@@ -378,9 +384,9 @@ wire_api = "responses"
 
 ### 4. 日志会保存哪些正文
 
-普通 SQLite 日志会保存客户端请求体、实际发送给上游的请求体，以及上游响应体。这个设计方便排查 compact 后 primary 是否收到了可读 summary、continuation note 或原始 `compaction` 状态。
+默认 `logging.persist_body = false`，SQLite 只保存可检索元数据，不保存客户端请求体、实际上游请求体、上游响应体或客户端响应体。兼容模式可打开 `persist_body`，但数据库达到容量上限时会优先清理这些正文。
 
-如果你还需要独立文件形式的完整抓包，可以临时启用：
+需要原始请求和响应时，推荐配置有大小上限的独立抓包目录：
 
 ```bash
 COMPACTGATE_CAPTURE_DIR=/path/to/captures

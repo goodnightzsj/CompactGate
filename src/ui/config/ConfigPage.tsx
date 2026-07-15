@@ -11,6 +11,7 @@ import { ConfigModelPanel } from "./ConfigModelPanel.js";
 import { ConfigPreviewPanel } from "./ConfigPreviewPanel.js";
 import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
 import { ConfigSaveBar } from "./ConfigSaveBar.js";
+import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
 import { saveLabel } from "./save-state.js";
 import type { ConfigFormState, ConfigTab, ProfileActionState, SaveState } from "./types.js";
@@ -85,6 +86,7 @@ const CONFIG_TABS: Array<{ id: ConfigTab; label: string }> = [
   { id: "profiles", label: "档案" },
   { id: "routes", label: "路由" },
   { id: "model", label: "模型" },
+  { id: "logging", label: "日志存储" },
   { id: "preview", label: "预览" },
   { id: "portable", label: "导入导出" }
 ];
@@ -118,9 +120,12 @@ export function ConfigPage({
 
       <div className="config-layout">
         <div className="config-section">
-          <div className="tab-bar">
+          <div className="tab-bar config-tab-bar" role="tablist" aria-label="配置分类">
             {CONFIG_TABS.map((tabItem) => (
               <button
+                type="button"
+                role="tab"
+                aria-selected={tab.configTab === tabItem.id}
                 key={tabItem.id}
                 className={tab.configTab === tabItem.id ? "is-active" : ""}
                 onClick={() => tab.onConfigTabChange(tabItem.id)}
@@ -165,6 +170,10 @@ export function ConfigPage({
               onUnlockCompactModel={model.onUnlockCompactModel}
               onRestoreLinkedMode={model.onRestoreLinkedMode}
             />
+          )}
+
+          {tab.configTab === "logging" && (
+            <LoggingStoragePanel form={form} onFormChange={onFormChange} />
           )}
 
           {tab.configTab === "preview" && (

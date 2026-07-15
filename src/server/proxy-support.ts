@@ -59,6 +59,7 @@ export function addLog(
     upstream_request_body: input.persistBody ? bodyText(input.upstreamRequestBody) : null,
     upstream_response_body: input.persistBody ? bodyText(input.upstreamResponseBody) : null,
     client_response_body: input.persistBody && input.clientResponseBody ? bodyText(input.clientResponseBody) : null,
+    body_status: input.persistBody ? "present" : "none",
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,
     compact_response_synthetic_source: input.compactResponseSyntheticSource,
