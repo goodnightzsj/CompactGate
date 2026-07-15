@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { StudioEventBroadcaster } from "../src/server/studio-events.js";
 import type { HealthResponse, PublicConfig, RequestLogEntry } from "../src/shared/types.js";
@@ -33,6 +34,73 @@ describe("CompactGate HTTP basics", () => {
       last_persist_error_at: null
     });
     expect(body.logger.database_path).toContain("compactgate-logs.sqlite");
+  });
+
+  it("retrieves logs by request ID and preserves duplicate-ID conflicts", async () => {
+    const primary = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const app = await startApp(primary.url, primary.url);
+
+    const proxyResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", input: "lookup me" })
+    });
+    expect(proxyResponse.status).toBe(200);
+    await proxyResponse.text();
+    const requestId = proxyResponse.headers.get("x-compactgate-request-id");
+    expect(requestId).toEqual(expect.any(String));
+
+    const foundResponse = await fetch(`${app.url}/api/logs/${requestId}`);
+    expect(foundResponse.status).toBe(200);
+    expect(await foundResponse.json()).toMatchObject({
+      request_id: requestId,
+      capture_status: "none"
+    });
+
+    const missingResponse = await fetch(`${app.url}/api/logs/missing-request-id`);
+    expect(missingResponse.status).toBe(404);
+
+    const db = new DatabaseSync(path.join(app.dir, "compactgate-logs.sqlite"));
+    try {
+      const insert = db.prepare(`
+        INSERT INTO request_logs (
+          time,
+          route,
+          method,
+          path,
+          status,
+          duration_ms,
+          upstream_host,
+          request_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (let index = 0; index < 2; index += 1) {
+        insert.run(
+          new Date(Date.UTC(2026, 6, 15, 0, 0, index)).toISOString(),
+          "primary",
+          "POST",
+          "/v1/responses",
+          200,
+          1,
+          "legacy.example",
+          "duplicate-api-request-id"
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    const duplicateResponse = await fetch(
+      `${app.url}/api/logs/duplicate-api-request-id`
+    );
+    expect(duplicateResponse.status).toBe(409);
+    expect(await duplicateResponse.json()).toMatchObject({
+      request_id: "duplicate-api-request-id"
+    });
   });
 
   it("serves static assets without falling back missing files to the SPA index", async () => {
@@ -242,7 +310,9 @@ describe("CompactGate HTTP basics", () => {
       upstream_host: "upstream.test",
       user_agent: null,
       request_id: "req-1",
-      error_summary: null
+      error_summary: null,
+      capture_path: null,
+      capture_status: "none"
     });
 
     expect(res.writeCount).toBeGreaterThan(writesAfterSubscribe);
@@ -311,7 +381,9 @@ describe("CompactGate HTTP basics", () => {
       upstream_host: "upstream.test",
       user_agent: null,
       request_id: "req-1",
-      error_summary: null
+      error_summary: null,
+      capture_path: null,
+      capture_status: "none"
     });
 
     expect(res.writeCount).toBe(2);

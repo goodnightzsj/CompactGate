@@ -66,6 +66,28 @@ export async function handleRuntimeApi(
     return true;
   }
 
+  const logByIdMatch = url.pathname.match(/^\/api\/logs\/([^/]+)$/);
+  if (req.method === "GET" && logByIdMatch) {
+    const requestId = logByIdMatch[1];
+    const result = logger.getByRequestId(requestId);
+    if (result.status === "not_found") {
+      sendJson(res, 404, {
+        error: "Request ID not found",
+        request_id: requestId
+      });
+      return true;
+    }
+    if (result.status === "multiple") {
+      sendJson(res, 409, {
+        error: "Request ID not unique",
+        request_id: requestId
+      });
+      return true;
+    }
+    sendJson(res, 200, result.entry);
+    return true;
+  }
+
   if (req.method === "GET" && url.pathname === "/api/events") {
     studioEvents.subscribe(req, res, createStudioSnapshot(configStore, logger));
     return true;

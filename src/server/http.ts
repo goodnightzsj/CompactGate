@@ -28,23 +28,39 @@ export interface CompactGateApp {
 }
 
 export function createRequestLogger(configStore: ConfigStore): RequestLogger {
+  const config = configStore.get();
   return new RequestLogger(
-    configStore.get().logging.keep_recent,
-    resolveLogDatabasePath(configStore.getConfigPath())
+    config.logging.keep_recent,
+    resolveLogDatabasePath(configStore.getConfigPath()),
+    { maxDatabaseBytes: config.logging.max_database_bytes }
   );
 }
 
-function createDebugCaptureWriter(): DebugCaptureWriter {
-  return DebugCaptureWriter.fromEnv();
+function createDebugCaptureWriter(
+  configStore: ConfigStore,
+  logger: RequestLogger
+): DebugCaptureWriter {
+  const config = configStore.get();
+  return DebugCaptureWriter.fromConfig(
+    config.logging.capture_dir,
+    config.logging.capture_body_max_bytes,
+    config.logging.capture_dir_max_bytes,
+    (capturePath) => {
+      logger.markCapturePurged(capturePath);
+    }
+  );
 }
 
 export function createCompactGateApp(
   configStore: ConfigStore,
-  logger = createRequestLogger(configStore),
-  captureWriter = createDebugCaptureWriter(),
+  logger?: RequestLogger,
+  captureWriter?: DebugCaptureWriter,
   compactionBridge = new CompactionBridgeStore(),
   studioEvents = new StudioEventBroadcaster()
 ): CompactGateApp {
+  const actualLogger = logger ?? createRequestLogger(configStore);
+  const actualCaptureWriter =
+    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger);
   const primaryFailover = new PrimaryFailoverState();
 
   return {
@@ -53,8 +69,8 @@ export function createCompactGateApp(
         req,
         res,
         configStore,
-        logger,
-        captureWriter,
+        actualLogger,
+        actualCaptureWriter,
         compactionBridge,
         studioEvents,
         primaryFailover
@@ -65,21 +81,24 @@ export function createCompactGateApp(
 
 export function createCompactGateServer(
   configStore: ConfigStore,
-  logger = createRequestLogger(configStore),
-  captureWriter = createDebugCaptureWriter(),
+  logger?: RequestLogger,
+  captureWriter?: DebugCaptureWriter,
   compactionBridge = new CompactionBridgeStore(),
   studioEvents = new StudioEventBroadcaster()
 ): http.Server {
+  const actualLogger = logger ?? createRequestLogger(configStore);
+  const actualCaptureWriter =
+    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger);
   const app = createCompactGateApp(
     configStore,
-    logger,
-    captureWriter,
+    actualLogger,
+    actualCaptureWriter,
     compactionBridge,
     studioEvents
   );
   const server = http.createServer(app.handler);
   server.once("close", () => {
-    logger.close();
+    actualLogger.close();
     studioEvents.close();
   });
   return server;
@@ -99,7 +118,16 @@ async function routeRequest(
     const url = parseRequestUrl(req.url);
 
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url, configStore, logger, studioEvents, fetchClaudeModels);
+      await handleApi(
+        req,
+        res,
+        url,
+        configStore,
+        logger,
+        captureWriter,
+        studioEvents,
+        fetchClaudeModels
+      );
       return;
     }
 

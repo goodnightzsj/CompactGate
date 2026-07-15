@@ -8,6 +8,7 @@ import {
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
+import type { DebugCaptureWriter } from "./debug-capture.js";
 
 export async function handleConfigApi(
   req: IncomingMessage,
@@ -15,6 +16,7 @@ export async function handleConfigApi(
   url: URL,
   configStore: ConfigStore,
   logger: RequestLogger,
+  captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster
 ): Promise<boolean> {
   if (req.method === "GET" && url.pathname === "/api/config") {
@@ -46,7 +48,7 @@ export async function handleConfigApi(
   if (req.method === "POST" && url.pathname === "/api/config/import") {
     const importedConfig = await readJsonBody(req);
     await configStore.importConfig(importedConfig);
-    broadcastConfigSnapshot(configStore, logger, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -54,7 +56,7 @@ export async function handleConfigApi(
   if (req.method === "PATCH" && url.pathname === "/api/config") {
     const patch = await readJsonBody(req);
     await configStore.patch(patch);
-    broadcastConfigSnapshot(configStore, logger, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -68,7 +70,7 @@ export async function handleConfigApi(
 
     const profilePatch = Object.hasOwn(record, "config") ? record.config : {};
     await configStore.saveProfile(readProfileScope(record, url), record.name, profilePatch);
-    broadcastConfigSnapshot(configStore, logger, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -85,7 +87,7 @@ export async function handleConfigApi(
       typeof body.name === "string" ? body.name : undefined,
       profilePatch
     );
-    broadcastConfigSnapshot(configStore, logger, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -101,7 +103,7 @@ export async function handleConfigApi(
     }
 
     await configStore.reorderProfiles(readProfileScope(body, url), profileIds);
-    broadcastConfigSnapshot(configStore, logger, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -116,7 +118,7 @@ export async function handleConfigApi(
       readProfileId(body, "duplicate"),
       typeof body.name === "string" ? body.name : undefined
     );
-    broadcastConfigSnapshot(configStore, logger, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -127,7 +129,7 @@ export async function handleConfigApi(
       "config profile delete requires a profile id."
     );
     await configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete"));
-    broadcastConfigSnapshot(configStore, logger, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -138,7 +140,7 @@ export async function handleConfigApi(
       "config profile apply requires a profile id."
     );
     await configStore.applyProfile(readProfileScope(body, url), readProfileId(body, "apply"));
-    broadcastConfigSnapshot(configStore, logger, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -149,11 +151,21 @@ export async function handleConfigApi(
 function broadcastConfigSnapshot(
   configStore: ConfigStore,
   logger: RequestLogger,
+  captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  resizeLogger = false
+  syncLogging = false
 ): void {
-  if (resizeLogger) {
-    logger.resize(configStore.get().logging.keep_recent);
+  if (syncLogging) {
+    const logging = configStore.get().logging;
+    logger.configure({
+      keepRecent: logging.keep_recent,
+      maxDatabaseBytes: logging.max_database_bytes
+    });
+    captureWriter.configure(
+      logging.capture_dir,
+      logging.capture_body_max_bytes,
+      logging.capture_dir_max_bytes
+    );
   }
   studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
 }

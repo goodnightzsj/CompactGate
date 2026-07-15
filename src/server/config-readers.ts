@@ -6,6 +6,20 @@ export function readString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
 }
 
+export function readNullableString(value: unknown, fallback: string | null): string | null {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
 export function readSensitiveString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
 }

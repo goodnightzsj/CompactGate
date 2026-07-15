@@ -86,7 +86,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validateImportCandidateShape(config: Record<string, unknown>): void {
+export function validateImportCandidateShape(config: Record<string, unknown>): void {
   const knownTopLevelKeys = [
     "listen",
     "primary",
@@ -113,13 +113,18 @@ function validateImportCandidateShape(config: Record<string, unknown>): void {
   validateOptionalRecord(config, "profile_scopes");
   validateOptionalArray(config, "profiles");
   validateOptionalArray(config, "route_url_presets");
-  validateOptionalStringPath(config, ["listen"]);
-  validateOptionalStringPath(config, ["primary", "base_url"]);
-  validateOptionalStringPath(config, ["compact", "base_url"]);
-  validateOptionalStringPath(config, ["claude", "primary", "base_url"]);
-  validateOptionalStringPath(config, ["logging", "keep_recent"], "number");
-  validateOptionalStringPath(config, ["logging", "persist_body"], "boolean");
-  validateOptionalStringPath(config, ["primary_failover", "auto_schedule"], "boolean");
+  validateOptionalPathType(config, ["listen"]);
+  validateOptionalPathType(config, ["primary", "base_url"]);
+  validateOptionalPathType(config, ["compact", "base_url"]);
+  validateOptionalPathType(config, ["claude", "primary", "base_url"]);
+  validateOptionalPathType(config, ["logging", "redact_body"], "boolean");
+  validateOptionalPathType(config, ["logging", "persist_body"], "boolean");
+  validateOptionalPathType(config, ["logging", "keep_recent"], "number");
+  validateOptionalPathType(config, ["logging", "capture_dir"], "nullable-string");
+  validateOptionalPathType(config, ["logging", "capture_body_max_bytes"], "number");
+  validateOptionalPathType(config, ["logging", "capture_dir_max_bytes"], "number");
+  validateOptionalPathType(config, ["logging", "max_database_bytes"], "number");
+  validateOptionalPathType(config, ["primary_failover", "auto_schedule"], "boolean");
 }
 
 function validateOptionalRecord(config: Record<string, unknown>, key: string): void {
@@ -134,10 +139,10 @@ function validateOptionalArray(config: Record<string, unknown>, key: string): vo
   }
 }
 
-function validateOptionalStringPath(
+function validateOptionalPathType(
   config: Record<string, unknown>,
   path: string[],
-  expectedType: "string" | "number" | "boolean" = "string"
+  expectedType: "string" | "number" | "boolean" | "nullable-string" = "string"
 ): void {
   let current: unknown = config;
   for (let index = 0; index < path.length; index += 1) {
@@ -147,12 +152,21 @@ function validateOptionalStringPath(
     current = current[path[index]];
   }
 
-  if (typeof current !== expectedType) {
+  const valid =
+    expectedType === "nullable-string"
+      ? current === null || typeof current === "string"
+      : typeof current === expectedType;
+  if (!valid) {
     throw new Error(`导入字段 ${path.join(".")} 必须是 ${importTypeLabel(expectedType)}。`);
   }
 }
 
-function importTypeLabel(expectedType: "string" | "number" | "boolean"): string {
+function importTypeLabel(
+  expectedType: "string" | "number" | "boolean" | "nullable-string"
+): string {
+  if (expectedType === "nullable-string") {
+    return "字符串或 null";
+  }
   if (expectedType === "string") {
     return "字符串";
   }

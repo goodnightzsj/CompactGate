@@ -119,7 +119,9 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     upstream_host: String(row.upstream_host),
     user_agent: readNullableString(row.user_agent),
     request_id: String(row.request_id),
-    error_summary: readNullableString(row.error_summary)
+    error_summary: readNullableString(row.error_summary),
+    capture_path: readNullableString(row.capture_path),
+    capture_status: readCaptureStatus(row.capture_status)
   };
 }
 
@@ -147,6 +149,12 @@ export function normalizeRoute(value: unknown): RouteKind {
 
 export function readCount(row: unknown): number {
   return isRecord(row) ? readNullableNumber(row.count) ?? 0 : 0;
+}
+
+export function readCaptureStatus(value: unknown): RequestLogEntry["capture_status"] {
+  return value === "pending" || value === "present" || value === "purged" || value === "none"
+    ? value
+    : "none";
 }
 
 export function readNullableNumber(value: unknown): number | null {

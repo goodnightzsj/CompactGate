@@ -32,7 +32,7 @@ export interface RequestLoggerOptions {
   maxPersistedEntries?: number;
 }
 
-export const DEFAULT_MAX_LOG_DATABASE_BYTES = 20 * 1024 * 1024 * 1024;
+export const DEFAULT_MAX_LOG_DATABASE_BYTES = 1024 * 1024 * 1024;
 
 const STORAGE_PRUNE_DELETE_FRACTION = 0.1;
 const STORAGE_PRUNE_MIN_DELETE_ROWS = 100;
@@ -54,7 +54,7 @@ export class RequestLogger {
 
   private readonly maxPersistedEntries: number | null;
 
-  private readonly maxDatabaseBytes: number | null;
+  private maxDatabaseBytes: number | null;
 
   private closed = false;
 
@@ -63,6 +63,8 @@ export class RequestLogger {
   private lastPersistError: string | null = null;
 
   private lastPersistErrorAt: string | null = null;
+
+  private sizeWarningIssued = false;
 
   constructor(
     private keepRecent: number,
@@ -79,13 +81,18 @@ export class RequestLogger {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
     this.migratePersistedSchema();
+    this.reconcileInterruptedCaptures();
     this.backfillResponseModels();
     this.prunePersistedEntries();
     this.prunePersistedStorage();
   }
 
-  resize(keepRecent: number): void {
-    this.keepRecent = keepRecent;
+  configure(options: { keepRecent: number; maxDatabaseBytes: number }): void {
+    this.keepRecent = options.keepRecent;
+    this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
+    this.sizeWarningIssued = false;
+    this.prunePersistedStorage();
+    this.checkDatabaseSize();
   }
 
   getDatabasePath(): string {
@@ -142,8 +149,10 @@ export class RequestLogger {
               upstream_host,
               user_agent,
               request_id,
-              error_summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              error_summary,
+              capture_path,
+              capture_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .run(
@@ -182,10 +191,13 @@ export class RequestLogger {
           entry.upstream_host,
           entry.user_agent,
           entry.request_id,
-          entry.error_summary
+          entry.error_summary,
+          entry.capture_path,
+          entry.capture_status
       );
       this.prunePersistedEntries();
       this.prunePersistedStorage();
+      this.checkDatabaseSize();
     } catch (error) {
       this.recordPersistenceFailure("persist request log", error);
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
@@ -244,6 +256,32 @@ export class RequestLogger {
     };
   }
 
+  getByRequestId(requestId: string):
+    | { status: "found"; entry: RequestLogEntry }
+    | { status: "not_found" }
+    | { status: "multiple" } {
+    const rows = (
+      this.db
+        .prepare(
+          `
+            SELECT ${RECENT_LOG_FIELDS}
+            FROM request_logs
+            WHERE request_id = ?
+            LIMIT 2
+          `
+        )
+        .all(requestId) as Array<Record<string, unknown>>
+    ).map(rowToLogEntry);
+
+    if (rows.length === 0) {
+      return { status: "not_found" };
+    }
+    if (rows.length > 1) {
+      return { status: "multiple" };
+    }
+    return { status: "found", entry: rows[0] };
+  }
+
   close(): void {
     if (this.closed) {
       return;
@@ -267,6 +305,22 @@ export class RequestLogger {
         this.db.exec(`ALTER TABLE request_logs ADD COLUMN ${name} ${definition};`);
       }
     }
+
+    this.ensureRequestIdIndex();
+  }
+
+  private ensureRequestIdIndex(): void {
+    const indexes = this.db.prepare("PRAGMA index_list(request_logs)").all() as Array<{
+      name: string;
+      unique: number;
+    }>;
+    const requestIdIndex = indexes.find((index) => index.name === "idx_request_logs_request_id");
+    if (requestIdIndex?.unique === 1) {
+      this.db.exec("DROP INDEX idx_request_logs_request_id;");
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id);"
+    );
   }
 
   private backfillResponseModels(): void {
@@ -309,6 +363,18 @@ export class RequestLogger {
       this.recordPersistenceFailure("backfill response models", error);
       console.error(`Failed to backfill response models in ${this.databasePath}.`, error);
     }
+  }
+
+  private reconcileInterruptedCaptures(): void {
+    this.db
+      .prepare(
+        `
+          UPDATE request_logs
+          SET capture_path = NULL, capture_status = 'none'
+          WHERE capture_status = 'pending'
+        `
+      )
+      .run();
   }
 
   private routeCounts(options: Pick<LogPageOptions, "status" | "host">): Record<"all" | RouteKind, number> {
@@ -493,6 +559,48 @@ export class RequestLogger {
     this.persistErrorCount += 1;
     this.lastPersistError = `${operation}: ${errorSummary(error)}`;
     this.lastPersistErrorAt = new Date().toISOString();
+  }
+
+  markCapturePurged(capturePath: string): void {
+    try {
+      this.db
+        .prepare("UPDATE request_logs SET capture_status = 'purged' WHERE capture_path = ?")
+        .run(capturePath);
+    } catch (error) {
+      this.recordPersistenceFailure("mark capture purged", error);
+    }
+  }
+
+  updateCapture(
+    requestId: string,
+    capturePath: string | null,
+    captureStatus: "none" | "present"
+  ): void {
+    try {
+      this.db
+        .prepare(
+          "UPDATE request_logs SET capture_path = ?, capture_status = ? WHERE request_id = ?"
+        )
+        .run(capturePath, captureStatus, requestId);
+    } catch (error) {
+      this.recordPersistenceFailure("update request capture", error);
+    }
+  }
+
+  private checkDatabaseSize(): void {
+    if (this.sizeWarningIssued) {
+      return;
+    }
+    const sizeBytes = this.databaseFootprintBytes();
+    const oneGB = 1024 * 1024 * 1024;
+    if (sizeBytes >= oneGB) {
+      console.warn(
+        `[CompactGate] WARNING: SQLite database has reached ${(sizeBytes / oneGB).toFixed(2)} GB. ` +
+          "Reduce logging.max_database_bytes or disable logging.persist_body; " +
+          "use logging.capture_dir for file-based diagnostics."
+      );
+      this.sizeWarningIssued = true;
+    }
   }
 }
 

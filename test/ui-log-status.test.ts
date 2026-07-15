@@ -75,6 +75,8 @@ function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     user_agent: null,
     request_id: "request-id",
     error_summary: null,
+    capture_path: null,
+    capture_status: "none",
     ...overrides
   };
 }

@@ -10,6 +10,7 @@ import {
   isRecord,
   readBoolean,
   readChild,
+  readNullableString,
   readNumber,
   readSensitiveString,
   readString
@@ -57,6 +58,27 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
     config.logging.keep_recent > 2_000
   ) {
     throw new ConfigError("logging.keep_recent must be between 1 and 2000.");
+  }
+
+  if (
+    !Number.isInteger(config.logging.capture_body_max_bytes) ||
+    config.logging.capture_body_max_bytes <= 0
+  ) {
+    throw new ConfigError("logging.capture_body_max_bytes must be a positive integer byte count.");
+  }
+
+  if (
+    !Number.isInteger(config.logging.capture_dir_max_bytes) ||
+    config.logging.capture_dir_max_bytes <= 0
+  ) {
+    throw new ConfigError("logging.capture_dir_max_bytes must be a positive integer byte count.");
+  }
+
+  if (
+    !Number.isInteger(config.logging.max_database_bytes) ||
+    config.logging.max_database_bytes <= 0
+  ) {
+    throw new ConfigError("logging.max_database_bytes must be a positive integer byte count.");
   }
 }
 
@@ -128,7 +150,23 @@ export function mergeRuntimeConfig(
     logging: {
       redact_body: readBoolean(readChild(patchRecord.logging).redact_body, base.logging.redact_body),
       persist_body: readBoolean(readChild(patchRecord.logging).persist_body, base.logging.persist_body),
-      keep_recent: readNumber(readChild(patchRecord.logging).keep_recent, base.logging.keep_recent)
+      keep_recent: readNumber(readChild(patchRecord.logging).keep_recent, base.logging.keep_recent),
+      capture_dir: readNullableString(
+        readChild(patchRecord.logging).capture_dir,
+        base.logging.capture_dir
+      ),
+      capture_body_max_bytes: readNumber(
+        readChild(patchRecord.logging).capture_body_max_bytes,
+        base.logging.capture_body_max_bytes
+      ),
+      capture_dir_max_bytes: readNumber(
+        readChild(patchRecord.logging).capture_dir_max_bytes,
+        base.logging.capture_dir_max_bytes
+      ),
+      max_database_bytes: readNumber(
+        readChild(patchRecord.logging).max_database_bytes,
+        base.logging.max_database_bytes
+      )
     },
     primary_failover: {
       auto_schedule: readBoolean(

@@ -24,11 +24,11 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
-  it("defaults the persisted SQLite database cap to 20 GiB", () => {
-    expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(20 * 1024 * 1024 * 1024);
+  it("defaults the persisted SQLite database cap to 1 GiB", () => {
+    expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(1024 * 1024 * 1024);
   });
 
-  it("does not cap persisted SQLite logs by default", async () => {
+  it("does not cap persisted SQLite logs by entry count by default", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
     const databasePath = path.join(dir, "compactgate-logs.sqlite");
@@ -96,7 +96,9 @@ describe("RequestLogger", () => {
         errorSummary: null,
         compactResponseNormalized: false,
         compactResponseNormalizeReason: null,
-        compactResponseSyntheticSource: null
+        compactResponseSyntheticSource: null,
+        capturePath: null,
+        captureStatus: "none"
       });
 
       expect(entry.time).toBe(startedAtIso);
@@ -152,7 +154,9 @@ describe("RequestLogger", () => {
         errorSummary: null,
         compactResponseNormalized: false,
         compactResponseNormalizeReason: null,
-        compactResponseSyntheticSource: null
+        compactResponseSyntheticSource: null,
+        capturePath: null,
+        captureStatus: "none"
       });
 
       expect(entry.response_model).toBe("gpt-5.5-2026-04-23");
@@ -498,9 +502,211 @@ function logEntry(index: number, body = ""): RequestLogEntry {
     upstream_host: "compact.example",
     user_agent: null,
     request_id: `request-${index}`,
-    error_summary: null
+    error_summary: null,
+    capture_path: null,
+    capture_status: "none"
   };
 }
+
+describe("getByRequestId", () => {
+  it("returns not_found when request_id does not exist", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+
+    try {
+      logger.add(logEntry(1));
+      expect(logger.getByRequestId("nonexistent")).toEqual({ status: "not_found" });
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("returns the entry when exactly one exists", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+
+    try {
+      const entry = logEntry(1);
+      logger.add(entry);
+      const result = logger.getByRequestId(entry.request_id);
+      expect(result.status).toBe("found");
+      if (result.status === "found") {
+        expect(result.entry.request_id).toBe(entry.request_id);
+        expect(result.entry.source_model).toBe(entry.source_model);
+      }
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("preserves duplicate legacy request IDs and reports them as multiple", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const db = new DatabaseSync(databasePath);
+    try {
+      db.exec(`
+        CREATE TABLE request_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          time TEXT NOT NULL,
+          route TEXT NOT NULL,
+          method TEXT NOT NULL,
+          path TEXT NOT NULL,
+          source_model TEXT,
+          target_model TEXT,
+          status INTEGER NOT NULL,
+          duration_ms INTEGER NOT NULL,
+          upstream_host TEXT NOT NULL,
+          request_id TEXT NOT NULL
+        );
+      `);
+      const insert = db.prepare(`
+        INSERT INTO request_logs (
+          time,
+          route,
+          method,
+          path,
+          source_model,
+          target_model,
+          status,
+          duration_ms,
+          upstream_host,
+          request_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (let index = 0; index < 2; index += 1) {
+        insert.run(
+          new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+          "primary",
+          "POST",
+          "/v1/responses",
+          "gpt-test",
+          "gpt-test",
+          200,
+          1,
+          "legacy.example",
+          "duplicate-request-id"
+        );
+      }
+    } finally {
+      db.close();
+    }
+
+    const logger = new RequestLogger(10, databasePath);
+    try {
+      expect(logger.page({ limit: 10, offset: 0 }).all_total).toBe(2);
+      expect(logger.getByRequestId("duplicate-request-id")).toEqual({ status: "multiple" });
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("uses a non-unique request ID index", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+    logger.close();
+
+    const db = new DatabaseSync(databasePath);
+    try {
+      const indexes = db.prepare("PRAGMA index_list(request_logs)").all() as Array<{
+        name: string;
+        unique: number;
+      }>;
+      expect(indexes.find((index) => index.name === "idx_request_logs_request_id")).toMatchObject({
+        unique: 0
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("runtime configuration", () => {
+  it("applies a lower database byte cap immediately", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath, {
+      maxDatabaseBytes: 10 * 1024 * 1024
+    });
+
+    try {
+      for (let index = 1; index <= 6; index += 1) {
+        logger.add(logEntry(index, "x".repeat(16 * 1024)));
+      }
+      expect(logger.page({ limit: 10, offset: 0 }).all_total).toBe(6);
+
+      const configurableLogger = logger as unknown as {
+        configure(options: { keepRecent: number; maxDatabaseBytes: number }): void;
+      };
+      configurableLogger.configure({
+        keepRecent: 10,
+        maxDatabaseBytes: 120 * 1024
+      });
+
+      expect(logger.page({ limit: 10, offset: 0 }).all_total).toBeLessThan(6);
+      expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(120 * 1024);
+    } finally {
+      logger.close();
+    }
+  });
+});
+
+describe("markCapturePurged", () => {
+  it("updates capture_status to purged", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+
+    try {
+      const entry = {
+        ...logEntry(1),
+        capture_path: "/path/to/capture.json",
+        capture_status: "present" as const
+      };
+      logger.add(entry);
+      logger.markCapturePurged("/path/to/capture.json");
+      const result = logger.getByRequestId(entry.request_id);
+      if (result.status === "found") {
+        expect(result.entry.capture_status).toBe("purged");
+      } else {
+        throw new Error("Expected found status");
+      }
+    } finally {
+      logger.close();
+    }
+  });
+});
+
+describe("capture recovery", () => {
+  it("clears pending capture states when reopening the database", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+    logger.add({ ...logEntry(1), capture_status: "pending" });
+    logger.close();
+
+    const reopenedLogger = new RequestLogger(10, databasePath);
+    try {
+      const result = reopenedLogger.getByRequestId("request-1");
+      expect(result.status).toBe("found");
+      if (result.status === "found") {
+        expect(result.entry.capture_path).toBeNull();
+        expect(result.entry.capture_status).toBe("none");
+      }
+    } finally {
+      reopenedLogger.close();
+    }
+  });
+});
 
 function databaseFootprintBytes(databasePath: string): number {
   return [

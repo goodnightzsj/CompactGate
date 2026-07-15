@@ -6,10 +6,10 @@ import {
   assertCaptured,
   type CapturedRequest,
   cleanup,
-  fetchRecentLogs,
   setEnv,
   startApp,
-  waitForCaptureRecords
+  waitForCaptureRecords,
+  waitForLogEntry
 } from "./helpers/server-test-utils.js";
 import {
   CLAUDE_HEADERS,
@@ -86,7 +86,7 @@ describe("CompactGate Claude routing", () => {
     expect(captured.current.headers["anthropic-api-key"]).toBe("saved-claude-token");
     expect(captured.current.body).toContain("capture claude");
 
-    const [entry] = await fetchRecentLogs(app.url);
+    const entry = await waitForLogEntry(app.url, (e) => e.route === "claude");
     expect(entry).toMatchObject({
       route: "claude",
       endpoint: "/messages",

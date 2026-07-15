@@ -65,7 +65,11 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
   logging: {
     redact_body: true,
     persist_body: false,
-    keep_recent: 200
+    keep_recent: 200,
+    capture_dir: null,
+    capture_body_max_bytes: 1024 * 1024,
+    capture_dir_max_bytes: 20 * 1024 * 1024 * 1024,
+    max_database_bytes: 1024 * 1024 * 1024
   },
   primary_failover: {
     auto_schedule: true

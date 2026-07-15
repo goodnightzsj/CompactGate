@@ -1,7 +1,16 @@
 import { gzipSync } from "node:zlib";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PublicConfig } from "../src/shared/types.js";
-import { startApp } from "./helpers/server-test-utils.js";
+import {
+  cleanup,
+  startApp,
+  startUpstream,
+  waitForCaptureRecords,
+  waitForLogEntry
+} from "./helpers/server-test-utils.js";
 
 describe("CompactGate config API", () => {
   it("hot patches config used by subsequent route previews", async () => {
@@ -56,6 +65,160 @@ describe("CompactGate config API", () => {
     expect(await response.json()).toMatchObject({
       error: "test-route path must be a valid URL or path."
     });
+  });
+
+  it("rejects keep_recent values below the supported page-size range", async () => {
+    const app = await startApp();
+
+    const response = await fetch(`${app.url}/api/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        logging: {
+          keep_recent: 0
+        }
+      })
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "logging.keep_recent must be between 1 and 2000."
+    });
+  });
+
+  it("applies capture configuration changes without restarting", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-hot-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ output: "RESPONSE_SHOULD_BE_TRUNCATED" }));
+    });
+    const app = await startApp(upstream.url, upstream.url);
+
+    const patchResponse = await fetch(`${app.url}/api/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        logging: {
+          capture_dir: captureDir,
+          capture_body_max_bytes: 12,
+          capture_dir_max_bytes: 1024 * 1024
+        }
+      })
+    });
+    expect(patchResponse.status).toBe(200);
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-test",
+        input: "REQUEST_SHOULD_BE_TRUNCATED"
+      })
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const captures = await waitForCaptureRecords(captureDir, 1);
+    expect(captures).toHaveLength(1);
+    expect(captures[0].incoming_request.body).toMatchObject({
+      captured_byte_length: 12,
+      truncated: true
+    });
+    expect(captures[0].upstream_response.body).toMatchObject({
+      captured_byte_length: 12,
+      truncated: true
+    });
+  });
+
+  it("disables capture when capture_dir is patched to null", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-hot-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    const app = await startApp(upstream.url, upstream.url);
+
+    const enableResponse = await fetch(`${app.url}/api/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        logging: {
+          capture_dir: captureDir
+        }
+      })
+    });
+    expect(enableResponse.status).toBe(200);
+
+    const capturedResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", input: "captured" })
+    });
+    expect(capturedResponse.status).toBe(200);
+    await capturedResponse.text();
+    await waitForCaptureRecords(captureDir, 1);
+
+    const disableResponse = await fetch(`${app.url}/api/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        logging: {
+          capture_dir: null
+        }
+      })
+    });
+    expect(disableResponse.status).toBe(200);
+    expect((await disableResponse.json()) as PublicConfig).toMatchObject({
+      logging: {
+        capture_dir: null
+      }
+    });
+
+    const uncapturedResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", input: "not captured" })
+    });
+    expect(uncapturedResponse.status).toBe(200);
+    await uncapturedResponse.text();
+    const requestId = uncapturedResponse.headers.get("x-compactgate-request-id");
+    const logEntry = await waitForLogEntry(app.url, (entry) => entry.request_id === requestId);
+
+    expect(logEntry.capture_status).toBe("none");
+    expect((await readdir(captureDir)).filter((name) => name.endsWith(".json"))).toHaveLength(1);
+  });
+
+  it("marks a capture purged when it exceeds the directory byte cap", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-hot-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+    const app = await startApp(upstream.url, upstream.url, {
+      logging: {
+        capture_dir: captureDir,
+        capture_dir_max_bytes: 1
+      }
+    });
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-test", input: "purge this capture" })
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    const requestId = response.headers.get("x-compactgate-request-id");
+    const logEntry = await waitForLogEntry(
+      app.url,
+      (entry) => entry.request_id === requestId && entry.capture_status === "purged"
+    );
+
+    expect(logEntry.capture_path).toEqual(expect.any(String));
+    expect((await readdir(captureDir)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
   });
 
   it("accepts gzip encoded API JSON request bodies", async () => {

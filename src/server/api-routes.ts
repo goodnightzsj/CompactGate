@@ -5,6 +5,7 @@ import { handleRuntimeApi, type FetchClaudeModels } from "./api-runtime-routes.j
 import { sendJson } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import type { StudioEventBroadcaster } from "./studio-events.js";
+import type { DebugCaptureWriter } from "./debug-capture.js";
 
 export async function handleApi(
   req: IncomingMessage,
@@ -12,10 +13,11 @@ export async function handleApi(
   url: URL,
   configStore: ConfigStore,
   logger: RequestLogger,
+  captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
   fetchClaudeModels: FetchClaudeModels
 ): Promise<void> {
-  if (await handleConfigApi(req, res, url, configStore, logger, studioEvents)) {
+  if (await handleConfigApi(req, res, url, configStore, logger, captureWriter, studioEvents)) {
     return;
   }
 

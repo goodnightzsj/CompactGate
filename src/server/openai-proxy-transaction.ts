@@ -116,6 +116,7 @@ export function applyOpenAiProxyUpstreamResult(
 
 export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransactionInput): Promise<void> {
   const completedAtIso = new Date().toISOString();
+  const captureEnabled = input.captureWriter.isEnabled();
   const logEntry = addLog(input.logger, {
     route: input.route,
     req: input.req,
@@ -142,44 +143,70 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     errorSummary: input.errorSummary,
     compactResponseNormalized: input.compactResponseNormalized,
     compactResponseNormalizeReason: input.compactResponseNormalizeReason,
-    compactResponseSyntheticSource: input.compactResponseSyntheticSource
+    compactResponseSyntheticSource: input.compactResponseSyntheticSource,
+    capturePath: null,
+    captureStatus: captureEnabled ? "pending" : "none"
   });
   input.studioEvents.broadcastLog(logEntry);
 
-  await persistCapture(input.captureWriter, () => ({
-    request_id: input.requestId,
-    time: input.startedAtIso,
-    completed_at: completedAtIso,
-    route: input.route,
-    method: input.req.method ?? "GET",
-    path: `${input.url.pathname}${input.url.search}`,
-    upstream_url: input.upstream.toString(),
-    upstream_host: input.upstream.host,
-    source_model: input.sourceModel,
-    target_model: input.targetModel,
-    compact_bridge_replacements: input.compactBridgeReplacements,
-    compact_response_normalized: input.compactResponseNormalized,
-    compact_response_normalize_reason: input.compactResponseNormalizeReason,
-    compact_response_synthetic_source: input.compactResponseSyntheticSource,
-    incoming_request: {
-      headers: serializeHeaders(input.req.headers),
-      body: input.captureWriter.serializeBody(input.rawBody)
-    },
-    upstream_request: {
-      headers: serializeHeaders(input.requestHeaders),
-      body: input.captureWriter.serializeBody(input.upstreamBody)
-    },
-    upstream_response: {
-      status: input.status,
-      headers: serializeHeaders(input.responseHeaders),
-      body: input.captureWriter.serializeBody(input.responseBody)
-    },
-    client_response: input.clientResponseBody
-      ? {
-          status: input.status,
-          headers: serializeHeaders(input.clientResponseHeaders ?? {}),
-          body: input.captureWriter.serializeBody(input.clientResponseBody)
-        }
-      : null
-  }));
+  if (!captureEnabled) {
+    return;
+  }
+
+  let captureRegistered = false;
+  const capturePath = await persistCapture(
+    input.captureWriter,
+    () => ({
+      request_id: input.requestId,
+      time: input.startedAtIso,
+      completed_at: completedAtIso,
+      route: input.route,
+      method: input.req.method ?? "GET",
+      path: `${input.url.pathname}${input.url.search}`,
+      upstream_url: input.upstream.toString(),
+      upstream_host: input.upstream.host,
+      source_model: input.sourceModel,
+      target_model: input.targetModel,
+      compact_bridge_replacements: input.compactBridgeReplacements,
+      compact_response_normalized: input.compactResponseNormalized,
+      compact_response_normalize_reason: input.compactResponseNormalizeReason,
+      compact_response_synthetic_source: input.compactResponseSyntheticSource,
+      incoming_request: {
+        headers: serializeHeaders(input.req.headers),
+        body: input.captureWriter.serializeBody(input.rawBody)
+      },
+      upstream_request: {
+        headers: serializeHeaders(input.requestHeaders),
+        body: input.captureWriter.serializeBody(input.upstreamBody)
+      },
+      upstream_response: {
+        status: input.status,
+        headers: serializeHeaders(input.responseHeaders),
+        body: input.captureWriter.serializeBody(input.responseBody)
+      },
+      client_response: input.clientResponseBody
+        ? {
+            status: input.status,
+            headers: serializeHeaders(input.clientResponseHeaders ?? {}),
+            body: input.captureWriter.serializeBody(input.clientResponseBody)
+          }
+        : null
+    }),
+    (writtenPath) => {
+      captureRegistered = true;
+      input.logger.updateCapture(input.requestId, writtenPath, "present");
+    }
+  );
+
+  if (!captureRegistered) {
+    input.logger.updateCapture(
+      input.requestId,
+      capturePath,
+      capturePath ? "present" : "none"
+    );
+  }
+  const updatedLog = input.logger.getByRequestId(input.requestId);
+  if (updatedLog.status === "found") {
+    input.studioEvents.broadcastLog(updatedLog.entry);
+  }
 }

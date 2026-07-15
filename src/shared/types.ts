@@ -58,6 +58,10 @@ export interface LoggingConfig {
   redact_body: boolean;
   persist_body: boolean;
   keep_recent: number;
+  capture_dir: string | null;
+  capture_body_max_bytes: number;
+  capture_dir_max_bytes: number;
+  max_database_bytes: number;
 }
 
 export interface PrimaryFailoverConfig {
@@ -275,6 +279,8 @@ export interface RequestLogEntry {
   user_agent: string | null;
   request_id: string;
   error_summary: string | null;
+  capture_path: string | null;
+  capture_status: "none" | "pending" | "present" | "purged";
 }
 
 export interface LogPersistenceHealth {

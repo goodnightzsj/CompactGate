@@ -36,9 +36,12 @@ export const LOG_TABLE_SQL = `
     upstream_host TEXT NOT NULL,
     user_agent TEXT,
     request_id TEXT NOT NULL,
-    error_summary TEXT
+    error_summary TEXT,
+    capture_path TEXT,
+    capture_status TEXT NOT NULL DEFAULT 'none'
   );
   CREATE INDEX IF NOT EXISTS idx_request_logs_id ON request_logs(id DESC);
+  CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id);
 `;
 
 export const RECENT_LOG_FIELDS = `
@@ -77,7 +80,9 @@ export const RECENT_LOG_FIELDS = `
   upstream_host,
   user_agent,
   request_id,
-  error_summary
+  error_summary,
+  capture_path,
+  capture_status
 `;
 
 export const MIGRATION_COLUMNS: Record<string, string> = {
@@ -106,5 +111,7 @@ export const MIGRATION_COLUMNS: Record<string, string> = {
   additive_cached_input_tokens: "INTEGER NOT NULL DEFAULT 0",
   additive_cached_output_tokens: "INTEGER NOT NULL DEFAULT 0",
   total_tokens: "INTEGER",
-  user_agent: "TEXT"
+  user_agent: "TEXT",
+  capture_path: "TEXT",
+  capture_status: "TEXT NOT NULL DEFAULT 'none'"
 };

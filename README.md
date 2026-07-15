@@ -145,12 +145,19 @@ wire_api = "responses"
   },
   "logging": {
     "redact_body": true,
-    "keep_recent": 200
+    "persist_body": false,
+    "keep_recent": 200,
+    "capture_dir": null,
+    "capture_body_max_bytes": 1048576,
+    "capture_dir_max_bytes": 21474836480,
+    "max_database_bytes": 1073741824
   }
 }
 ```
 
-`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 20 GiB；超过后会按时间顺序删除最早的请求记录。
+`logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；超过后会按时间顺序删除最早的请求记录。
+
+调试抓包默认关闭。设置 `logging.capture_dir` 后，每个代理请求会写入一份独立 JSON，单段正文默认最多 1 MiB，受管抓包文件合计默认最多 20 GiB。把 `capture_dir` 热更新为 `null` 可关闭抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
 
 最重要的字段只有这些：
 
@@ -302,6 +309,10 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 ?host=api.example.com
 ?limit=200&offset=200
 ```
+
+### `GET /api/logs/:request_id`
+
+按响应头 `x-compactgate-request-id` 查询单条日志及抓包路径、状态。不存在返回 404；旧数据库中若有重复请求 ID，返回 409 且不会删除历史日志。
 
 ### `GET /api/events`
 

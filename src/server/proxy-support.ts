@@ -41,6 +41,8 @@ export function addLog(
     compactResponseNormalized: boolean;
     compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
     compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
+    capturePath: string | null;
+    captureStatus: RequestLogEntry["capture_status"];
   }
 ): RequestLogEntry {
   const entry: RequestLogEntry = {
@@ -79,7 +81,9 @@ export function addLog(
     upstream_host: input.upstreamHost,
     user_agent: readHeaderString(input.req.headers["user-agent"]),
     request_id: input.requestId,
-    error_summary: input.errorSummary
+    error_summary: input.errorSummary,
+    capture_path: input.capturePath,
+    capture_status: input.captureStatus
   };
   logger.add(entry);
   return entry;
@@ -104,11 +108,16 @@ export function emptyUsageMetrics(): TokenUsageMetrics {
 
 export async function persistCapture(
   captureWriter: DebugCaptureWriter,
-  createRecord: () => CaptureRecord
-): Promise<void> {
+  createRecord: () => CaptureRecord,
+  onWritten?: (capturePath: string) => void
+): Promise<string | null> {
   if (!captureWriter.isEnabled()) {
-    return;
+    return null;
   }
 
-  await captureWriter.write(createRecord());
+  try {
+    return await captureWriter.write(createRecord(), onWritten);
+  } catch {
+    return null;
+  }
 }
