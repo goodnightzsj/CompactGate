@@ -6,7 +6,8 @@ import {
   requestJson,
   sendOpenAiUpstreamRequest,
   sendBufferedUpstreamRequest,
-  type BufferedUpstreamResult
+  type BufferedUpstreamResult,
+  UpstreamStatusError
 } from "../src/server/upstream-client.js";
 import { listen, trackServer } from "./helpers/server-test-lifecycle.js";
 import { startUpstream } from "./helpers/server-test-utils.js";
@@ -236,6 +237,20 @@ describe("sendBufferedUpstreamRequest", () => {
 });
 
 describe("requestJson", () => {
+  it("rejects non-success HTTP responses instead of parsing redirect bodies", async () => {
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(302, {
+        location: "/login",
+        "content-type": "text/html"
+      });
+      res.end("redirecting");
+    });
+
+    await expect(requestJson(new URL(upstream.url), {}, 1_000)).rejects.toEqual(
+      expect.objectContaining<Partial<UpstreamStatusError>>({ status: 302 })
+    );
+  });
+
   it("rejects oversized JSON responses before buffering the whole body", async () => {
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });

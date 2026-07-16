@@ -57,7 +57,7 @@ export function buildPrimaryOpenAiProxyPlan({
     primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
   );
   const selectedPrimaryConfig = primarySelection.config;
-  const modelRewrite = rewritePrimaryBody(rawBody, selectedPrimaryConfig);
+  const modelRewrite = rewritePrimaryBody(rawBody, selectedPrimaryConfig, endpoint);
   const sourceModel = modelRewrite.sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
   const splitCompactMode = config.compact.upstream_mode === "split";

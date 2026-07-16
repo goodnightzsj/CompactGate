@@ -30,7 +30,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     base_url: "https://primary.example/v1",
     api_key: "",
     api_key_env: "",
-    model_override: "gpt-5.5"
+    model_override: "gpt-5.5",
+    reasoning_effort: ""
   },
   compact: {
     base_url: "https://compact.example/v1",

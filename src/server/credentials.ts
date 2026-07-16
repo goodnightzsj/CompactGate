@@ -1,7 +1,8 @@
 import type {
   CompactGateConfig,
   CredentialScope,
-  CredentialSource
+  CredentialSource,
+  UpstreamConfig
 } from "../shared/types.js";
 
 export interface ResolvedCredential {
@@ -59,7 +60,7 @@ export function resolveRouteCredential(
 function configForCredentialScope(
   scope: CredentialScope,
   config: CompactGateConfig
-): CompactGateConfig["primary"] {
+): UpstreamConfig {
   switch (scope) {
     case "primary":
       return config.primary;

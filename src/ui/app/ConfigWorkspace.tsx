@@ -1,7 +1,6 @@
 import {
   type Dispatch,
-  type SetStateAction,
-  useState
+  type SetStateAction
 } from "react";
 import type {
   PublicConfig
@@ -17,21 +16,23 @@ export type ConfigWorkspaceProps = {
   actions: ConfigActions;
   config: PublicConfig | null;
   form: ConfigFormState;
+  configTab: ConfigTab;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
   onFormChange: Dispatch<SetStateAction<ConfigFormState>>;
+  onConfigTabChange: (tab: ConfigTab) => void;
 };
 
 export function ConfigWorkspace({
   actions,
   config,
   form,
+  configTab,
   hasPendingChanges,
   linkedCompactModel,
-  onFormChange
+  onFormChange,
+  onConfigTabChange
 }: ConfigWorkspaceProps) {
-  const [configTab, setConfigTab] = useState<ConfigTab>("profiles");
-
   return (
     <ConfigPage
       config={config}
@@ -78,7 +79,7 @@ export function ConfigWorkspace({
       }}
       tab={{
         configTab,
-        onConfigTabChange: setConfigTab
+        onConfigTabChange
       }}
       portable={{
         onExportConfig: actions.exportConfig,

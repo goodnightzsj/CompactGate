@@ -4,33 +4,22 @@ import type {
   CompactGateConfig
 } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
-import { hostOrNull } from "./health.js";
 import {
   buildUpstreamHeaders,
   isRecord,
-  parseJsonRecord,
-  summaryForError
+  parseJsonRecord
 } from "./http-utils.js";
 import {
-  requestJson,
-  UpstreamStatusError
-} from "./upstream-client.js";
+  fetchUpstreamModels,
+  type UpstreamModelsResponse
+} from "./upstream-models.js";
 
-export type FetchClaudeModels = (config: CompactGateConfig) => Promise<{
-  models: string[];
-  upstream_host: string;
-  error: string | null;
-}>;
+export type FetchClaudeModels = (config: CompactGateConfig) => Promise<UpstreamModelsResponse>;
 
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
 
-export async function fetchClaudeModels(config: CompactGateConfig): Promise<{
-  models: string[];
-  upstream_host: string;
-  error: string | null;
-}> {
-  const upstreams = buildClaudeModelListUrls(config.claude.primary.base_url);
+export async function fetchClaudeModels(config: CompactGateConfig): Promise<UpstreamModelsResponse> {
   const auth = resolveClaudeCredential(config);
   const headers = buildAnthropicUpstreamHeaders(
     {
@@ -38,30 +27,11 @@ export async function fetchClaudeModels(config: CompactGateConfig): Promise<{
     },
     auth.apiKey
   );
-  const errors: string[] = [];
-
-  for (const upstream of upstreams) {
-    try {
-      const body = await requestJson(upstream, headers, config.timeouts.claude_ms);
-      return {
-        models: extractModelIds(body),
-        upstream_host: upstream.host,
-        error: null
-      };
-    } catch (error) {
-      errors.push(`${upstream.pathname}: ${claudeModelFetchError(error)}`);
-
-      if (!shouldTryNextClaudeModelsPath(error)) {
-        break;
-      }
-    }
-  }
-
-  return {
-    models: [],
-    upstream_host: upstreams[0]?.host ?? hostOrNull(config.claude.primary.base_url) ?? "",
-    error: `上游模型列表不可用。已尝试 ${errors.join("；")}`
-  };
+  return fetchUpstreamModels({
+    baseUrl: config.claude.primary.base_url,
+    headers,
+    timeoutMs: config.timeouts.claude_ms
+  });
 }
 
 export function buildAnthropicUpstreamHeaders(
@@ -190,75 +160,6 @@ function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole
   }
 
   return null;
-}
-
-function buildClaudeModelListUrls(baseUrl: string): URL[] {
-  const candidates = [
-    buildClaudeUpstreamUrl(baseUrl, "/v1/models"),
-    buildClaudeUpstreamUrl(baseUrl, "/models")
-  ];
-  const rootBase = new URL(baseUrl);
-  rootBase.pathname = "/";
-  rootBase.search = "";
-  rootBase.hash = "";
-  candidates.push(
-    buildClaudeUpstreamUrl(rootBase.toString(), "/v1/models"),
-    buildClaudeUpstreamUrl(rootBase.toString(), "/models")
-  );
-
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = candidate.toString();
-    if (seen.has(key)) {
-      return false;
-    }
-
-    seen.add(key);
-    return true;
-  });
-}
-
-function shouldTryNextClaudeModelsPath(error: unknown): boolean {
-  if (error instanceof UpstreamStatusError) {
-    return error.status === 404 || error.status === 405;
-  }
-
-  return false;
-}
-
-function claudeModelFetchError(error: unknown): string {
-  if (error instanceof UpstreamStatusError) {
-    if (error.status === 401 || error.status === 403) {
-      return `认证失败，状态码 ${error.status}`;
-    }
-
-    return `状态码 ${error.status}`;
-  }
-
-  return summaryForError(error);
-}
-
-function extractModelIds(value: unknown): string[] {
-  const models = new Set<string>();
-  const candidates = isRecord(value) && Array.isArray(value.data) ? value.data : Array.isArray(value) ? value : [];
-
-  for (const item of candidates) {
-    if (typeof item === "string") {
-      models.add(item);
-      continue;
-    }
-
-    if (!isRecord(item)) {
-      continue;
-    }
-
-    const id = readStringField(item.id) ?? readStringField(item.name) ?? readStringField(item.model);
-    if (id) {
-      models.add(id);
-    }
-  }
-
-  return [...models].sort((left, right) => left.localeCompare(right));
 }
 
 function readStringField(value: unknown): string | null {

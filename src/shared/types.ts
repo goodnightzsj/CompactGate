@@ -13,6 +13,7 @@ export type CompactResponseNormalizeReason =
 export type CompactResponseSyntheticSource = "upstream_response" | "request_input";
 
 export type PrimaryModelMode = "passthrough" | "linked" | "custom";
+export type PrimaryReasoningEffort = "" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
 export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reasoning" | "subagent";
@@ -24,6 +25,10 @@ export interface UpstreamConfig {
   api_key: string;
   api_key_env: string;
   model_override?: string;
+}
+
+export interface PrimaryUpstreamConfig extends UpstreamConfig {
+  reasoning_effort: PrimaryReasoningEffort;
 }
 
 export interface ClaudeCompactConfig extends UpstreamConfig {
@@ -70,7 +75,7 @@ export interface PrimaryFailoverConfig {
 
 export interface CompactGateRuntimeConfig {
   listen: string;
-  primary: UpstreamConfig;
+  primary: PrimaryUpstreamConfig;
   compact: CompactConfig;
   claude: ClaudeConfig;
   timeouts: TimeoutConfig;
@@ -79,7 +84,7 @@ export interface CompactGateRuntimeConfig {
 }
 
 export interface SavedCodexProfileConfig {
-  primary: UpstreamConfig;
+  primary: PrimaryUpstreamConfig;
   compact: CompactConfig;
 }
 
@@ -208,7 +213,7 @@ export interface PublicConfigProfileScopes {
 
 export interface PublicConfig {
   listen: string;
-  primary: PublicUpstreamConfig;
+  primary: PublicUpstreamConfig & { reasoning_effort: PrimaryReasoningEffort };
   compact: PublicCompactConfig;
   claude: PublicClaudeConfig;
   timeouts: TimeoutConfig;

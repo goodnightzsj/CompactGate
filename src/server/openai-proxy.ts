@@ -172,6 +172,10 @@ async function proxyPrimaryRequest(
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
+    transaction.requestMetadata.reasoningEffort = extractRequestMetadata(
+      url.pathname,
+      transaction.upstreamBody
+    ).reasoningEffort;
     transaction.requestHeaders = plan.requestHeaders;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 

@@ -12,8 +12,10 @@ export function StudioApp() {
   const [themeMode, setThemeMode] = useThemeMode();
   const pageModels = useStudioPageModels({
     currentPage: navigation.currentPage,
+    configTab: navigation.configTab,
     healthMode: navigation.healthMode,
-    pageMode: navigation.pageMode
+    pageMode: navigation.pageMode,
+    onConfigTabChange: navigation.navigateToConfigTab
   });
   useDocumentTitle(navigation.pageMode);
 

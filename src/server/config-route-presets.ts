@@ -5,7 +5,8 @@ import type {
   PublicRouteUrlPreset,
   RouteUrlPreset,
   RouteUrlPresetKind,
-  SavedConfigProfileConfig
+  SavedConfigProfileConfig,
+  UpstreamConfig
 } from "../shared/types.js";
 import { ConfigError } from "./config-error.js";
 import { isValidBaseUrl, safeHost } from "./config-url.js";
@@ -177,7 +178,7 @@ export function cloneRouteUrlPreset(preset: RouteUrlPreset): RouteUrlPreset {
 
 function routeUrlEntry(
   kind: RouteUrlPresetKind,
-  config: CompactGateRuntimeConfig["primary"]
+  config: UpstreamConfig
 ): RouteUrlPresetEntry {
   return {
     kind,

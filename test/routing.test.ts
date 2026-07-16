@@ -84,6 +84,53 @@ describe("routing helpers", () => {
     expect(result.body).toBe(rawBody);
   });
 
+  it("overrides Responses reasoning effort while preserving other reasoning fields", () => {
+    const config: CompactGateConfig = {
+      ...DEFAULT_CONFIG,
+      primary: {
+        ...DEFAULT_CONFIG.primary,
+        model_override: "",
+        reasoning_effort: "xhigh"
+      }
+    };
+    const result = rewritePrimaryBody(
+      Buffer.from(JSON.stringify({
+        model: "gpt-5.6-sol",
+        input: "redacted",
+        reasoning: { summary: "auto", context: "all_turns", effort: "low" }
+      })),
+      config,
+      "/responses"
+    );
+
+    expect(result.targetModel).toBe("gpt-5.6-sol");
+    expect(result.bodyRewritten).toBe(true);
+    expect(JSON.parse(result.body.toString("utf8"))).toEqual({
+      model: "gpt-5.6-sol",
+      input: "redacted",
+      reasoning: { summary: "auto", context: "all_turns", effort: "xhigh" }
+    });
+  });
+
+  it("does not add Responses reasoning settings to other primary endpoints", () => {
+    const rawBody = Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", messages: [] }));
+    const result = rewritePrimaryBody(
+      rawBody,
+      {
+        ...DEFAULT_CONFIG,
+        primary: {
+          ...DEFAULT_CONFIG.primary,
+          model_override: "",
+          reasoning_effort: "high"
+        }
+      },
+      "/chat/completions"
+    );
+
+    expect(result.bodyRewritten).toBe(false);
+    expect(result.body).toBe(rawBody);
+  });
+
   it("builds upstream URLs under the configured /v1 base", () => {
     expect(
       buildUpstreamUrl("https://compact.example/v1", "/v1/responses/compact", "?trace=1").toString()

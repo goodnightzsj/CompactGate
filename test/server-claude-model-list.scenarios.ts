@@ -91,6 +91,11 @@ describe("CompactGate Claude routing", () => {
       requestedUrls.push(req.url ?? "");
       expect(req.headers["anthropic-api-key"]).toBe("fallback-models-token");
 
+      if (req.url === "/anthropic/v1/models") {
+        writeJsonResponse(res, { error: "method not allowed" }, 405);
+        return;
+      }
+
       if (req.url !== "/v1/models") {
         writeJsonResponse(res, { error: "not found" }, 404);
         return;
@@ -124,5 +129,67 @@ describe("CompactGate Claude routing", () => {
       upstream_host: new URL(claude.url).host,
       error: null
     });
+  });
+
+  it("falls back to the base-relative Claude models path", async () => {
+    const requestedUrls: string[] = [];
+    const claude = await startClaudeUpstream((req, res) => {
+      requestedUrls.push(req.url ?? "");
+      expect(req.headers["anthropic-api-key"]).toBe("relative-models-token");
+
+      if (req.url !== "/anthropic/models") {
+        writeJsonResponse(res, { error: "not found" }, 404);
+        return;
+      }
+
+      writeJsonResponse(res, { data: [{ id: "relative-claude-model" }] });
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claude.url}/anthropic`,
+          api_key: "relative-models-token"
+        }
+      }
+    });
+
+    const { body } = await fetchJson<{
+      models: string[];
+      error: string | null;
+    }>(`${app.url}/api/claude/models`, "GET");
+
+    expect(requestedUrls).toEqual([
+      "/anthropic/v1/models",
+      "/anthropic/models"
+    ]);
+    expect(body).toMatchObject({
+      models: ["relative-claude-model"],
+      error: null
+    });
+  });
+
+  it("does not hide Claude authentication failures behind path fallback", async () => {
+    const requestedUrls: string[] = [];
+    const claude = await startClaudeUpstream((req, res) => {
+      requestedUrls.push(req.url ?? "");
+      writeJsonResponse(res, { error: "unauthorized" }, 401);
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: `${claude.url}/anthropic`,
+          api_key: "rejected-token"
+        }
+      }
+    });
+
+    const { body } = await fetchJson<{
+      models: string[];
+      error: string | null;
+    }>(`${app.url}/api/claude/models`, "GET");
+
+    expect(requestedUrls).toEqual(["/anthropic/v1/models"]);
+    expect(body.models).toEqual([]);
+    expect(body.error).toBe("上游模型列表不可用：认证失败，状态码 401");
   });
 });

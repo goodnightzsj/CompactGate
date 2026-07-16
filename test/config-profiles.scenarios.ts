@@ -26,7 +26,8 @@ describe("ConfigStore", () => {
     const saved = await store.saveProfile("Local split", {
       primary: {
         base_url: "http://127.0.0.1:9201/v1",
-        api_key: "profile-primary-key"
+        api_key: "profile-primary-key",
+        reasoning_effort: "xhigh"
       },
       compact: {
         base_url: "http://127.0.0.1:9202/v1",
@@ -83,6 +84,7 @@ describe("ConfigStore", () => {
     expect(applied.profile_scopes?.codex?.active_profile_id).toBe(profileId);
     expect(applied.primary.base_url).toBe("http://127.0.0.1:9201/v1");
     expect(applied.primary.api_key).toBe("profile-primary-key");
+    expect(applied.primary.reasoning_effort).toBe("xhigh");
     expect(applied.compact.model_override).toBe("profile-compact-model");
     expect(applied.claude.compact.base_url).toBe("https://api.anthropic.com");
     expect(applied.route_url_presets).toEqual(saved.route_url_presets);
@@ -114,7 +116,8 @@ describe("ConfigStore", () => {
 
     await store.updateProfile(profileId ?? "", "Local split updated", {
       primary: {
-        base_url: "http://127.0.0.1:9401/v1"
+        base_url: "http://127.0.0.1:9401/v1",
+        reasoning_effort: "max"
       },
       compact: {
         model_override: "updated-profile-compact-model"
@@ -126,7 +129,8 @@ describe("ConfigStore", () => {
     expect(updatedProfile?.config).toMatchObject({
       primary: {
         base_url: "http://127.0.0.1:9401/v1",
-        api_key: "profile-primary-key"
+        api_key: "profile-primary-key",
+        reasoning_effort: "max"
       },
       compact: {
         model_override: "updated-profile-compact-model"

@@ -7,6 +7,7 @@ import type {
 import {
   ConfigImportExportPanel
 } from "./ConfigImportExportPanel.js";
+import { CONFIG_TABS } from "./config-tabs.js";
 import { ConfigModelPanel } from "./ConfigModelPanel.js";
 import { ConfigPreviewPanel } from "./ConfigPreviewPanel.js";
 import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
@@ -80,15 +81,6 @@ type ConfigPageProps = {
   portable: ConfigPagePortableProps;
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
 };
-
-const CONFIG_TABS: Array<{ id: ConfigTab; label: string }> = [
-  { id: "profiles", label: "档案" },
-  { id: "routes", label: "路由" },
-  { id: "model", label: "模型" },
-  { id: "logging", label: "日志存储" },
-  { id: "preview", label: "预览" },
-  { id: "portable", label: "导入导出" }
-];
 
 export function ConfigPage({
   config,
@@ -167,6 +159,7 @@ export function ConfigPage({
 
             {tab.configTab === "model" && (
               <ConfigModelPanel
+                config={config}
                 form={form}
                 linkedCompactModel={model.linkedCompactModel}
                 onFormChange={onFormChange}

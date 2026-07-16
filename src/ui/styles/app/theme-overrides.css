@@ -86,12 +86,8 @@
 :root[data-theme] .route-chip.compact { background: var(--amber-soft); color: var(--amber); }
 :root[data-theme] .route-chip.claude { background: var(--jade-soft); color: var(--jade); }
 
-/* Claude model map must follow the active theme after the global tag rules above. */
+/* Claude model map text must follow the active theme after the global tag rules above. */
 :root[data-theme] .claude-model-map-card {
-  border-color: color-mix(in srgb, var(--jade) 28%, var(--hairline));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--jade) 8%, transparent), transparent 44%),
-    var(--surface);
   color: var(--ink);
 }
 
@@ -118,6 +114,12 @@
   border-color: color-mix(in srgb, var(--brick) 34%, var(--hairline));
   background: var(--brick-soft);
   color: var(--brick);
+}
+
+:root[data-theme] .model-fetch-note.is-legacy {
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--hairline));
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 :root[data-theme] .claude-model-map-row {

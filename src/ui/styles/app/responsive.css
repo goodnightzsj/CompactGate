@@ -405,8 +405,7 @@
   .logs-panel,
   .profile-card,
   .route-config-group,
-  .route-config-card,
-  .claude-model-map-card {
+  .route-config-card {
     width: 100%;
     min-width: 0;
     padding: 12px;
@@ -672,8 +671,7 @@
   .logs-panel,
   .profile-card,
   .route-config-group,
-  .route-config-card,
-  .claude-model-map-card {
+  .route-config-card {
     padding: 10px;
   }
 

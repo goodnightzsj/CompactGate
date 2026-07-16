@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { PageMode, StudioPage } from "../app-types.js";
+import type { ConfigTab } from "../config/types.js";
 import {
   isFormDirty,
   renderLinkedModel
@@ -23,12 +24,16 @@ import {
 
 export function useStudioPageModels({
   currentPage,
+  configTab,
   healthMode,
-  pageMode
+  pageMode,
+  onConfigTabChange
 }: {
   currentPage: StudioPage;
+  configTab: ConfigTab;
   healthMode: boolean;
   pageMode: PageMode;
+  onConfigTabChange: (tab: ConfigTab) => void;
 }): {
   pageOutlet: StudioPageOutletProps;
   profileDeleteDialog: ProfileDeleteDialogHostProps | null;
@@ -110,10 +115,12 @@ export function useStudioPageModels({
       configPage: buildConfigPageModel({
         config,
         configActions,
+        configTab,
         form,
         hasPendingChanges,
         linkedCompactModel,
-        setForm
+        setForm,
+        onConfigTabChange
       }),
       logsPage: buildLogsPageModel({
         logFeed,

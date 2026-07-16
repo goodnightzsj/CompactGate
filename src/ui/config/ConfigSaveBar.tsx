@@ -26,7 +26,12 @@ export function ConfigSaveBar({
         <strong>{saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}</strong>
         <span>{applyTarget.hint}</span>
       </div>
-      <button type="button" className="btn btn-primary" disabled={saveState === "saving"} onClick={onSaveConfig}>
+      <button
+        type="button"
+        className="btn btn-primary"
+        disabled={saveState === "saving" || !hasPendingChanges}
+        onClick={onSaveConfig}
+      >
         {saveButtonLabel(saveState, hasPendingChanges, applyTarget.savesActiveProfiles)}
       </button>
     </aside>

@@ -52,7 +52,8 @@ export function buildPublicConfig({
       api_key_source: primaryCredential.apiKeySource,
       active_api_key_env: primaryCredential.activeApiKeyEnv,
       active_credential_scope: primaryCredential.activeCredentialScope,
-      model_override: config.primary.model_override ?? ""
+      model_override: config.primary.model_override ?? "",
+      reasoning_effort: config.primary.reasoning_effort
     },
     compact: {
       base_url: config.compact.base_url,

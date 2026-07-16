@@ -109,15 +109,11 @@ export class PrimaryFailoverState {
 
     const result = normalizeResult(resultOrStatus, maybeErrorSummary);
     const health = this.health.get(selection.profileId);
-    if (!health) {
+    if (!health || selection.generation !== this.generation) {
       return;
     }
 
     health.inFlight = Math.max(0, health.inFlight - 1);
-    if (selection.generation !== this.generation) {
-      return;
-    }
-
     const now = this.now();
     const category = classifyPrimaryRouteResult(result);
     const staleSuccess = category === "success" && selection.healthVersion !== health.version;

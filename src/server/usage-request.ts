@@ -13,7 +13,7 @@ export function extractRequestMetadata(pathname: string, rawBody: Buffer): Reque
   return {
     endpoint,
     requestType: parsed?.stream === true ? "stream" : "http",
-    reasoningEffort: extractReasoningEffort(parsed),
+    reasoningEffort: extractReasoningEffort(endpoint, parsed),
     requestSummary: extractRequestSummary(endpoint, parsed)
   };
 }
@@ -37,21 +37,27 @@ function normalizeEndpoint(pathname: string): string {
   return pathname || "/";
 }
 
-function extractReasoningEffort(parsed: Record<string, unknown> | null): string | null {
+function extractReasoningEffort(
+  endpoint: string,
+  parsed: Record<string, unknown> | null
+): string | null {
   if (!parsed) {
     return null;
+  }
+
+  const nestedReasoningEffort = isRecord(parsed.reasoning)
+    ? readTrimmedString(parsed.reasoning.effort)
+    : null;
+  if (endpoint === "/responses" && nestedReasoningEffort) {
+    return nestedReasoningEffort;
   }
 
   if (typeof parsed.reasoning_effort === "string" && parsed.reasoning_effort.trim().length > 0) {
     return parsed.reasoning_effort;
   }
 
-  if (
-    isRecord(parsed.reasoning) &&
-    typeof parsed.reasoning.effort === "string" &&
-    parsed.reasoning.effort.trim().length > 0
-  ) {
-    return parsed.reasoning.effort;
+  if (nestedReasoningEffort) {
+    return nestedReasoningEffort;
   }
 
   const outputConfigEffort = readOutputConfigEffort(parsed);

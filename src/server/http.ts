@@ -18,6 +18,7 @@ import {
 } from "./http-utils.js";
 import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
 import { proxyOpenAiRequest } from "./openai-proxy.js";
+import { fetchOpenAiModels } from "./openai-models.js";
 import { PrimaryFailoverState } from "./primary-failover.js";
 import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
@@ -133,6 +134,7 @@ async function routeRequest(
         captureWriter,
         studioEvents,
         fetchClaudeModels,
+        fetchOpenAiModels,
         primaryFailover
       );
       return;

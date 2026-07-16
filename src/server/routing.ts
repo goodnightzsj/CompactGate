@@ -48,22 +48,19 @@ export function deriveCompactModel(sourceModel: string, config: CompactGateConfi
   return config.compact.model_template.replaceAll("{model}", linkedSource);
 }
 
-export function rewritePrimaryBody(rawBody: Buffer, config: CompactGateConfig): RewriteResult {
+export function rewritePrimaryBody(
+  rawBody: Buffer,
+  config: CompactGateConfig,
+  endpoint?: string
+): RewriteResult {
   const modelOverride = config.primary.model_override?.trim();
-  if (!modelOverride) {
-    const extracted = extractJsonModel(rawBody);
-    return {
-      sourceModel: extracted.sourceModel,
-      targetModel: extracted.sourceModel,
-      body: rawBody,
-      bodyRewritten: false,
-      streamRemoved: false
-    };
-  }
+  const reasoningEffort = isResponsesEndpoint(endpoint)
+    ? config.primary.reasoning_effort
+    : "";
 
   const parsed = parseJsonRecord(rawBody);
   const sourceModel = typeof parsed?.model === "string" ? parsed.model : null;
-  if (!parsed || sourceModel === null) {
+  if (!parsed) {
     return {
       sourceModel,
       targetModel: sourceModel,
@@ -73,15 +70,39 @@ export function rewritePrimaryBody(rawBody: Buffer, config: CompactGateConfig): 
     };
   }
 
-  parsed.model = modelOverride;
+  let bodyRewritten = false;
+  let targetModel = sourceModel;
+
+  if (modelOverride && sourceModel !== null) {
+    targetModel = modelOverride;
+    if (sourceModel !== modelOverride) {
+      parsed.model = modelOverride;
+      bodyRewritten = true;
+    }
+  }
+
+  if (reasoningEffort) {
+    const currentReasoning = isRecord(parsed.reasoning) ? parsed.reasoning : null;
+    if (currentReasoning?.effort !== reasoningEffort) {
+      parsed.reasoning = {
+        ...(currentReasoning ?? {}),
+        effort: reasoningEffort
+      };
+      bodyRewritten = true;
+    }
+  }
 
   return {
     sourceModel,
-    targetModel: modelOverride,
-    body: Buffer.from(JSON.stringify(parsed)),
-    bodyRewritten: sourceModel !== modelOverride,
+    targetModel,
+    body: bodyRewritten ? Buffer.from(JSON.stringify(parsed)) : rawBody,
+    bodyRewritten,
     streamRemoved: false
   };
+}
+
+function isResponsesEndpoint(endpoint: string | undefined): boolean {
+  return endpoint === undefined || endpoint === "/responses" || endpoint === "/v1/responses";
 }
 
 export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): RewriteResult {
@@ -151,7 +172,7 @@ export function previewRoute(
   const upstream = buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
 
   if (route === "primary") {
-    const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config);
+    const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config, parsedUrl.pathname);
     return {
       route,
       method,

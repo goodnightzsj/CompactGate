@@ -1,50 +1,27 @@
-import { useId, useState } from "react";
+import { useId } from "react";
 import type { ClaudeModelMap, ClaudeModelMapRole } from "../../shared/types.js";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
-import { api, errorSummary } from "../shared/api.js";
 import { CLAUDE_MODEL_MAP_META, CLAUDE_MODEL_MAP_ROLES, normalizeClaudeModelMap } from "./model-map.js";
-
-type ClaudeModelsResponse = { models: string[]; upstream_host: string; error: string | null };
+import { useUpstreamModels } from "./useUpstreamModels.js";
 
 const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 
 export function ClaudeModelMapEditor({
   modelMap,
+  sourceKey,
   onModelMapChange
 }: {
   modelMap: ClaudeModelMap;
+  sourceKey: string;
   onModelMapChange: (role: ClaudeModelMapRole, value: string) => void;
 }) {
   const inputIdPrefix = useId();
-  const [models, setModels] = useState<string[]>([]);
-  const [fetchState, setFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
-  const [fetchMeta, setFetchMeta] = useState<string | null>(null);
-
-  async function fetchModels() {
-    setFetchState("loading");
-    setFetchMeta(null);
-
-    try {
-      const payload = await api<ClaudeModelsResponse>("/api/claude/models");
-      setModels(payload.models);
-      setFetchState(payload.error ? "error" : "loaded");
-      setFetchMeta(
-        payload.error
-          ? `${payload.upstream_host}: ${payload.error}`
-          : payload.models.length > 0
-            ? `已从 ${payload.upstream_host} 读取 ${payload.models.length} 个模型。`
-            : `${payload.upstream_host} 没有返回可用模型。`
-      );
-    } catch (error) {
-      setFetchState("error");
-      const message = errorSummary(error);
-      setFetchMeta(
-        message === "API endpoint not found."
-          ? "后端模型接口尚未加载，请重启 CompactGate 服务后重试。"
-          : message
-      );
-    }
-  }
+  const {
+    models,
+    fetchState,
+    fetchMeta,
+    fetchModels
+  } = useUpstreamModels("/api/claude/models", sourceKey);
 
   const normalizedModelMap = normalizeClaudeModelMap(modelMap);
   const filledCount = CLAUDE_MODEL_MAP_ROLES.filter((role) => normalizedModelMap[role].trim().length > 0).length;
@@ -58,7 +35,7 @@ export function ClaudeModelMapEditor({
           <p className="eyebrow">Claude 模型映射</p>
           <h3 id="claude-model-map-title">Claude 角色模型映射</h3>
           <p>
-            切换 Claude 配置档案时，这里会覆盖普通会话、Opus、Sonnet、Haiku、推理和子代理的目标模型。
+            模型目录读取已保存的 Claude Primary 上游；这里可覆盖普通会话、Opus、Sonnet、Haiku、推理和子代理的目标模型。
             未识别的请求会回退到默认槽位。
           </p>
         </div>
@@ -76,7 +53,12 @@ export function ClaudeModelMapEditor({
       </div>
 
       {fetchMeta && (
-        <p className={`model-fetch-note ${fetchState === "error" ? "is-error" : ""}`}>{fetchMeta}</p>
+        <p
+          className={`model-fetch-note ${fetchState === "error" ? "is-error" : ""}`}
+          aria-live="polite"
+        >
+          {fetchMeta}
+        </p>
       )}
 
       <div className="claude-model-map-grid">

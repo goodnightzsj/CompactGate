@@ -78,6 +78,27 @@ describe("UI config form state", () => {
     expect(formFromConfig(store.toPublicConfig()).primaryModelOverride).toBe("");
   });
 
+  it("round-trips the Primary reasoning effort through patch and export drafts", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.patch({
+      primary: { reasoning_effort: "high" }
+    });
+    const form = formFromConfig(store.toPublicConfig());
+
+    expect(form.primaryReasoningEffort).toBe("high");
+    expect(formToPatch(form).primary).toMatchObject({ reasoning_effort: "high" });
+    expect(applyDraftToConfigExport(store.get(), {
+      ...form,
+      primaryReasoningEffort: "max"
+    }).primary.reasoning_effort).toBe("max");
+    expect(isFormDirty(store.toPublicConfig(), form)).toBe(false);
+    expect(isFormDirty(store.toPublicConfig(), {
+      ...form,
+      primaryReasoningEffort: "low"
+    })).toBe(true);
+  });
+
   it("round-trips bounded logging storage settings in readable units", async () => {
     const dir = await makeConfigDir();
     const store = await ConfigStore.load(path.join(dir, "compactgate.json"));

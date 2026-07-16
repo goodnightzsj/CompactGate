@@ -11,10 +11,45 @@ import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "../src/server/primary-failover.js";
-import type { CompactGateConfig, SavedConfigProfile } from "../src/shared/types.js";
+import type {
+  CompactGateConfig,
+  PrimaryReasoningEffort,
+  SavedConfigProfile
+} from "../src/shared/types.js";
 import { compactUpstreamBaseUrl, deriveCompactModel } from "../src/server/routing.js";
 
 describe("PrimaryFailoverState", () => {
+  it("applies the selected Codex profile reasoning effort to Responses plans", () => {
+    const config = configWithCodexProfiles([
+      codexProfile(
+        "codex-reasoning",
+        "Codex reasoning",
+        "http://127.0.0.1:9101/v1",
+        DEFAULT_CONFIG.primary.api_key,
+        "xhigh"
+      )
+    ]);
+    const state = new PrimaryFailoverState({ random: () => 0 });
+    const plan = buildPrimaryOpenAiProxyPlan({
+      config,
+      url: new URL("http://compactgate.local/v1/responses"),
+      headers: { "content-type": "application/json" },
+      rawBody: Buffer.from(JSON.stringify({
+        model: "gpt-5.6-sol",
+        input: "redacted",
+        reasoning: { summary: "auto" }
+      })),
+      endpoint: "/responses",
+      compactionBridge: new CompactionBridgeStore(),
+      primaryFailover: state
+    });
+
+    expect(plan.primarySelection?.profileId).toBe("codex-reasoning");
+    expect(JSON.parse(plan.upstreamBody.toString("utf8"))).toMatchObject({
+      reasoning: { summary: "auto", effort: "xhigh" }
+    });
+  });
+
   it("releases its reservation when local bridge validation rejects the plan", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
@@ -164,6 +199,59 @@ describe("PrimaryFailoverState", () => {
     expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
       quarantineUntil: 0
     });
+  });
+
+  it("resets primary health when a profile reasoning effort changes", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "xhigh"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "key-b", "low")
+    ]);
+    const { state } = createState();
+
+    recordModelRequests(
+      state,
+      config,
+      "gpt-5.5",
+      11,
+      400,
+      "Upstream returned HTTP 400: model gpt-5.5 is unsupported for xhigh reasoning."
+    );
+    const before = state.preview(config, { model: "gpt-5.5" });
+    expect(before.profileId).toBe("codex-b");
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")?.modelCooldowns)
+      .toHaveLength(1);
+
+    const updatedConfig = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "low"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "key-b", "low")
+    ]);
+
+    const after = state.preview(updatedConfig, { model: "gpt-5.5" });
+    expect(after.profileId).toBe("codex-a");
+    expect(after.generation).toBe(before.generation + 1);
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")?.modelCooldowns)
+      .toEqual([]);
+  });
+
+  it("does not let an old generation completion decrement current in-flight work", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "xhigh")
+    ]);
+    const state = new PrimaryFailoverState({ random: () => 0 });
+    const oldSelection = state.select(config, { model: "gpt-5.5" });
+    const updatedConfig = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "low")
+    ]);
+    const currentSelection = state.select(updatedConfig, { model: "gpt-5.5" });
+
+    expect(currentSelection.generation).toBe(oldSelection.generation + 1);
+    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(1);
+
+    state.recordResult(oldSelection, 200);
+
+    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(1);
+    state.recordResult(currentSelection, 200);
+    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(0);
   });
 
   it("preserves primary health when only the active profile rotates", () => {
@@ -719,7 +807,8 @@ function codexProfile(
   id: string,
   name: string,
   primaryBaseUrl: string,
-  primaryApiKey = DEFAULT_CONFIG.primary.api_key
+  primaryApiKey = DEFAULT_CONFIG.primary.api_key,
+  reasoningEffort: PrimaryReasoningEffort = DEFAULT_CONFIG.primary.reasoning_effort
 ): SavedConfigProfile {
   return {
     id,
@@ -730,7 +819,8 @@ function codexProfile(
       primary: {
         ...DEFAULT_CONFIG.primary,
         base_url: primaryBaseUrl,
-        api_key: primaryApiKey
+        api_key: primaryApiKey,
+        reasoning_effort: reasoningEffort
       },
       compact: { ...DEFAULT_CONFIG.compact }
     }

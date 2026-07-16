@@ -129,7 +129,9 @@ wire_api = "responses"
   "listen": "127.0.0.1:7865",
   "primary": {
     "base_url": "https://primary.example/v1",
-    "api_key_env": "PRIMARY_API_KEY"
+    "api_key_env": "PRIMARY_API_KEY",
+    "model_override": "",
+    "reasoning_effort": ""
   },
   "compact": {
     "base_url": "https://compact.example/v1",
@@ -166,6 +168,8 @@ wire_api = "responses"
 ### `primary`
 
 普通请求走的主上游。
+
+`primary.model_override` 非空时覆盖请求模型；`primary.reasoning_effort` 可设为 `low`、`medium`、`high`、`xhigh` 或 `max`，仅对 Responses API 写入 `reasoning.effort`。两者留空都表示保留客户端请求。旧配置中的 `none` 仍会按原值转发，但不会出现在 Studio 下拉选项中；需要取消覆盖时应改为“跟随请求”。
 
 ### `compact`
 
@@ -224,10 +228,15 @@ my-compact-model
 - 修改主上游和 compact 上游地址
 - 切换 `split` / `primary` 模式
 - 切换 linked / custom 模型改写方式
+- 从已保存的 Primary/Claude 上游按需拉取模型并选择思考强度，或保留自定义兼容模型
 - 直接保存 API Key
 - 预览某条请求会走哪条路由
 - 查看健康状态
 - 实时查看最近日志
+
+配置页六个 Tab 分别使用 `/config/profiles`、`/config/routes`、`/config/model`、`/config/logging`、`/config/preview` 和 `/config/portable`，可通过浏览器前进、后退回顾切换历史。
+
+模型目录不会在页面加载时自动联网。CompactGate 会根据已保存的 base URL 生成 OpenAI-compatible `/v1/models` 或 `/models` 候选；仅当端点返回 404/405 时尝试下一条路径。Primary 使用 Bearer 凭据，Claude 保留 Anthropic 兼容鉴权头。修改 URL 或凭据草稿后需先保存，再拉取对应上游目录。
 
 日志是实时刷新的，使用的是 SSE。
 
@@ -236,6 +245,7 @@ my-compact-model
 - 路由类型
 - 状态码
 - 模型映射
+- 实际发送给 Primary Responses 上游的 `reasoning.effort`
 - 上游主机
 - 耗时
 - request id

@@ -12,7 +12,10 @@ describe("ConfigStore", () => {
     const store = await ConfigStore.load(configPath);
 
     const next = await store.patch({
-      primary: { base_url: "http://127.0.0.1:9001/v1" },
+      primary: {
+        base_url: "http://127.0.0.1:9001/v1",
+        reasoning_effort: "high"
+      },
       compact: {
         base_url: "http://127.0.0.1:9002/v1",
         model_mode: "custom",
@@ -23,6 +26,8 @@ describe("ConfigStore", () => {
     });
 
     expect(next.primary.base_url).toBe("http://127.0.0.1:9001/v1");
+    expect(next.primary.reasoning_effort).toBe("high");
+    expect(store.toPublicConfig().primary.reasoning_effort).toBe("high");
     expect(next.compact.model_mode).toBe("custom");
     expect(next.compact.model_override).toBe("manual-compact");
     expect(next.logging.keep_recent).toBe(17);
@@ -35,7 +40,10 @@ describe("ConfigStore", () => {
       ])
     );
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
-      primary: { base_url: "http://127.0.0.1:9001/v1" },
+      primary: {
+        base_url: "http://127.0.0.1:9001/v1",
+        reasoning_effort: "high"
+      },
       compact: { model_override: "manual-compact" },
       logging: { persist_body: true },
       primary_failover: { auto_schedule: false }
@@ -49,6 +57,18 @@ describe("ConfigStore", () => {
 
     expect(store.get().logging.persist_body).toBe(false);
     expect(store.toPublicConfig().logging.persist_body).toBe(false);
+    expect(store.get().primary.reasoning_effort).toBe("");
+  });
+
+  it("rejects unsupported primary reasoning effort values", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    await expect(store.patch({
+      primary: { reasoning_effort: "ultra" }
+    })).rejects.toThrow(
+      "primary.reasoning_effort must be empty, none, low, medium, high, xhigh, or max."
+    );
   });
 
   it("rejects listen ports with trailing characters", async () => {

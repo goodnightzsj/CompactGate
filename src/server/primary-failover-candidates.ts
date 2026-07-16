@@ -34,6 +34,7 @@ export function candidateSignature(candidates: PrimaryCandidate[]): string {
     candidate.config.primary.base_url,
     candidate.config.primary.api_key_env,
     candidate.config.primary.model_override ?? "",
+    candidate.config.primary.reasoning_effort,
     primaryCredentialSignature(candidate.config)
   ].join("|"));
   return candidateParts.join("::");

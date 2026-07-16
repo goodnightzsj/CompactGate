@@ -1,4 +1,9 @@
-import type { CompactGateConfig, PublicConfig, RouteUrlPresetKind } from "../../shared/types.js";
+import type {
+  CompactGateConfig,
+  PublicConfig,
+  RouteUrlPresetKind,
+  UpstreamConfig
+} from "../../shared/types.js";
 import { emptyClaudeModelMap, normalizeClaudeModelMap } from "./model-map.js";
 import type { ConfigFormState } from "./types.js";
 
@@ -12,6 +17,7 @@ export function emptyForm(): ConfigFormState {
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
     primaryModelOverride: "",
+    primaryReasoningEffort: "",
     codexCompactBaseUrl: "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -48,6 +54,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
     primaryModelOverride: config.primary.model_override ?? "",
+    primaryReasoningEffort: config.primary.reasoning_effort,
     codexCompactBaseUrl: config.compact.base_url,
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -83,7 +90,8 @@ export function formToPatch(form: ConfigFormState) {
     base_url: form.codexPrimaryBaseUrl,
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
-    model_override: form.primaryModelOverride
+    model_override: form.primaryModelOverride,
+    reasoning_effort: form.primaryReasoningEffort
   };
   const compact = {
     base_url: form.codexCompactBaseUrl,
@@ -145,7 +153,8 @@ export function applyDraftToConfigExport(
     primary: {
       ...config.primary,
       base_url: form.codexPrimaryBaseUrl,
-      model_override: form.primaryModelOverride
+      model_override: form.primaryModelOverride,
+      reasoning_effort: form.primaryReasoningEffort
     },
     compact: {
       ...config.compact,
@@ -239,6 +248,7 @@ function draftComparisonState(form: ConfigFormState) {
     clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
     primaryModelOverride: form.primaryModelOverride,
+    primaryReasoningEffort: form.primaryReasoningEffort,
     codexCompactBaseUrl: form.codexCompactBaseUrl,
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,
@@ -283,7 +293,7 @@ function credentialPresetPatch(value: string): { credential_preset_id?: string }
 }
 
 function applyApiKeyDraft(
-  target: CompactGateConfig["primary"] | CompactGateConfig["compact"],
+  target: UpstreamConfig,
   value: string,
   shouldClear: boolean,
   presets: CompactGateConfig["route_url_presets"],

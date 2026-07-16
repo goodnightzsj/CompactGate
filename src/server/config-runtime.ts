@@ -2,7 +2,9 @@ import type {
   ClaudeModelMap,
   CompactGateRuntimeConfig,
   CompactModelMode,
-  CompactUpstreamMode
+  CompactUpstreamMode,
+  PrimaryReasoningEffort,
+  UpstreamConfig
 } from "../shared/types.js";
 import { CLAUDE_MODEL_MAP_ROLES, emptyClaudeModelMap } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
@@ -29,6 +31,7 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
   validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
+  validatePrimaryReasoningEffort(config.primary.reasoning_effort);
   validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
   validateClaudeModelMap(config.claude.model_map);
@@ -119,7 +122,7 @@ export function mergeRuntimeConfig(
 
   return {
     listen: readString(patchRecord.listen, base.listen),
-    primary: mergeUpstreamConfig(base.primary, readChild(patchRecord.primary)),
+    primary: mergePrimaryConfig(base.primary, readChild(patchRecord.primary)),
     compact: {
       base_url: readString(compactPatch.base_url, base.compact.base_url),
       api_key: readSensitiveString(compactPatch.api_key, base.compact.api_key),
@@ -209,6 +212,14 @@ function validateModelMode(value: string): asserts value is CompactModelMode {
   }
 }
 
+function validatePrimaryReasoningEffort(value: string): asserts value is PrimaryReasoningEffort {
+  if (!["", "none", "low", "medium", "high", "xhigh", "max"].includes(value)) {
+    throw new ConfigError(
+      "primary.reasoning_effort must be empty, none, low, medium, high, xhigh, or max."
+    );
+  }
+}
+
 function validateOptionalModelName(value: string, field: string): void {
   if (value.trim().length > 256) {
     throw new ConfigError(`${field} must be 256 characters or fewer.`);
@@ -228,14 +239,27 @@ function validateUpstreamMode(value: string): asserts value is CompactUpstreamMo
 }
 
 function mergeUpstreamConfig(
-  base: CompactGateRuntimeConfig["primary"],
+  base: UpstreamConfig,
   patch: Record<string, unknown>
-): CompactGateRuntimeConfig["primary"] {
+): UpstreamConfig {
   return {
     base_url: readString(patch.base_url, base.base_url),
     api_key: readSensitiveString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
     model_override: readString(patch.model_override, base.model_override ?? "")
+  };
+}
+
+function mergePrimaryConfig(
+  base: CompactGateRuntimeConfig["primary"],
+  patch: Record<string, unknown>
+): CompactGateRuntimeConfig["primary"] {
+  return {
+    ...mergeUpstreamConfig(base, patch),
+    reasoning_effort: readString(
+      patch.reasoning_effort,
+      base.reasoning_effort
+    ) as PrimaryReasoningEffort
   };
 }
 

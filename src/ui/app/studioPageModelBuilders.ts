@@ -5,7 +5,7 @@ import type {
   RequestLogEntry,
   RouteKind
 } from "../../shared/types.js";
-import type { ConfigFormState } from "../config/types.js";
+import type { ConfigFormState, ConfigTab } from "../config/types.js";
 import type { ConfigActions } from "../hooks/useConfigActions.js";
 import type { useHealthRefresh } from "../hooks/useHealthRefresh.js";
 import type { useLogFeed } from "../hooks/useLogFeed.js";
@@ -88,25 +88,31 @@ export function buildRoutesPageModel({
 export function buildConfigPageModel({
   config,
   configActions,
+  configTab,
   form,
   hasPendingChanges,
   linkedCompactModel,
-  setForm
+  setForm,
+  onConfigTabChange
 }: {
   config: PublicConfig | null;
   configActions: ConfigActions;
+  configTab: ConfigTab;
   form: ConfigFormState;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
+  onConfigTabChange: (tab: ConfigTab) => void;
 }): ConfigWorkspaceProps {
   return {
     actions: configActions,
     config,
+    configTab,
     form,
     hasPendingChanges,
     linkedCompactModel,
-    onFormChange: setForm
+    onFormChange: setForm,
+    onConfigTabChange
   };
 }
 

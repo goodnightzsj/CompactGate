@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { CompactGateConfig } from "../shared/types.js";
+import type { FetchClaudeModels } from "./claude-models.js";
 import { ConfigError, type ConfigStore } from "./config.js";
 import { healthForConfig } from "./health.js";
 import {
@@ -14,18 +14,13 @@ import {
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
+import type { FetchOpenAiModels } from "./openai-models.js";
 import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "./primary-failover.js";
 import { previewRoute, routeForPath } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
-
-export type FetchClaudeModels = (config: CompactGateConfig) => Promise<{
-  models: string[];
-  upstream_host: string;
-  error: string | null;
-}>;
 
 export async function handleRuntimeApi(
   req: IncomingMessage,
@@ -36,6 +31,7 @@ export async function handleRuntimeApi(
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
   fetchClaudeModels: FetchClaudeModels,
+  fetchOpenAiModels: FetchOpenAiModels,
   primaryFailover: PrimaryFailoverState
 ): Promise<boolean> {
   if (req.method === "POST" && url.pathname === "/api/test-route") {
@@ -77,6 +73,11 @@ export async function handleRuntimeApi(
 
   if (req.method === "GET" && url.pathname === "/api/claude/models") {
     sendJson(res, 200, await fetchClaudeModels(configStore.get()));
+    return true;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/openai/models") {
+    sendJson(res, 200, await fetchOpenAiModels(configStore.get()));
     return true;
   }
 

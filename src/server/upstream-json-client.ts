@@ -68,8 +68,8 @@ export function requestJson(
 
         const body = Buffer.concat(chunks);
         const status = response.statusCode ?? 502;
-        if (status >= 400) {
-          rejectOnce(new UpstreamStatusError(status, `Claude models request failed with status ${status}.`));
+        if (status < 200 || status >= 300) {
+          rejectOnce(new UpstreamStatusError(status, `Upstream JSON request failed with status ${status}.`));
           return;
         }
 
@@ -80,10 +80,10 @@ export function requestJson(
         }
       });
       response.once("error", rejectOnce);
-      response.once("aborted", () => rejectOnce(new Error("Claude models response aborted before completion.")));
+      response.once("aborted", () => rejectOnce(new Error("Upstream JSON response aborted before completion.")));
     });
 
-    upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Claude models request timed out.")));
+    upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Upstream JSON request timed out.")));
     upstreamReq.once("error", rejectOnce);
     upstreamReq.end();
   });

@@ -412,6 +412,13 @@
   border-color: color-mix(in srgb, var(--amber) 40%, var(--hairline));
 }
 
+.config-save-bar .btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  box-shadow: none;
+  transform: none;
+}
+
 .config-save-copy {
   display: grid;
   gap: 2px;
@@ -1161,18 +1168,188 @@
   color: var(--ink);
 }
 
-/* Claude model map follows the same operator-console theme tokens as the rest of Config. */
+/* Model configuration is one continuous workspace, split by routing responsibility. */
+.model-config-workspace {
+  display: grid;
+  min-width: 0;
+}
+
+.model-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+  min-width: 0;
+}
+
+.model-config-block {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  align-content: start;
+  padding: 20px 0 22px;
+}
+
+.model-primary-block {
+  padding-right: 22px;
+  border-right: 1px solid var(--hairline);
+}
+
+.model-compact-block {
+  padding-left: 22px;
+}
+
+.model-config-block-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.model-config-block-head p:last-child {
+  max-width: 62ch;
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.model-config-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.primary-model-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.8fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.primary-model-controls .custom-select-trigger {
+  min-height: 48px;
+}
+
+.primary-model-controls .custom-select-copy strong,
+.primary-model-controls .custom-select-copy small {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.model-precision-field,
+.compact-model-mode {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.model-effective-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border-block: 1px solid var(--hairline);
+  background: var(--paper-warm);
+}
+
+.model-effective-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.model-effective-grid > div + div {
+  border-left: 1px solid var(--hairline);
+}
+
+.model-effective-grid dt {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.model-effective-grid dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.compact-model-mode .toggle-group {
+  width: 100%;
+}
+
+.compact-model-mode .toggle-group button {
+  flex: 1 1 0;
+}
+
+.compact-model-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Claude model map continues the workspace without adding another card shell. */
 .claude-model-map-card {
   display: grid;
   gap: 12px;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--jade) 28%, var(--hairline));
-  border-radius: var(--radius-md);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--jade) 8%, transparent), transparent 44%),
-    var(--surface);
+  padding: 22px 0 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
+}
+
+@media (max-width: 980px) {
+  .model-config-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-primary-block {
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .model-compact-block {
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .model-config-block {
+    padding-block: 16px 18px;
+  }
+
+  .model-config-block-head,
+  .primary-model-controls,
+  .compact-model-control,
+  .model-effective-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-config-block-head {
+    display: grid;
+  }
+
+  .model-config-actions {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .model-effective-grid > div + div {
+    border-top: 1px solid var(--hairline);
+    border-left: 0;
+  }
 }
 
 .claude-model-map-head {
@@ -1231,6 +1408,12 @@
   border-color: color-mix(in srgb, var(--brick) 34%, var(--hairline));
   background: var(--brick-soft);
   color: var(--brick);
+}
+
+.model-fetch-note.is-legacy {
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--hairline));
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .claude-model-map-grid {

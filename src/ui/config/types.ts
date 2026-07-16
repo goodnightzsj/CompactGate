@@ -1,4 +1,9 @@
-import type { ClaudeModelMap, ConfigProfileScope, PublicConfig } from "../../shared/types.js";
+import type {
+  ClaudeModelMap,
+  ConfigProfileScope,
+  PrimaryReasoningEffort,
+  PublicConfig
+} from "../../shared/types.js";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -24,6 +29,7 @@ export type ConfigFormState = {
   clearCodexPrimaryApiKey: boolean;
   codexPrimaryCredentialPresetId: string;
   primaryModelOverride: string;
+  primaryReasoningEffort: PrimaryReasoningEffort;
   codexCompactBaseUrl: string;
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;

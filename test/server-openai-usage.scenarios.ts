@@ -272,6 +272,41 @@ describe("CompactGate OpenAI routing", () => {
     expect(entry.first_token_ms).toEqual(expect.any(Number));
   });
 
+  it("logs the reasoning effort actually sent to the Primary upstream", async () => {
+    const captured = { current: null as CapturedRequest | null };
+    const primary = await startCapturedOpenAiUpstream(captured, (_req, res) => {
+      writeJsonResponse(res, { id: "resp_effective_reasoning" });
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url, {
+      primary: {
+        model_override: "",
+        reasoning_effort: "xhigh"
+      }
+    });
+
+    const response = await postJson(app.url, "/v1/responses", {
+      model: "gpt-client",
+      input: "redacted",
+      reasoning_effort: "low",
+      reasoning: { effort: "low", summary: "auto" }
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+    assertCaptured(captured.current);
+    expect(JSON.parse(captured.current.body)).toMatchObject({
+      reasoning: { effort: "xhigh", summary: "auto" }
+    });
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry).toMatchObject({
+      route: "primary",
+      endpoint: "/responses",
+      reasoning_effort: "xhigh"
+    });
+  });
+
   it("retries empty-content upstream stream errors before responding", async () => {
     let attempts = 0;
     const primary = await startUpstream(async (req, res) => {
