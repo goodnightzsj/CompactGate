@@ -133,22 +133,6 @@ export function LoggingStoragePanel({
             <h3 id="logging-settings-title">容量与保留</h3>
             <p>界面使用 MiB 与 GiB，保存时会转换为精确字节数。</p>
           </div>
-          <label className="auto-schedule-switch">
-            <input
-              type="checkbox"
-              checked={form.loggingRedactBody}
-              onChange={(event) =>
-                onFormChange((previous) => ({
-                  ...previous,
-                  loggingRedactBody: event.target.checked
-                }))
-              }
-            />
-            <span className="auto-schedule-track" aria-hidden="true">
-              <span className="auto-schedule-thumb" />
-            </span>
-            <span>正文脱敏</span>
-          </label>
         </div>
 
         <div className="logging-settings-grid">

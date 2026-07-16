@@ -16,6 +16,7 @@ export type CaptureReadResult =
 const DEFAULT_MAX_CAPTURE_BODY_BYTES = 1 * 1024 * 1024;
 const DEFAULT_MAX_CAPTURE_DIR_BYTES = 20 * 1024 * 1024 * 1024;
 const CAPTURE_FILE_PREFIX = "compactgate-capture-";
+const MAX_CAPTURE_FILENAME_CHARS = 240;
 const CAPTURE_FILE_PATTERN = new RegExp(
   `^(?:${CAPTURE_FILE_PREFIX})?\\d{4,}-(?:primary|compact|claude)-[a-z0-9-]+-` +
     "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.json$",
@@ -143,7 +144,7 @@ export class DebugCaptureWriter {
     }
 
     this.sequence += 1;
-    const filename = `${CAPTURE_FILE_PREFIX}${String(this.sequence).padStart(4, "0")}-${record.route}-${sanitizePath(record.path)}-${record.request_id}.json`;
+    const filename = captureFilename(this.sequence, record);
     const absolutePath = path.join(captureDir, filename);
     this.protectedCapturePaths.add(absolutePath);
     try {
@@ -389,6 +390,21 @@ export function serializeBody(
 
 function sanitizePath(pathname: string): string {
   return pathname.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "root";
+}
+
+function captureFilename(sequence: number, record: CaptureRecord): string {
+  const prefix =
+    `${CAPTURE_FILE_PREFIX}${String(sequence).padStart(4, "0")}-${record.route}-`;
+  const suffix = `-${record.request_id}.json`;
+  const maxPathChars = Math.max(
+    1,
+    MAX_CAPTURE_FILENAME_CHARS - prefix.length - suffix.length
+  );
+  const pathSegment =
+    sanitizePath(record.path).slice(0, maxPathChars).replace(/-+$/g, "") ||
+    "root".slice(0, maxPathChars) ||
+    "r";
+  return `${prefix}${pathSegment}${suffix}`;
 }
 
 function normalizeMaxCaptureBodyBytes(value: string | undefined): number {

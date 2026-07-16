@@ -399,4 +399,5 @@ export interface StudioSnapshotEvent {
 
 export interface StudioLogEvent {
   entry: RequestLogEntry;
+  operation: "insert" | "update";
 }

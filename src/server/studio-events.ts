@@ -68,8 +68,14 @@ export class StudioEventBroadcaster {
     }
   }
 
-  broadcastLog(entry: RequestLogEntry): void {
-    this.broadcast("log", { entry: stripLogEntryBodies(entry) });
+  broadcastLog(
+    entry: RequestLogEntry,
+    operation: StudioLogEvent["operation"] = "insert"
+  ): void {
+    this.broadcast("log", {
+      entry: stripLogEntryBodies(entry),
+      operation
+    });
   }
 
   broadcastSnapshot(snapshot: StudioSnapshotEvent): void {

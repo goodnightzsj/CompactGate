@@ -160,16 +160,36 @@ export function mergeLiveLogPage(
   nextEntry: RequestLogEntry,
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
-  hostFilter: string
+  hostFilter: string,
+  operation: "insert" | "update" = "insert"
 ): RequestLogPage {
+  if (operation === "update") {
+    const existingIndex = previous.logs.findIndex(
+      (entry) => entry.request_id === nextEntry.request_id
+    );
+    if (existingIndex < 0) {
+      return previous;
+    }
+
+    const nextLogs = [...previous.logs];
+    nextLogs[existingIndex] = nextEntry;
+    return {
+      ...previous,
+      logs: nextLogs
+    };
+  }
+
   const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
   const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter);
   const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter);
   const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter);
   const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER);
+  const loadedWindowSize = Math.max(previous.limit, previous.logs.length);
   const nextLogs = matchesFilter
     ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
+        .slice(0, loadedWindowSize)
     : previous.logs;
+  const nextTotal = previous.total + (matchesFilter && !duplicate ? 1 : 0);
   const nextRouteCounts = incrementRouteCounts(
     previous.counts,
     nextEntry.route,
@@ -179,8 +199,9 @@ export function mergeLiveLogPage(
   return {
     ...previous,
     logs: nextLogs,
-    total: previous.total + (matchesFilter && !duplicate ? 1 : 0),
+    total: nextTotal,
     all_total: previous.all_total + (duplicate ? 0 : 1),
+    has_more: nextLogs.length < nextTotal,
     counts: nextRouteCounts,
     provider_counts: incrementProviderCounts(
       previous.provider_counts,

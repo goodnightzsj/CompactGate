@@ -20,6 +20,19 @@ afterEach(async () => {
 });
 
 describe("DebugCaptureWriter pruning", () => {
+  it("bounds the generated filename for long request paths", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const record = captureRecord("00000000-0000-0000-0000-000000000007");
+    record.path = `/v1/${"very-long-segment/".repeat(40)}`;
+
+    const capturePath = await writer.write(record);
+
+    expect(capturePath).not.toBeNull();
+    expect(path.basename(capturePath ?? "").length).toBeLessThanOrEqual(240);
+    expect(existsSync(capturePath ?? "")).toBe(true);
+  });
+
   it("does not delete unrelated JSON files from the capture directory", async () => {
     const dir = await makeCaptureDir();
     const unrelatedPath = path.join(dir, "important-user-data.json");

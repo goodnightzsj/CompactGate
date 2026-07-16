@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
 import {
+  applyDraftToConfigExport,
   emptyForm,
   formFromConfig,
   formToPatch,
@@ -95,7 +96,6 @@ describe("UI config form state", () => {
     const form = formFromConfig(config);
 
     expect(form).toMatchObject({
-      loggingRedactBody: false,
       loggingPersistBody: false,
       loggingKeepRecent: 321,
       loggingCaptureDir: "./captures",
@@ -105,7 +105,6 @@ describe("UI config form state", () => {
     });
     expect(formToPatch(form)).toMatchObject({
       logging: {
-        redact_body: false,
         persist_body: false,
         keep_recent: 321,
         capture_dir: "./captures",
@@ -114,6 +113,8 @@ describe("UI config form state", () => {
         max_database_bytes: 768 * 1024 * 1024
       }
     });
+    expect(formToPatch(form).logging).not.toHaveProperty("redact_body");
+    expect(applyDraftToConfigExport(store.get(), form).logging.redact_body).toBe(false);
     expect(isFormDirty(config, form)).toBe(false);
     expect(isFormDirty(config, { ...form, loggingKeepRecent: 322 })).toBe(true);
   });

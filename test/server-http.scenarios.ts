@@ -200,6 +200,9 @@ describe("CompactGate HTTP basics", () => {
       db.close();
     }
 
+    const sse = await openSseStream(`${app.url}/api/events`);
+    await sse.waitForEvent("snapshot");
+
     expect((await fetch(`${app.url}/api/logs/unknown/capture`)).status).toBe(404);
     expect((await fetch(`${app.url}/api/logs/capture-none/capture`)).status).toBe(404);
     expect((await fetch(`${app.url}/api/logs/capture-pending/capture`)).status).toBe(202);
@@ -213,6 +216,15 @@ describe("CompactGate HTTP basics", () => {
       capture_path: null,
       capture_status: "purged"
     });
+    expect(await sse.waitForEvent("log")).toMatchObject({
+      operation: "update",
+      entry: {
+        request_id: "capture-missing",
+        capture_path: null,
+        capture_status: "purged"
+      }
+    });
+    await sse.close();
   });
 
   it("requires confirmation before purging SQLite bodies and preserves metadata rows", async () => {

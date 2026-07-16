@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DebugCaptureWriter } from "../src/server/debug-capture.js";
 import { RequestLogger } from "../src/server/logger.js";
 import { finalizeOpenAiProxyTransaction } from "../src/server/openai-proxy-transaction.js";
@@ -26,6 +26,7 @@ describe("finalizeOpenAiProxyTransaction", () => {
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
     const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"));
     const studioEvents = new StudioEventBroadcaster();
+    const broadcastSpy = vi.spyOn(studioEvents, "broadcastLog");
     let finishCapture: (capturePath: string | null) => void = () => {
       throw new Error("Expected capture write to be pending.");
     };
@@ -94,6 +95,9 @@ describe("finalizeOpenAiProxyTransaction", () => {
         capturePath: path.join(dir, "capture.json"),
         captureStatus: "present"
       });
+      expect(
+        broadcastSpy.mock.calls.map((call) => (call as unknown as unknown[])[1])
+      ).toEqual(["insert", "update"]);
     } finally {
       logger.close();
       studioEvents.close();

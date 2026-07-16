@@ -867,10 +867,15 @@ describe("getByRequestId", () => {
     try {
       const indexes = db.prepare("PRAGMA index_list(request_logs)").all() as Array<{
         name: string;
+        partial: number;
         unique: number;
       }>;
       expect(indexes.find((index) => index.name === "idx_request_logs_request_id")).toMatchObject({
         unique: 0
+      });
+      expect(indexes.find((index) => index.name === "idx_request_logs_capture_path")).toMatchObject({
+        unique: 0,
+        partial: 1
       });
     } finally {
       db.close();

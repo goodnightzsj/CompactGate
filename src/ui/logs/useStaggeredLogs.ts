@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
 const STAGGER_MS = 250;
-const MAX_DISPLAYED = 100;
 
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array.
@@ -57,6 +56,9 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
 
     // Build a map of the incoming data for in-place updates.
     const incoming = new Map(logs.map((e) => [e.request_id, e]));
+    queueRef.current = queueRef.current
+      .filter((item) => incoming.has(item.request_id))
+      .map((item) => incoming.get(item.request_id) ?? item);
 
     // Find first known index to split head (SSE) from tail (pagination).
     let firstKnown = -1;
@@ -67,20 +69,23 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
       }
     }
 
-    // Mark all current IDs as seen.
-    for (const e of logs) seenIds.current.add(e.request_id);
+    seenIds.current = currIds;
 
-    // Apply in-place updates to already-displayed rows.
+    // Apply in-place updates and remove rows that left the loaded window.
     setDisplayed((prev) => {
       let didChange = false;
-      const updated = prev.map((item) => {
+      const updated: RequestLogEntry[] = [];
+      for (const item of prev) {
         const fresh = incoming.get(item.request_id);
-        if (fresh && fresh !== item) {
+        if (!fresh) {
           didChange = true;
-          return fresh;
+          continue;
         }
-        return item;
-      });
+        if (fresh !== item) {
+          didChange = true;
+        }
+        updated.push(fresh);
+      }
       return didChange ? updated : prev;
     });
 
@@ -123,11 +128,6 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [queueVersion, scheduleQueueDrain]);
-
-  // Cap displayed length to prevent unbounded growth.
-  if (displayed.length > MAX_DISPLAYED) {
-    return displayed.slice(0, MAX_DISPLAYED);
-  }
 
   return displayed;
 }

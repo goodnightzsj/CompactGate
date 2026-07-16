@@ -405,6 +405,11 @@ export class RequestLogger {
 
     this.reconcileBodyStatuses();
     this.ensureRequestIdIndex();
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_request_logs_capture_path
+        ON request_logs(capture_path)
+        WHERE capture_path IS NOT NULL;
+    `);
   }
 
   private reconcileBodyStatuses(): void {
@@ -745,27 +750,60 @@ export class RequestLogger {
     this.lastPersistErrorAt = new Date().toISOString();
   }
 
-  markCapturePurged(capturePath: string): void {
+  markCapturePurged(capturePath: string): RequestLogEntry[] {
     try {
-      this.db
+      const entries = (
+        this.db
+          .prepare(
+            `
+              SELECT ${RECENT_LOG_FIELDS}
+              FROM request_logs
+              WHERE capture_path = ?
+            `
+          )
+          .all(capturePath) as Array<Record<string, unknown>>
+      ).map(rowToLogEntry);
+      const result = this.db
         .prepare(
           "UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE capture_path = ?"
         )
         .run(capturePath);
+      if (Number(result.changes) === 0) {
+        return [];
+      }
+      return entries.map((entry) => ({
+        ...entry,
+        capture_path: null,
+        capture_status: "purged"
+      }));
     } catch (error) {
       this.recordPersistenceFailure("mark capture purged", error);
+      return [];
     }
   }
 
-  markCapturePurgedByRequestId(requestId: string): void {
+  markCapturePurgedByRequestId(requestId: string): RequestLogEntry | null {
     try {
-      this.db
+      const existing = this.getByRequestId(requestId);
+      if (existing.status !== "found") {
+        return null;
+      }
+      const result = this.db
         .prepare(
           "UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE request_id = ?"
         )
         .run(requestId);
+      if (Number(result.changes) === 0) {
+        return null;
+      }
+      return {
+        ...existing.entry,
+        capture_path: null,
+        capture_status: "purged"
+      };
     } catch (error) {
       this.recordPersistenceFailure("mark request capture purged", error);
+      return null;
     }
   }
 

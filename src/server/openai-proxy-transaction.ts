@@ -147,7 +147,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     capturePath: null,
     captureStatus: captureEnabled ? "pending" : "none"
   });
-  input.studioEvents.broadcastLog(logEntry);
+  input.studioEvents.broadcastLog(logEntry, "insert");
 
   if (!captureEnabled) {
     return;
@@ -207,6 +207,6 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
   }
   const updatedLog = input.logger.getByRequestId(input.requestId);
   if (updatedLog.status === "found") {
-    input.studioEvents.broadcastLog(updatedLog.entry);
+    input.studioEvents.broadcastLog(updatedLog.entry, "update");
   }
 }

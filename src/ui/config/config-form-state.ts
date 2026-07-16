@@ -32,7 +32,6 @@ export function emptyForm(): ConfigFormState {
     modelTemplate: "{model}-openai-compact",
     modelOverride: "",
     autoSchedulePrimaryFailover: true,
-    loggingRedactBody: true,
     loggingPersistBody: false,
     loggingKeepRecent: 200,
     loggingCaptureDir: "",
@@ -69,7 +68,6 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     modelTemplate: config.compact.model_template,
     modelOverride: config.compact.model_override,
     autoSchedulePrimaryFailover: config.primary_failover.auto_schedule,
-    loggingRedactBody: config.logging.redact_body,
     loggingPersistBody: config.logging.persist_body,
     loggingKeepRecent: config.logging.keep_recent,
     loggingCaptureDir: config.logging.capture_dir ?? "",
@@ -121,7 +119,6 @@ export function formToPatch(form: ConfigFormState) {
       auto_schedule: form.autoSchedulePrimaryFailover
     },
     logging: {
-      redact_body: form.loggingRedactBody,
       persist_body: form.loggingPersistBody,
       keep_recent: form.loggingKeepRecent,
       capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
@@ -174,7 +171,7 @@ export function applyDraftToConfigExport(
     },
     timeouts: { ...config.timeouts },
     logging: {
-      redact_body: form.loggingRedactBody,
+      redact_body: config.logging.redact_body,
       persist_body: form.loggingPersistBody,
       keep_recent: form.loggingKeepRecent,
       capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
@@ -262,7 +259,6 @@ function draftComparisonState(form: ConfigFormState) {
     modelTemplate: form.modelTemplate,
     modelOverride: form.modelOverride,
     autoSchedulePrimaryFailover: form.autoSchedulePrimaryFailover,
-    loggingRedactBody: form.loggingRedactBody,
     loggingPersistBody: form.loggingPersistBody,
     loggingKeepRecent: form.loggingKeepRecent,
     loggingCaptureDir: normalizedCaptureDir(form.loggingCaptureDir),

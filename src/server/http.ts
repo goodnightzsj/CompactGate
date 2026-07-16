@@ -41,7 +41,8 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
 
 function createDebugCaptureWriter(
   configStore: ConfigStore,
-  logger: RequestLogger
+  logger: RequestLogger,
+  studioEvents: StudioEventBroadcaster
 ): DebugCaptureWriter {
   const config = configStore.get();
   return DebugCaptureWriter.fromConfig(
@@ -49,7 +50,9 @@ function createDebugCaptureWriter(
     config.logging.capture_body_max_bytes,
     config.logging.capture_dir_max_bytes,
     (capturePath) => {
-      logger.markCapturePurged(capturePath);
+      for (const entry of logger.markCapturePurged(capturePath)) {
+        studioEvents.broadcastLog(entry, "update");
+      }
     }
   );
 }
@@ -63,7 +66,7 @@ export function createCompactGateApp(
 ): CompactGateApp {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
-    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger);
+    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
   const primaryFailover = new PrimaryFailoverState();
 
   return {
@@ -91,7 +94,7 @@ export function createCompactGateServer(
 ): http.Server {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
-    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger);
+    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
   const app = createCompactGateApp(
     configStore,
     actualLogger,

@@ -159,6 +159,8 @@ wire_api = "responses"
 
 推荐使用分离存储：保持 `logging.persist_body = false`，再设置 `logging.capture_dir`。每个代理请求会写入一份独立 JSON，单段正文默认最多 1 MiB，受管抓包文件合计默认最多 20 GiB。目录超限时只删除最旧抓包，SQLite 元数据继续保留并把 `capture_status` 标为 `purged`。把 `capture_dir` 热更新为 `null` 可停止新抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
 
+`logging.redact_body` 是为旧配置保留的兼容字段，当前不会改变 SQLite 正文或抓包正文；敏感鉴权请求头始终单独脱敏。Studio 不提供这个无效开关，保存其他日志设置时也不会重写它。
+
 最重要的字段只有这些：
 
 ### `primary`

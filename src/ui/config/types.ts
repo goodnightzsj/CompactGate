@@ -44,7 +44,6 @@ export type ConfigFormState = {
   modelTemplate: string;
   modelOverride: string;
   autoSchedulePrimaryFailover: boolean;
-  loggingRedactBody: boolean;
   loggingPersistBody: boolean;
   loggingKeepRecent: number;
   loggingCaptureDir: string;

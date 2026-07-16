@@ -182,7 +182,14 @@ export function useLogFeed({
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
         setLogPage((previous) =>
-          mergeLiveLogPage(previous, payload.entry, routeFilter, statusFilter, hostFilter)
+          mergeLiveLogPage(
+            previous,
+            payload.entry,
+            routeFilter,
+            statusFilter,
+            hostFilter,
+            payload.operation ?? "insert"
+          )
         );
         markStreamConnected();
       } catch (error) {

@@ -90,7 +90,8 @@ export async function handleRuntimeApi(
       captureMatch[1],
       captureMatch[2] === "download",
       logger,
-      captureWriter
+      captureWriter,
+      studioEvents
     );
     return true;
   }
@@ -130,7 +131,8 @@ async function sendCaptureResponse(
   requestId: string,
   download: boolean,
   logger: RequestLogger,
-  captureWriter: DebugCaptureWriter
+  captureWriter: DebugCaptureWriter,
+  studioEvents: StudioEventBroadcaster
 ): Promise<void> {
   const lookup = logger.getCaptureByRequestId(requestId);
   if (lookup.status === "not_found") {
@@ -175,7 +177,10 @@ async function sendCaptureResponse(
     ? await captureWriter.readCapture(lookup.capturePath, requestId)
     : { status: "unavailable" as const };
   if (capture.status === "unavailable") {
-    logger.markCapturePurgedByRequestId(requestId);
+    const updatedEntry = logger.markCapturePurgedByRequestId(requestId);
+    if (updatedEntry) {
+      studioEvents.broadcastLog(updatedEntry, "update");
+    }
     sendJson(res, 410, {
       error: "Capture is no longer available",
       request_id: requestId,

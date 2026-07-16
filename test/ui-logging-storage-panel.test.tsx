@@ -17,5 +17,6 @@ describe("LoggingStoragePanel", () => {
     expect(markup).toContain('for="logging-keep-recent"');
     expect(markup).toContain('for="logging-capture-dir"');
     expect(markup).toContain("清理历史正文");
+    expect(markup).not.toContain("正文脱敏");
   });
 });
