@@ -11,13 +11,17 @@ const STAGGER_MS = 250;
  * - Pagination (older logs at tail): appear immediately.
  * - Existing rows are updated in-place when their fields change.
  */
-export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
+export function useStaggeredLogs(
+  logs: RequestLogEntry[],
+  queryKey = "default"
+): RequestLogEntry[] {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
   const seenIds = useRef<Set<string>>(new Set());
   const queueRef = useRef<RequestLogEntry[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [queueVersion, setQueueVersion] = useState(0);
   const prevLogsRef = useRef<RequestLogEntry[]>(logs);
+  const prevQueryKeyRef = useRef(queryKey);
 
   const scheduleQueueDrain = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -41,8 +45,12 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
     // Full reset: empty list or no ID overlap with previous batch.
     const prevIds = new Set(prevLogsRef.current.map((e) => e.request_id));
     const currIds = new Set(logs.map((e) => e.request_id));
-    const hasOverlap = logs.length > 0 && [...prevIds].some((id) => currIds.has(id));
-    const isReset = !hasOverlap || logs.length === 0;
+    const isReset = shouldResetStaggeredLogs(
+      prevLogsRef.current,
+      logs,
+      prevQueryKeyRef.current,
+      queryKey
+    );
 
     if (isReset) {
       queueRef.current = [];
@@ -51,6 +59,7 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
       setDisplayed(logs);
       seenIds.current = new Set(logs.map((e) => e.request_id));
       prevLogsRef.current = logs;
+      prevQueryKeyRef.current = queryKey;
       return;
     }
 
@@ -119,7 +128,8 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
     }
 
     prevLogsRef.current = logs;
-  }, [logs]);
+    prevQueryKeyRef.current = queryKey;
+  }, [logs, queryKey]);
 
   // Re-schedule the stagger drain whenever the queue gets new items.
   useEffect(() => {
@@ -130,4 +140,18 @@ export function useStaggeredLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
   }, [queueVersion, scheduleQueueDrain]);
 
   return displayed;
+}
+
+export function shouldResetStaggeredLogs(
+  previousLogs: RequestLogEntry[],
+  nextLogs: RequestLogEntry[],
+  previousQueryKey: string,
+  nextQueryKey: string
+): boolean {
+  if (previousQueryKey !== nextQueryKey || nextLogs.length === 0) {
+    return true;
+  }
+
+  const previousIds = new Set(previousLogs.map((entry) => entry.request_id));
+  return !nextLogs.some((entry) => previousIds.has(entry.request_id));
 }

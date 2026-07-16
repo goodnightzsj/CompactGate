@@ -148,6 +148,7 @@ export function sendBufferedUpstreamRequest(
       options.upstream,
       requestOptions,
       (response) => {
+        let responseResolutionStarted = false;
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
         let bufferedBytes = 0;
@@ -185,23 +186,40 @@ export function sendBufferedUpstreamRequest(
           }
           streamObserver?.observe(chunk);
           if (shouldDeferRetryableResponse && responseBodyTruncated) {
-            resolveUpstreamResponse();
+            beginResolveUpstreamResponse();
             upstreamReq?.destroy();
             response.destroy();
           }
         });
-        response.on("aborted", handleUpstreamResponseAborted);
-        response.on("error", handleUpstreamResponseError);
+        response.on("aborted", () => {
+          if (!responseResolutionStarted) {
+            handleUpstreamResponseAborted();
+          }
+        });
+        response.on("error", (error) => {
+          if (!responseResolutionStarted) {
+            handleUpstreamResponseError(error);
+          }
+        });
         if (shouldWriteResponse) {
           response.pipe(options.res);
         }
 
         response.on("end", () => {
-          resolveUpstreamResponse();
+          beginResolveUpstreamResponse();
         });
 
-        function resolveUpstreamResponse() {
+        function beginResolveUpstreamResponse() {
+          if (responseResolutionStarted) {
+            return;
+          }
+          responseResolutionStarted = true;
+          void resolveUpstreamResponse();
+        }
+
+        async function resolveUpstreamResponse() {
           const responseBody = Buffer.concat(responseChunks);
+          const streamSummary = streamObserver ? await streamObserver.finish() : null;
           resolveOnce({
             status,
             errorSummary: extractResponseErrorSummary(status, responseBody, response.headers),
@@ -209,7 +227,7 @@ export function sendBufferedUpstreamRequest(
             responseBodyTruncated,
             responseHeaders: response.headers,
             firstTokenMs,
-            streamSummary: streamObserver?.finish() ?? null
+            streamSummary
           });
         }
       }

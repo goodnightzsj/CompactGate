@@ -52,7 +52,12 @@ export function buildPrimaryOpenAiProxyPlan({
   compactionBridge: CompactionBridgeStore;
   primaryFailover: PrimaryFailoverState;
 }): OpenAiProxyPlan {
-  const modelRewrite = rewritePrimaryBody(rawBody, config);
+  const primarySelection = primaryFailover.preview(
+    config,
+    primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
+  );
+  const selectedPrimaryConfig = primarySelection.config;
+  const modelRewrite = rewritePrimaryBody(rawBody, selectedPrimaryConfig);
   const sourceModel = modelRewrite.sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
   const splitCompactMode = config.compact.upstream_mode === "split";
@@ -65,24 +70,25 @@ export function buildPrimaryOpenAiProxyPlan({
     throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
   }
 
-  const primarySelection = primaryFailover.select(
-    config,
-    primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
+  const plan = withRequestHeaders(
+    headers,
+    resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "",
+    rawBody,
+    {
+      route: "primary",
+      upstream: buildUpstreamUrl(selectedPrimaryConfig.primary.base_url, url.pathname, url.search),
+      timeoutMs: config.timeouts.primary_ms,
+      timeoutMessage: "Primary upstream request timed out.",
+      upstreamBody: bridgeResult.body,
+      sourceModel,
+      targetModel: modelRewrite.targetModel,
+      compactBridgeReplacements: bridgeResult.replacedCompactionCount,
+      compactBridgeScope,
+      primarySelection
+    }
   );
-  const selectedPrimaryConfig = primarySelection.config;
-
-  return withRequestHeaders(headers, resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "", rawBody, {
-    route: "primary",
-    upstream: buildUpstreamUrl(selectedPrimaryConfig.primary.base_url, url.pathname, url.search),
-    timeoutMs: config.timeouts.primary_ms,
-    timeoutMessage: "Primary upstream request timed out.",
-    upstreamBody: bridgeResult.body,
-    sourceModel,
-    targetModel: modelRewrite.targetModel,
-    compactBridgeReplacements: bridgeResult.replacedCompactionCount,
-    compactBridgeScope,
-    primarySelection
-  });
+  primaryFailover.reserveSelection(primarySelection, config.primary_failover.auto_schedule);
+  return plan;
 }
 
 export function buildCompactOpenAiProxyPlan({

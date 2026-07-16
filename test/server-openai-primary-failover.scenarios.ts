@@ -29,8 +29,20 @@ describe("CompactGate OpenAI routing", () => {
     const compact = await startCapturedOpenAiUpstream(compactRequests, (res) => writeJson(res, { ok: true }));
     const app = await startApp(firstPrimary.url, compact.url);
 
-    const firstProfileId = await saveCodexProfile(app.url, compact.url, "primary-a", firstPrimary.url);
-    const secondProfileId = await saveCodexProfile(app.url, compact.url, "primary-b", secondPrimary.url);
+    const firstProfileId = await saveCodexProfile(
+      app.url,
+      compact.url,
+      "primary-a",
+      firstPrimary.url,
+      "model-a"
+    );
+    const secondProfileId = await saveCodexProfile(
+      app.url,
+      compact.url,
+      "primary-b",
+      secondPrimary.url,
+      "model-b"
+    );
     expect(firstProfileId).toBeTruthy();
     expect(secondProfileId).toBeTruthy();
 
@@ -50,6 +62,23 @@ describe("CompactGate OpenAI routing", () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("");
     }
+
+    const previewResponse = await fetch(`${app.url}/api/test-route`, {
+      method: "POST",
+      body: JSON.stringify({
+        path: "/v1/responses",
+        body: { model: "gpt-5.5", stream: true, input: "preview failover" }
+      }),
+      headers: JSON_HEADERS
+    });
+    expect(previewResponse.status).toBe(200);
+    expect(await previewResponse.json()).toMatchObject({
+      upstream_host: new URL(secondPrimary.url).host,
+      target_model: "model-b"
+    });
+    const configBeforeFailoverRequest = await fetch(`${app.url}/api/config`);
+    expect((await configBeforeFailoverRequest.json() as PublicConfig).profile_scopes.codex.active_profile_id)
+      .toBe(firstProfileId);
 
     const failoverResponse = await fetch(`${app.url}/v1/responses`, {
       method: "POST",
@@ -71,12 +100,12 @@ describe("CompactGate OpenAI routing", () => {
     expect(secondPrimaryRequests).toHaveLength(1);
     expect(compactRequests).toHaveLength(1);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
-      model: "gpt-5.5",
+      model: "model-b",
       stream: true,
       input: "after failover"
     });
     expect(JSON.parse(compactRequests[0].body)).toMatchObject({
-      model: "gpt-5.5-openai-compact",
+      model: "model-b-openai-compact",
       input: "compact untouched"
     });
     const configAfterFailover = await fetch(`${app.url}/api/config`);
@@ -95,7 +124,8 @@ describe("CompactGate OpenAI routing", () => {
       route: "primary",
       status: 200,
       upstream_host: new URL(secondPrimary.url).host,
-      error_summary: null
+      error_summary: null,
+      target_model: "model-b"
     });
     expect(logs.find((entry) => entry.upstream_host === new URL(compact.url).host)).toMatchObject({
       route: "compact",

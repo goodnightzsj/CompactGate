@@ -28,6 +28,8 @@ export class DebugCaptureWriter {
 
   private readonly protectedCapturePaths = new Set<string>();
 
+  private readonly maxDirBytesByCaptureDir = new Map<string, number>();
+
   private readonly pruneStates = new Map<
     string,
     {
@@ -84,6 +86,7 @@ export class DebugCaptureWriter {
     this.maxBodyBytes = envMax ? normalizeMaxCaptureBodyBytes(envMax) : maxBodyBytes;
     this.maxDirBytes = maxDirBytes;
     if (this.captureDir) {
+      this.maxDirBytesByCaptureDir.set(this.captureDir, maxDirBytes);
       void this.pruneOldCaptures();
     }
   }
@@ -138,7 +141,6 @@ export class DebugCaptureWriter {
     onWritten?: (capturePath: string) => void
   ): Promise<string | null> {
     const captureDir = this.captureDir;
-    const maxDirBytes = this.maxDirBytes;
     if (!captureDir) {
       return null;
     }
@@ -158,7 +160,8 @@ export class DebugCaptureWriter {
       return absolutePath;
     } finally {
       this.protectedCapturePaths.delete(absolutePath);
-      void this.requestPrune(captureDir, maxDirBytes);
+      const effectiveMaxDirBytes = this.maxDirBytesByCaptureDir.get(captureDir) ?? this.maxDirBytes;
+      void this.requestPrune(captureDir, effectiveMaxDirBytes);
     }
   }
 
@@ -370,7 +373,9 @@ function isSensitiveHeader(name: string): boolean {
     lowerName === "proxy-authorization" ||
     lowerName === "x-api-key" ||
     lowerName === "api-key" ||
-    lowerName === "anthropic-api-key"
+    lowerName === "anthropic-api-key" ||
+    lowerName === "cookie" ||
+    lowerName === "set-cookie"
   );
 }
 

@@ -13,7 +13,8 @@ export async function saveCodexProfile(
   appUrl: string,
   compactUrl: string,
   name: string,
-  primaryBaseUrl: string
+  primaryBaseUrl: string,
+  modelOverride?: string
 ): Promise<string> {
   const response = await fetch(`${appUrl}/api/config/profiles`, {
     method: "POST",
@@ -22,7 +23,11 @@ export async function saveCodexProfile(
       scope: "codex",
       name,
       config: {
-        primary: { base_url: primaryBaseUrl, api_key: `${name}-token` },
+        primary: {
+          base_url: primaryBaseUrl,
+          api_key: `${name}-token`,
+          ...(modelOverride ? { model_override: modelOverride } : {})
+        },
         compact: { base_url: compactUrl, api_key: "compact-token", upstream_mode: "split" }
       }
     })

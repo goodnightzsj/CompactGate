@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
+import { createGunzip } from "node:zlib";
 
 export interface OpenAiStreamSummary {
   sawTerminalEvent: boolean;
@@ -14,19 +15,28 @@ export interface OpenAiStreamObserverOptions {
   maxEventBytes?: number;
 }
 
+export interface OpenAiStreamObserverHandle {
+  observe(chunk: Buffer): void;
+  finish(): Promise<OpenAiStreamSummary>;
+}
+
 const DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES = 64 * 1024;
 
 export function createOpenAiStreamObserver(
   headers: IncomingHttpHeaders,
   options: OpenAiStreamObserverOptions = {}
-): OpenAiStreamObserver | null {
+): OpenAiStreamObserverHandle | null {
   const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
-  return contentType.includes("text/event-stream")
-    ? new OpenAiStreamObserver(normalizeMaxEventBytes(options.maxEventBytes))
-    : null;
+  if (!contentType.includes("text/event-stream")) {
+    return null;
+  }
+
+  const observer = new OpenAiStreamObserver(normalizeMaxEventBytes(options.maxEventBytes));
+  const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
+  return contentEncoding.includes("gzip") ? new GzipOpenAiStreamObserver(observer) : observer;
 }
 
-class OpenAiStreamObserver {
+class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private pending = "";
   private eventName: string | null = null;
   private dataLines: string[] = [];
@@ -58,7 +68,7 @@ class OpenAiStreamObserver {
     }
   }
 
-  finish(): OpenAiStreamSummary {
+  async finish(): Promise<OpenAiStreamSummary> {
     if (this.pending.length > 0) {
       this.observeLine(this.pending);
       this.pending = "";
@@ -203,6 +213,29 @@ class OpenAiStreamObserver {
     this.dataLines = [];
     this.retainedEventBytes = 0;
     this.oversizedEvent = false;
+  }
+}
+
+class GzipOpenAiStreamObserver implements OpenAiStreamObserverHandle {
+  private readonly gunzip = createGunzip();
+  private readonly completion: Promise<void>;
+
+  constructor(private readonly observer: OpenAiStreamObserver) {
+    this.gunzip.on("data", (chunk: Buffer) => this.observer.observe(chunk));
+    this.completion = new Promise((resolve) => {
+      this.gunzip.once("end", resolve);
+      this.gunzip.once("error", resolve);
+    });
+  }
+
+  observe(chunk: Buffer): void {
+    this.gunzip.write(chunk);
+  }
+
+  async finish(): Promise<OpenAiStreamSummary> {
+    this.gunzip.end();
+    await this.completion;
+    return this.observer.finish();
   }
 }
 

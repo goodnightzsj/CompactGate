@@ -12,6 +12,21 @@ import type { TokenUsageMetrics } from "./usage.js";
 import { decodeBodyText, readHeaderString } from "./http-utils.js";
 import { extractResponseModelFromBodies } from "./response-model.js";
 
+const SENSITIVE_QUERY_KEYS = new Set([
+  "api_key",
+  "api-key",
+  "apikey",
+  "access_token",
+  "access-token",
+  "token",
+  "client_secret",
+  "client-secret",
+  "authorization",
+  "auth",
+  "signature",
+  "sig"
+]);
+
 export function addLog(
   logger: RequestLogger,
   input: {
@@ -50,7 +65,7 @@ export function addLog(
     completed_at: input.completedAtIso,
     route: input.route,
     method: input.req.method ?? "GET",
-    path: `${input.url.pathname}${input.url.search}`,
+    path: storedPathForUrl(input.url),
     endpoint: input.endpoint,
     request_type: input.requestType,
     reasoning_effort: input.reasoningEffort,
@@ -88,6 +103,24 @@ export function addLog(
   };
   logger.add(entry);
   return entry;
+}
+
+export function redactUrlForStorage(url: URL): URL {
+  const next = new URL(url);
+  const entries = [...next.searchParams.entries()];
+  next.search = "";
+  for (const [name, value] of entries) {
+    next.searchParams.append(
+      name,
+      SENSITIVE_QUERY_KEYS.has(name.toLowerCase()) ? "[redacted]" : value
+    );
+  }
+  return next;
+}
+
+export function storedPathForUrl(url: URL): string {
+  const storedUrl = redactUrlForStorage(url);
+  return `${storedUrl.pathname}${storedUrl.search}`;
 }
 
 function bodyText(body: Buffer): string {

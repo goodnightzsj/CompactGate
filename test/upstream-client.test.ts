@@ -1,4 +1,5 @@
 import http from "node:http";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import "./helpers/server-test-hooks.js";
 import {
@@ -85,6 +86,50 @@ describe("sendBufferedUpstreamRequest", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(upstreamBody);
+    expect(streamSummary).toMatchObject({
+      eventCount: 1,
+      sawCompletedEvent: true,
+      sawTerminalEvent: true
+    });
+  });
+
+  it("observes completion events inside gzip encoded SSE responses", async () => {
+    const upstreamBody = gzipSync(Buffer.from(
+      'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+    ));
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "content-encoding": "gzip"
+      });
+      res.end(upstreamBody);
+    });
+    let streamSummary: BufferedUpstreamResult["streamSummary"] = null;
+
+    const proxy = http.createServer(async (req, res) => {
+      const result = await sendBufferedUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {}
+      });
+      streamSummary = result.streamSummary;
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(response.status).toBe(200);
+    await response.text();
     expect(streamSummary).toMatchObject({
       eventCount: 1,
       sawCompletedEvent: true,

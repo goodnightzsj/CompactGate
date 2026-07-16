@@ -366,6 +366,44 @@ describe("CompactGate logs and capture", () => {
     expect(captures[0].upstream_response.body.truncated).toBe(false);
   });
 
+  it("redacts credential query values and Cookie headers in stored diagnostics", async () => {
+    const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));
+    cleanup.push(() => rm(captureDir, { recursive: true, force: true }));
+    setEnv("COMPACTGATE_CAPTURE_DIR", captureDir);
+    const primary = await startUpstream(async (req, res) => {
+      await captureBody(req);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "set-cookie": "upstream-session=response-secret"
+      });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const compact = await startUpstream((_req, res) => res.end("{}"));
+    const app = await startApp(primary.url, compact.url);
+
+    const response = await postJson(
+      app.url,
+      "/v1/responses?api_key=query-secret&api-version=2026-07-16",
+      { model: "gpt-5.5", input: "redact local diagnostics" },
+      { cookie: "session=request-secret" }
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const [entry] = await fetchRecentLogs(app.url);
+    expect(entry.path).not.toContain("query-secret");
+    expect(new URL(entry.path, app.url).searchParams.get("api_key")).toBe("[redacted]");
+    expect(entry.path).toContain("api-version=2026-07-16");
+
+    const [capture] = await waitForCaptureRecords(captureDir, 1);
+    expect(JSON.stringify(capture)).not.toContain("query-secret");
+    expect(capture.path).toContain("api-version=2026-07-16");
+    expect(new URL(capture.upstream_url).searchParams.get("api_key")).toBe("[redacted]");
+    expect(capture.incoming_request.headers.cookie).toBe("[redacted]");
+    expect(capture.upstream_request.headers.cookie).toBe("[redacted]");
+    expect(capture.upstream_response.headers["set-cookie"]).toBe("[redacted]");
+  });
+
   it("bounds captured body payloads while preserving original byte lengths", async () => {
     const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));
     cleanup.push(() => rm(captureDir, { recursive: true, force: true }));

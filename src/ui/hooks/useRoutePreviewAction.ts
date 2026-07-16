@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import type { RoutePreviewResponse } from "../../shared/types.js";
 import { api, errorSummary } from "../shared/api.js";
 
@@ -9,9 +9,12 @@ export function useRoutePreviewAction() {
   const [previewBody, setPreviewBody] = useState(DEFAULT_PREVIEW_BODY);
   const [preview, setPreview] = useState<RoutePreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   async function previewRoute(event: FormEvent) {
     event.preventDefault();
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
     setPreviewError(null);
 
     try {
@@ -24,10 +27,14 @@ export function useRoutePreviewAction() {
           body: parsedBody
         })
       });
-      setPreview(nextPreview);
+      if (isLatestPreviewRequest(requestId, requestIdRef.current)) {
+        setPreview(nextPreview);
+      }
     } catch (error) {
-      setPreview(null);
-      setPreviewError(errorSummary(error));
+      if (isLatestPreviewRequest(requestId, requestIdRef.current)) {
+        setPreview(null);
+        setPreviewError(errorSummary(error));
+      }
     }
   }
 
@@ -40,4 +47,8 @@ export function useRoutePreviewAction() {
     setPreviewBody,
     setPreviewPath
   };
+}
+
+export function isLatestPreviewRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
 }

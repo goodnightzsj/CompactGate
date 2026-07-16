@@ -41,6 +41,9 @@ export function useStudioPageModels({
     setHealth,
     form,
     setForm,
+    draftRevision,
+    applyRemoteConfig,
+    commitConfig,
     pageError,
     setPageError
   } = useStudioBootstrap(pageMode);
@@ -50,7 +53,7 @@ export function useStudioPageModels({
     enabled: !healthMode,
     hasConfig,
     logPageLimit,
-    setConfig,
+    applyRemoteConfig,
     setHealth
   });
   const healthRefresh = useHealthRefresh({
@@ -65,6 +68,8 @@ export function useStudioPageModels({
     config,
     form,
     linkedCompactModel,
+    draftRevision,
+    commitConfig,
     setConfig,
     setForm,
     setHealth,

@@ -32,12 +32,12 @@ const rowTransition = {
 };
 
 export function LogsPage({
-  logs, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
+  logs, pageQueryKey, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
   routeFilter, statusFilter, hostFilter,
   onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onLoadMore, error
 }: {
-  logs: RequestLogEntry[]; logCounts: Record<"all" | RouteKind, number>;
+  logs: RequestLogEntry[]; pageQueryKey: string; logCounts: Record<"all" | RouteKind, number>;
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
   hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
@@ -48,7 +48,7 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
-  const displayedLogs = useStaggeredLogs(logs);
+  const displayedLogs = useStaggeredLogs(logs, pageQueryKey);
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
@@ -199,7 +199,7 @@ export function LogsPage({
 
       {hasMoreLogs && (
         <div style={{ textAlign: "center", marginTop: 12 }}>
-          <button className="btn" onClick={onLoadMore} disabled={isLoadingMoreLogs}>
+          <button className="btn" onClick={onLoadMore} disabled={isLoadingLogs || isLoadingMoreLogs}>
             {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${displayedLogs.length}/${totalLogCount})`}
           </button>
         </div>

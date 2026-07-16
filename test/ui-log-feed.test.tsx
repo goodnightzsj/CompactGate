@@ -4,8 +4,37 @@ import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
 import {
   ALL_HOSTS_FILTER,
-  mergeLiveLogPage
+  mergeLiveLogPage,
+  replayLiveLogEvents
 } from "../src/ui/logs/log-utils.js";
+import {
+  isCurrentLogPageRequest,
+  isCurrentLogRequest,
+  logPageQueryKey
+} from "../src/ui/logs/log-feed-query.js";
+
+describe("log request generations", () => {
+  it("rejects stale pagination responses after the applied query changes", () => {
+    expect(isCurrentLogRequest(1, 2, 4, 5)).toBe(false);
+    expect(isCurrentLogRequest(2, 2, 4, 5)).toBe(false);
+    expect(isCurrentLogRequest(2, 2, 5, 5)).toBe(true);
+  });
+
+  it("uses every applied filter in the page query key", () => {
+    const base = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, limit: 200 };
+    expect(logPageQueryKey(base)).not.toBe(logPageQueryKey({ ...base, route: "compact" }));
+    expect(logPageQueryKey(base)).not.toBe(logPageQueryKey({ ...base, host: "other.example" }));
+  });
+
+  it("rejects responses whose query no longer matches the applied page", () => {
+    const previous = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, limit: 200 };
+    const current = { ...previous, route: "compact" as const };
+
+    expect(isCurrentLogPageRequest(3, 3, previous, current)).toBe(false);
+    expect(isCurrentLogPageRequest(3, 3, current, current, 7, 7)).toBe(true);
+    expect(isCurrentLogPageRequest(3, 3, current, current, 6, 7)).toBe(false);
+  });
+});
 
 describe("live log page updates", () => {
   it("does not increment filtered counts for capture lifecycle updates", () => {
@@ -78,6 +107,38 @@ describe("live log page updates", () => {
     expect(updated.total).toBe(11);
     expect(updated.has_more).toBe(true);
   });
+
+  it("replays live events that arrive while the first page is loading", () => {
+    const existing = requestLog("request-existing", { capture_status: "pending" });
+    const initial: RequestLogPage = {
+      ...emptyPage(2),
+      logs: [existing],
+      total: 1,
+      all_total: 1,
+      counts: { all: 1, primary: 1, compact: 0, claude: 0 },
+      provider_counts: { all: 1, openai: 1, claude: 0 },
+      status_counts: { all: 1, normal: 1, error: 0 },
+      host_counts: [{ host: "upstream.example", total: 1, primary: 1, compact: 0, claude: 0 }]
+    };
+
+    const replayed = replayLiveLogEvents(
+      initial,
+      [
+        { operation: "insert", entry: requestLog("request-live") },
+        { operation: "update", entry: { ...existing, capture_status: "present" } }
+      ],
+      "all",
+      "all",
+      ALL_HOSTS_FILTER
+    );
+
+    expect(replayed.logs.map((entry) => entry.request_id)).toEqual([
+      "request-live",
+      "request-existing"
+    ]);
+    expect(replayed.logs[1].capture_status).toBe("present");
+    expect(replayed.total).toBe(2);
+  });
 });
 
 describe("LogsPage loaded rows", () => {
@@ -88,6 +149,7 @@ describe("LogsPage loaded rows", () => {
     const markup = renderToStaticMarkup(
       <LogsPage
         logs={logs}
+        pageQueryKey="all-logs"
         logCounts={{ all: 120, primary: 120, compact: 0, claude: 0 }}
         providerCounts={{ all: 120, openai: 120, claude: 0 }}
         statusCounts={{ all: 120, normal: 120, error: 0 }}

@@ -2,13 +2,57 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import {
+  CompactionBridgeStore,
+  UnresolvedCompactionStateError
+} from "../src/server/compaction-bridge.js";
+import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
+import {
   classifyPrimaryRouteResult,
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "../src/server/primary-failover.js";
 import type { CompactGateConfig, SavedConfigProfile } from "../src/shared/types.js";
+import { compactUpstreamBaseUrl, deriveCompactModel } from "../src/server/routing.js";
 
 describe("PrimaryFailoverState", () => {
+  it("releases its reservation when local bridge validation rejects the plan", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    config.compact.upstream_mode = "split";
+    const state = new PrimaryFailoverState({ random: () => 0 });
+    const bridge = new CompactionBridgeStore();
+    const sourceModel = "gpt-5.5";
+    const encryptedContent = "KNOWN_WITHOUT_FALLBACK";
+    bridge.storeCompactResponse(Buffer.from(JSON.stringify({
+      output: [{ type: "compaction", encrypted_content: encryptedContent }]
+    })), {
+      scope: {
+        compactUpstream: compactUpstreamBaseUrl(config),
+        sourceModel,
+        targetModel: deriveCompactModel(sourceModel, config)
+      }
+    });
+    const rawBody = Buffer.from(JSON.stringify({
+      model: sourceModel,
+      input: [{ type: "compaction", encrypted_content: encryptedContent }]
+    }));
+
+    expect(() => buildPrimaryOpenAiProxyPlan({
+      config,
+      url: new URL("http://compactgate.local/v1/responses"),
+      headers: { "content-type": "application/json" },
+      rawBody,
+      endpoint: "/responses",
+      compactionBridge: bridge,
+      primaryFailover: state
+    })).toThrow(UnresolvedCompactionStateError);
+
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a"))
+      .toMatchObject({ inFlight: 0 });
+  });
+
   it("resets empty-stream failure counts after a successful primary stream", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
@@ -119,6 +163,35 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(rotatedConfig, { model: "gpt-5.5" }).profileId).toBe("codex-a");
     expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
       quarantineUntil: 0
+    });
+  });
+
+  it("preserves primary health when only the active profile rotates", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "bad-key"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "fallback-key")
+    ]);
+    const { state } = createState();
+
+    recordRequests(
+      state,
+      config,
+      11,
+      401,
+      "Upstream returned HTTP 401: invalid token."
+    );
+    const quarantineUntil = state.getHealthSnapshot()
+      .find((entry) => entry.profileId === "codex-a")?.quarantineUntil;
+
+    const rotatedConfig = cloneConfig(config);
+    if (!rotatedConfig.profile_scopes?.codex) {
+      throw new Error("Expected Codex profile scope.");
+    }
+    rotatedConfig.profile_scopes.codex.active_profile_id = "codex-b";
+
+    expect(state.preview(rotatedConfig, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
+      quarantineUntil
     });
   });
 

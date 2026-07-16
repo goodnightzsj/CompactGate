@@ -132,7 +132,8 @@ async function routeRequest(
         logger,
         captureWriter,
         studioEvents,
-        fetchClaudeModels
+        fetchClaudeModels,
+        primaryFailover
       );
       return;
     }

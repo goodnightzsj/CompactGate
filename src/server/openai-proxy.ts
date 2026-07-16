@@ -328,8 +328,10 @@ async function proxyCompactRequest(
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 
     const dedupeInput = {
+      method: req.method ?? "POST",
       upstream: plan.upstream,
       authorization: transaction.requestHeaders.authorization ?? null,
+      requestHeaders: transaction.requestHeaders,
       body: transaction.upstreamBody
     };
     const cachedCompactResponse = compactionBridge.getCachedCompactResponse(dedupeInput);
@@ -388,7 +390,15 @@ async function proxyCompactRequest(
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
     transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
-    if (transaction.status >= 200 && transaction.status < 300 && plan.compactBridgeScope) {
+    if (result.streamSummary) {
+      transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
+    }
+    if (
+      transaction.status >= 200 &&
+      transaction.status < 300 &&
+      !transaction.errorSummary &&
+      plan.compactBridgeScope
+    ) {
       compactionBridge.storeCompactResponse(normalizedResponse.body, {
         scope: plan.compactBridgeScope,
         source: normalizedResponse.normalized ? "synthetic" : "standard"

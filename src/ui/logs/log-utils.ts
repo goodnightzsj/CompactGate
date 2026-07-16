@@ -6,6 +6,7 @@ import type {
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
+  StudioLogEvent,
   StatusLogCounts
 } from "../../shared/types.js";
 import { api } from "../shared/api.js";
@@ -215,6 +216,26 @@ export function mergeLiveLogPage(
     ),
     host_counts: incrementHostCounts(previous.host_counts, nextEntry, duplicate || !matchesHostCountScope)
   };
+}
+
+export function replayLiveLogEvents(
+  page: RequestLogPage,
+  events: StudioLogEvent[],
+  routeFilter: "all" | RouteKind,
+  statusFilter: "all" | LogStatusKind,
+  hostFilter: string
+): RequestLogPage {
+  return events.reduce(
+    (current, event) => mergeLiveLogPage(
+      current,
+      event.entry,
+      routeFilter,
+      statusFilter,
+      hostFilter,
+      event.operation ?? "insert"
+    ),
+    page
+  );
 }
 
 function mergeUniqueLogs(logs: RequestLogEntry[]): RequestLogEntry[] {

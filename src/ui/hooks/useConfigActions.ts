@@ -4,7 +4,6 @@ import type {
   PublicConfig
 } from "../../shared/types.js";
 import {
-  formFromConfig,
   formToPatch
 } from "../config/config-form-state.js";
 import type { ConfigFormState, SaveState } from "../config/types.js";
@@ -17,6 +16,8 @@ export function useConfigActions({
   config,
   form,
   linkedCompactModel,
+  draftRevision,
+  commitConfig,
   setConfig,
   setForm,
   setHealth,
@@ -25,6 +26,8 @@ export function useConfigActions({
   config: PublicConfig | null;
   form: ConfigFormState;
   linkedCompactModel: string;
+  draftRevision: number;
+  commitConfig: (config: PublicConfig, submittedRevision: number) => void;
   setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
   setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
@@ -55,6 +58,7 @@ export function useConfigActions({
 
   async function saveConfig(event: FormEvent) {
     event.preventDefault();
+    const submittedRevision = draftRevision;
     setSaveState("saving");
     setSaveError(null);
 
@@ -66,9 +70,8 @@ export function useConfigActions({
       const nextHealth = await api<HealthResponse>("/api/health", {
         method: "GET"
       });
-      setConfig(nextConfig);
+      commitConfig(nextConfig, submittedRevision);
       setHealth(nextHealth);
-      setForm(formFromConfig(nextConfig));
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1400);
     } catch (error) {

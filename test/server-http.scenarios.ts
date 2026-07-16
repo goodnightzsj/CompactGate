@@ -8,7 +8,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { StudioEventBroadcaster } from "../src/server/studio-events.js";
-import type { HealthResponse, PublicConfig, RequestLogEntry } from "../src/shared/types.js";
+import type {
+  HealthResponse,
+  PublicConfig,
+  RequestLogEntry,
+  StudioSnapshotEvent
+} from "../src/shared/types.js";
 import {
   captureBody,
   cleanup,
@@ -251,6 +256,11 @@ describe("CompactGate HTTP basics", () => {
       db.close();
     }
 
+    const sse = await openSseStream(`${app.url}/api/events`);
+    const initialSnapshot = await sse.waitForEvent("snapshot") as StudioSnapshotEvent;
+    expect(initialSnapshot.log_page.logs.find((entry) => entry.request_id === "purge-body-api"))
+      .toMatchObject({ body_status: "present" });
+
     const rejectedResponse = await fetch(`${app.url}/api/logs/maintenance/purge-bodies`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -269,12 +279,16 @@ describe("CompactGate HTTP basics", () => {
       row_count_before: 1,
       row_count_after: 1
     });
+    const purgedSnapshot = await sse.waitForEvent("snapshot") as StudioSnapshotEvent;
+    expect(purgedSnapshot.log_page.logs.find((entry) => entry.request_id === "purge-body-api"))
+      .toMatchObject({ body_status: "purged" });
 
     const metadataResponse = await fetch(`${app.url}/api/logs/purge-body-api`);
     expect(metadataResponse.status).toBe(200);
     expect(await metadataResponse.json()).toMatchObject({
       body_status: "purged"
     });
+    await sse.close();
   });
 
   it("serves static assets without falling back missing files to the SPA index", async () => {

@@ -16,23 +16,37 @@ import {
   emptyLogPage,
   fetchLogPage,
   mergeLiveLogPage,
-  mergeSnapshotLogPage
+  mergeSnapshotLogPage,
+  replayLiveLogEvents
 } from "../logs/log-utils.js";
+import {
+  isCurrentLogPageRequest,
+  isCurrentLogRequest,
+  type LogPageQuery,
+  logPageQueryKey
+} from "../logs/log-feed-query.js";
 import { errorSummary } from "../shared/api.js";
 
 const STREAM_RECONNECTING_MESSAGE = "实时日志流暂时断开，浏览器正在重连。";
+
+interface PendingLogLoad {
+  generation: number;
+  query: LogPageQuery;
+  liveEvents: StudioLogEvent[];
+  snapshot: RequestLogPage | null;
+}
 
 export function useLogFeed({
   enabled,
   hasConfig,
   logPageLimit,
-  setConfig,
+  applyRemoteConfig,
   setHealth
 }: {
   enabled: boolean;
   hasConfig: boolean;
   logPageLimit: number;
-  setConfig: React.Dispatch<React.SetStateAction<PublicConfig | null>>;
+  applyRemoteConfig: (config: PublicConfig) => void;
   setHealth: React.Dispatch<React.SetStateAction<HealthResponse | null>>;
 }) {
   const [logPage, setLogPage] = useState<RequestLogPage>(() => emptyLogPage(DEFAULT_LOG_PAGE_LIMIT));
@@ -42,7 +56,18 @@ export function useLogFeed({
   const [logError, setLogError] = useState<string | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
+  const isLoadingLogsRef = useRef(false);
   const isLoadingMoreLogsRef = useRef(false);
+  const generationRef = useRef(0);
+  const loadMoreRequestIdRef = useRef(0);
+  const pendingLogLoadRef = useRef<PendingLogLoad | null>(null);
+  const appliedQueryRef = useRef<LogPageQuery>({
+    route: "all",
+    status: "all",
+    host: ALL_HOSTS_FILTER,
+    limit: DEFAULT_LOG_PAGE_LIMIT
+  });
+  const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
 
   const deferredFilter = useDeferredValue(routeFilter);
   const deferredStatusFilter = useDeferredValue(statusFilter);
@@ -54,33 +79,70 @@ export function useLogFeed({
 
   useEffect(() => {
     if (!enabled || !hasConfig) {
+      isLoadingLogsRef.current = false;
+      pendingLogLoadRef.current = null;
+      setIsLoadingLogs(false);
       return;
     }
 
     let cancelled = false;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    loadMoreRequestIdRef.current += 1;
+    isLoadingMoreLogsRef.current = false;
+    setIsLoadingMoreLogs(false);
+    const query: LogPageQuery = {
+      route: deferredFilter,
+      status: deferredStatusFilter,
+      host: deferredHostFilter,
+      limit: logPageLimit
+    };
+    isLoadingLogsRef.current = true;
+    pendingLogLoadRef.current = {
+      generation,
+      query,
+      liveEvents: [],
+      snapshot: null
+    };
 
     async function loadLogs() {
       setIsLoadingLogs(true);
 
       try {
         const nextPage = await fetchLogPage({
-          route: deferredFilter,
-          status: deferredStatusFilter,
-          host: deferredHostFilter,
-          limit: logPageLimit,
+          ...query,
           offset: 0
         });
 
-        if (!cancelled) {
-          setLogPage(nextPage);
+        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+          const pendingLoad = pendingLogLoadRef.current;
+          let resolvedPage = nextPage;
+          if (pendingLoad?.generation === generation) {
+            if (pendingLoad.snapshot) {
+              resolvedPage = mergeSnapshotLogPage(resolvedPage, pendingLoad.snapshot);
+            }
+            resolvedPage = replayLiveLogEvents(
+              resolvedPage,
+              pendingLoad.liveEvents,
+              query.route,
+              query.status,
+              query.host
+            );
+            pendingLogLoadRef.current = null;
+          }
+          appliedQueryRef.current = query;
+          setLogPage(resolvedPage);
+          setPageQueryKey(logPageQueryKey(query));
           setLogError(null);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+          pendingLogLoadRef.current = null;
           setLogError(errorSummary(error));
         }
       } finally {
-        if (!cancelled) {
+        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+          isLoadingLogsRef.current = false;
           setIsLoadingLogs(false);
         }
       }
@@ -98,53 +160,77 @@ export function useLogFeed({
       return;
     }
 
-    if (typeof window.EventSource !== "function") {
-      setLogError("当前浏览器不支持 SSE，已回退为轮询刷新。");
-      const interval = window.setInterval(async () => {
-        try {
-          const nextPage = await fetchLogPage({
-            route: deferredFilter,
-            status: deferredStatusFilter,
-            host: deferredHostFilter,
-            limit: logPageLimit,
-            offset: 0
-          });
+    let closed = false;
+    let refreshRequestId = 0;
+
+    async function refreshAppliedLogPage(isStillRelevant: () => boolean): Promise<boolean> {
+      const generation = generationRef.current;
+      const query = appliedQueryRef.current;
+      const requestId = refreshRequestId + 1;
+      refreshRequestId = requestId;
+      try {
+        const nextPage = await fetchLogPage({
+          ...query,
+          offset: 0
+        });
+        if (
+          !closed &&
+          isStillRelevant() &&
+          isCurrentLogPageRequest(
+            generation,
+            generationRef.current,
+            query,
+            appliedQueryRef.current,
+            requestId,
+            refreshRequestId
+          )
+        ) {
           setLogPage(nextPage);
-        } catch (error) {
+          setLogError(null);
+          return true;
+        }
+      } catch (error) {
+        if (
+          !closed &&
+          isStillRelevant() &&
+          isCurrentLogPageRequest(
+            generation,
+            generationRef.current,
+            query,
+            appliedQueryRef.current,
+            requestId,
+            refreshRequestId
+          )
+        ) {
           setLogError(errorSummary(error));
         }
+      }
+      return false;
+    }
+
+    if (typeof window.EventSource !== "function") {
+      setLogError("当前浏览器不支持 SSE，已回退为轮询刷新。");
+      const interval = window.setInterval(() => {
+        void refreshAppliedLogPage(() => true);
       }, 2500);
 
-      return () => window.clearInterval(interval);
+      return () => {
+        closed = true;
+        window.clearInterval(interval);
+      };
     }
 
     const stream = new EventSource("/api/events");
     let streamInterrupted = false;
     let pollingFallbackActive = false;
-    let closed = false;
 
     async function pollWhileStreamInterrupted() {
       if (!streamInterrupted || closed) {
         return;
       }
 
-      try {
-        const nextPage = await fetchLogPage({
-          route: deferredFilter,
-          status: deferredStatusFilter,
-          host: deferredHostFilter,
-          limit: logPageLimit,
-          offset: 0
-        });
-        if (!closed && streamInterrupted) {
-          setLogPage(nextPage);
-          setLogError(null);
-          pollingFallbackActive = true;
-        }
-      } catch (error) {
-        if (!closed) {
-          setLogError(errorSummary(error));
-        }
+      if (await refreshAppliedLogPage(() => streamInterrupted)) {
+        pollingFallbackActive = true;
       }
     }
 
@@ -164,12 +250,21 @@ export function useLogFeed({
     const handleSnapshot = (event: MessageEvent<string>) => {
       try {
         const snapshot = JSON.parse(event.data) as StudioSnapshotEvent;
-        setConfig(snapshot.config);
+        applyRemoteConfig(snapshot.config);
         setHealth(snapshot.health);
+        const pendingLoad = pendingLogLoadRef.current;
         if (
-          routeFilter === "all" &&
-          statusFilter === "all" &&
-          hostFilter === ALL_HOSTS_FILTER
+          pendingLoad?.generation === generationRef.current &&
+          pendingLoad.query.route === "all" &&
+          pendingLoad.query.status === "all" &&
+          pendingLoad.query.host === ALL_HOSTS_FILTER
+        ) {
+          pendingLoad.snapshot = snapshot.log_page;
+        }
+        if (
+          appliedQueryRef.current.route === "all" &&
+          appliedQueryRef.current.status === "all" &&
+          appliedQueryRef.current.host === ALL_HOSTS_FILTER
         ) {
           setLogPage((previous) => mergeSnapshotLogPage(previous, snapshot.log_page));
         }
@@ -181,13 +276,18 @@ export function useLogFeed({
     const handleLog = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
+        const pendingLoad = pendingLogLoadRef.current;
+        if (pendingLoad?.generation === generationRef.current) {
+          pendingLoad.liveEvents.push(payload);
+        }
+        const appliedQuery = appliedQueryRef.current;
         setLogPage((previous) =>
           mergeLiveLogPage(
             previous,
             payload.entry,
-            routeFilter,
-            statusFilter,
-            hostFilter,
+            appliedQuery.route,
+            appliedQuery.status,
+            appliedQuery.host,
             payload.operation ?? "insert"
           )
         );
@@ -219,46 +319,68 @@ export function useLogFeed({
       stream.close();
     };
   }, [
-    deferredFilter,
-    deferredStatusFilter,
-    deferredHostFilter,
     enabled,
-    logPageLimit,
-    routeFilter,
-    statusFilter,
-    hostFilter,
-    setConfig,
+    applyRemoteConfig,
     setHealth
   ]);
 
   async function loadMoreLogs() {
-    if (isLoadingMoreLogsRef.current || !logPage.has_more) {
+    if (isLoadingLogsRef.current || isLoadingMoreLogsRef.current || !logPage.has_more) {
       return;
     }
 
     isLoadingMoreLogsRef.current = true;
     setIsLoadingMoreLogs(true);
+    const generation = generationRef.current;
+    const requestId = loadMoreRequestIdRef.current + 1;
+    loadMoreRequestIdRef.current = requestId;
+    const query = appliedQueryRef.current;
 
     try {
       const nextPage = await fetchLogPage({
-        route: routeFilter,
-        status: statusFilter,
-        host: hostFilter,
-        limit: logPageLimit,
+        ...query,
         offset: logPage.logs.length
       });
-      setLogPage((previous) => appendLogPage(previous, nextPage));
-      setLogError(null);
+      if (isCurrentLogPageRequest(
+        generation,
+        generationRef.current,
+        query,
+        appliedQueryRef.current,
+        requestId,
+        loadMoreRequestIdRef.current
+      )) {
+        setLogPage((previous) => appendLogPage(previous, nextPage));
+        setLogError(null);
+      }
     } catch (error) {
-      setLogError(errorSummary(error));
+      if (isCurrentLogPageRequest(
+        generation,
+        generationRef.current,
+        query,
+        appliedQueryRef.current,
+        requestId,
+        loadMoreRequestIdRef.current
+      )) {
+        setLogError(errorSummary(error));
+      }
     } finally {
-      isLoadingMoreLogsRef.current = false;
-      setIsLoadingMoreLogs(false);
+      if (isCurrentLogPageRequest(
+        generation,
+        generationRef.current,
+        query,
+        appliedQueryRef.current,
+        requestId,
+        loadMoreRequestIdRef.current
+      )) {
+        isLoadingMoreLogsRef.current = false;
+        setIsLoadingMoreLogs(false);
+      }
     }
   }
 
   return {
     logPage,
+    pageQueryKey,
     routeFilter,
     setRouteFilter,
     statusFilter,

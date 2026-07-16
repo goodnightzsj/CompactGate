@@ -77,6 +77,27 @@ export class PrimaryFailoverState {
     return this.selectInternal(config, context, false);
   }
 
+  reserveSelection(
+    selection: PrimaryRouteSelection,
+    rememberRequestStickiness: boolean
+  ): void {
+    if (!selection.profileId) {
+      return;
+    }
+
+    const health = this.health.get(selection.profileId);
+    if (!health || selection.generation !== this.generation) {
+      throw new Error("Cannot reserve a stale primary route selection.");
+    }
+
+    const now = this.now();
+    health.inFlight += 1;
+    health.lastSelectedAt = now;
+    if (rememberRequestStickiness) {
+      this.stickiness.rememberRequest(selection.context, selection.profileId, now);
+    }
+  }
+
   recordResult(
     selection: PrimaryRouteSelection,
     resultOrStatus: PrimaryRouteResult | number,
@@ -224,7 +245,7 @@ export class PrimaryFailoverState {
       };
     }
 
-    const signature = candidateSignature(config, candidates);
+    const signature = candidateSignature(candidates);
     if (signature !== this.signature) {
       this.signature = signature;
       this.generation += 1;
@@ -237,12 +258,7 @@ export class PrimaryFailoverState {
     if (!config.primary_failover.auto_schedule) {
       const selected = candidates.find((candidate) => candidate.active) ?? candidates[0];
       const health = this.health.forProfile(selected.id);
-      if (reserve) {
-        health.inFlight += 1;
-        health.lastSelectedAt = this.now();
-      }
-
-      return {
+      const selection = {
         config: selected.config,
         profileId: selected.id,
         profileName: selected.name,
@@ -250,6 +266,10 @@ export class PrimaryFailoverState {
         healthVersion: health.version,
         context: normalizedContext
       };
+      if (reserve) {
+        this.reserveSelection(selection, false);
+      }
+      return selection;
     }
 
     const now = this.now();
@@ -267,13 +287,7 @@ export class PrimaryFailoverState {
         this.stickiness.selectProfileId(normalizedContext, isUsable)
     });
     const health = this.health.forProfile(selected.id);
-    if (reserve) {
-      health.inFlight += 1;
-      health.lastSelectedAt = now;
-      this.stickiness.rememberRequest(normalizedContext, selected.id, now);
-    }
-
-    return {
+    const selection = {
       config: selected.config,
       profileId: selected.id,
       profileName: selected.name,
@@ -281,6 +295,10 @@ export class PrimaryFailoverState {
       healthVersion: health.version,
       context: normalizedContext
     };
+    if (reserve) {
+      this.reserveSelection(selection, true);
+    }
+    return selection;
   }
 
   private blockedUntil(

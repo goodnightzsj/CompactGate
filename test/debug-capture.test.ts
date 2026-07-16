@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type CaptureRecord,
-  DebugCaptureWriter
+  DebugCaptureWriter,
+  serializeHeaders
 } from "../src/server/debug-capture.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -89,6 +90,50 @@ describe("DebugCaptureWriter pruning", () => {
       `purged:${capturePath}`
     ]);
   });
+
+  it("keeps the newest directory cap when a write overlaps hot configuration", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir, 1024 * 1024, 10 * 1024 * 1024);
+    const record = captureRecord("00000000-0000-0000-0000-000000000008");
+    record.incoming_request.body.text = "x".repeat(600_000);
+
+    const writePromise = writer.write(record);
+    writer.configure(dir, 1024 * 1024, 1);
+    const capturePath = await writePromise;
+
+    expect(capturePath).not.toBeNull();
+    await waitFor(() => !existsSync(capturePath ?? ""));
+  });
+
+  it("keeps a directory's newest cap after capture switches elsewhere", async () => {
+    const firstDir = await makeCaptureDir();
+    const secondDir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(firstDir, 1024 * 1024, 10 * 1024 * 1024);
+    const record = captureRecord("00000000-0000-0000-0000-000000000009");
+    record.incoming_request.body.text = "x".repeat(600_000);
+
+    const writePromise = writer.write(record);
+    writer.configure(firstDir, 1024 * 1024, 1);
+    writer.configure(secondDir, 1024 * 1024, 10 * 1024 * 1024);
+    const capturePath = await writePromise;
+
+    expect(capturePath).not.toBeNull();
+    await waitFor(() => !existsSync(capturePath ?? ""));
+  });
+});
+
+describe("DebugCaptureWriter header redaction", () => {
+  it("redacts Cookie response and request headers", () => {
+    expect(serializeHeaders({
+      cookie: "session=request-secret",
+      "set-cookie": ["session=response-secret", "refresh=other-secret"],
+      "content-type": "application/json"
+    })).toEqual({
+      cookie: "[redacted]",
+      "set-cookie": "[redacted]",
+      "content-type": "application/json"
+    });
+  });
 });
 
 describe("DebugCaptureWriter safe reads", () => {
@@ -170,6 +215,16 @@ async function makeCaptureDir(): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-prune-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   return dir;
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for capture state.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function captureRecord(requestId: string): CaptureRecord {

@@ -14,7 +14,11 @@ import {
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
-import { previewRoute } from "./routing.js";
+import {
+  PrimaryFailoverState,
+  primaryRouteRequestContextFromBody
+} from "./primary-failover.js";
+import { previewRoute, routeForPath } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 
 export type FetchClaudeModels = (config: CompactGateConfig) => Promise<{
@@ -31,7 +35,8 @@ export async function handleRuntimeApi(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  fetchClaudeModels: FetchClaudeModels
+  fetchClaudeModels: FetchClaudeModels,
+  primaryFailover: PrimaryFailoverState
 ): Promise<boolean> {
   if (req.method === "POST" && url.pathname === "/api/test-route") {
     const body = await readJsonBody(req);
@@ -42,7 +47,19 @@ export async function handleRuntimeApi(
 
     const method = typeof body.method === "string" ? body.method.toUpperCase() : "POST";
     try {
-      sendJson(res, 200, previewRoute(method, body.path, body.body, configStore.get()));
+      const config = configStore.get();
+      const parsedUrl = new URL(body.path, "http://compactgate.local");
+      const previewConfig = routeForPath(parsedUrl.pathname, body.body) === "primary"
+        ? primaryFailover.preview(
+            config,
+            primaryRouteRequestContextFromBody(
+              Buffer.from(typeof body.body === "string" ? body.body : JSON.stringify(body.body ?? {})),
+              req.headers,
+              parsedUrl.pathname
+            )
+          ).config
+        : config;
+      sendJson(res, 200, previewRoute(method, body.path, body.body, previewConfig));
     } catch (error) {
       if (error instanceof TypeError) {
         throw new ConfigError("test-route path must be a valid URL or path.");
@@ -77,7 +94,9 @@ export async function handleRuntimeApi(
       return true;
     }
 
-    sendJson(res, 200, logger.purgeStoredBodies());
+    const result = logger.purgeStoredBodies();
+    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+    sendJson(res, 200, result);
     return true;
   }
 

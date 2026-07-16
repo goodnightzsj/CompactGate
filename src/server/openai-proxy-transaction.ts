@@ -9,7 +9,13 @@ import type { DebugCaptureWriter } from "./debug-capture.js";
 import { serializeHeaders } from "./debug-capture.js";
 import { endpointFromPath } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
-import { addLog, emptyUsageMetrics, persistCapture } from "./proxy-support.js";
+import {
+  addLog,
+  emptyUsageMetrics,
+  persistCapture,
+  redactUrlForStorage,
+  storedPathForUrl
+} from "./proxy-support.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
 import type {
   RequestMetadata,
@@ -162,8 +168,8 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       completed_at: completedAtIso,
       route: input.route,
       method: input.req.method ?? "GET",
-      path: `${input.url.pathname}${input.url.search}`,
-      upstream_url: input.upstream.toString(),
+      path: storedPathForUrl(input.url),
+      upstream_url: redactUrlForStorage(input.upstream).toString(),
       upstream_host: input.upstream.host,
       source_model: input.sourceModel,
       target_model: input.targetModel,

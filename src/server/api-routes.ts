@@ -6,6 +6,7 @@ import { sendJson } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import type { StudioEventBroadcaster } from "./studio-events.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
+import type { PrimaryFailoverState } from "./primary-failover.js";
 
 export async function handleApi(
   req: IncomingMessage,
@@ -15,7 +16,8 @@ export async function handleApi(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  fetchClaudeModels: FetchClaudeModels
+  fetchClaudeModels: FetchClaudeModels,
+  primaryFailover: PrimaryFailoverState
 ): Promise<void> {
   if (await handleConfigApi(req, res, url, configStore, logger, captureWriter, studioEvents)) {
     return;
@@ -30,7 +32,8 @@ export async function handleApi(
       logger,
       captureWriter,
       studioEvents,
-      fetchClaudeModels
+      fetchClaudeModels,
+      primaryFailover
     )
   ) {
     return;

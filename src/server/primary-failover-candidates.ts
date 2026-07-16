@@ -28,15 +28,15 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
   }));
 }
 
-export function candidateSignature(config: CompactGateConfig, candidates: PrimaryCandidate[]): string {
-  const activeProfileId = config.profile_scopes?.codex?.active_profile_id ?? "";
+export function candidateSignature(candidates: PrimaryCandidate[]): string {
   const candidateParts = candidates.map((candidate) => [
     candidate.id,
     candidate.config.primary.base_url,
     candidate.config.primary.api_key_env,
+    candidate.config.primary.model_override ?? "",
     primaryCredentialSignature(candidate.config)
   ].join("|"));
-  return [activeProfileId, ...candidateParts].join("::");
+  return candidateParts.join("::");
 }
 
 function primaryCredentialSignature(config: CompactGateConfig): string {

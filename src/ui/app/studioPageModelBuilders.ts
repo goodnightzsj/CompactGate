@@ -117,6 +117,7 @@ export function buildLogsPageModel({
 }): StudioPageOutletProps["logsPage"] {
   return {
     logs,
+    pageQueryKey: logFeed.pageQueryKey,
     logCounts: logFeed.logPage.counts,
     providerCounts: logFeed.logPage.provider_counts,
     statusCounts: logFeed.logPage.status_counts,

@@ -39,6 +39,8 @@ export interface CompactResponseDedupeInput {
   upstream: URL;
   authorization: string | null;
   body: Buffer;
+  method?: string;
+  requestHeaders?: Record<string, string>;
 }
 
 export interface CachedCompactResponse {
@@ -310,10 +312,19 @@ function compactionKey(scope: CompactionBridgeScope, encryptedContent: string): 
 
 function compactDedupeKey(input: CompactResponseDedupeInput): string {
   return JSON.stringify([
+    (input.method ?? "POST").toUpperCase(),
     input.upstream.toString(),
     hashText(input.authorization ?? ""),
+    hashText(JSON.stringify(canonicalDedupeHeaders(input.requestHeaders ?? {}))),
     hashBuffer(input.body)
   ]);
+}
+
+function canonicalDedupeHeaders(headers: Record<string, string>): Array<[string, string]> {
+  return Object.entries(headers)
+    .map(([name, value]) => [name.toLowerCase(), value] as [string, string])
+    .filter(([name]) => name !== "content-length")
+    .sort(([left], [right]) => left.localeCompare(right));
 }
 
 function hashText(value: string): string {

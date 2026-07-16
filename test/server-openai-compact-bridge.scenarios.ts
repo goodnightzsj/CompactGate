@@ -40,11 +40,16 @@ function writeJsonResponse(res: ServerResponse, body: unknown, status = 200): vo
   res.end(JSON.stringify(body));
 }
 
-function postJson(appUrl: string, path: string, body: unknown): Promise<Response> {
+function postJson(
+  appUrl: string,
+  path: string,
+  body: unknown,
+  headers: Record<string, string> = JSON_HEADERS
+): Promise<Response> {
   return fetch(`${appUrl}${path}`, {
     method: "POST",
     body: typeof body === "string" ? body : JSON.stringify(body),
-    headers: JSON_HEADERS
+    headers
   });
 }
 
@@ -202,6 +207,50 @@ describe("CompactGate OpenAI routing", () => {
     });
     now += 1_001;
     expect(store.getCachedCompactResponse(input)).toBeNull();
+  });
+
+  it("isolates compact dedupe entries by method and forwarded headers", () => {
+    const store = new CompactionBridgeStore();
+    const input = {
+      method: "POST",
+      upstream: new URL("http://compact.example/v1/responses"),
+      authorization: "Bearer test",
+      requestHeaders: {
+        authorization: "Bearer test",
+        "openai-project": "project-a"
+      },
+      body: Buffer.from(JSON.stringify({ model: "gpt-5.5-openai-compact", input: "compact me" }))
+    };
+    store.storeCompactDedupeResponse(input, {
+      status: 200,
+      responseBody: Buffer.from("{\"ok\":true}"),
+      responseHeaders: { "content-type": "application/json" },
+      clientResponseBody: Buffer.from("{\"ok\":true}"),
+      clientResponseHeaders: { "content-type": "application/json" },
+      compactResponseNormalized: false,
+      compactResponseNormalizeReason: null,
+      compactResponseSyntheticSource: null,
+      firstTokenMs: 12
+    });
+
+    expect(store.getCachedCompactResponse({
+      ...input,
+      method: "GET"
+    })).toBeNull();
+    expect(store.getCachedCompactResponse({
+      ...input,
+      requestHeaders: {
+        authorization: "Bearer test",
+        "openai-project": "project-b"
+      }
+    })).toBeNull();
+    expect(store.getCachedCompactResponse({
+      ...input,
+      requestHeaders: {
+        "openai-project": "project-a",
+        authorization: "Bearer test"
+      }
+    })).not.toBeNull();
   });
 
   it("does not cache fallback state from oversized gzip compact responses", () => {
@@ -635,6 +684,129 @@ describe("CompactGate OpenAI routing", () => {
         content: [{ type: "input_text", text: "continue after cached compact" }]
       }
     ]);
+  });
+
+  it("does not reuse compact responses across OpenAI projects", async () => {
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (req, res) => {
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [{
+          type: "compaction",
+          encrypted_content: `PROJECT_${String(req.headers["openai-project"] ?? "missing")}`
+        }]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+    const body = { model: "gpt-5.5", input: "same compact body" };
+
+    const firstResponse = await postJson(app.url, "/v1/responses/compact", body, {
+      ...JSON_HEADERS,
+      "OpenAI-Project": "project-a"
+    });
+    const secondResponse = await postJson(app.url, "/v1/responses/compact", body, {
+      ...JSON_HEADERS,
+      "OpenAI-Project": "project-b"
+    });
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    await firstResponse.text();
+    await secondResponse.text();
+    expect(compactRequests).toHaveLength(2);
+  });
+
+  it("does not cache compact SSE responses that close before a terminal event", async () => {
+    const compactRequests: CapturedRequest[] = [];
+    let responseIndex = 0;
+    const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      responseIndex += 1;
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      if (responseIndex === 1) {
+        res.end('data: {"type":"response.output_text.delta","delta":"partial"}\n\n');
+        return;
+      }
+      res.end('data: {"type":"response.completed","response":{"output":[]}}\n\n');
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+    const body = { model: "gpt-5.5", stream: true, input: "retry partial compact" };
+
+    const firstResponse = await postJson(app.url, "/v1/responses/compact", body);
+    expect(await firstResponse.text()).toContain("partial");
+    const secondResponse = await postJson(app.url, "/v1/responses/compact", body);
+    expect(await secondResponse.text()).toContain("response.completed");
+
+    expect(compactRequests).toHaveLength(2);
+    const page = await fetchLogPage(app.url);
+    expect(page.logs.find((entry) => entry.error_summary === "OpenAI stream closed before response.completed."))
+      .toMatchObject({ route: "compact", status: 200 });
+  });
+
+  it("caches valid JSON compact responses when the request asked for streaming", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "JSON STREAM FALLBACK SUMMARY" }]
+          },
+          {
+            type: "compaction",
+            encrypted_content: "JSON_STREAM_FALLBACK_STATE"
+          }
+        ]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+    const compactBody = {
+      model: "gpt-5.5",
+      stream: true,
+      input: "cache a JSON response"
+    };
+
+    const firstResponse = await postJson(app.url, "/v1/responses/compact", compactBody);
+    const secondResponse = await postJson(app.url, "/v1/responses/compact", compactBody);
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    await firstResponse.text();
+    await secondResponse.text();
+    expect(compactRequests).toHaveLength(1);
+
+    const followUpResponse = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction", encrypted_content: "JSON_STREAM_FALLBACK_STATE" }]
+    });
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual([{
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "JSON STREAM FALLBACK SUMMARY" }]
+    }]);
+
+    const page = await fetchLogPage(app.url);
+    const compactLogs = page.logs.filter((entry) => entry.route === "compact");
+    expect(compactLogs).toHaveLength(2);
+    expect(compactLogs.every((entry) => entry.error_summary === null)).toBe(true);
   });
 
   it("does not dedupe different compact request bodies", async () => {
