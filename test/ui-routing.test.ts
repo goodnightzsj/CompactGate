@@ -26,6 +26,7 @@ describe("UI routing helpers", () => {
     expect(pagePathForStudioPage("routes")).toBe("/#routes");
     expect(pagePathForStudioPage("config")).toBe("/#config");
     expect(pagePathForStudioPage("logs")).toBe("/#logs");
+    expect(pagePathForStudioPage("health")).toBe("/health");
   });
 
   it("notifies mounted pages when browser location changes", () => {

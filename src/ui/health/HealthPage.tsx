@@ -4,7 +4,6 @@ import { HealthEndpointCard } from "./HealthEndpointCard.js";
 import { HealthHeroSection } from "./HealthHeroSection.js";
 import {
   overallHealthBadge,
-  StatusPill,
   upstreamHealthBadge
 } from "./health-status.js";
 
@@ -31,42 +30,25 @@ export function HealthPage({
   const readyRoutes = routeStatuses.filter((item) => item.status.tone === "good").length;
   const attentionRoutes = routeStatuses.filter((item) => item.status.tone === "warn").length;
   const failedRoutes = routeStatuses.filter((item) => item.status.tone === "bad").length;
+  const totalRoutes = routeStatuses.length;
   const listenUrl = health ? `http://${health.listen}` : "读取中...";
   const openAiEndpoint = health ? `http://${health.listen}/v1` : "等待健康数据";
   const claudeEndpoint = health ? `http://${health.listen}/anthropic` : "等待健康数据";
 
   return (
-    <main className="shell shell-health page-appear">
-      <header className="topbar health-topbar">
-        <div className="brand-lockup">
-          <div className="mark" aria-hidden="true">
-            CG
-          </div>
-          <div>
-            <p className="eyebrow">CompactGate 健康检查</p>
-            <h1>健康检查与上游装配状态</h1>
-          </div>
+    <div className="health-page page-appear">
+      <div className="page-header health-page-header">
+        <div>
+          <p className="eyebrow">健康检查</p>
+          <h2>上游装配状态</h2>
         </div>
 
-        <div className="status-strip" aria-label="CompactGate 健康状态">
-          <StatusPill label="总体状态" status={overallStatus} />
-          <StatusPill label="主上游" status={primaryStatus} />
-          <StatusPill label="压缩上游" status={compactStatus} />
-          <StatusPill label="Claude" status={claudePrimaryStatus} />
-        </div>
-
-        <div className="toolbar">
-          <a className="ghost-button" href="/">
-            返回控制台
-          </a>
-          <a className="ghost-button" href="/api/health" target="_blank" rel="noreferrer">
-            原始 JSON
-          </a>
-          <button className="solid-button" type="button" onClick={onRefresh} disabled={isRefreshing}>
+        <div className="health-page-actions">
+          <button className="btn btn-primary" type="button" onClick={onRefresh} disabled={isRefreshing}>
             {isRefreshing ? "刷新中..." : "刷新状态"}
           </button>
         </div>
-      </header>
+      </div>
 
       {error && <p className="error-banner">{error}</p>}
 
@@ -75,6 +57,7 @@ export function HealthPage({
         readyRoutes={readyRoutes}
         attentionRoutes={attentionRoutes}
         failedRoutes={failedRoutes}
+        totalRoutes={totalRoutes}
         listenUrl={listenUrl}
         refreshedAt={health?.time ?? null}
         isRefreshing={isRefreshing}
@@ -125,6 +108,6 @@ export function HealthPage({
         failedRoutes={failedRoutes}
         attentionRoutes={attentionRoutes}
       />
-    </main>
+    </div>
   );
 }

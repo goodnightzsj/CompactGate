@@ -1,4 +1,5 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
+import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
@@ -10,7 +11,8 @@ import type {
 } from "../../shared/types.js";
 import { CustomSelect } from "../shared/CustomSelect.js";
 import { formatDateTime, formatDurationMs } from "../shared/format.js";
-import { LogDetailRow } from "./LogDetailRow.js";
+import { LogDetailPanel } from "./LogDetailRow.js";
+import { LogMobileCard } from "./LogMobileCard.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
@@ -21,15 +23,26 @@ import {
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useStaggeredLogs } from "./useStaggeredLogs.js";
 
+const MotionDiv = motion.div;
+const MotionSpan = motion.span;
 const MotionTr = motion.tr;
 
-const rowTransition = {
+const logRowTransition = {
   type: "spring" as const,
-  stiffness: 500,
-  damping: 30,
-  mass: 1,
-  opacity: { duration: 0.15 },
+  stiffness: 460,
+  damping: 34,
+  mass: 0.72,
+  opacity: { duration: 0.14 }
 };
+
+const detailTransition = {
+  duration: 0.2,
+  ease: [0.16, 1, 0.3, 1] as const
+};
+
+function logEntryKey(entry: RequestLogEntry): string {
+  return `${entry.request_id}-${entry.time}`;
+}
 
 export function LogsPage({
   logs, pageQueryKey, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
@@ -47,7 +60,7 @@ export function LogsPage({
   onHostFilterChange: (host: string) => void;
   onLoadMore: () => void; error: string | null;
 }) {
-  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
+  const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const displayedLogs = useStaggeredLogs(logs, pageQueryKey);
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
@@ -56,6 +69,26 @@ export function LogsPage({
     logs: displayedLogs,
     onLoadMore
   });
+  const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER;
+
+  function toggleLog(logKey: string) {
+    setExpandedLogKey((currentKey) => currentKey === logKey ? null : logKey);
+  }
+
+  function handleRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, logKey: string) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault();
+    toggleLog(logKey);
+  }
+
+  function clearFilters() {
+    onRouteFilterChange("all");
+    onStatusFilterChange("all");
+    onHostFilterChange(ALL_HOSTS_FILTER);
+  }
 
   return (
     <>
@@ -100,7 +133,22 @@ export function LogsPage({
           ]}
           onChange={onHostFilterChange}
         />
-        <div style={{ display: "flex", gap: 6, marginLeft: "auto", alignItems: "center" }}>
+        <AnimatePresence initial={false}>
+          {hasActiveFilters && (
+            <MotionSpan
+              className="logs-clear-filters-motion"
+              initial={{ opacity: 0, scale: 0.96, x: -4 }}
+              animate={{ opacity: 1, scale: 1, x: 0 }}
+              exit={{ opacity: 0, scale: 0.98, x: -3 }}
+              transition={detailTransition}
+            >
+              <button className="btn btn-sm logs-clear-filters" type="button" onClick={clearFilters}>
+                清除筛选
+              </button>
+            </MotionSpan>
+          )}
+        </AnimatePresence>
+        <div className="logs-provider-counts">
           <span className="route-chip codex">{PROVIDER_LABELS.openai}: {providerCounts.openai}</span>
           <span className="route-chip claude">{PROVIDER_LABELS.claude}: {providerCounts.claude}</span>
         </div>
@@ -117,9 +165,10 @@ export function LogsPage({
         </div>
       ) : (
         <div className="log-table log-table-full">
-          <div
+          <MotionDiv
             ref={tableBodyRef}
             className="log-table-body"
+            layoutScroll
             onScroll={handleLogScroll}
             aria-busy={isLoadingLogs || isLoadingMoreLogs}
           >
@@ -152,49 +201,102 @@ export function LogsPage({
               </thead>
               <tbody>
                 <AnimatePresence initial={false} mode="popLayout">
-                  {displayedLogs.map((entry) => {
+                  {displayedLogs.flatMap((entry, index) => {
                     const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
                     const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
                     const hasError = Boolean(entry.error_summary) || entry.status >= 400;
-                    return (
-                      <Fragment key={entry.request_id}>
+                    const logKey = logEntryKey(entry);
+                    const detailId = `desktop-log-detail-${index}`;
+                    const expanded = expandedLogKey === logKey;
+                    const rows = [
+                      <MotionTr
+                        key={logKey}
+                        layout="position"
+                        initial={{ opacity: 0, y: -14, scale: 0.995 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={logRowTransition}
+                        className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
+                        tabIndex={0}
+                        aria-expanded={expanded}
+                        aria-controls={detailId}
+                        aria-label={`${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
+                        onClick={() => toggleLog(logKey)}
+                        onKeyDown={(event) => handleRowKeyDown(event, logKey)}
+                      >
+                        <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
+                        <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
+                        <td>
+                          <LogTextTooltip className="log-model-cell" value={modelMapping}>
+                            <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                            <strong>{entry.source_model ?? "-"}</strong>
+                            {hasRewrite && <small>→ {entry.target_model}</small>}
+                          </LogTextTooltip>
+                        </td>
+                        <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
+                        <td><LogTextTooltip className="log-cell-code" value={entry.response_model ?? "-"} /></td>
+                        <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
+                        <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
+                        <td><TokenTooltip entry={entry} /></td>
+                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
+                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
+                      </MotionTr>
+                    ];
+
+                    if (expanded) {
+                      rows.push(
                         <MotionTr
-                          initial={{ opacity: 0, y: -16 }}
+                          key={`${logKey}-detail`}
+                          layout="position"
+                          initial={{ opacity: 0, y: -6 }}
                           animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          transition={rowTransition}
-                          layout
-                          className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
-                          onClick={() =>
-                            setExpandedRequestId((currentId) => currentId === entry.request_id ? null : entry.request_id)
-                          }
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={detailTransition}
+                          className="log-detail-row"
+                          id={detailId}
                         >
-                          <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
-                          <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
-                          <td>
-                            <LogTextTooltip className="log-model-cell" value={modelMapping}>
-                              <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-                              <strong>{entry.source_model ?? "-"}</strong>
-                              {hasRewrite && <small>→ {entry.target_model}</small>}
-                            </LogTextTooltip>
+                          <td colSpan={10}>
+                            <LogDetailPanel entry={entry} />
                           </td>
-                          <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
-                          <td><LogTextTooltip className="log-cell-code" value={entry.response_model ?? "-"} /></td>
-                          <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
-                          <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
-                          <td><TokenTooltip entry={entry} /></td>
-                          <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
-                          <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
                         </MotionTr>
-                        {expandedRequestId === entry.request_id && <LogDetailRow entry={entry} />}
-                      </Fragment>
-                    );
+                      );
+                    }
+
+                    return rows;
                   })}
                 </AnimatePresence>
               </tbody>
             </table>
-          </div>
+          </MotionDiv>
         </div>
+      )}
+
+      {displayedLogs.length > 0 && (
+        <MotionDiv className="logs-mobile-list" aria-label="请求日志摘要" layoutScroll>
+          <AnimatePresence initial={false} mode="popLayout">
+            {displayedLogs.map((entry, index) => {
+              const logKey = logEntryKey(entry);
+              return (
+                <MotionDiv
+                  key={`mobile-${logKey}`}
+                  className="log-mobile-motion-item"
+                  layout="position"
+                  initial={{ opacity: 0, y: -10, scale: 0.995 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -5 }}
+                  transition={logRowTransition}
+                >
+                  <LogMobileCard
+                    entry={entry}
+                    detailId={`mobile-log-detail-${index}`}
+                    expanded={expandedLogKey === logKey}
+                    onToggle={() => toggleLog(logKey)}
+                  />
+                </MotionDiv>
+              );
+            })}
+          </AnimatePresence>
+        </MotionDiv>
       )}
 
       {hasMoreLogs && (

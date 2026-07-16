@@ -9,6 +9,7 @@
   .custom-select-option,
   .sidebar-nav-item,
   .config-tab,
+  .profile-item-more summary,
   input,
   textarea {
     min-height: 44px;
@@ -120,7 +121,7 @@
   }
 
   .profile-item-actions {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) auto;
     width: 100%;
   }
 
@@ -175,6 +176,11 @@
     min-width: 0;
   }
 
+  .main-content {
+    gap: 16px;
+    padding: 16px 12px 28px;
+  }
+
   .page-header {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -182,6 +188,18 @@
 
   .page-header > * {
     min-width: 0;
+  }
+
+  .dashboard-header-actions,
+  .dashboard-header-actions .status-pill,
+  .dashboard-header-actions .btn,
+  .route-hit-summary {
+    width: 100%;
+  }
+
+  .dashboard-header-actions .status-pill,
+  .route-hit-summary {
+    justify-content: center;
   }
 
   .sidebar {
@@ -208,20 +226,21 @@
 
   .sidebar-nav {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 6px;
     padding: 0;
   }
 
   .sidebar-nav-item {
+    flex-direction: column;
     height: auto;
     min-height: 44px;
     min-width: 0;
     justify-content: center;
-    gap: 5px;
+    gap: 2px;
     padding: 8px 5px;
     border-radius: var(--radius-sm);
-    font-size: 0.7rem;
+    font-size: 0.66rem;
     text-align: center;
     box-shadow: none;
   }
@@ -313,6 +332,30 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .dashboard-request-table {
+    display: none;
+  }
+
+  .dashboard-request-list {
+    display: grid;
+  }
+
+  .card,
+  .stat-card,
+  .config-section {
+    padding: 12px;
+  }
+
+  .card-header {
+    gap: 10px;
+  }
+
+  .card-header .status-pill,
+  .dashboard-health-row .status-pill {
+    width: auto;
+    flex-shrink: 0;
+  }
+
   .logging-storage-summary {
     width: 100%;
   }
@@ -380,22 +423,52 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .route-mapping-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .route-mapping-row code,
+  .route-hit-marker {
+    grid-column: 1 / -1;
+  }
+
   .route-foot {
     gap: 8px;
   }
 
   .config-tab-bar {
-    display: flex;
-    gap: 6px;
-    overflow-x: auto;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    overflow: visible;
   }
 
   .config-tab {
-    flex: 0 0 max(92px, 25%);
-    scroll-snap-align: start;
-    white-space: nowrap;
+    min-width: 0;
+    padding-inline: 6px;
+    white-space: normal;
+  }
+
+  .config-portable-panel,
+  .config-portable-card,
+  .config-import-summary {
+    min-width: 0;
+  }
+
+  .config-portable-panel {
+    padding: 12px;
+  }
+
+  .config-portable-head,
+  .config-portable-grid,
+  .config-import-summary-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .config-portable-head .btn-primary,
+  .config-import-confirm .btn-danger {
+    width: 100%;
   }
 
   .profile-card-controls,
@@ -417,6 +490,20 @@
   .profile-item-actions {
     display: grid;
     gap: 6px;
+    width: 100%;
+  }
+
+  .profile-secondary-actions,
+  .config-save-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .config-save-bar {
+    bottom: 8px;
+    padding: 10px;
+  }
+
+  .config-save-bar .btn-primary {
     width: 100%;
   }
 
@@ -454,6 +541,28 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     justify-items: stretch;
+  }
+
+  .logs-toolbar,
+  .logs-provider-counts {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+
+  .logs-toolbar .custom-select,
+  .logs-toolbar .btn,
+  .logs-provider-counts .route-chip {
+    width: 100%;
+  }
+
+  .logs-provider-counts {
+    margin-left: 0;
+  }
+
+  .logs-provider-counts .route-chip {
+    min-height: 32px;
+    justify-content: center;
   }
 
   .log-list {
@@ -551,15 +660,11 @@
 }
 
 @media (max-width: 420px) {
-  .sidebar-nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .brand-lockup h1,
   .route-board .section-heading h2,
   .config-dashboard .section-heading h2,
   .logs-panel .section-heading h2 {
-    font-size: clamp(1rem, 7vw, 1.25rem);
+    font-size: 1.2rem;
   }
 
   .route-board,
@@ -619,7 +724,7 @@
 
   .profile-scope-grid .profile-item-actions {
     grid-column: auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 
@@ -633,7 +738,7 @@
   }
 
   .profile-scope-grid .profile-item {
-    grid-template-columns: 28px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .profile-scope-grid .profile-item-handle {
@@ -641,12 +746,13 @@
   }
 
   .profile-scope-grid .profile-item-main {
+    grid-column: 1;
     grid-template-columns: minmax(0, 1fr);
   }
 
   .profile-scope-grid .profile-item-actions {
     grid-column: 1 / -1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .profile-scope-grid .profile-card-status {
@@ -664,10 +770,17 @@
 }
 
 @media (min-width: 761px) and (max-width: 1180px) {
+  .profile-scope-grid .profile-item,
   .profile-item {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
+  .profile-scope-grid .profile-item-main,
+  .profile-item-main {
+    grid-column: 1;
+  }
+
+  .profile-scope-grid .profile-item-actions,
   .profile-item-actions {
     grid-column: 1 / -1;
   }
@@ -675,10 +788,11 @@
 
 @media (max-width: 760px) {
   .profile-item {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .profile-item-main {
+    grid-column: 1;
     grid-template-columns: minmax(0, 1fr);
   }
 

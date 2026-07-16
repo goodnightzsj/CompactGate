@@ -3,8 +3,16 @@
    ═══════════════════════════════════════════════════ */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: minmax(250px, 0.8fr) minmax(280px, 0.9fr) minmax(340px, 1.3fr);
   gap: 16px;
+}
+
+.dashboard-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .stat-card {
@@ -34,7 +42,7 @@
   font-family: var(--font-display);
   font-size: 2rem;
   font-weight: 700;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   color: var(--ink);
   line-height: 1;
 }
@@ -108,4 +116,75 @@
   font-size: 0.76rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dashboard-request-list {
+  display: none;
+}
+
+.dashboard-request-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 10px;
+  min-width: 0;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.dashboard-request-item-head {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.dashboard-request-item-head time {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.dashboard-request-item > strong,
+.dashboard-request-item > code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-request-item > strong {
+  color: var(--ink);
+  font-size: 0.78rem;
+}
+
+.dashboard-request-item > code {
+  grid-column: 1;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.dashboard-request-duration {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  align-self: center;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.dashboard-request-all {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 700;
 }

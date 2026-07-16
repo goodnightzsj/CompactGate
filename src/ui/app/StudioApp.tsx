@@ -1,3 +1,4 @@
+import { MotionConfig } from "framer-motion";
 import { useDocumentTitle } from "../hooks/useDocumentTitle.js";
 import { useThemeMode } from "../hooks/useThemeMode.js";
 import { StudioSidebar } from "../layout/StudioSidebar.js";
@@ -14,27 +15,27 @@ export function StudioApp() {
     healthMode: navigation.healthMode,
     pageMode: navigation.pageMode
   });
-  const sidebarPage = navigation.healthMode ? "dashboard" : navigation.currentPage;
-
   useDocumentTitle(navigation.pageMode);
 
   return (
-    <div className="app-shell">
-      <StudioSidebar
-        currentPage={sidebarPage}
-        onNavigate={navigation.navigateTo}
-        health={pageModels.sidebarHealth}
-        themeMode={themeMode}
-        onThemeModeChange={setThemeMode}
-      />
+    <MotionConfig reducedMotion="user">
+      <div className="app-shell">
+        <StudioSidebar
+          currentPage={navigation.currentPage}
+          onNavigate={navigation.navigateTo}
+          health={pageModels.sidebarHealth}
+          themeMode={themeMode}
+          onThemeModeChange={setThemeMode}
+        />
 
-      <main className="main-content">
-        <StudioPageOutlet {...pageModels.pageOutlet} />
-      </main>
+        <main className="main-content">
+          <StudioPageOutlet {...pageModels.pageOutlet} />
+        </main>
 
-      {pageModels.profileDeleteDialog && (
-        <ProfileDeleteDialogHost {...pageModels.profileDeleteDialog} />
-      )}
-    </div>
+        {pageModels.profileDeleteDialog && (
+          <ProfileDeleteDialogHost {...pageModels.profileDeleteDialog} />
+        )}
+      </div>
+    </MotionConfig>
   );
 }

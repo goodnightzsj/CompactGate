@@ -23,6 +23,7 @@ export function detectPageFromLocation(location: LocationLike): PageMode {
 }
 
 export function pagePathForStudioPage(page: StudioPage): string {
+  if (page === "health") return "/health";
   return page === "dashboard" ? "/" : `/#${page}`;
 }
 

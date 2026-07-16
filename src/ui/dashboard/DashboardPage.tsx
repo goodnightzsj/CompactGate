@@ -1,6 +1,5 @@
 import type {
   HealthResponse,
-  ProviderLogCounts,
   PublicConfig,
   RequestLogEntry,
   RouteKind
@@ -15,7 +14,6 @@ export function DashboardPage({
   health,
   logs,
   logCounts,
-  providerCounts,
   saveState,
   hasPendingChanges,
   onExport
@@ -24,7 +22,6 @@ export function DashboardPage({
   health: HealthResponse | null;
   logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
-  providerCounts: ProviderLogCounts;
   saveState: SaveState;
   hasPendingChanges: boolean;
   onExport: () => void | Promise<void>;
@@ -38,7 +35,7 @@ export function DashboardPage({
           <p className="eyebrow">总览</p>
           <h2>CompactGate 控制台</h2>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div className="dashboard-header-actions">
           <span className="status-pill is-good">监听 {listen}</span>
           <span className="status-pill">
             {saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}
@@ -52,7 +49,6 @@ export function DashboardPage({
         health={health}
         listen={listen}
         logCounts={logCounts}
-        providerCounts={providerCounts}
       />
 
       <DashboardRecentRequests logs={logs} listen={listen} />

@@ -24,7 +24,8 @@ export function StudioSidebar({
     { page: "dashboard", label: "总览", icon: "◇" },
     { page: "routes", label: "路由", icon: "⇢" },
     { page: "config", label: "配置", icon: "⚙" },
-    { page: "logs", label: "日志", icon: "☰" }
+    { page: "logs", label: "日志", icon: "☰" },
+    { page: "health", label: "健康", icon: "+" }
   ];
 
   return (
@@ -39,6 +40,7 @@ export function StudioSidebar({
           <button
             key={item.page}
             className={`sidebar-nav-item ${currentPage === item.page ? "is-active" : ""}`}
+            aria-current={currentPage === item.page ? "page" : undefined}
             onClick={() => onNavigate(item.page)}
           >
             <span className="sidebar-nav-icon">{item.icon}</span>

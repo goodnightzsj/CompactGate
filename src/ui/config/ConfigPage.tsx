@@ -13,7 +13,6 @@ import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
 import { ConfigSaveBar } from "./ConfigSaveBar.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
-import { saveLabel } from "./save-state.js";
 import type { ConfigFormState, ConfigTab, ProfileActionState, SaveState } from "./types.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
 
@@ -113,9 +112,6 @@ export function ConfigPage({
           <p className="eyebrow">配置管理</p>
           <h2>配置管理</h2>
         </div>
-        <span className={`status-pill ${save.hasPendingChanges ? "is-warn" : ""}`}>
-          {saveLabel(save.saveState, save.hasPendingChanges, config?.last_saved_at)}
-        </span>
       </div>
 
       <div className="config-layout">
@@ -125,9 +121,11 @@ export function ConfigPage({
               <button
                 type="button"
                 role="tab"
+                id={`config-tab-${tabItem.id}`}
+                aria-controls={`config-panel-${tabItem.id}`}
                 aria-selected={tab.configTab === tabItem.id}
                 key={tabItem.id}
-                className={tab.configTab === tabItem.id ? "is-active" : ""}
+                className={`config-tab ${tab.configTab === tabItem.id ? "is-active" : ""}`}
                 onClick={() => tab.onConfigTabChange(tabItem.id)}
               >
                 {tabItem.label}
@@ -135,71 +133,77 @@ export function ConfigPage({
             ))}
           </div>
 
-          {tab.configTab === "profiles" && (
-            <ConfigProfilesPanel
-              config={config}
-              profileName={profiles.profileName}
-              selectedProfileId={profiles.selectedProfileId}
-              profileState={profiles.profileState}
-              profileError={profiles.profileError}
-              claudeProfileName={profiles.claudeProfileName}
-              selectedClaudeProfileId={profiles.selectedClaudeProfileId}
-              claudeProfileState={profiles.claudeProfileState}
-              claudeProfileError={profiles.claudeProfileError}
-              onProfileNameChange={profiles.onProfileNameChange}
-              onClaudeProfileNameChange={profiles.onClaudeProfileNameChange}
-              onSelectedProfileChange={profiles.onSelectedProfileChange}
-              onSaveProfile={profiles.onSaveProfile}
-              onApplyProfile={profiles.onApplyProfile}
-              onUpdateProfile={profiles.onUpdateProfile}
-              onReorderProfiles={profiles.onReorderProfiles}
-              onDuplicateProfile={profiles.onDuplicateProfile}
-              onDeleteProfile={profiles.onDeleteProfile}
-            />
-          )}
+          <div
+            id={`config-panel-${tab.configTab}`}
+            role="tabpanel"
+            aria-labelledby={`config-tab-${tab.configTab}`}
+          >
+            {tab.configTab === "profiles" && (
+              <ConfigProfilesPanel
+                config={config}
+                profileName={profiles.profileName}
+                selectedProfileId={profiles.selectedProfileId}
+                profileState={profiles.profileState}
+                profileError={profiles.profileError}
+                claudeProfileName={profiles.claudeProfileName}
+                selectedClaudeProfileId={profiles.selectedClaudeProfileId}
+                claudeProfileState={profiles.claudeProfileState}
+                claudeProfileError={profiles.claudeProfileError}
+                onProfileNameChange={profiles.onProfileNameChange}
+                onClaudeProfileNameChange={profiles.onClaudeProfileNameChange}
+                onSelectedProfileChange={profiles.onSelectedProfileChange}
+                onSaveProfile={profiles.onSaveProfile}
+                onApplyProfile={profiles.onApplyProfile}
+                onUpdateProfile={profiles.onUpdateProfile}
+                onReorderProfiles={profiles.onReorderProfiles}
+                onDuplicateProfile={profiles.onDuplicateProfile}
+                onDeleteProfile={profiles.onDeleteProfile}
+              />
+            )}
 
-          {tab.configTab === "routes" && (
-            <RouteConfigPanel config={config} form={form} onFormChange={onFormChange} />
-          )}
+            {tab.configTab === "routes" && (
+              <RouteConfigPanel config={config} form={form} onFormChange={onFormChange} />
+            )}
 
-          {tab.configTab === "model" && (
-            <ConfigModelPanel
-              form={form}
-              linkedCompactModel={model.linkedCompactModel}
-              onFormChange={onFormChange}
-              onUnlockCompactModel={model.onUnlockCompactModel}
-              onRestoreLinkedMode={model.onRestoreLinkedMode}
-            />
-          )}
+            {tab.configTab === "model" && (
+              <ConfigModelPanel
+                form={form}
+                linkedCompactModel={model.linkedCompactModel}
+                onFormChange={onFormChange}
+                onUnlockCompactModel={model.onUnlockCompactModel}
+                onRestoreLinkedMode={model.onRestoreLinkedMode}
+              />
+            )}
 
-          {tab.configTab === "logging" && (
-            <LoggingStoragePanel form={form} onFormChange={onFormChange} />
-          )}
+            {tab.configTab === "logging" && (
+              <LoggingStoragePanel form={form} onFormChange={onFormChange} />
+            )}
 
-          {tab.configTab === "preview" && (
-            <ConfigPreviewPanel
-              previewPath={previewState.previewPath}
-              previewBody={previewState.previewBody}
-              preview={previewState.preview}
-              previewError={previewState.previewError}
-              onPathChange={previewState.onPathChange}
-              onBodyChange={previewState.onBodyChange}
-              onPreviewSubmit={previewState.onPreviewSubmit}
-            />
-          )}
+            {tab.configTab === "preview" && (
+              <ConfigPreviewPanel
+                previewPath={previewState.previewPath}
+                previewBody={previewState.previewBody}
+                preview={previewState.preview}
+                previewError={previewState.previewError}
+                onPathChange={previewState.onPathChange}
+                onBodyChange={previewState.onBodyChange}
+                onPreviewSubmit={previewState.onPreviewSubmit}
+              />
+            )}
 
-          {tab.configTab === "portable" && (
-            <ConfigImportExportPanel
-              config={config}
-              importCandidate={importWorkflow.importCandidate}
-              importState={importWorkflow.importState}
-              importError={importWorkflow.importError}
-              onFileChange={importWorkflow.handleImportFileChange}
-              onExportConfig={portable.onExportConfig}
-              onConfirmImport={importWorkflow.confirmImportConfig}
-              onClearImport={importWorkflow.clearImportCandidate}
-            />
-          )}
+            {tab.configTab === "portable" && (
+              <ConfigImportExportPanel
+                config={config}
+                importCandidate={importWorkflow.importCandidate}
+                importState={importWorkflow.importState}
+                importError={importWorkflow.importError}
+                onFileChange={importWorkflow.handleImportFileChange}
+                onExportConfig={portable.onExportConfig}
+                onConfirmImport={importWorkflow.confirmImportConfig}
+                onClearImport={importWorkflow.clearImportCandidate}
+              />
+            )}
+          </div>
         </div>
 
         <ConfigSaveBar

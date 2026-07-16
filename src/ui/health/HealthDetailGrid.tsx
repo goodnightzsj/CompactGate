@@ -9,9 +9,11 @@ export function HealthDetailGrid({
   failedRoutes: number;
   attentionRoutes: number;
 }) {
+  const needsAttention = failedRoutes > 0 || attentionRoutes > 0;
+
   return (
-    <section className="health-detail-grid">
-      <section className="panel health-notes" aria-labelledby="health-notes-title">
+    <section className={`health-detail-grid ${needsAttention ? "" : "is-compact"}`}>
+      {needsAttention && <section className="panel health-notes" aria-labelledby="health-notes-title">
         <div className="section-heading">
           <p className="eyebrow">检查清单</p>
           <h2 id="health-notes-title">如何判断现在能不能接请求</h2>
@@ -31,18 +33,21 @@ export function HealthDetailGrid({
             <p>如果显示“缺密钥”，代理仍能启动，但转发前需要先在控制台里直接保存访问密钥，或依赖旧配置里的环境变量回退。</p>
           </div>
         </div>
-      </section>
+      </section>}
 
-      <section className="panel health-json-panel" aria-labelledby="health-json-title">
-        <div className="section-heading">
-          <p className="eyebrow">响应内容</p>
-          <h2 id="health-json-title">原始健康响应</h2>
-        </div>
+      <details className="panel health-json-panel">
+        <summary>
+          <span>
+            <small>响应内容</small>
+            <strong>原始健康响应</strong>
+          </span>
+          <span className="health-json-action">展开查看</span>
+        </summary>
 
         <pre className="health-json">
           {health ? JSON.stringify(health, null, 2) : '{\n  "status": "loading"\n}'}
         </pre>
-      </section>
+      </details>
     </section>
   );
 }

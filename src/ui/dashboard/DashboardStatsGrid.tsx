@@ -1,6 +1,5 @@
 import type {
   HealthResponse,
-  ProviderLogCounts,
   PublicConfig,
   RouteKind
 } from "../../shared/types.js";
@@ -10,14 +9,12 @@ export function DashboardStatsGrid({
   config,
   health,
   listen,
-  logCounts,
-  providerCounts
+  logCounts
 }: {
   config: PublicConfig | null;
   health: HealthResponse | null;
   listen: string;
   logCounts: Record<"all" | RouteKind, number>;
-  providerCounts: ProviderLogCounts;
 }) {
   const primaryHost = config?.primary.host ?? "-";
   const compactHost = config?.compact.host ?? "-";
@@ -75,20 +72,6 @@ export function DashboardStatsGrid({
             <span className="dashboard-health-name">Claude 主路由</span>
             <span className="dashboard-health-host">{claudeHost}</span>
             <span className={`status-pill ${claudeOk ? "is-good" : "is-warn"}`}>{claudeOk ? "正常" : "异常"}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="stat-card">
-        <div className="stat-card-label">Provider 汇总</div>
-        <div className="dashboard-provider-grid">
-          <div>
-            <div className="stat-card-value">{providerCounts.openai}</div>
-            <div className="stat-card-meta">Codex / OpenAI</div>
-          </div>
-          <div>
-            <div className="stat-card-value">{providerCounts.claude}</div>
-            <div className="stat-card-meta">Claude</div>
           </div>
         </div>
       </div>

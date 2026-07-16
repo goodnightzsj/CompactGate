@@ -204,44 +204,49 @@ export function ProfileScopeCard({
                   >
                     {profileState === "applying" && isSelected ? "应用中..." : "应用"}
                   </button>
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    disabled={profileBusy}
-                    title={
-                      isActive
-                        ? "保存当前草稿到这个档案，并立即更新运行时。"
-                        : "保存当前草稿到这个档案；不会切换当前运行时。"
-                    }
-                    onClick={() => {
-                      onSelectedProfileChange(scope, profile.id);
-                      void onUpdateProfile(scope, profile.id);
-                    }}
-                  >
-                    {profileState === "updating" && isSelected ? busyUpdateLabel : updateLabel}
-                  </button>
-                  <button
-                    className="ghost-button"
-                    type="button"
-                    disabled={profileBusy}
-                    onClick={() => {
-                      onSelectedProfileChange(scope, profile.id);
-                      void onDuplicateProfile(scope, profile.id);
-                    }}
-                  >
-                    {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
-                  </button>
-                  <button
-                    className="ghost-button profile-danger-button"
-                    type="button"
-                    disabled={profileBusy}
-                    onClick={() => {
-                      onSelectedProfileChange(scope, profile.id);
-                      void onDeleteProfile(scope, profile.id);
-                    }}
-                  >
-                    {profileState === "deleting" && isSelected ? "删除中..." : "删除"}
-                  </button>
+                  <details className="profile-item-more">
+                    <summary title={`更多 ${profile.name} 档案操作`}>更多</summary>
+                    <div className="profile-secondary-actions">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={profileBusy}
+                        title={
+                          isActive
+                            ? "保存当前草稿到这个档案，并立即更新运行时。"
+                            : "保存当前草稿到这个档案；不会切换当前运行时。"
+                        }
+                        onClick={() => {
+                          onSelectedProfileChange(scope, profile.id);
+                          void onUpdateProfile(scope, profile.id);
+                        }}
+                      >
+                        {profileState === "updating" && isSelected ? busyUpdateLabel : updateLabel}
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => {
+                          onSelectedProfileChange(scope, profile.id);
+                          void onDuplicateProfile(scope, profile.id);
+                        }}
+                      >
+                        {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
+                      </button>
+                      <button
+                        className="ghost-button profile-danger-button"
+                        type="button"
+                        disabled={profileBusy}
+                        onClick={() => {
+                          onSelectedProfileChange(scope, profile.id);
+                          void onDeleteProfile(scope, profile.id);
+                        }}
+                      >
+                        {profileState === "deleting" && isSelected ? "删除中..." : "删除"}
+                      </button>
+                    </div>
+                  </details>
                 </div>
               </article>
             );

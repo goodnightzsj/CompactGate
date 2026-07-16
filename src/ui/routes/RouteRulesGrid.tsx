@@ -1,5 +1,7 @@
 import type { RouteKind } from "../../shared/types.js";
 
+export type RouteHitSource = "preview" | "latest" | "none";
+
 export function RouteRulesGrid({
   listen,
   primaryHost,
@@ -8,7 +10,8 @@ export function RouteRulesGrid({
   currentModel,
   compactModel,
   compactMode,
-  activeRoute
+  activeRoute,
+  activeRouteSource
 }: {
   listen: string;
   primaryHost: string;
@@ -17,7 +20,8 @@ export function RouteRulesGrid({
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
-  activeRoute: RouteKind;
+  activeRoute: RouteKind | null;
+  activeRouteSource: RouteHitSource;
 }) {
   const compactTarget = compactMode === "split" ? compactHost : primaryHost;
 
@@ -31,13 +35,15 @@ export function RouteRulesGrid({
         <div className="route-mapping">
           <div className={`route-mapping-row ${activeRoute === "compact" ? "is-active" : ""}`}>
             <code>/v1/responses/compact</code>
-            <span className="tag">命中</span>
+            <span className="tag">精确规则</span>
             <span className="route-chip compact">压缩上游</span>
+            {activeRoute === "compact" && <RouteHitMarker source={activeRouteSource} />}
           </div>
           <div className={`route-mapping-row ${activeRoute === "primary" ? "is-active" : ""}`}>
             <code>其它 /v1/*</code>
-            <span className="tag">默认</span>
+            <span className="tag">兜底规则</span>
             <span className="route-chip codex">主上游</span>
+            {activeRoute === "primary" && <RouteHitMarker source={activeRouteSource} />}
           </div>
         </div>
 
@@ -67,8 +73,9 @@ export function RouteRulesGrid({
         <div className="route-mapping">
           <div className={`route-mapping-row ${activeRoute === "claude" ? "is-active" : ""}`}>
             <code>所有 /messages</code>
-            <span className="tag">默认</span>
+            <span className="tag">通道规则</span>
             <span className="route-chip claude">主上游</span>
+            {activeRoute === "claude" && <RouteHitMarker source={activeRouteSource} />}
           </div>
         </div>
 
@@ -85,5 +92,17 @@ export function RouteRulesGrid({
         </div>
       </div>
     </div>
+  );
+}
+
+function RouteHitMarker({ source }: { source: RouteHitSource }) {
+  if (source === "none") {
+    return null;
+  }
+
+  return (
+    <span className="route-hit-marker">
+      {source === "preview" ? "预览命中" : "最近命中"}
+    </span>
   );
 }

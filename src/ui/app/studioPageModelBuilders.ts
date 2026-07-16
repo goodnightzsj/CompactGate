@@ -53,7 +53,6 @@ export function buildDashboardPageModel({
     health,
     logs,
     logCounts: logFeed.logPage.counts,
-    providerCounts: logFeed.logPage.provider_counts,
     saveState: configActions.saveState,
     hasPendingChanges,
     onExport: configActions.exportConfig
@@ -61,24 +60,27 @@ export function buildDashboardPageModel({
 }
 
 export function buildRoutesPageModel({
-  activeRoute,
   compactModel,
   config,
   form,
-  latestLog
+  latestLog,
+  previewRoute
 }: {
-  activeRoute: RouteKind;
   compactModel: string;
   config: PublicConfig | null;
   form: ConfigFormState;
   latestLog: RequestLogEntry | null;
+  previewRoute: RouteKind | null;
 }): StudioPageOutletProps["routesPage"] {
+  const activeRoute = previewRoute ?? latestLog?.route ?? null;
+
   return {
     config,
     currentModel: form.primaryModelOverride,
     compactModel,
     compactMode: form.upstreamMode,
     activeRoute,
+    activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
     latestLog
   };
 }

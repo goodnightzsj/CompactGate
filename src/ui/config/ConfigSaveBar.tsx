@@ -1,7 +1,7 @@
 import type * as React from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import { profileScopeState } from "./profile-utils.js";
-import { saveButtonLabel } from "./save-state.js";
+import { saveButtonLabel, saveLabel } from "./save-state.js";
 import type { SaveState } from "./types.js";
 
 export function ConfigSaveBar({
@@ -20,13 +20,16 @@ export function ConfigSaveBar({
   const applyTarget = activeProfileApplyTarget(config);
 
   return (
-    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-      {saveError && <div className="error-banner" style={{ flex: 1 }}>{saveError}</div>}
-      <span className="field-hint" style={{ flex: "1 1 260px" }}>{applyTarget.hint}</span>
-      <button className="btn btn-primary" disabled={saveState === "saving"} onClick={onSaveConfig}>
+    <aside className={`config-save-bar ${hasPendingChanges ? "is-dirty" : ""}`} aria-label="配置保存">
+      {saveError && <div className="error-banner config-save-error">{saveError}</div>}
+      <div className="config-save-copy" aria-live="polite">
+        <strong>{saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}</strong>
+        <span>{applyTarget.hint}</span>
+      </div>
+      <button type="button" className="btn btn-primary" disabled={saveState === "saving"} onClick={onSaveConfig}>
         {saveButtonLabel(saveState, hasPendingChanges, applyTarget.savesActiveProfiles)}
       </button>
-    </div>
+    </aside>
   );
 }
 

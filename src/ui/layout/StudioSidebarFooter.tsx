@@ -32,10 +32,6 @@ export function StudioSidebarFooter({
           </button>
         ))}
       </div>
-
-      <a className="btn btn-sm btn-ghost" href="/health" style={{ width: "100%", justifyContent: "center" }}>
-        健康检查
-      </a>
     </div>
   );
 }

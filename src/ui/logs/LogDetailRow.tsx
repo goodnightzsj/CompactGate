@@ -14,11 +14,19 @@ import {
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
-export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
+export function LogDetailRow({ entry, id }: { entry: RequestLogEntry; id?: string }) {
   return (
-    <tr className="log-detail-row">
+    <tr className="log-detail-row" id={id}>
       <td colSpan={10}>
-        <div className="log-detail-panel">
+        <LogDetailPanel entry={entry} />
+      </td>
+    </tr>
+  );
+}
+
+export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
+  return (
+    <div className="log-detail-panel">
           <section className="log-detail-section is-primary" aria-label="请求上下文">
             <div className="log-detail-section-head">
               <div>
@@ -193,8 +201,6 @@ export function LogDetailRow({ entry }: { entry: RequestLogEntry }) {
           </section>
 
           <LogCaptureViewer entry={entry} />
-        </div>
-      </td>
-    </tr>
+    </div>
   );
 }

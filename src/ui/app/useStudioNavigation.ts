@@ -14,7 +14,7 @@ type StudioNavigationState = {
 function navigationStateFromPageMode(pageMode: PageMode): StudioNavigationState {
   return {
     pageMode,
-    currentPage: pageMode === "health" ? "dashboard" : pageMode
+    currentPage: pageMode
   };
 }
 
@@ -36,7 +36,7 @@ export function useStudioNavigation() {
 
   return {
     currentPage: navigation.currentPage,
-    healthMode: navigation.pageMode === "health",
+    healthMode: navigation.currentPage === "health",
     navigateTo,
     pageMode: navigation.pageMode
   };

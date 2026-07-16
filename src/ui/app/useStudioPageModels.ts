@@ -77,7 +77,7 @@ export function useStudioPageModels({
   });
   const effectiveCompactModel =
     form.modelMode === "linked" ? linkedCompactModel : form.modelOverride || "手动模型";
-  const activeRoute = configActions.preview?.route ?? latestLog?.route ?? "compact";
+  const previewRoute = configActions.preview?.route ?? null;
   const hasPendingChanges = useMemo(() => {
     return config ? isFormDirty(config, form) : false;
   }, [config, form]);
@@ -101,11 +101,11 @@ export function useStudioPageModels({
         logs
       }),
       routesPage: buildRoutesPageModel({
-        activeRoute,
         compactModel: effectiveCompactModel,
         config,
         form,
-        latestLog
+        latestLog,
+        previewRoute
       }),
       configPage: buildConfigPageModel({
         config,

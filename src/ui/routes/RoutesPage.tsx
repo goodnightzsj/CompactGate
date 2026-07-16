@@ -1,6 +1,7 @@
 import { routeLabel } from "../../shared/route-meta.js";
 import type { PublicConfig, RequestLogEntry, RouteKind } from "../../shared/types.js";
 import { RouteRulesGrid } from "./RouteRulesGrid.js";
+import type { RouteHitSource } from "./RouteRulesGrid.js";
 
 export function RoutesPage({
   config,
@@ -8,13 +9,15 @@ export function RoutesPage({
   compactModel,
   compactMode,
   activeRoute,
+  activeRouteSource,
   latestLog
 }: {
   config: PublicConfig | null;
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
-  activeRoute: RouteKind;
+  activeRoute: RouteKind | null;
+  activeRouteSource: RouteHitSource;
   latestLog: RequestLogEntry | null;
 }) {
   const listen = config?.listen ?? "127.0.0.1:7865";
@@ -29,8 +32,8 @@ export function RoutesPage({
           <p className="eyebrow">路由规则</p>
           <h2>分流逻辑</h2>
         </div>
-        <span className="status-pill">
-          最近命中: {formatLatestLogStatus(latestLog, "等待请求")}
+        <span className={`status-pill route-hit-summary ${activeRouteSource === "none" ? "" : "is-good"}`}>
+          {formatRouteHitStatus(activeRoute, activeRouteSource, latestLog)}
         </span>
       </div>
 
@@ -43,11 +46,24 @@ export function RoutesPage({
         compactModel={compactModel}
         compactMode={compactMode}
         activeRoute={activeRoute}
+        activeRouteSource={activeRouteSource}
       />
     </>
   );
 }
 
-function formatLatestLogStatus(entry: RequestLogEntry | null, fallback: string): string {
-  return entry ? `${routeLabel(entry.route)} · 状态 ${entry.status}` : fallback;
+function formatRouteHitStatus(
+  activeRoute: RouteKind | null,
+  source: RouteHitSource,
+  latestLog: RequestLogEntry | null
+): string {
+  if (!activeRoute || source === "none") {
+    return "等待预览或真实请求";
+  }
+
+  if (source === "preview") {
+    return `路由预览 · ${routeLabel(activeRoute)}`;
+  }
+
+  return `最近请求 · ${routeLabel(activeRoute)} · ${latestLog?.status ?? "-"}`;
 }
