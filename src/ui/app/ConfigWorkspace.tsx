@@ -71,10 +71,12 @@ export function ConfigWorkspace({
       previewState={{
         previewPath: actions.previewPath,
         previewBody: actions.previewBody,
+        previewHeaders: actions.previewHeaders,
         preview: actions.preview,
         previewError: actions.previewError,
         onPathChange: actions.setPreviewPath,
         onBodyChange: actions.setPreviewBody,
+        onHeadersChange: actions.setPreviewHeaders,
         onPreviewSubmit: actions.previewRoute
       }}
       tab={{

@@ -1,11 +1,23 @@
 export type RouteKind = "primary" | "compact" | "claude";
 export type ProviderFamily = "openai" | "claude";
 export type LogStatusKind = "normal" | "error";
+export type ClientDisconnectPhase = "none" | "before_headers" | "before_terminal" | "after_terminal";
+export type ResponseModelSource = "upstream" | "target_fallback" | "unavailable";
+export type StreamOutcome =
+  | "success"
+  | "upstream_http_error"
+  | "upstream_stream_incomplete"
+  | "client_cancel"
+  | "client_cancel_after_terminal"
+  | "timeout"
+  | "upstream_request_error";
 export type CredentialScope = "primary" | "compact" | "claude" | "claude_primary" | "claude_compact";
 export type CredentialSource = "config" | "env" | "missing";
 export type ConfigProfileScope = "codex" | "claude";
 export type RouteUrlPresetKind = "codex_primary" | "codex_compact" | "claude_primary" | "claude_compact";
 export type RequestTransport = "http" | "stream";
+export type OpenAiCompactionMode = "local" | "remote_v1" | "remote_v2";
+export type OpenAiRequestDetectionSource = "path" | "input" | "body_metadata" | "header_metadata";
 export type CompactResponseNormalizeReason =
   | "malformed_json"
   | "missing_response_compaction_object"
@@ -233,10 +245,13 @@ export interface RoutePreviewRequest {
   method?: string;
   path: string;
   body?: unknown;
+  headers?: Record<string, string>;
 }
 
 export interface RoutePreviewResponse {
   route: RouteKind;
+  compaction_mode: OpenAiCompactionMode | null;
+  detection_source: OpenAiRequestDetectionSource | null;
   method: string;
   path: string;
   upstream_url: string;
@@ -251,6 +266,8 @@ export interface RequestLogEntry {
   time: string;
   completed_at: string;
   route: RouteKind;
+  compaction_mode?: OpenAiCompactionMode | null;
+  compaction_detection_source?: OpenAiRequestDetectionSource | null;
   method: string;
   path: string;
   endpoint: string;
@@ -268,7 +285,13 @@ export interface RequestLogEntry {
   source_model: string | null;
   target_model: string | null;
   response_model: string | null;
+  response_model_source?: ResponseModelSource;
   status: number;
+  upstream_status?: number | null;
+  stream_terminal_event?: string | null;
+  client_disconnect_phase?: ClientDisconnectPhase;
+  stream_outcome?: StreamOutcome | null;
+  stream_oversized_event_count?: number;
   duration_ms: number;
   first_token_ms: number | null;
   input_tokens: number | null;
@@ -319,12 +342,16 @@ export interface CaptureRecord {
   time: string;
   completed_at: string;
   route: RouteKind;
+  compaction_mode?: OpenAiCompactionMode | null;
+  compaction_detection_source?: OpenAiRequestDetectionSource | null;
   method: string;
   path: string;
   upstream_url: string;
   upstream_host: string;
   source_model: string | null;
   target_model: string | null;
+  response_model?: string | null;
+  response_model_source?: ResponseModelSource;
   compact_bridge_replacements: number;
   compact_response_normalized: boolean;
   compact_response_normalize_reason: CompactResponseNormalizeReason | null;
@@ -333,6 +360,11 @@ export interface CaptureRecord {
   upstream_request: CapturePayload;
   upstream_response: CaptureResponsePayload;
   client_response: CaptureResponsePayload | null;
+  upstream_status?: number | null;
+  stream_terminal_event?: string | null;
+  client_disconnect_phase?: ClientDisconnectPhase;
+  stream_outcome?: StreamOutcome | null;
+  stream_oversized_event_count?: number;
 }
 
 export interface LogPersistenceHealth {

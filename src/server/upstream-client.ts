@@ -14,6 +14,7 @@ import {
   normalizeMaxObservedStreamEventBytes
 } from "./upstream-response-buffer.js";
 import { extractResponseErrorSummary } from "./usage.js";
+import type { ClientDisconnectPhase, StreamOutcome } from "../shared/types.js";
 
 export {
   DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
@@ -50,6 +51,34 @@ export interface BufferedUpstreamResult {
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
   streamSummary: OpenAiStreamSummary | null;
+  clientDisconnectPhase: ClientDisconnectPhase;
+}
+
+export type UpstreamFailureKind =
+  | "client_cancel"
+  | "upstream_stream_incomplete"
+  | "upstream_request_error"
+  | "timeout";
+
+export interface UpstreamFailureDetails {
+  status: number | null;
+  responseBody: Buffer;
+  responseBodyTruncated: boolean;
+  responseHeaders: IncomingHttpHeaders;
+  firstTokenMs: number | null;
+  streamSummary: OpenAiStreamSummary | null;
+  clientDisconnectPhase: ClientDisconnectPhase;
+  kind: UpstreamFailureKind;
+}
+
+export class UpstreamRequestError extends Error {
+  constructor(
+    message: string,
+    readonly details: UpstreamFailureDetails
+  ) {
+    super(message);
+    this.name = "UpstreamRequestError";
+  }
 }
 
 const DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR =
@@ -73,6 +102,7 @@ export function sendBufferedUpstreamRequest(
   return new Promise((resolve, reject) => {
     let settled = false;
     let upstreamReq: http.ClientRequest | null = null;
+    let activeResponse: ActiveUpstreamResponse | null = null;
 
     const cleanup = () => {
       options.res.off("close", handleClientClose);
@@ -100,38 +130,81 @@ export function sendBufferedUpstreamRequest(
       reject(error);
     };
 
-    const clientDisconnectError = () =>
-      new Error("Client disconnected before upstream response completed.");
+    const responseDetails = (
+      kind: UpstreamFailureKind,
+      clientDisconnectPhase: ClientDisconnectPhase
+    ): UpstreamFailureDetails => ({
+      status: activeResponse?.status ?? null,
+      responseBody: activeResponse ? Buffer.concat(activeResponse.responseChunks) : Buffer.alloc(0),
+      responseBodyTruncated: activeResponse?.responseBodyTruncated ?? false,
+      responseHeaders: activeResponse?.response.headers ?? {},
+      firstTokenMs: activeResponse?.firstTokenMs ?? null,
+      streamSummary: activeResponse?.streamObserver?.snapshot() ?? null,
+      clientDisconnectPhase,
+      kind
+    });
 
     function handleClientClose() {
       if (options.res.writableEnded || settled) {
         return;
       }
 
-      const error = clientDisconnectError();
+      if (activeResponse?.responseResolutionStarted) {
+        return;
+      }
+
+      if (settleAfterTerminal()) {
+        return;
+      }
+
+      const details = responseDetails(
+        "client_cancel",
+        activeResponse ? "before_terminal" : "before_headers"
+      );
+      const error = new UpstreamRequestError(
+        "Client disconnected before upstream response completed.",
+        details
+      );
       upstreamReq?.destroy();
       rejectOnce(error);
     }
 
     function handleClientError(error: Error) {
       upstreamReq?.destroy();
-      rejectOnce(error);
+      rejectOnce(new UpstreamRequestError(error.message, responseDetails("client_cancel", "none")));
     }
 
     function handleTimeout() {
-      upstreamReq?.destroy(new Error(options.timeoutMessage));
+      const error = new UpstreamRequestError(
+        options.timeoutMessage,
+        responseDetails("timeout", activeResponse ? "before_terminal" : "before_headers")
+      );
+      upstreamReq?.destroy(error);
+      rejectOnce(error);
     }
 
     function handleUpstreamRequestError(error: Error) {
-      rejectOnce(error);
+      rejectOnce(new UpstreamRequestError(error.message, responseDetails("upstream_request_error", "none")));
     }
 
     function handleUpstreamResponseAborted() {
-      rejectOnce(new Error("Upstream response aborted before completion."));
+      if (settleAfterTerminal()) {
+        return;
+      }
+      rejectOnce(new UpstreamRequestError(
+        "Upstream response aborted before completion.",
+        responseDetails("upstream_stream_incomplete", "before_terminal")
+      ));
     }
 
     function handleUpstreamResponseError(error: Error) {
-      rejectOnce(error);
+      if (settleAfterTerminal()) {
+        return;
+      }
+      rejectOnce(new UpstreamRequestError(
+        error.message,
+        responseDetails("upstream_stream_incomplete", "before_terminal")
+      ));
     }
 
     const requestOptions: RequestOptions = {
@@ -148,7 +221,6 @@ export function sendBufferedUpstreamRequest(
       options.upstream,
       requestOptions,
       (response) => {
-        let responseResolutionStarted = false;
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
         let bufferedBytes = 0;
@@ -157,6 +229,17 @@ export function sendBufferedUpstreamRequest(
         const streamObserver = createOpenAiStreamObserver(response.headers, {
           maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
         });
+      const responseState: ActiveUpstreamResponse = {
+          response,
+          status,
+          responseChunks,
+          responseBodyTruncated: false,
+          firstTokenMs: null,
+          streamObserver,
+          clientDisconnectPhase: "none",
+          responseResolutionStarted: false
+        };
+        activeResponse = responseState;
         const shouldWriteResponse =
           options.writeResponse !== false &&
           !(options.deferRetryableStreamErrors === true && status >= 500);
@@ -174,6 +257,7 @@ export function sendBufferedUpstreamRequest(
         }
         response.on("data", (chunk: Buffer) => {
           firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
+          responseState.firstTokenMs = firstTokenMs;
           const previousBufferedBytes = bufferedBytes;
           bufferedBytes = appendBufferedResponseChunk(
             responseChunks,
@@ -183,6 +267,7 @@ export function sendBufferedUpstreamRequest(
           );
           if (bufferedBytes - previousBufferedBytes < chunk.byteLength) {
             responseBodyTruncated = true;
+            responseState.responseBodyTruncated = true;
           }
           streamObserver?.observe(chunk);
           if (shouldDeferRetryableResponse && responseBodyTruncated) {
@@ -192,12 +277,12 @@ export function sendBufferedUpstreamRequest(
           }
         });
         response.on("aborted", () => {
-          if (!responseResolutionStarted) {
+          if (!responseState.responseResolutionStarted) {
             handleUpstreamResponseAborted();
           }
         });
         response.on("error", (error) => {
-          if (!responseResolutionStarted) {
+          if (!responseState.responseResolutionStarted) {
             handleUpstreamResponseError(error);
           }
         });
@@ -210,28 +295,52 @@ export function sendBufferedUpstreamRequest(
         });
 
         function beginResolveUpstreamResponse() {
-          if (responseResolutionStarted) {
+          if (responseState.responseResolutionStarted) {
             return;
           }
-          responseResolutionStarted = true;
-          void resolveUpstreamResponse();
-        }
-
-        async function resolveUpstreamResponse() {
-          const responseBody = Buffer.concat(responseChunks);
-          const streamSummary = streamObserver ? await streamObserver.finish() : null;
-          resolveOnce({
-            status,
-            errorSummary: extractResponseErrorSummary(status, responseBody, response.headers),
-            responseBody,
-            responseBodyTruncated,
-            responseHeaders: response.headers,
-            firstTokenMs,
-            streamSummary
-          });
+          responseState.responseResolutionStarted = true;
+          void resolveUpstreamResponse(responseState);
         }
       }
     );
+
+    async function resolveUpstreamResponse(responseState: ActiveUpstreamResponse) {
+      const responseBody = Buffer.concat(responseState.responseChunks);
+      const streamSummary = responseState.streamObserver
+        ? await responseState.streamObserver.finish()
+        : null;
+      resolveOnce({
+        status: responseState.status,
+        errorSummary: extractResponseErrorSummary(
+          responseState.status,
+          responseBody,
+          responseState.response.headers
+        ),
+        responseBody,
+        responseBodyTruncated: responseState.responseBodyTruncated,
+        responseHeaders: responseState.response.headers,
+        firstTokenMs: responseState.firstTokenMs,
+        streamSummary,
+        clientDisconnectPhase: responseState.clientDisconnectPhase
+      });
+    }
+
+    function settleAfterTerminal(): boolean {
+      const responseState = activeResponse;
+      if (
+        !responseState ||
+        responseState.responseResolutionStarted ||
+        !hasTerminalStream(responseState.streamObserver?.snapshot() ?? null)
+      ) {
+        return false;
+      }
+
+      responseState.clientDisconnectPhase = "after_terminal";
+      responseState.responseResolutionStarted = true;
+      upstreamReq?.destroy();
+      void resolveUpstreamResponse(responseState);
+      return true;
+    }
 
     options.res.once("close", handleClientClose);
     options.res.once("error", handleClientError);
@@ -240,6 +349,21 @@ export function sendBufferedUpstreamRequest(
 
     upstreamReq.end(options.body);
   });
+}
+
+interface ActiveUpstreamResponse {
+  response: IncomingMessage;
+  status: number;
+  responseChunks: Buffer[];
+  responseBodyTruncated: boolean;
+  firstTokenMs: number | null;
+  streamObserver: ReturnType<typeof createOpenAiStreamObserver>;
+  clientDisconnectPhase: ClientDisconnectPhase;
+  responseResolutionStarted: boolean;
+}
+
+function hasTerminalStream(summary: OpenAiStreamSummary | null): boolean {
+  return Boolean(summary?.sawTerminalEvent);
 }
 
 export async function sendOpenAiUpstreamRequest(
@@ -316,6 +440,31 @@ export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): st
   return summary.eventCount > 0
     ? "OpenAI stream ended without response.completed, [DONE], or output token."
     : "OpenAI stream closed before response.completed.";
+}
+
+export function classifyOpenAiUpstreamResult(result: BufferedUpstreamResult): StreamOutcome {
+  if (result.status >= 400) {
+    return "upstream_http_error";
+  }
+
+  const summary = result.streamSummary;
+  if (summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
+    return "upstream_stream_incomplete";
+  }
+
+  if (result.clientDisconnectPhase === "after_terminal") {
+    return "success";
+  }
+
+  if (result.clientDisconnectPhase === "before_terminal") {
+    return "client_cancel";
+  }
+
+  if (summary && !summary.sawCompletedEvent && !summary.sawDoneMarker) {
+    return "upstream_stream_incomplete";
+  }
+
+  return "success";
 }
 
 function isRetryableEmptyStreamUpstreamError(result: BufferedUpstreamResult): boolean {

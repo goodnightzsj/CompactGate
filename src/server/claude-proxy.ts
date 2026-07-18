@@ -31,8 +31,10 @@ import {
   responseTransport
 } from "./usage.js";
 import {
+  classifyOpenAiUpstreamResult,
   sendBufferedUpstreamRequest,
-  type BufferedUpstreamResult
+  type BufferedUpstreamResult,
+  UpstreamRequestError
 } from "./upstream-client.js";
 
 export const ANTHROPIC_PROXY_PREFIX = "/anthropic";
@@ -111,9 +113,24 @@ export async function proxyClaudeRequest(
     }
 
     applyOpenAiProxyUpstreamResult(transaction, completedResult);
+    transaction.streamOutcome = classifyOpenAiUpstreamResult(completedResult);
     transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
   } catch (error) {
+    if (error instanceof UpstreamRequestError) {
+      transaction.upstreamStatus = error.details.status;
+      transaction.responseBody = error.details.responseBody;
+      transaction.responseHeaders = error.details.responseHeaders;
+      transaction.firstTokenMs = error.details.firstTokenMs;
+      transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
+      transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
+      transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
+      transaction.streamOutcome = error.details.kind === "client_cancel"
+        ? error.details.clientDisconnectPhase === "after_terminal"
+          ? "client_cancel_after_terminal"
+          : "client_cancel"
+        : error.details.kind;
+    }
     transaction.status = error instanceof RequestBodyTooLargeError ? 413 : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
@@ -128,9 +145,16 @@ export async function proxyClaudeRequest(
       captureWriter,
       studioEvents,
       route,
+      compactionMode: null,
+      compactionDetectionSource: null,
       req,
       url: logUrl,
       status: transaction.status,
+      upstreamStatus: transaction.upstreamStatus,
+      streamTerminalEvent: transaction.streamTerminalEvent,
+      clientDisconnectPhase: transaction.clientDisconnectPhase,
+      streamOutcome: transaction.streamOutcome,
+      streamOversizedEventCount: transaction.streamOversizedEventCount,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,

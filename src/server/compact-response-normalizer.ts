@@ -104,12 +104,7 @@ function compactResponseNormalizeReason(
     return "malformed_json";
   }
 
-  if (parsed.object !== "response.compaction") {
-    return "missing_response_compaction_object";
-  }
-
-  const output = Array.isArray(parsed.output) ? parsed.output : [];
-  return output.some(isCompactionItem) ? null : "missing_compaction_output";
+  return Array.isArray(parsed.output) ? null : "missing_compaction_output";
 }
 
 function buildSyntheticCompactResponse({

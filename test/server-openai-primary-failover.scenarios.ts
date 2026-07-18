@@ -17,6 +17,130 @@ import {
 } from "./server-openai-failover-helpers.js";
 
 describe("CompactGate OpenAI routing", () => {
+  it("uses supplied route-preview headers for primary session stickiness", async () => {
+    const firstPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "first" }));
+    const secondPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "second" }));
+    const app = await startApp(firstPrimary.url, firstPrimary.url);
+
+    const firstProfileId = await saveCodexProfile(
+      app.url,
+      firstPrimary.url,
+      "preview-primary-a",
+      firstPrimary.url,
+      "preview-model-a"
+    );
+    const secondProfileId = await saveCodexProfile(
+      app.url,
+      firstPrimary.url,
+      "preview-primary-b",
+      secondPrimary.url,
+      "preview-model-b"
+    );
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applySecond = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ scope: "codex", profile_id: secondProfileId })
+    });
+    expect(applySecond.status).toBe(200);
+
+    const stickyRequest = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "x-compactgate-session": "preview-session" },
+      body: JSON.stringify({ model: "gpt-5.5", input: "remember preview session" })
+    });
+    expect(stickyRequest.status).toBe(200);
+    await stickyRequest.text();
+
+    const applyFirst = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyFirst.status).toBe(200);
+
+    const previewResponse = await fetch(`${app.url}/api/test-route`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        path: "/v1/responses",
+        headers: { "x-compactgate-session": "preview-session" },
+        body: { model: "gpt-5.5", input: "preview with session" }
+      })
+    });
+    expect(previewResponse.status).toBe(200);
+    expect(await previewResponse.json()).toMatchObject({
+      upstream_host: new URL(secondPrimary.url).host,
+      target_model: "preview-model-b"
+    });
+  });
+
+  it("uses primary failover selection for remote V1 compact previews in primary mode", async () => {
+    const firstPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "first" }));
+    const secondPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "second" }));
+    const app = await startApp(firstPrimary.url, firstPrimary.url, {
+      compact: { upstream_mode: "primary" }
+    });
+
+    const firstProfileId = await saveCodexProfile(
+      app.url,
+      firstPrimary.url,
+      "preview-compact-a",
+      firstPrimary.url,
+      "model-a",
+      "primary"
+    );
+    const secondProfileId = await saveCodexProfile(
+      app.url,
+      firstPrimary.url,
+      "preview-compact-b",
+      secondPrimary.url,
+      "model-b",
+      "primary"
+    );
+    expect(firstProfileId).toBeTruthy();
+    expect(secondProfileId).toBeTruthy();
+
+    const applySecond = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ scope: "codex", profile_id: secondProfileId })
+    });
+    expect(applySecond.status).toBe(200);
+
+    const stickyRequest = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "x-compactgate-session": "preview-compact-session" },
+      body: JSON.stringify({ model: "gpt-5.5", input: "remember compact preview session" })
+    });
+    expect(stickyRequest.status).toBe(200);
+    await stickyRequest.text();
+
+    const applyFirst = await fetch(`${app.url}/api/config/profiles/apply`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ scope: "codex", profile_id: firstProfileId })
+    });
+    expect(applyFirst.status).toBe(200);
+
+    const previewResponse = await fetch(`${app.url}/api/test-route`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        path: "/v1/responses/compact",
+        headers: { "x-compactgate-session": "preview-compact-session" },
+        body: { model: "gpt-5.5", input: "compact preview" }
+      })
+    });
+    expect(previewResponse.status).toBe(200);
+    expect(await previewResponse.json()).toMatchObject({
+      upstream_host: new URL(secondPrimary.url).host,
+      target_model: "model-b-openai-compact"
+    });
+  });
+
   it("fails over Codex primary streams after more than ten empty 200 responses without touching compact routing", async () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
@@ -117,6 +241,11 @@ describe("CompactGate OpenAI routing", () => {
     expect(logs.find((entry) => entry.error_summary === "OpenAI stream closed before response.completed.")).toMatchObject({
       route: "primary",
       status: 200,
+      upstream_status: 200,
+      stream_terminal_event: null,
+      stream_outcome: "upstream_stream_incomplete",
+      response_model: null,
+      response_model_source: "unavailable",
       upstream_host: new URL(firstPrimary.url).host,
       error_summary: "OpenAI stream closed before response.completed."
     });
@@ -185,6 +314,9 @@ describe("CompactGate OpenAI routing", () => {
     expect(logs.find((entry) => entry.upstream_host === new URL(firstPrimary.url).host)).toMatchObject({
       route: "primary",
       status: 200,
+      upstream_status: 200,
+      stream_terminal_event: null,
+      stream_outcome: "upstream_stream_incomplete",
       upstream_host: new URL(firstPrimary.url).host,
       error_summary: "OpenAI stream closed before response.completed."
     });
@@ -281,6 +413,11 @@ describe("CompactGate OpenAI routing", () => {
     expect(logPage.logs[0]).toMatchObject({
       route: "primary",
       status: 200,
+      upstream_status: 200,
+      stream_terminal_event: "response.failed",
+      stream_outcome: "upstream_stream_incomplete",
+      response_model: null,
+      response_model_source: "unavailable",
       upstream_host: new URL(firstPrimary.url).host,
       input_tokens: 9,
       output_tokens: 2,

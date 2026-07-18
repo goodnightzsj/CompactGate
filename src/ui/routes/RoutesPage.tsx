@@ -1,5 +1,10 @@
 import { routeLabel } from "../../shared/route-meta.js";
-import type { PublicConfig, RequestLogEntry, RouteKind } from "../../shared/types.js";
+import type {
+  OpenAiCompactionMode,
+  PublicConfig,
+  RequestLogEntry,
+  RouteKind
+} from "../../shared/types.js";
 import { RouteRulesGrid } from "./RouteRulesGrid.js";
 import type { RouteHitSource } from "./RouteRulesGrid.js";
 
@@ -9,6 +14,7 @@ export function RoutesPage({
   compactModel,
   compactMode,
   activeRoute,
+  activeCompactionMode,
   activeRouteSource,
   latestLog
 }: {
@@ -17,6 +23,7 @@ export function RoutesPage({
   compactModel: string;
   compactMode: "split" | "primary";
   activeRoute: RouteKind | null;
+  activeCompactionMode: OpenAiCompactionMode | null;
   activeRouteSource: RouteHitSource;
   latestLog: RequestLogEntry | null;
 }) {
@@ -46,6 +53,7 @@ export function RoutesPage({
         compactModel={compactModel}
         compactMode={compactMode}
         activeRoute={activeRoute}
+        activeCompactionMode={activeCompactionMode}
         activeRouteSource={activeRouteSource}
       />
     </>

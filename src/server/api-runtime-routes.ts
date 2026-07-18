@@ -19,7 +19,7 @@ import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "./primary-failover.js";
-import { previewRoute, routeForPath } from "./routing.js";
+import { classifyOpenAiRequest, previewRoute } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 
 export async function handleRuntimeApi(
@@ -45,17 +45,26 @@ export async function handleRuntimeApi(
     try {
       const config = configStore.get();
       const parsedUrl = new URL(body.path, "http://compactgate.local");
-      const previewConfig = routeForPath(parsedUrl.pathname, body.body) === "primary"
+      const previewHeaders = isRecord(body.headers)
+        ? Object.fromEntries(
+            Object.entries(body.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+          )
+        : undefined;
+      const classification = classifyOpenAiRequest(parsedUrl.pathname, body.body, previewHeaders);
+      const usesPrimaryPlan = classification.route === "primary" ||
+        classification.compactionMode === "remote_v2" ||
+        (classification.route === "compact" && config.compact.upstream_mode === "primary");
+      const previewConfig = usesPrimaryPlan
         ? primaryFailover.preview(
             config,
             primaryRouteRequestContextFromBody(
               Buffer.from(typeof body.body === "string" ? body.body : JSON.stringify(body.body ?? {})),
-              req.headers,
+              previewHeaders,
               parsedUrl.pathname
             )
           ).config
         : config;
-      sendJson(res, 200, previewRoute(method, body.path, body.body, previewConfig));
+      sendJson(res, 200, previewRoute(method, body.path, body.body, previewConfig, previewHeaders));
     } catch (error) {
       if (error instanceof TypeError) {
         throw new ConfigError("test-route path must be a valid URL or path.");

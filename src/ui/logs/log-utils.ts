@@ -39,8 +39,37 @@ export function reasoningEffortLabel(entry: RequestLogEntry): string {
   return entry.reasoning_effort ?? "standard";
 }
 
+export function responseModelDisplay(entry: RequestLogEntry): string {
+  if (entry.response_model) {
+    return entry.response_model;
+  }
+
+  if (entry.response_model_source === "target_fallback" && entry.target_model) {
+    return entry.target_model;
+  }
+
+  return "上游未返回";
+}
+
+export function responseModelSourceLabel(entry: RequestLogEntry): string {
+  if (entry.response_model_source === "upstream" || entry.response_model) {
+    return "上游响应";
+  }
+
+  if (entry.response_model_source === "target_fallback") {
+    return "请求目标模型";
+  }
+
+  return "不可用";
+}
+
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
-  const hasStandaloneError = (entry.status >= 400 || Boolean(entry.error_summary)) && !hasTokenDetails(entry);
+  const hasOutcomeError = Boolean(entry.stream_outcome && entry.stream_outcome !== "success");
+  const hasStandaloneError = (
+    entry.status >= 400 ||
+    Boolean(entry.error_summary) ||
+    hasOutcomeError
+  ) && !hasTokenDetails(entry);
   return hasStandaloneError ? "error" : "normal";
 }
 

@@ -42,6 +42,26 @@ describe("CompactGate HTTP basics", () => {
     expect(body.logger.database_path).toContain("compactgate-logs.sqlite");
   });
 
+  it("returns 426 for Responses WebSocket upgrades so Codex falls back to HTTP", async () => {
+    const app = await startApp();
+    const target = new URL(app.url);
+    const response = await sendRawHttpRequest(
+      app.url,
+      [
+        "GET /v1/responses HTTP/1.1",
+        `Host: ${target.host}`,
+        "Connection: Upgrade",
+        "Upgrade: websocket",
+        "Sec-WebSocket-Version: 13",
+        "Sec-WebSocket-Key: dGVzdC1jb21wYWN0Z2F0ZQ==",
+        "",
+        ""
+      ].join("\r\n")
+    );
+
+    expect(response).toMatchObject({ status: 426, text: "" });
+  });
+
   it("retrieves logs by request ID and preserves duplicate-ID conflicts", async () => {
     const primary = await startUpstream(async (req, res) => {
       await captureBody(req);

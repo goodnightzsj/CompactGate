@@ -16,9 +16,11 @@ import { LogMobileCard } from "./LogMobileCard.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
+  logStatusKind,
   type HostFilterOption,
   logStatusToneClass,
-  reasoningEffortLabel
+  reasoningEffortLabel,
+  responseModelDisplay
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useStaggeredLogs } from "./useStaggeredLogs.js";
@@ -204,7 +206,7 @@ export function LogsPage({
                   {displayedLogs.flatMap((entry, index) => {
                     const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
                     const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
-                    const hasError = Boolean(entry.error_summary) || entry.status >= 400;
+                    const hasError = logStatusKind(entry) === "error";
                     const logKey = logEntryKey(entry);
                     const detailId = `desktop-log-detail-${index}`;
                     const expanded = expandedLogKey === logKey;
@@ -234,7 +236,7 @@ export function LogsPage({
                           </LogTextTooltip>
                         </td>
                         <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={entry.response_model ?? "-"} /></td>
+                        <td><LogTextTooltip className="log-cell-code" value={responseModelDisplay(entry)} /></td>
                         <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
                         <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
                         <td><TokenTooltip entry={entry} /></td>

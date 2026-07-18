@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { gzipSync } from "node:zlib";
+import { gzipSync, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   assertCaptured,
@@ -126,7 +126,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(entry.compact_response_synthetic_source).toBeNull();
   });
 
-  it("normalizes successful non-compaction compact responses before returning to clients", async () => {
+  it("accepts legacy compact JSON with a standard output array", async () => {
     const summaryText = [
       "- Repo: `/tmp/example`.",
       "- Current task: keep the restored context available.",
@@ -177,9 +177,9 @@ describe("CompactGate OpenAI routing", () => {
 
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
-      compact_response_normalized: true,
-      compact_response_normalize_reason: "missing_response_compaction_object",
-      compact_response_synthetic_source: "upstream_response",
+      compact_response_normalized: false,
+      compact_response_normalize_reason: null,
+      compact_response_synthetic_source: null,
       input_tokens: 11,
       output_tokens: 7,
       total_tokens: 18
@@ -479,6 +479,38 @@ describe("CompactGate OpenAI routing", () => {
     expect(JSON.parse(captured.current.body)).toEqual({
       model: "gpt-5.5-openai-compact",
       stream: true,
+      input: "compressed compact request"
+    });
+  });
+
+  it("accepts Codex zstd compact requests and forwards rewritten plain JSON", async () => {
+    const captured: { current: CapturedRequest | null } = { current: null };
+    const primary = await startUpstream((_req, res) => res.end("{}"));
+    const compact = await startCapturedOpenAiUpstream(captured, (_req, res) => {
+      writeJsonResponse(res, { output: [] });
+    });
+    const app = await startApp(primary.url, compact.url);
+    const requestBody = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: "gpt-5.6",
+      input: "compressed compact request"
+    })));
+
+    const response = await fetch(`${app.url}/v1/responses/compact`, {
+      method: "POST",
+      body: requestBody,
+      headers: {
+        authorization: "Bearer codex-backend-token",
+        "content-type": "application/json",
+        "content-encoding": "zstd"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    assertCaptured(captured.current);
+    expect(captured.current.headers.authorization).toBeUndefined();
+    expect(captured.current.headers["content-encoding"]).toBeUndefined();
+    expect(JSON.parse(captured.current.body)).toEqual({
+      model: "gpt-5.6-openai-compact",
       input: "compressed compact request"
     });
   });

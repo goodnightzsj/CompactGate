@@ -1,4 +1,4 @@
-import type { RouteKind } from "../../shared/types.js";
+import type { OpenAiCompactionMode, RouteKind } from "../../shared/types.js";
 
 export type RouteHitSource = "preview" | "latest" | "none";
 
@@ -11,6 +11,7 @@ export function RouteRulesGrid({
   compactModel,
   compactMode,
   activeRoute,
+  activeCompactionMode,
   activeRouteSource
 }: {
   listen: string;
@@ -21,9 +22,14 @@ export function RouteRulesGrid({
   compactModel: string;
   compactMode: "split" | "primary";
   activeRoute: RouteKind | null;
+  activeCompactionMode: OpenAiCompactionMode | null;
   activeRouteSource: RouteHitSource;
 }) {
   const compactTarget = compactMode === "split" ? compactHost : primaryHost;
+  const activeRemoteV2 = activeRoute === "compact" && activeCompactionMode === "remote_v2";
+  const activeRemoteV1 = activeRoute === "compact" &&
+    (activeCompactionMode === "remote_v1" || activeCompactionMode === null);
+  const activeLocal = activeRoute === "compact" && activeCompactionMode === "local";
 
   return (
     <div className="routes-layout">
@@ -33,11 +39,23 @@ export function RouteRulesGrid({
         <p>请求目标：<code>http://{listen}/v1</code></p>
 
         <div className="route-mapping">
-          <div className={`route-mapping-row ${activeRoute === "compact" ? "is-active" : ""}`}>
+          <div className={`route-mapping-row ${activeRemoteV1 ? "is-active" : ""}`}>
             <code>/v1/responses/compact</code>
-            <span className="tag">精确规则</span>
+            <span className="tag">Remote V1</span>
             <span className="route-chip compact">压缩上游</span>
-            {activeRoute === "compact" && <RouteHitMarker source={activeRouteSource} />}
+            {activeRemoteV1 && <RouteHitMarker source={activeRouteSource} />}
+          </div>
+          <div className={`route-mapping-row ${activeLocal ? "is-active" : ""}`}>
+            <code>/v1/responses + request_kind=compaction</code>
+            <span className="tag">Local</span>
+            <span className="route-chip compact">压缩上游</span>
+            {activeLocal && <RouteHitMarker source={activeRouteSource} />}
+          </div>
+          <div className={`route-mapping-row ${activeRemoteV2 ? "is-active" : ""}`}>
+            <code>/v1/responses + compaction_trigger</code>
+            <span className="tag">Remote V2</span>
+            <span className="route-chip codex">主上游</span>
+            {activeRemoteV2 && <RouteHitMarker source={activeRouteSource} />}
           </div>
           <div className={`route-mapping-row ${activeRoute === "primary" ? "is-active" : ""}`}>
             <code>其它 /v1/*</code>
@@ -61,8 +79,9 @@ export function RouteRulesGrid({
         </div>
 
         <div className="route-model-strip">
-          模型映射：{currentModel} → {compactModel}
+          Local / Remote V1 模型映射：{currentModel} → {compactModel}
         </div>
+        <div className="route-note">Remote V2 保留原始模型与 Responses 请求，始终使用 Primary 上游。</div>
       </div>
 
       <div className="route-rule claude">

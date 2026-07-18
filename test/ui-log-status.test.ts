@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RequestLogEntry } from "../src/shared/types.js";
-import { logStatusKind, logStatusToneClass } from "../src/ui/logs/log-utils.js";
+import {
+  logStatusKind,
+  logStatusToneClass,
+  responseModelDisplay,
+  responseModelSourceLabel
+} from "../src/ui/logs/log-utils.js";
 
 describe("UI log status helpers", () => {
   it("treats a 2xx response with only a diagnostic summary as an error", () => {
@@ -34,6 +39,51 @@ describe("UI log status helpers", () => {
 
     expect(logStatusKind(entry)).toBe("normal");
     expect(logStatusToneClass(entry)).toBe("is-ok");
+  });
+
+  it("treats a completed stream followed by client close as normal", () => {
+    const entry = requestLog({
+      status: 200,
+      stream_outcome: "success",
+      client_disconnect_phase: "after_terminal",
+      stream_terminal_event: "response.completed"
+    });
+
+    expect(logStatusKind(entry)).toBe("normal");
+    expect(logStatusToneClass(entry)).toBe("is-ok");
+  });
+
+  it("shows a pre-terminal client cancellation as an error", () => {
+    const entry = requestLog({
+      status: 502,
+      stream_outcome: "client_cancel",
+      client_disconnect_phase: "before_terminal"
+    });
+
+    expect(logStatusKind(entry)).toBe("error");
+    expect(logStatusToneClass(entry)).toBe("is-err");
+  });
+
+  it("labels a target model fallback without claiming it was returned upstream", () => {
+    const entry = requestLog({
+      response_model: null,
+      response_model_source: "target_fallback",
+      target_model: "gpt-5.6-sol"
+    });
+
+    expect(responseModelDisplay(entry)).toBe("gpt-5.6-sol");
+    expect(responseModelSourceLabel(entry)).toBe("请求目标模型");
+  });
+
+  it("shows unavailable when a failed stream has no response model", () => {
+    const entry = requestLog({
+      response_model: null,
+      response_model_source: "unavailable",
+      stream_outcome: "upstream_stream_incomplete"
+    });
+
+    expect(responseModelDisplay(entry)).toBe("上游未返回");
+    expect(responseModelSourceLabel(entry)).toBe("不可用");
   });
 });
 

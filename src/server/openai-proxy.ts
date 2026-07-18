@@ -21,6 +21,7 @@ import {
 import type { RequestLogger } from "./logger.js";
 import {
   PrimaryFailoverState,
+  primaryRouteRequestContextFromBody,
   type PrimaryRouteSelection
 } from "./primary-failover.js";
 import {
@@ -33,8 +34,10 @@ import {
   finalizeOpenAiProxyTransaction
 } from "./openai-proxy-transaction.js";
 import {
+  classifyOpenAiRequest,
   extractJsonModel,
-  routeForPath
+  hasRemoteV2CompactionState,
+  type OpenAiRequestClassification
 } from "./routing.js";
 import {
   createStudioSnapshot,
@@ -48,8 +51,10 @@ import {
   type RequestMetadata
 } from "./usage.js";
 import {
+  classifyOpenAiUpstreamResult,
   sendOpenAiUpstreamRequest,
-  summarizeOpenAiStreamFailure
+  summarizeOpenAiStreamFailure,
+  UpstreamRequestError
 } from "./upstream-client.js";
 
 export async function proxyOpenAiRequest(
@@ -66,22 +71,25 @@ export async function proxyOpenAiRequest(
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
   const config = configStore.get();
-  const route = routeForPath(url.pathname);
+  const classification = classifyOpenAiRequest(url.pathname);
   const requestId = randomUUID();
 
-  if (route === "compact") {
+  if (classification.route === "compact" && classification.compactionMode !== "remote_v2") {
     await proxyCompactRequest(
       req,
       res,
       url,
       config,
+      configStore,
       logger,
       captureWriter,
       compactionBridge,
       studioEvents,
+      primaryFailover,
       requestId,
       startedAtIso,
-      startedAt
+      startedAt,
+      classification
     );
     return;
   }
@@ -119,6 +127,11 @@ async function proxyPrimaryRequest(
   startedAt: number
 ): Promise<void> {
   let route: RouteKind = "primary";
+  let classification: OpenAiRequestClassification = {
+    route: "primary",
+    compactionMode: null,
+    detectionSource: null
+  };
   let delegatedToCompact = false;
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
@@ -128,20 +141,24 @@ async function proxyPrimaryRequest(
     transaction.rawBody = await readRawBody(req);
     transaction.requestMetadata = extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
-    if (routeForPath(url.pathname, transaction.rawBody) === "compact") {
+    classification = classifyOpenAiRequest(url.pathname, transaction.rawBody, req.headers);
+    if (classification.route === "compact" && classification.compactionMode !== "remote_v2") {
       delegatedToCompact = true;
       await proxyCompactRequest(
         req,
         res,
         url,
         config,
+        configStore,
         logger,
         captureWriter,
         compactionBridge,
         studioEvents,
+        primaryFailover,
         requestId,
         startedAtIso,
         startedAt,
+        classification,
         {
           rawBody: transaction.rawBody,
           requestMetadata: transaction.requestMetadata
@@ -157,9 +174,10 @@ async function proxyPrimaryRequest(
       rawBody: transaction.rawBody,
       endpoint: transaction.requestMetadata.endpoint,
       compactionBridge,
-      primaryFailover
+      primaryFailover,
+      preserveRemoteV2State: hasRemoteV2CompactionState(url.pathname, transaction.rawBody, req.headers)
     });
-    route = plan.route;
+    route = classification.route;
     upstream = plan.upstream;
     primarySelection = plan.primarySelection;
     await syncScheduledPrimaryProfile({
@@ -190,6 +208,7 @@ async function proxyPrimaryRequest(
       body: transaction.upstreamBody,
       extraResponseHeaders: {
         "x-compactgate-route": route,
+        ...compactionResponseHeaders(classification),
         "x-compactgate-request-id": requestId
       },
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
@@ -197,12 +216,14 @@ async function proxyPrimaryRequest(
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
+    transaction.streamOutcome = classifyOpenAiUpstreamResult(result);
     transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
-    if (route === "primary" && transaction.requestMetadata.requestType === "stream") {
+    if (transaction.requestMetadata.requestType === "stream") {
       transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
     }
   } catch (error) {
+    applyUpstreamFailureToTransaction(transaction, error);
     transaction.status = error instanceof RequestBodyTooLargeError
       ? 413
       : error instanceof UnresolvedCompactionStateError
@@ -219,7 +240,7 @@ async function proxyPrimaryRequest(
       return;
     }
 
-    if (route === "primary" && primarySelection) {
+    if (primarySelection) {
       primaryFailover.recordResult(primarySelection, {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
@@ -235,9 +256,16 @@ async function proxyPrimaryRequest(
       captureWriter,
       studioEvents,
       route,
+      compactionMode: classification.compactionMode,
+      compactionDetectionSource: classification.detectionSource,
       req,
       url,
       status: transaction.status,
+      upstreamStatus: transaction.upstreamStatus,
+      streamTerminalEvent: transaction.streamTerminalEvent,
+      clientDisconnectPhase: transaction.clientDisconnectPhase,
+      streamOutcome: transaction.streamOutcome,
+      streamOversizedEventCount: transaction.streamOversizedEventCount,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,
@@ -297,13 +325,16 @@ async function proxyCompactRequest(
   res: ServerResponse,
   url: URL,
   config: CompactGateConfig,
+  configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
+  primaryFailover: PrimaryFailoverState,
   requestId: string,
   startedAtIso: string,
   startedAt: number,
+  classification: Extract<OpenAiRequestClassification, { route: "compact" }>,
   prepared?: {
     rawBody: Buffer;
     requestMetadata: RequestMetadata;
@@ -312,18 +343,40 @@ async function proxyCompactRequest(
   const route: RouteKind = "compact";
   let upstream = new URL(config.compact.base_url);
   let attemptedUpstream = false;
+  let primarySelection: PrimaryRouteSelection | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
   try {
     transaction.rawBody = prepared?.rawBody ?? await readRawBody(req);
     transaction.requestMetadata = prepared?.requestMetadata ?? extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
+    const selectedPrimary = config.compact.upstream_mode === "primary"
+      ? primaryFailover.preview(
+          config,
+          primaryRouteRequestContextFromBody(
+            transaction.rawBody,
+            req.headers,
+            transaction.requestMetadata.endpoint
+          )
+        )
+      : null;
     const plan = buildCompactOpenAiProxyPlan({
-      config,
+      config: selectedPrimary?.config ?? config,
       url,
       headers: req.headers,
       rawBody: transaction.rawBody
     });
+    if (selectedPrimary) {
+      primaryFailover.reserveSelection(selectedPrimary, config.primary_failover.auto_schedule);
+      primarySelection = selectedPrimary;
+      await syncScheduledPrimaryProfile({
+        config,
+        configStore,
+        logger,
+        primarySelection,
+        studioEvents
+      });
+    }
     upstream = plan.upstream;
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
@@ -338,7 +391,9 @@ async function proxyCompactRequest(
       requestHeaders: transaction.requestHeaders,
       body: transaction.upstreamBody
     };
-    const cachedCompactResponse = compactionBridge.getCachedCompactResponse(dedupeInput);
+    const cachedCompactResponse = classification.compactionMode === "remote_v1"
+      ? compactionBridge.getCachedCompactResponse(dedupeInput)
+      : null;
     if (cachedCompactResponse) {
       applyCachedCompactResponse(transaction, cachedCompactResponse);
       // 方案 B:Codex compact 期望原始上游 SSE 流,重放缓存的原始响应体而非归一化 JSON。
@@ -351,6 +406,7 @@ async function proxyCompactRequest(
         transaction.responseBody,
         {
           "x-compactgate-route": route,
+          ...compactionResponseHeaders(classification),
           "x-compactgate-model": transaction.targetModel ?? "",
           "x-compactgate-request-id": requestId
         }
@@ -374,6 +430,7 @@ async function proxyCompactRequest(
       body: transaction.upstreamBody,
       extraResponseHeaders: {
         "x-compactgate-route": route,
+        ...compactionResponseHeaders(classification),
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
@@ -381,14 +438,23 @@ async function proxyCompactRequest(
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    // 归一化仅用于桥接存储(提取 compaction item 与可读 summary)和诊断日志,不再写回客户端。
-    // 客户端已通过上面的流式转发收到原始上游响应。
-    const normalizedResponse = normalizeCompactResponse({
-      status: transaction.status,
-      responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders,
-      requestBody: transaction.upstreamBody
-    });
+    transaction.streamOutcome = classifyOpenAiUpstreamResult(result);
+    // 远程压缩归一化仅用于桥接存储和诊断日志,不写回客户端。本地摘要压缩返回普通
+    // Responses 流,不能把它误记为缺失 compaction output。
+    const normalizedResponse = classification.compactionMode === "remote_v1"
+      ? normalizeCompactResponse({
+          status: transaction.status,
+          responseBody: transaction.responseBody,
+          responseHeaders: transaction.responseHeaders,
+          requestBody: transaction.upstreamBody
+        })
+      : {
+          body: transaction.responseBody,
+          headers: transaction.responseHeaders,
+          normalized: false,
+          reason: null,
+          syntheticSource: null
+        };
     transaction.compactResponseNormalized = normalizedResponse.normalized;
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
@@ -403,23 +469,26 @@ async function proxyCompactRequest(
       !transaction.errorSummary &&
       plan.compactBridgeScope
     ) {
-      compactionBridge.storeCompactResponse(normalizedResponse.body, {
-        scope: plan.compactBridgeScope,
-        source: normalizedResponse.normalized ? "synthetic" : "standard"
-      });
-      compactionBridge.storeCompactDedupeResponse(dedupeInput, {
-        status: transaction.status,
-        responseBody: transaction.responseBody,
-        responseHeaders: transaction.responseHeaders,
-        clientResponseBody: normalizedResponse.body,
-        clientResponseHeaders: normalizedResponse.headers,
-        compactResponseNormalized: transaction.compactResponseNormalized,
-        compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-        compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
-        firstTokenMs: transaction.firstTokenMs
-      });
+      if (classification.compactionMode === "remote_v1") {
+        compactionBridge.storeCompactResponse(normalizedResponse.body, {
+          scope: plan.compactBridgeScope,
+          source: normalizedResponse.normalized ? "synthetic" : "standard"
+        });
+        compactionBridge.storeCompactDedupeResponse(dedupeInput, {
+          status: transaction.status,
+          responseBody: transaction.responseBody,
+          responseHeaders: transaction.responseHeaders,
+          clientResponseBody: normalizedResponse.body,
+          clientResponseHeaders: normalizedResponse.headers,
+          compactResponseNormalized: transaction.compactResponseNormalized,
+          compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+          compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+          firstTokenMs: transaction.firstTokenMs
+        });
+      }
     }
   } catch (error) {
+    applyUpstreamFailureToTransaction(transaction, error);
     transaction.status = error instanceof RequestBodyTooLargeError ? 413 : attemptedUpstream ? 502 : 400;
     transaction.errorSummary = summaryForError(error);
 
@@ -433,14 +502,31 @@ async function proxyCompactRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
+    if (primarySelection) {
+      primaryFailover.recordResult(primarySelection, {
+        status: transaction.status,
+        errorSummary: transaction.errorSummary,
+        responseBody: transaction.responseBody,
+        responseHeaders: transaction.responseHeaders,
+        firstTokenMs: transaction.firstTokenMs,
+        usage: transaction.usage
+      });
+    }
     await finalizeOpenAiProxyTransaction({
       logger,
       captureWriter,
       studioEvents,
       route,
+      compactionMode: classification.compactionMode,
+      compactionDetectionSource: classification.detectionSource,
       req,
       url,
       status: transaction.status,
+      upstreamStatus: transaction.upstreamStatus,
+      streamTerminalEvent: transaction.streamTerminalEvent,
+      clientDisconnectPhase: transaction.clientDisconnectPhase,
+      streamOutcome: transaction.streamOutcome,
+      streamOversizedEventCount: transaction.streamOversizedEventCount,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,
@@ -468,11 +554,43 @@ async function proxyCompactRequest(
   }
 }
 
+function compactionResponseHeaders(
+  classification: OpenAiRequestClassification
+): Record<string, string> {
+  return classification.route === "compact"
+    ? { "x-compactgate-compaction-mode": classification.compactionMode }
+    : {};
+}
+
+function applyUpstreamFailureToTransaction(
+  transaction: ReturnType<typeof createOpenAiProxyTransactionState>,
+  error: unknown
+): void {
+  if (!(error instanceof UpstreamRequestError)) {
+    return;
+  }
+
+  transaction.upstreamStatus = error.details.status;
+  transaction.responseBody = error.details.responseBody;
+  transaction.responseHeaders = error.details.responseHeaders;
+  transaction.firstTokenMs = error.details.firstTokenMs;
+  transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
+  transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
+  transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
+  transaction.streamOutcome = error.details.kind === "client_cancel"
+    ? error.details.clientDisconnectPhase === "after_terminal"
+      ? "client_cancel_after_terminal"
+      : "client_cancel"
+    : error.details.kind;
+}
+
 function applyCachedCompactResponse(
   transaction: ReturnType<typeof createOpenAiProxyTransactionState>,
   cached: CachedCompactResponse
 ): void {
   transaction.status = cached.status;
+  transaction.upstreamStatus = cached.status;
+  transaction.streamOutcome = cached.status >= 400 ? "upstream_http_error" : "success";
   transaction.responseBody = cached.responseBody;
   transaction.responseHeaders = cached.responseHeaders;
   transaction.clientResponseBody = cached.clientResponseBody;

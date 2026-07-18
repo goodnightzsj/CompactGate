@@ -3,7 +3,7 @@ import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
-import { displayTotalTokens, logStatusToneClass } from "./log-utils.js";
+import { displayTotalTokens, logStatusKind, logStatusToneClass } from "./log-utils.js";
 
 export function LogMobileCard({
   entry,
@@ -20,7 +20,7 @@ export function LogMobileCard({
   const modelLabel = entry.source_model && entry.source_model !== targetModel
     ? `${entry.source_model} → ${targetModel}`
     : targetModel;
-  const hasError = Boolean(entry.error_summary) || entry.status >= 400;
+  const hasError = logStatusKind(entry) === "error";
 
   return (
     <article className={`log-mobile-card ${hasError ? "has-error" : ""}`}>

@@ -110,7 +110,8 @@ export function useStudioPageModels({
         config,
         form,
         latestLog,
-        previewRoute
+        previewRoute,
+        previewCompactionMode: configActions.preview?.compaction_mode ?? null
       }),
       configPage: buildConfigPageModel({
         config,

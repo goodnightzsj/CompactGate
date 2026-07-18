@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type {
   HealthResponse,
+  OpenAiCompactionMode,
   PublicConfig,
   RequestLogEntry,
   RouteKind
@@ -64,15 +65,18 @@ export function buildRoutesPageModel({
   config,
   form,
   latestLog,
-  previewRoute
+  previewRoute,
+  previewCompactionMode
 }: {
   compactModel: string;
   config: PublicConfig | null;
   form: ConfigFormState;
   latestLog: RequestLogEntry | null;
   previewRoute: RouteKind | null;
+  previewCompactionMode: OpenAiCompactionMode | null;
 }): StudioPageOutletProps["routesPage"] {
   const activeRoute = previewRoute ?? latestLog?.route ?? null;
+  const activeCompactionMode = previewRoute ? previewCompactionMode : latestLog?.compaction_mode ?? null;
 
   return {
     config,
@@ -80,6 +84,7 @@ export function buildRoutesPageModel({
     compactModel,
     compactMode: form.upstreamMode,
     activeRoute,
+    activeCompactionMode,
     activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
     latestLog
   };

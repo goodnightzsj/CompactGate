@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { zstdCompressSync } from "node:zlib";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import {
   buildUpstreamUrl,
+  classifyOpenAiRequest,
+  hasRemoteV2CompactionState,
   compactUpstreamPath,
+  isBodyAwareCompactRequest,
   previewRoute,
   routeForPath,
   rewriteCompactBody,
@@ -52,7 +56,10 @@ describe("routing helpers", () => {
   it("rewrites primary request models when a primary override is configured", () => {
     const result = rewritePrimaryBody(
       Buffer.from(JSON.stringify({ model: "gpt-5.4", input: "redacted" })),
-      DEFAULT_CONFIG
+      {
+        ...DEFAULT_CONFIG,
+        primary: { ...DEFAULT_CONFIG.primary, model_override: "gpt-5.5" }
+      }
     );
 
     expect(result.sourceModel).toBe("gpt-5.4");
@@ -137,6 +144,16 @@ describe("routing helpers", () => {
     ).toBe("https://compact.example/v1/responses/compact?trace=1");
   });
 
+  it("preserves base query parameters and lets request parameters override conflicts", () => {
+    expect(
+      buildUpstreamUrl(
+        "https://compact.example/v1?api-version=2026-01-01&region=us",
+        "/v1/responses",
+        "?trace=1&region=eu"
+      ).toString()
+    ).toBe("https://compact.example/v1/responses?api-version=2026-01-01&trace=1&region=eu");
+  });
+
   it("previews compact routing and body rewrite", () => {
     const preview = previewRoute(
       "POST",
@@ -146,6 +163,8 @@ describe("routing helpers", () => {
     );
 
     expect(preview.route).toBe("compact");
+    expect(preview.compaction_mode).toBe("remote_v1");
+    expect(preview.detection_source).toBe("path");
     expect(preview.upstream_url).toBe("https://compact.example/v1/responses/compact");
     expect(preview.source_model).toBe("gpt-5.5");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
@@ -158,20 +177,194 @@ describe("routing helpers", () => {
       model: "gpt-5.5",
       input: [
         {
-          type: "compaction_trigger",
-          content: [{ type: "input_text", text: "summarize the conversation" }]
-        }
-      ]
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "conversation to compact" }]
+        },
+        { type: "compaction_trigger" }
+      ],
+      client_metadata: {
+        "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" })
+      }
     };
 
+    expect(classifyOpenAiRequest("/v1/responses", Buffer.from(JSON.stringify(body)))).toEqual({
+      route: "compact",
+      compactionMode: "remote_v2",
+      detectionSource: "input"
+    });
     expect(routeForPath("/v1/responses", Buffer.from(JSON.stringify(body)))).toBe("compact");
+    expect(isBodyAwareCompactRequest("/v1/responses", Buffer.from(JSON.stringify(body)))).toBe(true);
 
     const preview = previewRoute("POST", "/v1/responses", body, DEFAULT_CONFIG);
     expect(preview.route).toBe("compact");
-    expect(preview.upstream_url).toBe("https://compact.example/v1/responses");
+    expect(preview.compaction_mode).toBe("remote_v2");
+    expect(preview.detection_source).toBe("input");
+    expect(preview.upstream_url).toBe("https://primary.example/v1/responses");
     expect(preview.source_model).toBe("gpt-5.5");
-    expect(preview.target_model).toBe("gpt-5.5-openai-compact");
-    expect(preview.body_rewritten).toBe(true);
+    expect(preview.target_model).toBe("gpt-5.5");
+    expect(preview.body_rewritten).toBe(false);
+  });
+
+  it("treats Codex body metadata compaction requests as compact route traffic", () => {
+    const body = {
+      model: "gpt-5.5",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "summarize the conversation" }]
+        }
+      ],
+      client_metadata: {
+        "x-codex-turn-metadata": JSON.stringify({
+          request_kind: "compaction",
+          compaction: { trigger: "auto", implementation: "responses" }
+        })
+      }
+    };
+
+    expect(classifyOpenAiRequest("/v1/responses", body)).toEqual({
+      route: "compact",
+      compactionMode: "local",
+      detectionSource: "body_metadata"
+    });
+    expect(previewRoute("POST", "/v1/responses", body, DEFAULT_CONFIG)).toMatchObject({
+      route: "compact",
+      upstream_url: "https://compact.example/v1/responses",
+      target_model: "gpt-5.5-openai-compact"
+    });
+  });
+
+  it("recognizes the Codex turn metadata compatibility header", () => {
+    expect(classifyOpenAiRequest(
+      "/v1/responses",
+      { model: "gpt-5.5", input: [] },
+      {
+        "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" })
+      }
+    )).toEqual({
+      route: "compact",
+      compactionMode: "local",
+      detectionSource: "header_metadata"
+    });
+  });
+
+  it("accepts case variants of the compatibility header in route previews", () => {
+    expect(classifyOpenAiRequest(
+      "/v1/responses",
+      { model: "gpt-5.5", input: [] },
+      {
+        "X-Codex-Turn-Metadata": JSON.stringify({ request_kind: "compaction" })
+      }
+    )).toMatchObject({ route: "compact", compactionMode: "local" });
+  });
+
+  it.each([
+    ["normal turn metadata", JSON.stringify({ request_kind: "turn" })],
+    ["malformed metadata", "{not-json"],
+    ["non-string metadata", { request_kind: "compaction" }]
+  ])("keeps %s on primary", (_label, turnMetadata) => {
+    expect(classifyOpenAiRequest("/v1/responses", {
+      model: "gpt-5.5",
+      input: [],
+      client_metadata: { "x-codex-turn-metadata": turnMetadata }
+    })).toEqual({ route: "primary", compactionMode: null, detectionSource: null });
+  });
+
+  it("ignores compaction metadata outside the Responses endpoint", () => {
+    expect(classifyOpenAiRequest(
+      "/v1/chat/completions",
+      { model: "gpt-5.5", messages: [] },
+      {
+        "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" })
+      }
+    )).toEqual({ route: "primary", compactionMode: null, detectionSource: null });
+  });
+
+  it("uses canonical body metadata instead of a conflicting compatibility header", () => {
+    expect(classifyOpenAiRequest(
+      "/v1/responses",
+      {
+        model: "gpt-5.5",
+        input: [],
+        client_metadata: {
+          "x-codex-turn-metadata": JSON.stringify({ request_kind: "turn" })
+        }
+      },
+      {
+        "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" })
+      }
+    )).toEqual({ route: "primary", compactionMode: null, detectionSource: null });
+  });
+
+  it("falls back to the compatibility header when canonical metadata is malformed", () => {
+    expect(classifyOpenAiRequest(
+      "/v1/responses",
+      {
+        model: "gpt-5.5",
+        input: [],
+        client_metadata: { "x-codex-turn-metadata": "{not-json" }
+      },
+      {
+        "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" })
+      }
+    )).toEqual({
+      route: "compact",
+      compactionMode: "local",
+      detectionSource: "header_metadata"
+    });
+  });
+
+  it("recognizes remote v2 from metadata when the body is unavailable", () => {
+    const metadata = JSON.stringify({
+      request_kind: "compaction",
+      compaction: { implementation: "responses_compaction_v2" }
+    });
+    expect(classifyOpenAiRequest(
+      "/v1/responses",
+      undefined,
+      { "x-codex-turn-metadata": metadata }
+    )).toEqual({
+      route: "compact",
+      compactionMode: "remote_v2",
+      detectionSource: "header_metadata"
+    });
+  });
+
+  it("classifies zstd-compressed remote v2 request bodies", () => {
+    const body = zstdCompressSync(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger" }]
+    })));
+    expect(classifyOpenAiRequest("/v1/responses", body)).toEqual({
+      route: "compact",
+      compactionMode: "remote_v2",
+      detectionSource: "input"
+    });
+  });
+
+  it("recognizes provider-owned remote v2 state on a normal follow-up turn", () => {
+    const body = {
+      model: "gpt-5.5",
+      input: [{ type: "compaction", encrypted_content: "Readable remote V2 state. Preserve this provider-owned summary." }]
+    };
+    const headers = { "x-codex-beta-features": "remote_compaction_v2" };
+
+    expect(hasRemoteV2CompactionState("/v1/responses", body, headers)).toBe(true);
+    expect(classifyOpenAiRequest("/v1/responses", body, headers)).toEqual({
+      route: "primary",
+      compactionMode: null,
+      detectionSource: null
+    });
+    expect(previewRoute("POST", "/v1/responses", body, DEFAULT_CONFIG, headers)).toMatchObject({
+      route: "primary",
+      compaction_mode: null,
+      detection_source: null,
+      upstream_host: "primary.example",
+      body_rewritten: false
+    });
+    expect(hasRemoteV2CompactionState("/v1/responses", body, {})).toBe(false);
   });
 
   it("previews primary model override rewrites", () => {
@@ -179,7 +372,10 @@ describe("routing helpers", () => {
       "POST",
       "/v1/responses",
       { model: "gpt-5.4", input: "redacted" },
-      DEFAULT_CONFIG
+      {
+        ...DEFAULT_CONFIG,
+        primary: { ...DEFAULT_CONFIG.primary, model_override: "gpt-5.5" }
+      }
     );
 
     expect(preview.route).toBe("primary");

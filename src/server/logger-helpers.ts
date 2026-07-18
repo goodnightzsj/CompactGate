@@ -2,11 +2,14 @@ import { routeProvider } from "../shared/route-meta.js";
 import type {
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
+  ClientDisconnectPhase,
   LogStatusKind,
   ProviderLogCounts,
   RequestLogEntry,
+  ResponseModelSource,
   RequestTransport,
-  RouteKind
+  RouteKind,
+  StreamOutcome
 } from "../shared/types.js";
 
 export interface LogPageOptions {
@@ -31,7 +34,11 @@ export function logStandaloneErrorSql(columnPrefix = ""): string {
   )`;
 
   return `(
-    (${column("status")} >= 400 OR ${column("error_summary")} IS NOT NULL) AND
+    (
+      ${column("status")} >= 400 OR
+      ${column("error_summary")} IS NOT NULL OR
+      (${column("stream_outcome")} IS NOT NULL AND ${column("stream_outcome")} <> 'success')
+    ) AND
     NOT ${tokenDetailsSql}
   )`;
 }
@@ -118,6 +125,8 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     time: String(row.time),
     completed_at: readCompletedAt(row.completed_at, row.time),
     route: normalizeRoute(row.route),
+    compaction_mode: readCompactionMode(row.compaction_mode),
+    compaction_detection_source: readCompactionDetectionSource(row.compaction_detection_source),
     method: String(row.method),
     path: String(row.path),
     endpoint: readEndpoint(row.endpoint, String(row.path)),
@@ -139,7 +148,13 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
     response_model: readNullableString(row.response_model),
+    response_model_source: readResponseModelSource(row.response_model_source),
     status: readRequiredNumber(row.status),
+    upstream_status: readNullableNumber(row.upstream_status),
+    stream_terminal_event: readNullableString(row.stream_terminal_event),
+    client_disconnect_phase: readClientDisconnectPhase(row.client_disconnect_phase),
+    stream_outcome: readStreamOutcome(row.stream_outcome),
+    stream_oversized_event_count: readNullableNumber(row.stream_oversized_event_count) ?? 0,
     duration_ms: readRequiredNumber(row.duration_ms),
     first_token_ms: readNullableNumber(row.first_token_ms),
     input_tokens: readNullableNumber(row.input_tokens),
@@ -173,6 +188,28 @@ export function stripLogEntryBodies(entry: RequestLogEntry): RequestLogEntry {
 
 export function normalizeLogStatus(value: unknown): LogStatusKind {
   return value === "error" ? "error" : "normal";
+}
+
+function readClientDisconnectPhase(value: unknown): ClientDisconnectPhase {
+  return value === "before_headers" || value === "before_terminal" || value === "after_terminal"
+    ? value
+    : "none";
+}
+
+function readStreamOutcome(value: unknown): StreamOutcome | null {
+  return value === "success" ||
+    value === "upstream_http_error" ||
+    value === "upstream_stream_incomplete" ||
+    value === "client_cancel" ||
+    value === "client_cancel_after_terminal" ||
+    value === "timeout" ||
+    value === "upstream_request_error"
+    ? value
+    : null;
+}
+
+function readResponseModelSource(value: unknown): ResponseModelSource {
+  return value === "upstream" || value === "target_fallback" ? value : "unavailable";
 }
 
 export function normalizeRoute(value: unknown): RouteKind {
@@ -254,6 +291,21 @@ function readCompactResponseSyntheticSource(
   value: unknown
 ): CompactResponseSyntheticSource | null {
   return value === "upstream_response" || value === "request_input" ? value : null;
+}
+
+function readCompactionMode(value: unknown): RequestLogEntry["compaction_mode"] {
+  return value === "local" || value === "remote_v1" || value === "remote_v2" ? value : null;
+}
+
+function readCompactionDetectionSource(
+  value: unknown
+): RequestLogEntry["compaction_detection_source"] {
+  return value === "path" ||
+    value === "input" ||
+    value === "body_metadata" ||
+    value === "header_metadata"
+    ? value
+    : null;
 }
 
 function readEndpoint(value: unknown, pathValue: string): string {

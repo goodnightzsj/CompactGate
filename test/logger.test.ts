@@ -321,7 +321,9 @@ describe("RequestLogger", () => {
       });
 
       expect(entry.response_model).toBe("gpt-5.5-2026-04-23");
+      expect(entry.response_model_source).toBe("upstream");
       expect(logger.recent()[0].response_model).toBe("gpt-5.5-2026-04-23");
+      expect(logger.recent()[0].response_model_source).toBe("upstream");
     } finally {
       logger.close();
     }
@@ -349,6 +351,7 @@ describe("RequestLogger", () => {
     const reopenedLogger = new RequestLogger(2, databasePath);
     try {
       expect(reopenedLogger.recent()[0].response_model).toBe("gpt-5.5-actual");
+      expect(reopenedLogger.recent()[0].response_model_source).toBe("upstream");
     } finally {
       reopenedLogger.close();
     }

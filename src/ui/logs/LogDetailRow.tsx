@@ -10,7 +10,9 @@ import {
   formatCacheHitRate,
   hasAdditiveCachedInput,
   logStatusToneClass,
-  totalInputTokens
+  totalInputTokens,
+  responseModelDisplay,
+  responseModelSourceLabel
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
@@ -74,7 +76,15 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">响应模型</span>
-                <span className="log-detail-value is-medium">{entry.response_model ?? "-"}</span>
+                <span className="log-detail-value is-medium">{entry.response_model ?? "上游未返回"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">有效模型</span>
+                <span className="log-detail-value is-medium">{responseModelDisplay(entry)}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">模型来源</span>
+                <span className="log-detail-value is-small">{responseModelSourceLabel(entry)}</span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">上游 Host</span>
@@ -84,6 +94,18 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-label">端点</span>
                 <span className="log-detail-value">{entry.endpoint}</span>
               </div>
+              {entry.compaction_mode && (
+                <div className="log-detail-item">
+                  <span className="log-detail-label">压缩模式</span>
+                  <span className="log-detail-value is-small">{entry.compaction_mode}</span>
+                </div>
+              )}
+              {entry.compaction_detection_source && (
+                <div className="log-detail-item">
+                  <span className="log-detail-label">判定来源</span>
+                  <span className="log-detail-value is-small">{entry.compaction_detection_source}</span>
+                </div>
+              )}
               <div className="log-detail-item">
                 <span className="log-detail-label">推理强度</span>
                 <span className="log-detail-value is-small">{entry.reasoning_effort ?? "无"}</span>
@@ -103,6 +125,26 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
               <div className="log-detail-item">
                 <span className="log-detail-label">状态</span>
                 <span className="log-detail-value">{entry.status}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">上游状态</span>
+                <span className="log-detail-value">{entry.upstream_status ?? "-"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">流完成</span>
+                <span className="log-detail-value">{entry.stream_terminal_event ?? "-"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">断开阶段</span>
+                <span className="log-detail-value">{entry.client_disconnect_phase ?? "none"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">结果分类</span>
+                <span className="log-detail-value">{entry.stream_outcome ?? "-"}</span>
+              </div>
+              <div className="log-detail-item">
+                <span className="log-detail-label">超大流事件</span>
+                <span className="log-detail-value">{entry.stream_oversized_event_count ?? 0}</span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">类型</span>

@@ -286,6 +286,13 @@ function isCaptureRecord(value: unknown): value is CaptureRecord {
     typeof value.upstream_host === "string" &&
     isNullableString(value.source_model) &&
     isNullableString(value.target_model) &&
+    (value.response_model === undefined || isNullableString(value.response_model)) &&
+    (value.response_model_source === undefined ||
+      value.response_model_source === "upstream" ||
+      value.response_model_source === "target_fallback" ||
+      value.response_model_source === "unavailable") &&
+    (value.stream_oversized_event_count === undefined ||
+      typeof value.stream_oversized_event_count === "number") &&
     typeof value.compact_bridge_replacements === "number" &&
     typeof value.compact_response_normalized === "boolean" &&
     isNullableString(value.compact_response_normalize_reason) &&

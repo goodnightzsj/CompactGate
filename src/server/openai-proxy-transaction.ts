@@ -1,10 +1,15 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type {
+  ClientDisconnectPhase,
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
+  OpenAiCompactionMode,
+  OpenAiRequestDetectionSource,
   RequestTransport,
-  RouteKind
+  RouteKind,
+  StreamOutcome
 } from "../shared/types.js";
+import type { OpenAiStreamSummary } from "./upstream-openai-stream.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import { serializeHeaders } from "./debug-capture.js";
 import { endpointFromPath } from "./http-utils.js";
@@ -24,6 +29,11 @@ import type {
 
 export interface OpenAiProxyTransactionState {
   status: number;
+  upstreamStatus: number | null;
+  streamTerminalEvent: string | null;
+  clientDisconnectPhase: ClientDisconnectPhase;
+  streamOutcome: StreamOutcome | null;
+  streamOversizedEventCount: number;
   errorSummary: string | null;
   rawBody: Buffer;
   upstreamBody: Buffer;
@@ -50,6 +60,8 @@ export interface OpenAiProxyUpstreamResult {
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
+  clientDisconnectPhase: ClientDisconnectPhase;
+  streamSummary: OpenAiStreamSummary | null;
 }
 
 export interface OpenAiProxyTransactionInput {
@@ -59,7 +71,14 @@ export interface OpenAiProxyTransactionInput {
   req: IncomingMessage;
   url: URL;
   route: RouteKind;
+  compactionMode?: OpenAiCompactionMode | null;
+  compactionDetectionSource?: OpenAiRequestDetectionSource | null;
   status: number;
+  upstreamStatus?: number | null;
+  streamTerminalEvent?: string | null;
+  clientDisconnectPhase?: ClientDisconnectPhase;
+  streamOutcome?: StreamOutcome | null;
+  streamOversizedEventCount?: number;
   startedAt: number;
   startedAtIso: string;
   requestMetadata: RequestMetadata | null;
@@ -88,6 +107,11 @@ export interface OpenAiProxyTransactionInput {
 export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState {
   return {
     status: 502,
+    upstreamStatus: null,
+    streamTerminalEvent: null,
+    clientDisconnectPhase: "none",
+    streamOutcome: null,
+    streamOversizedEventCount: 0,
     errorSummary: null,
     rawBody: Buffer.alloc(0),
     upstreamBody: Buffer.alloc(0),
@@ -114,6 +138,10 @@ export function applyOpenAiProxyUpstreamResult(
   result: OpenAiProxyUpstreamResult
 ): void {
   state.status = result.status;
+  state.upstreamStatus = result.status;
+  state.streamTerminalEvent = result.streamSummary?.terminalEvent ?? null;
+  state.clientDisconnectPhase = result.clientDisconnectPhase;
+  state.streamOversizedEventCount = result.streamSummary?.oversizedEventCount ?? 0;
   state.errorSummary = result.errorSummary;
   state.responseBody = result.responseBody;
   state.responseHeaders = result.responseHeaders;
@@ -125,9 +153,16 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
   const captureEnabled = input.captureWriter.isEnabled();
   const logEntry = addLog(input.logger, {
     route: input.route,
+    compactionMode: input.compactionMode ?? null,
+    compactionDetectionSource: input.compactionDetectionSource ?? null,
     req: input.req,
     url: input.url,
     status: input.status,
+    upstreamStatus: input.upstreamStatus,
+    streamTerminalEvent: input.streamTerminalEvent,
+    clientDisconnectPhase: input.clientDisconnectPhase,
+    streamOutcome: input.streamOutcome,
+    streamOversizedEventCount: input.streamOversizedEventCount,
     startedAt: input.startedAt,
     startedAtIso: input.startedAtIso,
     completedAtIso,
@@ -167,16 +202,25 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       time: input.startedAtIso,
       completed_at: completedAtIso,
       route: input.route,
+      compaction_mode: input.compactionMode ?? null,
+      compaction_detection_source: input.compactionDetectionSource ?? null,
       method: input.req.method ?? "GET",
       path: storedPathForUrl(input.url),
       upstream_url: redactUrlForStorage(input.upstream).toString(),
       upstream_host: input.upstream.host,
       source_model: input.sourceModel,
       target_model: input.targetModel,
+      response_model: logEntry.response_model,
+      response_model_source: logEntry.response_model_source,
       compact_bridge_replacements: input.compactBridgeReplacements,
       compact_response_normalized: input.compactResponseNormalized,
       compact_response_normalize_reason: input.compactResponseNormalizeReason,
       compact_response_synthetic_source: input.compactResponseSyntheticSource,
+      upstream_status: input.upstreamStatus ?? null,
+      stream_terminal_event: input.streamTerminalEvent ?? null,
+      client_disconnect_phase: input.clientDisconnectPhase ?? "none",
+      stream_outcome: input.streamOutcome ?? null,
+      stream_oversized_event_count: input.streamOversizedEventCount ?? 0,
       incoming_request: {
         headers: serializeHeaders(input.req.headers),
         body: input.captureWriter.serializeBody(input.rawBody)
@@ -186,13 +230,13 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
         body: input.captureWriter.serializeBody(input.upstreamBody)
       },
       upstream_response: {
-        status: input.status,
+        status: input.upstreamStatus ?? input.status,
         headers: serializeHeaders(input.responseHeaders),
         body: input.captureWriter.serializeBody(input.responseBody)
       },
       client_response: input.clientResponseBody
         ? {
-            status: input.status,
+            status: input.upstreamStatus ?? input.status,
             headers: serializeHeaders(input.clientResponseHeaders ?? {}),
             body: input.captureWriter.serializeBody(input.clientResponseBody)
           }

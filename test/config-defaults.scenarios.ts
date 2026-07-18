@@ -57,6 +57,7 @@ describe("ConfigStore", () => {
 
     expect(store.get().logging.persist_body).toBe(false);
     expect(store.toPublicConfig().logging.persist_body).toBe(false);
+    expect(store.get().primary.model_override).toBe("");
     expect(store.get().primary.reasoning_effort).toBe("");
   });
 

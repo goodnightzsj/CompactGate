@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, zstdDecompressSync } from "node:zlib";
 import { ConfigError } from "./config.js";
 import type { LogStatusKind, RouteKind } from "../shared/types.js";
 
@@ -229,14 +229,15 @@ export function decodeBodyText(body: Buffer): string {
     return "";
   }
 
-  if (!looksLikeGzip(body)) {
+  if (!looksLikeGzip(body) && !looksLikeZstd(body)) {
     return body.toString("utf8");
   }
 
   try {
-    return gunzipSync(body, {
-      maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES
-    }).toString("utf8");
+    const decoded = looksLikeGzip(body)
+      ? gunzipSync(body, { maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES })
+      : zstdDecompressSync(body, { maxOutputLength: DEFAULT_MAX_DECODED_BODY_BYTES });
+    return decoded.toString("utf8");
   } catch {
     return "";
   }
@@ -255,6 +256,14 @@ export function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null 
 
 export function looksLikeGzip(buffer: Buffer): boolean {
   return buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+}
+
+export function looksLikeZstd(buffer: Buffer): boolean {
+  return buffer.length >= 4 &&
+    buffer[0] === 0x28 &&
+    buffer[1] === 0xb5 &&
+    buffer[2] === 0x2f &&
+    buffer[3] === 0xfd;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

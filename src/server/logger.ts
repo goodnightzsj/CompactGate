@@ -96,6 +96,7 @@ export class RequestLogger {
     this.ensureFacetSummary();
     this.reconcileInterruptedCaptures();
     this.backfillResponseModels();
+    this.backfillResponseModelSources();
     this.prunePersistedEntries();
     if (this.deferStoragePrune) {
       this.checkDatabaseSize();
@@ -134,6 +135,8 @@ export class RequestLogger {
               time,
               completed_at,
               route,
+              compaction_mode,
+              compaction_detection_source,
               method,
               path,
               endpoint,
@@ -151,7 +154,13 @@ export class RequestLogger {
               source_model,
               target_model,
               response_model,
+              response_model_source,
               status,
+              upstream_status,
+              stream_terminal_event,
+              client_disconnect_phase,
+              stream_outcome,
+              stream_oversized_event_count,
               duration_ms,
               first_token_ms,
               input_tokens,
@@ -170,13 +179,26 @@ export class RequestLogger {
               error_summary,
               capture_path,
               capture_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?
+            )
           `
         )
         .run(
           entry.time,
           entry.completed_at,
           entry.route,
+          entry.compaction_mode ?? null,
+          entry.compaction_detection_source ?? null,
           entry.method,
           entry.path,
           entry.endpoint,
@@ -194,7 +216,13 @@ export class RequestLogger {
           entry.source_model,
           entry.target_model,
           entry.response_model,
+          entry.response_model_source ?? (entry.response_model ? "upstream" : "unavailable"),
           entry.status,
+          entry.upstream_status ?? null,
+          entry.stream_terminal_event ?? null,
+          entry.client_disconnect_phase ?? "none",
+          entry.stream_outcome ?? null,
+          entry.stream_oversized_event_count ?? 0,
           entry.duration_ms,
           entry.first_token_ms,
           entry.input_tokens,
@@ -444,6 +472,10 @@ export class RequestLogger {
   }
 
   private ensureFacetSummary(): void {
+    this.db.exec(`
+      DROP TRIGGER IF EXISTS trg_request_log_facets_insert;
+      DROP TRIGGER IF EXISTS trg_request_log_facets_delete;
+    `);
     this.db.exec(LOG_FACET_SCHEMA_SQL);
     const persistedTotal = readCount(
       this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
@@ -516,6 +548,65 @@ export class RequestLogger {
       this.db.exec("ROLLBACK");
       this.recordPersistenceFailure("backfill response models", error);
       console.error(`Failed to backfill response models in ${this.databasePath}.`, error);
+    }
+  }
+
+  private backfillResponseModelSources(): void {
+    try {
+      this.db.exec("BEGIN");
+      this.db
+        .prepare(
+          `
+            UPDATE request_logs
+            SET response_model_source = CASE
+              WHEN response_model IS NOT NULL THEN 'upstream'
+              WHEN status >= 200 AND status < 300
+                AND error_summary IS NULL
+                AND (
+                  stream_outcome = 'success' OR
+                  (stream_outcome IS NULL AND request_type <> 'stream')
+                )
+                AND target_model IS NOT NULL
+              THEN 'target_fallback'
+              ELSE 'unavailable'
+            END
+            WHERE (response_model IS NOT NULL AND response_model_source <> 'upstream')
+              OR (
+                response_model IS NULL
+                AND status >= 200 AND status < 300
+                AND error_summary IS NULL
+                AND (
+                  stream_outcome = 'success' OR
+                  (stream_outcome IS NULL AND request_type <> 'stream')
+                )
+                AND target_model IS NOT NULL
+                AND response_model_source <> 'target_fallback'
+              )
+              OR (
+                response_model IS NULL
+                AND NOT (
+                  status >= 200 AND status < 300
+                  AND error_summary IS NULL
+                  AND (
+                    stream_outcome = 'success' OR
+                    (stream_outcome IS NULL AND request_type <> 'stream')
+                  )
+                  AND target_model IS NOT NULL
+                )
+                AND response_model_source <> 'unavailable'
+              )
+          `
+        )
+        .run();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // Preserve the original persistence failure.
+      }
+      this.recordPersistenceFailure("backfill response model sources", error);
+      console.error(`Failed to backfill response model sources in ${this.databasePath}.`, error);
     }
   }
 

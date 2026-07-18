@@ -4,9 +4,14 @@ import type { RequestLogger } from "./logger.js";
 import type {
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
+  ClientDisconnectPhase,
+  OpenAiCompactionMode,
+  OpenAiRequestDetectionSource,
   RequestLogEntry,
+  ResponseModelSource,
   RequestTransport,
-  RouteKind
+  RouteKind,
+  StreamOutcome
 } from "../shared/types.js";
 import type { TokenUsageMetrics } from "./usage.js";
 import { decodeBodyText, readHeaderString } from "./http-utils.js";
@@ -31,9 +36,16 @@ export function addLog(
   logger: RequestLogger,
   input: {
     route: RouteKind;
+    compactionMode?: OpenAiCompactionMode | null;
+    compactionDetectionSource?: OpenAiRequestDetectionSource | null;
     req: IncomingMessage;
     url: URL;
     status: number;
+    upstreamStatus?: number | null;
+    streamTerminalEvent?: string | null;
+    clientDisconnectPhase?: ClientDisconnectPhase;
+    streamOutcome?: StreamOutcome | null;
+    streamOversizedEventCount?: number;
     startedAt: number;
     startedAtIso: string;
     completedAtIso: string;
@@ -60,10 +72,16 @@ export function addLog(
     captureStatus: RequestLogEntry["capture_status"];
   }
 ): RequestLogEntry {
+  const responseModel = extractResponseModelFromBodies(
+    input.upstreamResponseBody,
+    input.clientResponseBody
+  );
   const entry: RequestLogEntry = {
     time: input.startedAtIso,
     completed_at: input.completedAtIso,
     route: input.route,
+    compaction_mode: input.compactionMode ?? null,
+    compaction_detection_source: input.compactionDetectionSource ?? null,
     method: input.req.method ?? "GET",
     path: storedPathForUrl(input.url),
     endpoint: input.endpoint,
@@ -80,8 +98,21 @@ export function addLog(
     compact_response_synthetic_source: input.compactResponseSyntheticSource,
     source_model: input.sourceModel,
     target_model: input.targetModel,
-    response_model: extractResponseModelFromBodies(input.upstreamResponseBody, input.clientResponseBody),
+    response_model: responseModel,
+    response_model_source: resolveResponseModelSource({
+      responseModel,
+      targetModel: input.targetModel,
+      status: input.status,
+      errorSummary: input.errorSummary,
+      streamOutcome: input.streamOutcome ?? null,
+      requestType: input.requestType
+    }),
     status: input.status,
+    upstream_status: input.upstreamStatus ?? null,
+    stream_terminal_event: input.streamTerminalEvent ?? null,
+    client_disconnect_phase: input.clientDisconnectPhase ?? "none",
+    stream_outcome: input.streamOutcome ?? null,
+    stream_oversized_event_count: input.streamOversizedEventCount ?? 0,
     duration_ms: Math.max(0, Math.round(performance.now() - input.startedAt)),
     first_token_ms: input.firstTokenMs,
     input_tokens: input.usage.inputTokens,
@@ -103,6 +134,25 @@ export function addLog(
   };
   logger.add(entry);
   return entry;
+}
+
+export function resolveResponseModelSource(input: {
+  responseModel: string | null;
+  targetModel: string | null;
+  status: number;
+  errorSummary: string | null;
+  streamOutcome: StreamOutcome | null;
+  requestType: RequestTransport;
+}): ResponseModelSource {
+  if (input.responseModel) {
+    return "upstream";
+  }
+
+  const successful = input.status >= 200 && input.status < 300 &&
+    input.errorSummary === null &&
+    (input.streamOutcome === "success" ||
+      (input.streamOutcome === null && input.requestType !== "stream"));
+  return successful && input.targetModel ? "target_fallback" : "unavailable";
 }
 
 export function redactUrlForStorage(url: URL): URL {

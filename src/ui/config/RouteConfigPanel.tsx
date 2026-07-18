@@ -62,7 +62,7 @@ export function RouteConfigPanel({
         />
         <RouteCredentialFields
           title="Codex 压缩路由" badge="压缩" tone="compact"
-          baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "Codex 压缩请求会转发到这里。" : "当前复用 Codex 主路由。"}
+          baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "Local/Remote V1 压缩请求会转发到这里；Remote V2 始终走主路由。" : "Local/Remote V1 复用 Codex 主路由；Remote V2 始终走主路由。"}
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
           baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
           storedApiKey={config?.compact.stored_api_key ?? false}

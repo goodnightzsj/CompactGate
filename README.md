@@ -35,9 +35,13 @@ Codex -> CompactGate -> 你的上游服务
 CompactGate 会按规则转发：
 
 ```text
-普通 /v1/* 请求          -> primary 主上游
-/v1/responses/compact -> compact 上游，或者仍走 primary
+普通 /v1/* 请求                                      -> primary 主上游
+/v1/responses/compact                               -> compact 策略
+/v1/responses + request_kind: "compaction"          -> compact 策略
+/v1/responses + input[].type: "compaction_trigger"  -> primary Responses 策略（逻辑记录为 remote_v2）
 ```
+
+新版 Codex 的上下文压缩有三种线上的请求形态：专用 `/responses/compact` 的 Remote V1、带 `compaction_trigger` 且仍走普通 `/responses` 的 Remote V2，以及由 `x-codex-turn-metadata` 标记为 `request_kind: "compaction"` 的本地摘要压缩。CompactGate 会识别三种形态；Remote V2 复用 primary 模型、凭据和 Responses 上游，不要求上游提供 compact 模型。没有这些精确信号的普通请求仍走 primary。
 
 你只需要把 Codex 的 `base_url` 改成 CompactGate，本地代理就会替你处理剩下的事情。
 
@@ -118,7 +122,7 @@ name = "OpenAI"
 wire_api = "responses"
 ```
 
-这两项不要随便改，尤其是 `name` 必须保持 `"OpenAI"`，否则 Codex 可能不会按预期调用 `/v1/responses/compact`。
+这两项不要随便改，尤其是 `name` 必须保持 `"OpenAI"`，否则 Codex 可能不会启用预期的 Responses 和远程压缩能力。不同 Codex 版本不一定都调用 `/v1/responses/compact`，也可能使用上面另外两种压缩请求形态。
 
 ## 配置文件怎么理解
 
@@ -175,12 +179,16 @@ wire_api = "responses"
 
 compact 请求走的上游。
 
+CompactGate 只在以下精确信号出现时标记为压缩流量：路径是 `/v1/responses/compact`（`remote_v1`）；`/v1/responses` 的 Codex turn metadata 中 `request_kind` 是 `compaction`（`local`，实现为 `responses_compaction_v2` 时为 `remote_v2`）；或者 input 中存在 `type: "compaction_trigger"`（`remote_v2`）。body 中的 `client_metadata` 优先于兼容请求头。压缩成功后的普通 `/v1/responses` 后续 turn 即使携带 `type: "compaction"` 和 V2 beta 标记，也保持普通 `primary` 日志，只跳过 V1 bridge并保留状态。它不会根据提示词、模型名或 token 数猜测请求用途。Remote V2 的真实压缩动作仍使用 Primary 上游。
+
 ### `compact.upstream_mode`
 
 可选值：
 
-- `split`：compact 请求走 `compact.base_url`
-- `primary`：compact 请求也走 `primary.base_url`
+- `split`：local/Remote V1 compact 请求走 `compact.base_url`
+- `primary`：local/Remote V1 compact 请求也走 `primary.base_url`
+
+Remote V2 始终走 primary Responses 上游，不受此项切换，也不会改写为 compact 模型。
 
 ### `compact.model_mode`
 
@@ -366,9 +374,11 @@ npm run build
 
 ## 常见问题
 
-### 1. Codex 没有调用 `/v1/responses/compact`
+### 1. Codex 没有调用 `/v1/responses/compact`，压缩还能分流吗
 
-先检查 Codex 配置里是不是：
+可以。新版 Codex 还可能把压缩请求发到普通 `/v1/responses`：本地压缩由 `x-codex-turn-metadata` 中的 `request_kind: "compaction"` 标识，Remote V2 由 `input[].type: "compaction_trigger"` 标识。CompactGate 会把它们记录为 `compact` 逻辑流量，但 Remote V2 实际复用 primary 上游，不走 `/responses/compact`，也不需要 compact 模型。
+
+如果日志仍显示为 `primary`，再检查 Codex 配置里是不是：
 
 ```toml
 name = "OpenAI"
@@ -388,7 +398,7 @@ wire_api = "responses"
 
 不需要。
 
-直接把：
+这只影响 local/Remote V1。直接把：
 
 ```json
 "upstream_mode": "primary"
@@ -417,6 +427,10 @@ Stream disconnected before completion: stream closed before response.completed
 ```
 
 如果 primary 上游收到原始 `type: "compaction"`，但不能验证其中的 `encrypted_content`，上游可能会返回 `invalid_encrypted_content`，并且响应流里没有 Codex 需要的 `response.completed` 事件，最终就会显示上面的断流错误。
+
+如果日志同时显示 `status=502` 与 `Client disconnected before upstream response completed.`，需要继续查看 `upstream_status`、`stream_terminal_event`、`client_disconnect_phase` 和 `stream_outcome`。Remote V2 或 Remote V1 在已经收到 `response.completed`/`[DONE]` 后，Codex CLI 可能先关闭连接而上游 HTTP 流尚未发出 `end`;新版会保留真实上游状态和已缓冲响应，并记录 `stream_outcome=success`、`client_disconnect_phase=after_terminal`，不再把它当作压缩失败。终止事件之前关闭仍记录为客户端取消或未完成流；真实上游 5xx 仍保留为上游错误。
+
+日志中的 `response_model` 只表示上游响应正文明确返回的模型。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，但 `response_model_source=target_fallback` 会说明 Studio 显示的有效模型来自 `target_model`；只有明确读到上游模型时才是 `response_model_source=upstream`，失败、取消或未完成流则为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，并记录 `stream_oversized_event_count` 供诊断。
 
 当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的可读 summary 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会继续走 primary，但 CompactGate 会先把可读 compact 状态转换成 assistant summary message，再转发给 primary。
 

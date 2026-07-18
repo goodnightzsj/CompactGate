@@ -8,7 +8,9 @@ export interface OpenAiStreamSummary {
   sawIncompleteEvent: boolean;
   sawOutputEvent: boolean;
   sawDoneMarker: boolean;
+  terminalEvent: string | null;
   eventCount: number;
+  oversizedEventCount: number;
 }
 
 export interface OpenAiStreamObserverOptions {
@@ -17,6 +19,7 @@ export interface OpenAiStreamObserverOptions {
 
 export interface OpenAiStreamObserverHandle {
   observe(chunk: Buffer): void;
+  snapshot(): OpenAiStreamSummary;
   finish(): Promise<OpenAiStreamSummary>;
 }
 
@@ -50,7 +53,9 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     sawIncompleteEvent: false,
     sawOutputEvent: false,
     sawDoneMarker: false,
-    eventCount: 0
+    terminalEvent: null,
+    eventCount: 0,
+    oversizedEventCount: 0
   };
 
   constructor(private readonly maxEventBytes: number) {}
@@ -66,6 +71,10 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       this.observeLineSegment(segment, hasNewline);
       offset = hasNewline ? newlineIndex + 1 : text.length;
     }
+  }
+
+  snapshot(): OpenAiStreamSummary {
+    return { ...this.summary };
   }
 
   async finish(): Promise<OpenAiStreamSummary> {
@@ -99,6 +108,10 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   private flushEvent(): void {
     if (this.oversizedEvent) {
+      if (this.eventName) {
+        this.summary.eventCount += 1;
+        this.recordEvent(this.eventName, null, "");
+      }
       this.resetEvent();
       return;
     }
@@ -110,31 +123,37 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
     this.summary.eventCount += 1;
     const data = this.dataLines.join("\n").trim();
-    if (data === "[DONE]") {
-      this.summary.sawDoneMarker = true;
-      this.summary.sawTerminalEvent = true;
-    }
-
     const eventType = this.readEventType(data);
-    if (isOpenAiTerminalEvent(this.eventName) || isOpenAiTerminalEvent(eventType)) {
-      this.summary.sawTerminalEvent = true;
-    }
-    if (isOpenAiCompletedEvent(this.eventName) || isOpenAiCompletedEvent(eventType)) {
-      this.summary.sawCompletedEvent = true;
-    }
-    if (isOpenAiFailedEvent(this.eventName) || isOpenAiFailedEvent(eventType)) {
-      this.summary.sawFailedEvent = true;
-    }
-    if (isOpenAiIncompleteEvent(this.eventName) || isOpenAiIncompleteEvent(eventType)) {
-      this.summary.sawIncompleteEvent = true;
-    }
-    if (isOpenAiOutputEvent(this.eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
-      this.summary.sawOutputEvent = true;
-    }
+    this.recordEvent(this.eventName, eventType, data);
 
     this.eventName = null;
     this.dataLines = [];
     this.retainedEventBytes = 0;
+  }
+
+  private recordEvent(eventName: string | null, eventType: string | null, data: string): void {
+    if (data === "[DONE]") {
+      this.summary.sawDoneMarker = true;
+      this.summary.sawTerminalEvent = true;
+      this.summary.terminalEvent = "[DONE]";
+    }
+
+    if (isOpenAiTerminalEvent(eventName) || isOpenAiTerminalEvent(eventType)) {
+      this.summary.sawTerminalEvent = true;
+      this.summary.terminalEvent = eventName ?? eventType;
+    }
+    if (isOpenAiCompletedEvent(eventName) || isOpenAiCompletedEvent(eventType)) {
+      this.summary.sawCompletedEvent = true;
+    }
+    if (isOpenAiFailedEvent(eventName) || isOpenAiFailedEvent(eventType)) {
+      this.summary.sawFailedEvent = true;
+    }
+    if (isOpenAiIncompleteEvent(eventName) || isOpenAiIncompleteEvent(eventType)) {
+      this.summary.sawIncompleteEvent = true;
+    }
+    if (isOpenAiOutputEvent(eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
+      this.summary.sawOutputEvent = true;
+    }
   }
 
   private readEventType(data: string): string | null {
@@ -202,9 +221,11 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   private markEventOversized(): void {
     this.pending = "";
-    this.eventName = null;
     this.dataLines = [];
     this.retainedEventBytes = 0;
+    if (!this.oversizedEvent) {
+      this.summary.oversizedEventCount += 1;
+    }
     this.oversizedEvent = true;
   }
 
@@ -230,6 +251,10 @@ class GzipOpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   observe(chunk: Buffer): void {
     this.gunzip.write(chunk);
+  }
+
+  snapshot(): OpenAiStreamSummary {
+    return this.observer.snapshot();
   }
 
   async finish(): Promise<OpenAiStreamSummary> {

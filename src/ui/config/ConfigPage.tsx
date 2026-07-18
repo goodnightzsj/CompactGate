@@ -53,10 +53,12 @@ type ConfigPageProfileProps = {
 type ConfigPagePreviewProps = {
   previewPath: string;
   previewBody: string;
+  previewHeaders: string;
   preview: RoutePreviewResponse | null;
   previewError: string | null;
   onPathChange: (path: string) => void;
   onBodyChange: (body: string) => void;
+  onHeadersChange: (headers: string) => void;
   onPreviewSubmit: (event: React.FormEvent) => void;
 };
 
@@ -176,10 +178,12 @@ export function ConfigPage({
               <ConfigPreviewPanel
                 previewPath={previewState.previewPath}
                 previewBody={previewState.previewBody}
+                previewHeaders={previewState.previewHeaders}
                 preview={previewState.preview}
                 previewError={previewState.previewError}
                 onPathChange={previewState.onPathChange}
                 onBodyChange={previewState.onBodyChange}
+                onHeadersChange={previewState.onHeadersChange}
                 onPreviewSubmit={previewState.onPreviewSubmit}
               />
             )}

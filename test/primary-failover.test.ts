@@ -1,4 +1,4 @@
-import { gzipSync } from "node:zlib";
+import { gzipSync, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import {
@@ -719,6 +719,35 @@ describe("primaryRouteRequestContextFromBody", () => {
       compactionStateKey: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
     });
     expect(context.compactionStateKey).not.toContain("OPAQUE_GZIP_STATE");
+  });
+
+  it("prefers Codex client metadata and supports zstd request bodies", () => {
+    const context = primaryRouteRequestContextFromBody(
+      zstdCompressSync(Buffer.from(JSON.stringify({
+        model: "gpt-5.6",
+        client_metadata: {
+          thread_id: "codex-thread",
+          session_id: "codex-session"
+        }
+      }))),
+      {
+        "thread-id": "header-thread",
+        "session-id": "header-session"
+      },
+      "/responses"
+    );
+
+    expect(context).toMatchObject({
+      model: "gpt-5.6",
+      sessionKey: "codex-thread"
+    });
+  });
+
+  it("uses Codex thread-id and session-id compatibility headers", () => {
+    expect(primaryRouteRequestContextFromBody(
+      Buffer.from(JSON.stringify({ model: "gpt-5.6" })),
+      { "thread-id": "header-thread", "session-id": "header-session" }
+    ).sessionKey).toBe("header-thread");
   });
 });
 

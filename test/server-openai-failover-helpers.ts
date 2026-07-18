@@ -14,7 +14,8 @@ export async function saveCodexProfile(
   compactUrl: string,
   name: string,
   primaryBaseUrl: string,
-  modelOverride?: string
+  modelOverride?: string,
+  compactUpstreamMode: "split" | "primary" = "split"
 ): Promise<string> {
   const response = await fetch(`${appUrl}/api/config/profiles`, {
     method: "POST",
@@ -28,7 +29,7 @@ export async function saveCodexProfile(
           api_key: `${name}-token`,
           ...(modelOverride ? { model_override: modelOverride } : {})
         },
-        compact: { base_url: compactUrl, api_key: "compact-token", upstream_mode: "split" }
+        compact: { base_url: compactUrl, api_key: "compact-token", upstream_mode: compactUpstreamMode }
       }
     })
   });

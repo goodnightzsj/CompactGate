@@ -129,13 +129,7 @@ describe("CompactGate OpenAI routing", () => {
         writeJson(res, {
           id: "resp_primary_mode_normalized",
           object: "response",
-          output: [
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: summaryText }]
-            }
-          ]
+          output_text: summaryText
         });
         return;
       }
@@ -156,16 +150,8 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(compactResponse.status).toBe(200);
     // 方案 B:客户端收原始上游 JSON,归一化仅用于桥接存储。
-    const compactBody = await compactResponse.json() as {
-      output: Array<{ type: string; role?: string; content?: unknown }>;
-    };
-    expect(compactBody.output).toEqual([
-      {
-        type: "message",
-        role: "assistant",
-        content: [{ type: "output_text", text: summaryText }]
-      }
-    ]);
+    const compactBody = await compactResponse.json() as { output_text?: string };
+    expect(compactBody.output_text).toBe(summaryText);
 
     const followUpResponse = await fetch(`${app.url}/v1/responses`, {
       method: "POST",

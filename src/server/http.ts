@@ -104,6 +104,13 @@ export function createCompactGateServer(
     studioEvents
   );
   const server = http.createServer(app.handler);
+  server.on("upgrade", (_req, socket) => {
+    socket.end(
+      "HTTP/1.1 426 Upgrade Required\r\n" +
+      "Connection: close\r\n" +
+      "Content-Length: 0\r\n\r\n"
+    );
+  });
   server.once("close", () => {
     actualLogger.close();
     studioEvents.close();

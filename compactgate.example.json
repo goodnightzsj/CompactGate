@@ -2,7 +2,8 @@
   "listen": "127.0.0.1:7865",
   "primary": {
     "base_url": "https://primary.example/v1",
-    "api_key_env": "PRIMARY_API_KEY"
+    "api_key_env": "PRIMARY_API_KEY",
+    "model_override": ""
   },
   "compact": {
     "base_url": "https://compact.example/v1",

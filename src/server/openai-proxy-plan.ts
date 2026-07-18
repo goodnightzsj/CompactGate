@@ -42,7 +42,8 @@ export function buildPrimaryOpenAiProxyPlan({
   rawBody,
   endpoint,
   compactionBridge,
-  primaryFailover
+  primaryFailover,
+  preserveRemoteV2State = false
 }: {
   config: CompactGateConfig;
   url: URL;
@@ -51,6 +52,7 @@ export function buildPrimaryOpenAiProxyPlan({
   endpoint: string;
   compactionBridge: CompactionBridgeStore;
   primaryFailover: PrimaryFailoverState;
+  preserveRemoteV2State?: boolean;
 }): OpenAiProxyPlan {
   const primarySelection = primaryFailover.preview(
     config,
@@ -61,12 +63,19 @@ export function buildPrimaryOpenAiProxyPlan({
   const sourceModel = modelRewrite.sourceModel;
   const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
   const splitCompactMode = config.compact.upstream_mode === "split";
-  const bridgeResult = compactionBridge.rewritePrimaryBody(modelRewrite.body, compactBridgeScope, {
-    includeStandardFallbacks: splitCompactMode,
-    includeSyntheticFallbacks: true,
-    allowReadableFallback: splitCompactMode
-  });
-  if (splitCompactMode && bridgeResult.knownMissingCompactionCount > 0) {
+  const bridgeResult = preserveRemoteV2State
+    ? {
+        body: modelRewrite.body,
+        replacedCompactionCount: 0,
+        remainingCompactionCount: 0,
+        knownMissingCompactionCount: 0
+      }
+    : compactionBridge.rewritePrimaryBody(modelRewrite.body, compactBridgeScope, {
+        includeStandardFallbacks: splitCompactMode,
+        includeSyntheticFallbacks: true,
+        allowReadableFallback: splitCompactMode
+      });
+  if (!preserveRemoteV2State && splitCompactMode && bridgeResult.knownMissingCompactionCount > 0) {
     throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
   }
 
@@ -104,7 +113,8 @@ export function buildCompactOpenAiProxyPlan({
 }): OpenAiProxyPlan {
   const rewrite = rewriteCompactBody(rawBody, config);
   const upstreamPath = compactUpstreamPath(config, url.pathname);
-  return withRequestHeaders(headers, resolveRouteCredential("compact", config).apiKey, rawBody, {
+  const credential = resolveRouteCredential("compact", config);
+  const plan = withRequestHeaders(headers, credential.apiKey, rawBody, {
     route: "compact",
     upstream: buildUpstreamUrl(compactUpstreamBaseUrl(config), upstreamPath, url.search),
     timeoutMs: config.timeouts.compact_ms,
@@ -120,6 +130,10 @@ export function buildCompactOpenAiProxyPlan({
     },
     primarySelection: null
   });
+  if (config.compact.upstream_mode === "split" && !credential.apiKeyConfigured) {
+    delete plan.requestHeaders.authorization;
+  }
+  return plan;
 }
 
 function compactBridgeScopeFor(

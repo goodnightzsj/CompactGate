@@ -154,7 +154,7 @@ export function ConfigModelPanel({
             <div>
               <p className="eyebrow">Compact Route</p>
               <h3 id="compact-model-title">压缩模型联动</h3>
-              <p>自动从 Primary 模型派生，或为压缩请求固定目标模型。</p>
+              <p>仅用于 local/Remote V1 压缩；Remote V2 始终沿用 Primary 模型。</p>
             </div>
           </div>
 

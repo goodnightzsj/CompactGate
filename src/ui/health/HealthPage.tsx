@@ -90,7 +90,7 @@ export function HealthPage({
           route="compact"
           credentialScope="compact"
           badgeLabel="Codex 压缩"
-          summary="处理 /v1/responses/compact"
+            summary="处理 local/Remote V1；Remote V2 复用主路由"
           upstream={health?.compact}
         />
         <HealthEndpointCard

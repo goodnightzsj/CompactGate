@@ -114,7 +114,7 @@ describe("CompactGate logs and capture", () => {
       upstream_response_body: null,
       client_response_body: null,
       compact_response_normalized: true,
-      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_normalize_reason: "missing_compaction_output",
       compact_response_synthetic_source: "request_input"
     });
 
@@ -140,13 +140,7 @@ describe("CompactGate logs and capture", () => {
     const compact = await startJsonUpstream({
       id: "resp_audit_normalized",
       object: "response",
-      output: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: summaryText }]
-        }
-      ]
+      output_text: summaryText
     });
     const app = await startApp(primary.url, compact.url, {
       logging: { persist_body: true }
@@ -159,16 +153,16 @@ describe("CompactGate logs and capture", () => {
 
     // 方案 B:客户端收原始上游 JSON(非归一化)。
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      object: "response",
-      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: summaryText }] }]
-    });
+    expect(await response.json()).toMatchObject({ object: "response", output_text: summaryText });
 
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       compact_response_normalized: true,
-      compact_response_normalize_reason: "missing_response_compaction_object",
+      compact_response_normalize_reason: "missing_compaction_output",
       compact_response_synthetic_source: "upstream_response",
+      response_model: null,
+      response_model_source: "target_fallback",
+      stream_oversized_event_count: 0,
       upstream_response_body: null,
       client_response_body: null
     });
@@ -182,8 +176,11 @@ describe("CompactGate logs and capture", () => {
     expect(capture).toMatchObject({
       route: "compact",
       compact_response_normalized: true,
-      compact_response_normalize_reason: "missing_response_compaction_object",
-      compact_response_synthetic_source: "upstream_response"
+      compact_response_normalize_reason: "missing_compaction_output",
+      compact_response_synthetic_source: "upstream_response",
+      response_model: null,
+      response_model_source: "target_fallback",
+      stream_oversized_event_count: 0
     });
     expect(capture.upstream_response.body.text).toContain('"object":"response"');
     // 方案 B:无独立客户端响应体(透明转发),capture 的 client_response 为空。
@@ -256,6 +253,8 @@ describe("CompactGate logs and capture", () => {
     expect(errorPage.logs[0]).toMatchObject({
       route: "compact",
       status: 400,
+      upstream_status: 400,
+      stream_outcome: "upstream_http_error",
       error_summary: "Upstream returned HTTP 400: bad compact model (invalid_request_error)",
       request_summary: "input text"
     });

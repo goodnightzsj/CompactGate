@@ -40,13 +40,18 @@ function readSessionKey(
   headers: IncomingHttpHeaders
 ): string | null {
   const metadata = isRecord(parsed?.metadata) ? parsed.metadata : null;
+  const clientMetadata = isRecord(parsed?.client_metadata) ? parsed.client_metadata : null;
   return (
     readTrimmedString(parsed?.session_hash) ??
     readTrimmedString(parsed?.session_id) ??
     readTrimmedString(parsed?.conversation_id) ??
+    readTrimmedString(clientMetadata?.thread_id) ??
+    readTrimmedString(clientMetadata?.session_id) ??
     readTrimmedString(metadata?.session_hash) ??
     readTrimmedString(metadata?.session_id) ??
     readHeader(headers["x-compactgate-session"]) ??
+    readHeader(headers["thread-id"]) ??
+    readHeader(headers["session-id"]) ??
     readHeader(headers["x-session-id"]) ??
     readHeader(headers["x-conversation-id"]) ??
     readHeader(headers["openai-conversation-id"])
