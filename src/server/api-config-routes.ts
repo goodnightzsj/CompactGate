@@ -9,6 +9,7 @@ import {
 import type { RequestLogger } from "./logger.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 
 export async function handleConfigApi(
   req: IncomingMessage,
@@ -17,7 +18,8 @@ export async function handleConfigApi(
   configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  codexVersionMonitor: CodexVersionMonitor
 ): Promise<boolean> {
   if (req.method === "GET" && url.pathname === "/api/config") {
     sendJson(res, 200, configStore.toPublicConfig());
@@ -48,7 +50,7 @@ export async function handleConfigApi(
   if (req.method === "POST" && url.pathname === "/api/config/import") {
     const importedConfig = await readJsonBody(req);
     await configStore.importConfig(importedConfig);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -56,7 +58,7 @@ export async function handleConfigApi(
   if (req.method === "PATCH" && url.pathname === "/api/config") {
     const patch = await readJsonBody(req);
     await configStore.patch(patch);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -70,7 +72,7 @@ export async function handleConfigApi(
 
     const profilePatch = Object.hasOwn(record, "config") ? record.config : {};
     await configStore.saveProfile(readProfileScope(record, url), record.name, profilePatch);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -87,7 +89,7 @@ export async function handleConfigApi(
       typeof body.name === "string" ? body.name : undefined,
       profilePatch
     );
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -103,7 +105,7 @@ export async function handleConfigApi(
     }
 
     await configStore.reorderProfiles(readProfileScope(body, url), profileIds);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -118,7 +120,7 @@ export async function handleConfigApi(
       readProfileId(body, "duplicate"),
       typeof body.name === "string" ? body.name : undefined
     );
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -129,7 +131,7 @@ export async function handleConfigApi(
       "config profile delete requires a profile id."
     );
     await configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete"));
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -140,7 +142,7 @@ export async function handleConfigApi(
       "config profile apply requires a profile id."
     );
     await configStore.applyProfile(readProfileScope(body, url), readProfileId(body, "apply"));
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, true);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -153,6 +155,7 @@ function broadcastConfigSnapshot(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
+  codexVersionMonitor: CodexVersionMonitor,
   syncLogging = false
 ): void {
   if (syncLogging) {
@@ -167,7 +170,7 @@ function broadcastConfigSnapshot(
       logging.capture_dir_max_bytes
     );
   }
-  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
 }
 
 function requireRecordBody(body: unknown, message: string): Record<string, unknown> {

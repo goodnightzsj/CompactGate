@@ -29,6 +29,15 @@ import { errorSummary } from "../shared/api.js";
 
 const STREAM_RECONNECTING_MESSAGE = "实时日志流暂时断开，浏览器正在重连。";
 
+export function mergeCodexStatusIntoHealth(
+  health: HealthResponse | null,
+  event: StudioLogEvent
+): HealthResponse | null {
+  return health && event.codex_status
+    ? { ...health, codex: event.codex_status }
+    : health;
+}
+
 interface PendingLogLoad {
   generation: number;
   query: LogPageQuery;
@@ -276,6 +285,7 @@ export function useLogFeed({
     const handleLog = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
+        setHealth((previous) => mergeCodexStatusIntoHealth(previous, payload));
         const pendingLoad = pendingLogLoadRef.current;
         if (pendingLoad?.generation === generationRef.current) {
           pendingLoad.liveEvents.push(payload);

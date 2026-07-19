@@ -23,6 +23,7 @@ import { PrimaryFailoverState } from "./primary-failover.js";
 import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
+import { CodexVersionMonitor } from "./codex-version.js";
 
 export interface CompactGateApp {
   handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -63,12 +64,14 @@ export function createCompactGateApp(
   logger?: RequestLogger,
   captureWriter?: DebugCaptureWriter,
   compactionBridge = new CompactionBridgeStore(),
-  studioEvents = new StudioEventBroadcaster()
+  studioEvents = new StudioEventBroadcaster(),
+  codexVersionMonitor = new CodexVersionMonitor()
 ): CompactGateApp {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
     captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
   const primaryFailover = new PrimaryFailoverState();
+  codexVersionMonitor.start();
 
   return {
     handler: (req, res) => {
@@ -80,7 +83,8 @@ export function createCompactGateApp(
         actualCaptureWriter,
         compactionBridge,
         studioEvents,
-        primaryFailover
+        primaryFailover,
+        codexVersionMonitor
       );
     }
   };
@@ -91,7 +95,8 @@ export function createCompactGateServer(
   logger?: RequestLogger,
   captureWriter?: DebugCaptureWriter,
   compactionBridge = new CompactionBridgeStore(),
-  studioEvents = new StudioEventBroadcaster()
+  studioEvents = new StudioEventBroadcaster(),
+  codexVersionMonitor = new CodexVersionMonitor()
 ): http.Server {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
@@ -101,7 +106,8 @@ export function createCompactGateServer(
     actualLogger,
     actualCaptureWriter,
     compactionBridge,
-    studioEvents
+    studioEvents,
+    codexVersionMonitor
   );
   const server = http.createServer(app.handler);
   server.on("upgrade", (_req, socket) => {
@@ -114,6 +120,7 @@ export function createCompactGateServer(
   server.once("close", () => {
     actualLogger.close();
     studioEvents.close();
+    codexVersionMonitor.close();
   });
   return server;
 }
@@ -126,7 +133,8 @@ async function routeRequest(
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
-  primaryFailover: PrimaryFailoverState
+  primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor
 ): Promise<void> {
   try {
     const url = parseRequestUrl(req.url);
@@ -142,7 +150,8 @@ async function routeRequest(
         studioEvents,
         fetchClaudeModels,
         fetchOpenAiModels,
-        primaryFailover
+        primaryFailover,
+        codexVersionMonitor
       );
       return;
     }
@@ -170,7 +179,8 @@ async function routeRequest(
         captureWriter,
         compactionBridge,
         studioEvents,
-        primaryFailover
+        primaryFailover,
+        codexVersionMonitor
       );
       return;
     }

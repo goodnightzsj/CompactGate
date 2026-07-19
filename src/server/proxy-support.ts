@@ -16,6 +16,8 @@ import type {
 import type { TokenUsageMetrics } from "./usage.js";
 import { decodeBodyText, readHeaderString } from "./http-utils.js";
 import { extractResponseModelFromBodies } from "./response-model.js";
+import { effectiveResponseModel } from "./response-model.js";
+import { parseCodexClientUserAgent } from "./codex-version.js";
 
 const SENSITIVE_QUERY_KEYS = new Set([
   "api_key",
@@ -76,6 +78,15 @@ export function addLog(
     input.upstreamResponseBody,
     input.clientResponseBody
   );
+  const responseModelSource = resolveResponseModelSource({
+    responseModel,
+    targetModel: input.targetModel,
+    status: input.status,
+    errorSummary: input.errorSummary,
+    streamOutcome: input.streamOutcome ?? null,
+    requestType: input.requestType
+  });
+  const userAgent = readHeaderString(input.req.headers["user-agent"]);
   const entry: RequestLogEntry = {
     time: input.startedAtIso,
     completed_at: input.completedAtIso,
@@ -99,14 +110,9 @@ export function addLog(
     source_model: input.sourceModel,
     target_model: input.targetModel,
     response_model: responseModel,
-    response_model_source: resolveResponseModelSource({
-      responseModel,
-      targetModel: input.targetModel,
-      status: input.status,
-      errorSummary: input.errorSummary,
-      streamOutcome: input.streamOutcome ?? null,
-      requestType: input.requestType
-    }),
+    response_model_source: responseModelSource,
+    effective_response_model: effectiveResponseModel(responseModel, input.targetModel, responseModelSource),
+    codex_client: parseCodexClientUserAgent(userAgent),
     status: input.status,
     upstream_status: input.upstreamStatus ?? null,
     stream_terminal_event: input.streamTerminalEvent ?? null,
@@ -126,7 +132,7 @@ export function addLog(
     additive_cached_output_tokens: input.usage.additiveCachedOutputTokens === true,
     total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
-    user_agent: readHeaderString(input.req.headers["user-agent"]),
+    user_agent: userAgent,
     request_id: input.requestId,
     error_summary: input.errorSummary,
     capture_path: input.capturePath,

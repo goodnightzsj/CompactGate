@@ -64,6 +64,7 @@ export function buildRoutesPageModel({
   compactModel,
   config,
   form,
+  health,
   latestLog,
   previewRoute,
   previewCompactionMode
@@ -71,6 +72,7 @@ export function buildRoutesPageModel({
   compactModel: string;
   config: PublicConfig | null;
   form: ConfigFormState;
+  health: HealthResponse | null;
   latestLog: RequestLogEntry | null;
   previewRoute: RouteKind | null;
   previewCompactionMode: OpenAiCompactionMode | null;
@@ -86,7 +88,8 @@ export function buildRoutesPageModel({
     activeRoute,
     activeCompactionMode,
     activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
-    latestLog
+    latestLog,
+    codexStatus: health?.codex ?? null
   };
 }
 

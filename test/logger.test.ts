@@ -322,8 +322,73 @@ describe("RequestLogger", () => {
 
       expect(entry.response_model).toBe("gpt-5.5-2026-04-23");
       expect(entry.response_model_source).toBe("upstream");
+      expect(entry.effective_response_model).toBe("gpt-5.5-2026-04-23");
       expect(logger.recent()[0].response_model).toBe("gpt-5.5-2026-04-23");
       expect(logger.recent()[0].response_model_source).toBe("upstream");
+      expect(logger.recent()[0].effective_response_model).toBe("gpt-5.5-2026-04-23");
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("projects the effective target model and forked Codex client for a successful V2 compaction", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(2, path.join(dir, "compactgate-logs.sqlite"));
+
+    try {
+      const entry = addLog(logger, {
+        route: "compact",
+        compactionMode: "remote_v2",
+        compactionDetectionSource: "input",
+        req: {
+          method: "POST",
+          headers: { "user-agent": "codex-tui/0.144.1-cometix (Mac OS 15.0.1; arm64)" }
+        } as IncomingMessage,
+        url: new URL("http://compactgate.local/v1/responses"),
+        status: 200,
+        upstreamStatus: 200,
+        streamTerminalEvent: "response.completed",
+        streamOutcome: "success",
+        startedAt: performance.now(),
+        startedAtIso: "2026-07-19T00:00:00.000Z",
+        completedAtIso: "2026-07-19T00:01:00.000Z",
+        endpoint: "/responses",
+        requestType: "stream",
+        reasoningEffort: null,
+        requestSummary: "input 334 · compactions 1",
+        incomingRequestBody: Buffer.alloc(0),
+        upstreamRequestBody: Buffer.alloc(0),
+        upstreamResponseBody: Buffer.from("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"),
+        clientResponseBody: null,
+        persistBody: false,
+        upstreamHost: "primary.example",
+        requestId: "response-model-v2-fallback",
+        sourceModel: "gpt-5.6-sol",
+        targetModel: "gpt-5.6-sol",
+        firstTokenMs: 10,
+        usage: emptyUsageMetrics(),
+        errorSummary: null,
+        compactResponseNormalized: false,
+        compactResponseNormalizeReason: null,
+        compactResponseSyntheticSource: null,
+        capturePath: null,
+        captureStatus: "none"
+      });
+
+      expect(entry.response_model).toBeNull();
+      expect(entry.response_model_source).toBe("target_fallback");
+      expect(entry.effective_response_model).toBe("gpt-5.6-sol");
+      expect(entry.codex_client).toMatchObject({
+        raw_version: "0.144.1-cometix",
+        base_version: "0.144.1",
+        variant: "cometix",
+        is_fork: true
+      });
+      expect(logger.recent()[0]).toMatchObject({
+        effective_response_model: "gpt-5.6-sol",
+        codex_client: { raw_version: "0.144.1-cometix", variant: "cometix" }
+      });
     } finally {
       logger.close();
     }

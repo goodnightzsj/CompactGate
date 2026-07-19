@@ -20,7 +20,9 @@ import {
   type HostFilterOption,
   logStatusToneClass,
   reasoningEffortLabel,
-  responseModelDisplay
+  responseModelDisplay,
+  compactionModeClass,
+  compactionModeLabel
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useStaggeredLogs } from "./useStaggeredLogs.js";
@@ -230,7 +232,10 @@ export function LogsPage({
                         <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
                         <td>
                           <LogTextTooltip className="log-model-cell" value={modelMapping}>
-                            <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                            <span className="log-model-route-badges">
+                              <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+                              {entry.compaction_mode && <span className={`protocol-chip ${compactionModeClass(entry.compaction_mode)}`}>{compactionModeLabel(entry.compaction_mode)}</span>}
+                            </span>
                             <strong>{entry.source_model ?? "-"}</strong>
                             {hasRewrite && <small>→ {entry.target_model}</small>}
                           </LogTextTooltip>

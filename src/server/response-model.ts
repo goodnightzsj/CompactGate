@@ -1,4 +1,5 @@
 import { decodeBodyText } from "./http-utils.js";
+import type { ResponseModelSource } from "../shared/types.js";
 
 export function extractResponseModelFromBodies(
   upstreamResponseBody: Buffer,
@@ -8,6 +9,18 @@ export function extractResponseModelFromBodies(
     extractResponseModelFromText(decodeBodyText(upstreamResponseBody)) ??
     extractResponseModelFromText(clientResponseBody ? decodeBodyText(clientResponseBody) : "")
   );
+}
+
+export function effectiveResponseModel(
+  responseModel: string | null,
+  targetModel: string | null,
+  source: ResponseModelSource
+): string | null {
+  if (responseModel) {
+    return responseModel;
+  }
+
+  return source === "target_fallback" ? targetModel : null;
 }
 
 export function extractResponseModelFromText(text: string): string | null {

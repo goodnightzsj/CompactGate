@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
+import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
+import { mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
 import {
   ALL_HOSTS_FILTER,
@@ -37,6 +39,19 @@ describe("log request generations", () => {
 });
 
 describe("live log page updates", () => {
+  it("projects compact event protocol status into the current health snapshot", () => {
+    const health = { codex: { observed_protocol: "remote_v1" } } as HealthResponse;
+    const event = {
+      operation: "insert",
+      entry: requestLog("compact-live", { compaction_mode: "remote_v2" }),
+      codex_status: { observed_protocol: "remote_v2" }
+    } as StudioLogEvent;
+
+    expect(mergeCodexStatusIntoHealth(health, event)?.codex.observed_protocol).toBe("remote_v2");
+    expect(mergeCodexStatusIntoHealth(health, { operation: "insert", entry: requestLog("ordinary") }))
+      .toBe(health);
+  });
+
   it("does not increment filtered counts for capture lifecycle updates", () => {
     const initial = emptyPage(2);
     const pending = requestLog("capture-update", {

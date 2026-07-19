@@ -56,6 +56,7 @@ import {
   summarizeOpenAiStreamFailure,
   UpstreamRequestError
 } from "./upstream-client.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 
 export async function proxyOpenAiRequest(
   req: IncomingMessage,
@@ -66,7 +67,8 @@ export async function proxyOpenAiRequest(
   captureWriter: DebugCaptureWriter,
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
-  primaryFailover: PrimaryFailoverState
+  primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
@@ -86,6 +88,7 @@ export async function proxyOpenAiRequest(
       compactionBridge,
       studioEvents,
       primaryFailover,
+      codexVersionMonitor,
       requestId,
       startedAtIso,
       startedAt,
@@ -105,6 +108,7 @@ export async function proxyOpenAiRequest(
     compactionBridge,
     studioEvents,
     primaryFailover,
+    codexVersionMonitor,
     requestId,
     startedAtIso,
     startedAt
@@ -122,6 +126,7 @@ async function proxyPrimaryRequest(
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor,
   requestId: string,
   startedAtIso: string,
   startedAt: number
@@ -155,6 +160,7 @@ async function proxyPrimaryRequest(
         compactionBridge,
         studioEvents,
         primaryFailover,
+        codexVersionMonitor,
         requestId,
         startedAtIso,
         startedAt,
@@ -185,7 +191,8 @@ async function proxyPrimaryRequest(
       configStore,
       logger,
       primarySelection,
-      studioEvents
+      studioEvents,
+      codexVersionMonitor
     });
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
@@ -251,10 +258,11 @@ async function proxyPrimaryRequest(
       });
     }
 
-    await finalizeOpenAiProxyTransaction({
-      logger,
-      captureWriter,
-      studioEvents,
+      await finalizeOpenAiProxyTransaction({
+        logger,
+        captureWriter,
+        studioEvents,
+        codexVersionMonitor,
       route,
       compactionMode: classification.compactionMode,
       compactionDetectionSource: classification.detectionSource,
@@ -298,13 +306,15 @@ async function syncScheduledPrimaryProfile({
   configStore,
   logger,
   primarySelection,
-  studioEvents
+  studioEvents,
+  codexVersionMonitor
 }: {
   config: CompactGateConfig;
   configStore: ConfigStore;
   logger: RequestLogger;
   primarySelection: PrimaryRouteSelection | null;
   studioEvents: StudioEventBroadcaster;
+  codexVersionMonitor: CodexVersionMonitor;
 }): Promise<void> {
   const selectedProfileId = primarySelection?.profileId;
   const activeProfileId = config.profile_scopes?.codex?.active_profile_id ?? null;
@@ -317,7 +327,7 @@ async function syncScheduledPrimaryProfile({
   }
 
   await configStore.applyProfile("codex", selectedProfileId);
-  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
 }
 
 async function proxyCompactRequest(
@@ -331,6 +341,7 @@ async function proxyCompactRequest(
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor,
   requestId: string,
   startedAtIso: string,
   startedAt: number,
@@ -374,7 +385,8 @@ async function proxyCompactRequest(
         configStore,
         logger,
         primarySelection,
-        studioEvents
+        studioEvents,
+        codexVersionMonitor
       });
     }
     upstream = plan.upstream;
@@ -516,6 +528,7 @@ async function proxyCompactRequest(
       logger,
       captureWriter,
       studioEvents,
+      codexVersionMonitor,
       route,
       compactionMode: classification.compactionMode,
       compactionDetectionSource: classification.detectionSource,

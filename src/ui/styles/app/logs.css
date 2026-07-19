@@ -311,12 +311,30 @@
 }
 
 .log-model-cell .route-chip {
-  grid-row: 1 / span 2;
-  align-self: start;
   width: fit-content;
   max-inline-size: 8.5ch;
   font-size: 0.6rem;
   height: 16px;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-model-route-badges {
+  display: flex;
+  grid-row: 1 / span 2;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 3px;
+  min-width: 0;
+  max-inline-size: 12ch;
+}
+
+.log-model-route-badges .protocol-chip {
+  max-inline-size: 12ch;
+  align-self: start;
+  font-size: 0.6rem;
   padding: 0 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -461,6 +479,12 @@
 .log-table .log-detail-value.is-medium,
 .log-table .log-detail-value.is-tiny {
   font-size: 0.7rem;
+}
+
+.log-table .log-detail-value.is-emphasis {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 800;
 }
 
 .log-table .log-detail-label {

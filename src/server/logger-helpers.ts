@@ -11,6 +11,8 @@ import type {
   RouteKind,
   StreamOutcome
 } from "../shared/types.js";
+import { effectiveResponseModel } from "./response-model.js";
+import { parseCodexClientUserAgent } from "./codex-version.js";
 
 export interface LogPageOptions {
   route?: RouteKind;
@@ -121,6 +123,9 @@ export function buildFacetWhereClause(
 }
 
 export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
+  const responseModel = readNullableString(row.response_model);
+  const responseModelSource = readResponseModelSource(row.response_model_source);
+  const userAgent = readNullableString(row.user_agent);
   return {
     time: String(row.time),
     completed_at: readCompletedAt(row.completed_at, row.time),
@@ -147,8 +152,14 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     ),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
-    response_model: readNullableString(row.response_model),
-    response_model_source: readResponseModelSource(row.response_model_source),
+    response_model: responseModel,
+    response_model_source: responseModelSource,
+    effective_response_model: effectiveResponseModel(
+      responseModel,
+      readNullableString(row.target_model),
+      responseModelSource
+    ),
+    codex_client: parseCodexClientUserAgent(userAgent),
     status: readRequiredNumber(row.status),
     upstream_status: readNullableNumber(row.upstream_status),
     stream_terminal_event: readNullableString(row.stream_terminal_event),
@@ -168,7 +179,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     additive_cached_output_tokens: readBoolean(row.additive_cached_output_tokens),
     total_tokens: readNullableNumber(row.total_tokens),
     upstream_host: String(row.upstream_host),
-    user_agent: readNullableString(row.user_agent),
+    user_agent: userAgent,
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary),
     capture_path: readNullableString(row.capture_path),

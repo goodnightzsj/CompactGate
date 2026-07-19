@@ -4,7 +4,9 @@ import {
   logStatusKind,
   logStatusToneClass,
   responseModelDisplay,
-  responseModelSourceLabel
+  responseModelSourceLabel,
+  compactionModeLabel,
+  compactionDetectionLabel
 } from "../src/ui/logs/log-utils.js";
 
 describe("UI log status helpers", () => {
@@ -64,7 +66,7 @@ describe("UI log status helpers", () => {
     expect(logStatusToneClass(entry)).toBe("is-err");
   });
 
-  it("labels a target model fallback without claiming it was returned upstream", () => {
+  it("uses the target model fallback for a response-model display value", () => {
     const entry = requestLog({
       response_model: null,
       response_model_source: "target_fallback",
@@ -72,18 +74,38 @@ describe("UI log status helpers", () => {
     });
 
     expect(responseModelDisplay(entry)).toBe("gpt-5.6-sol");
-    expect(responseModelSourceLabel(entry)).toBe("请求目标模型");
+    expect(responseModelSourceLabel(entry)).toBe("目标模型推断");
   });
 
-  it("shows unavailable when a failed stream has no response model", () => {
+  it("uses the neutral placeholder when a failed stream has no response model", () => {
     const entry = requestLog({
       response_model: null,
       response_model_source: "unavailable",
       stream_outcome: "upstream_stream_incomplete"
     });
 
-    expect(responseModelDisplay(entry)).toBe("上游未返回");
-    expect(responseModelSourceLabel(entry)).toBe("不可用");
+    expect(responseModelDisplay(entry)).toBe("-");
+    expect(responseModelSourceLabel(entry)).toBe("未获得");
+  });
+
+  it("prioritizes the backend effective model projection", () => {
+    const entry = requestLog({
+      effective_response_model: "gpt-5.6-sol",
+      response_model: null,
+      response_model_source: "target_fallback",
+      target_model: "gpt-5.6-sol"
+    });
+
+    expect(responseModelDisplay(entry)).toBe("gpt-5.6-sol");
+  });
+
+  it("labels the three compaction modes by their wire signal", () => {
+    expect(compactionModeLabel("remote_v1")).toBe("Remote V1");
+    expect(compactionModeLabel("remote_v2")).toBe("Remote V2");
+    expect(compactionModeLabel("local")).toBe("Local");
+    expect(compactionDetectionLabel(requestLog({
+      compaction_detection_source: "input"
+    }))).toBe("compaction_trigger");
   });
 });
 

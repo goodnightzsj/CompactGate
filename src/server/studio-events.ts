@@ -4,6 +4,8 @@ import type { ConfigStore } from "./config.js";
 import { healthForConfig } from "./health.js";
 import type { RequestLogger } from "./logger.js";
 import { stripLogEntryBodies } from "./logger-helpers.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
+import type { CodexVersionStatus } from "../shared/types.js";
 
 interface StudioSseClient {
   keepAliveTimer: ReturnType<typeof setInterval>;
@@ -70,11 +72,13 @@ export class StudioEventBroadcaster {
 
   broadcastLog(
     entry: RequestLogEntry,
-    operation: StudioLogEvent["operation"] = "insert"
+    operation: StudioLogEvent["operation"] = "insert",
+    codexStatus?: CodexVersionStatus
   ): void {
     this.broadcast("log", {
       entry: stripLogEntryBodies(entry),
-      operation
+      operation,
+      ...(codexStatus ? { codex_status: codexStatus } : {})
     });
   }
 
@@ -110,7 +114,8 @@ export class StudioEventBroadcaster {
 
 export function createStudioSnapshot(
   configStore: ConfigStore,
-  logger: RequestLogger
+  logger: RequestLogger,
+  codexVersionMonitor: CodexVersionMonitor
 ): StudioSnapshotEvent {
   const logPage = logger.page({
     limit: configStore.get().logging.keep_recent,
@@ -119,7 +124,7 @@ export function createStudioSnapshot(
 
   return {
     config: configStore.toPublicConfig(),
-    health: healthForConfig(configStore.get(), logger),
+    health: healthForConfig(configStore.get(), logger, codexVersionMonitor),
     logs: logPage.logs,
     log_page: logPage
   };

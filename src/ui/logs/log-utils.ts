@@ -5,6 +5,7 @@ import type {
   ProviderLogCounts,
   RequestLogEntry,
   RequestLogPage,
+  OpenAiCompactionMode,
   RouteKind,
   StudioLogEvent,
   StatusLogCounts
@@ -40,6 +41,10 @@ export function reasoningEffortLabel(entry: RequestLogEntry): string {
 }
 
 export function responseModelDisplay(entry: RequestLogEntry): string {
+  if (entry.effective_response_model) {
+    return entry.effective_response_model;
+  }
+
   if (entry.response_model) {
     return entry.response_model;
   }
@@ -48,19 +53,60 @@ export function responseModelDisplay(entry: RequestLogEntry): string {
     return entry.target_model;
   }
 
-  return "上游未返回";
+  return "-";
 }
 
 export function responseModelSourceLabel(entry: RequestLogEntry): string {
   if (entry.response_model_source === "upstream" || entry.response_model) {
-    return "上游响应";
+    return "上游声明";
   }
 
   if (entry.response_model_source === "target_fallback") {
-    return "请求目标模型";
+    return "目标模型推断";
   }
 
-  return "不可用";
+  return "未获得";
+}
+
+export function compactionModeLabel(mode: OpenAiCompactionMode | null | undefined): string {
+  switch (mode) {
+    case "remote_v1":
+      return "Remote V1";
+    case "remote_v2":
+      return "Remote V2";
+    case "local":
+      return "Local";
+    default:
+      return "普通请求";
+  }
+}
+
+export function compactionModeClass(mode: OpenAiCompactionMode | null | undefined): string {
+  return mode ? mode.replace("_", "-") : "none";
+}
+
+export function compactionDetectionLabel(entry: RequestLogEntry): string {
+  switch (entry.compaction_detection_source) {
+    case "path":
+      return "专用路径";
+    case "input":
+      return "compaction_trigger";
+    case "body_metadata":
+      return "正文 metadata";
+    case "header_metadata":
+      return "请求头 metadata";
+    default:
+      return "未记录";
+  }
+}
+
+export function codexClientDisplay(entry: RequestLogEntry): string {
+  const client = entry.codex_client;
+  if (!client) {
+    return "未识别";
+  }
+
+  return `${client.name} ${client.raw_version}${client.is_fork ? " · 二开" : ""}`;
 }
 
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {

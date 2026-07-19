@@ -32,6 +32,31 @@ export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reas
 
 export type ClaudeModelMap = Record<ClaudeModelMapRole, string>;
 
+export interface CodexClientInfo {
+  name: string;
+  raw_version: string;
+  base_version: string | null;
+  variant: string | null;
+  is_fork: boolean;
+}
+
+export interface CodexObservedClient extends CodexClientInfo {
+  last_observed_at: string;
+  protocols: OpenAiCompactionMode[];
+}
+
+export interface CodexVersionStatus {
+  local_client: CodexClientInfo | null;
+  local_source: "local_cli" | "unavailable";
+  last_checked_at: string | null;
+  observed_clients: CodexObservedClient[];
+  observed_protocol: OpenAiCompactionMode | "mixed" | "unknown";
+  observed_at: string | null;
+  protocol_source: "request" | "version_baseline" | "none";
+  confidence: "observed" | "inferred" | "unknown";
+  v2_default_from: string;
+}
+
 export interface UpstreamConfig {
   base_url: string;
   api_key: string;
@@ -286,6 +311,8 @@ export interface RequestLogEntry {
   target_model: string | null;
   response_model: string | null;
   response_model_source?: ResponseModelSource;
+  effective_response_model?: string | null;
+  codex_client?: CodexClientInfo | null;
   status: number;
   upstream_status?: number | null;
   stream_terminal_event?: string | null;
@@ -403,6 +430,7 @@ export interface HealthResponse {
   time: string;
   listen: string;
   logger: LogPersistenceHealth;
+  codex: CodexVersionStatus;
   primary: {
     status: "configured" | "invalid";
     base_url: string;
@@ -437,4 +465,5 @@ export interface StudioSnapshotEvent {
 export interface StudioLogEvent {
   entry: RequestLogEntry;
   operation: "insert" | "update";
+  codex_status?: CodexVersionStatus;
 }

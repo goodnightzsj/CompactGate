@@ -43,6 +43,21 @@ CompactGate 会按规则转发：
 
 新版 Codex 的上下文压缩有三种线上的请求形态：专用 `/responses/compact` 的 Remote V1、带 `compaction_trigger` 且仍走普通 `/responses` 的 Remote V2，以及由 `x-codex-turn-metadata` 标记为 `request_kind: "compaction"` 的本地摘要压缩。CompactGate 会识别三种形态；Remote V2 复用 primary 模型、凭据和 Responses 上游，不要求上游提供 compact 模型。没有这些精确信号的普通请求仍走 primary。
 
+Remote V1 与 Remote V2 不是同一路径换了名字：
+
+| 项目 | Remote V1 | Remote V2 |
+|---|---|---|
+| 请求入口 | `/v1/responses/compact` | `/v1/responses` |
+| 真实触发信号 | 专用 compact 路径 | `input[].type: "compaction_trigger"` 或 `responses_compaction_v2` 元数据 |
+| 实际上游 | `split` 时走独立 `compact.base_url` | 始终复用 Primary Responses 上游 |
+| 模型策略 | 可改写为 compact 模型 | 保留 Primary 模型和 reasoning 策略 |
+| 状态处理 | 支持响应归一化、桥接和短期去重 | 保留 provider-owned 状态，不进入 V1 bridge |
+| 日志 | `route=compact`、`compaction_mode=remote_v1` | `route=compact`、`compaction_mode=remote_v2` |
+
+OpenAI Codex 官方 [`0.140.0` 发布说明](https://github.com/openai/codex/releases/tag/rust-v0.140.0)把 Remote Compaction V2 改为默认启用，因此 CompactGate 把 `0.140.0` 记作“V2 默认起点”，而不是“V1 被删除”的硬切换点。账号灰度、配置、桌面内置 CLI 和二开版本仍可能改变实际行为，所以 Studio 按“实际请求 > 历史观测 > 本机版本基线”的顺序展示协议；所有兼容路径始终保留。
+
+服务启动时会执行一次有超时保护的 `codex --version`，之后每 6 小时刷新本机版本。真实请求里的 User-Agent 更权威，例如 `codex-tui/0.144.1-cometix` 会拆成原始版本 `0.144.1-cometix`、官方数字基线 `0.144.1` 和二开变体 `cometix`；如果它实际发送 V1，Studio 仍显示 V1，不会因为数字基线较新而强制标成 V2。
+
 你只需要把 Codex 的 `base_url` 改成 CompactGate，本地代理就会替你处理剩下的事情。
 
 ## 最短上手
@@ -430,7 +445,7 @@ Stream disconnected before completion: stream closed before response.completed
 
 如果日志同时显示 `status=502` 与 `Client disconnected before upstream response completed.`，需要继续查看 `upstream_status`、`stream_terminal_event`、`client_disconnect_phase` 和 `stream_outcome`。Remote V2 或 Remote V1 在已经收到 `response.completed`/`[DONE]` 后，Codex CLI 可能先关闭连接而上游 HTTP 流尚未发出 `end`;新版会保留真实上游状态和已缓冲响应，并记录 `stream_outcome=success`、`client_disconnect_phase=after_terminal`，不再把它当作压缩失败。终止事件之前关闭仍记录为客户端取消或未完成流；真实上游 5xx 仍保留为上游错误。
 
-日志中的 `response_model` 只表示上游响应正文明确返回的模型。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，但 `response_model_source=target_fallback` 会说明 Studio 显示的有效模型来自 `target_model`；只有明确读到上游模型时才是 `response_model_source=upstream`，失败、取消或未完成流则为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，并记录 `stream_oversized_event_count` 供诊断。
+日志中的 `response_model` 只表示上游响应正文明确返回的模型。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，`effective_response_model` 则在成功时使用 `target_model`，并由 `response_model_source=target_fallback` 标记为“目标模型推断”。Studio 主展示“有效响应模型”，同时单独显示“上游声明模型”，不会把推断值伪装成上游字段；只有明确读到上游模型时来源才是 `upstream`，失败、取消或未完成流则为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，并记录 `stream_oversized_event_count` 供诊断。
 
 当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的可读 summary 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会继续走 primary，但 CompactGate 会先把可读 compact 状态转换成 assistant summary message，再转发给 primary。
 

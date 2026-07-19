@@ -70,6 +70,28 @@
 .route-chip.compact { background: var(--amber-soft); color: var(--amber); }
 .route-chip.claude  { background: var(--jade-soft); color: var(--jade); }
 
+/* ── Protocol chips ── */
+.protocol-chip {
+  display: inline-flex;
+  min-height: 21px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.61rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.protocol-chip.remote-v1 { background: var(--amber-soft); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 24%, transparent); }
+.protocol-chip.remote-v2 { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 24%, transparent); }
+.protocol-chip.local { background: var(--jade-soft); color: var(--jade); border-color: color-mix(in srgb, var(--jade) 24%, transparent); }
+.protocol-chip.mixed { background: var(--brick-soft); color: var(--brick); border-color: color-mix(in srgb, var(--brick) 24%, transparent); }
+.protocol-chip.unknown,
+.protocol-chip.none { background: var(--paper-warm); color: var(--muted); border-color: var(--hairline); }
+
 /* ── Buttons ── */
 .btn {
   display: inline-flex;

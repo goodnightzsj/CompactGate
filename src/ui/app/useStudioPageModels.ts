@@ -109,6 +109,7 @@ export function useStudioPageModels({
         compactModel: effectiveCompactModel,
         config,
         form,
+        health,
         latestLog,
         previewRoute,
         previewCompactionMode: configActions.preview?.compaction_mode ?? null

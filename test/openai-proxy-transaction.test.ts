@@ -8,6 +8,7 @@ import { RequestLogger } from "../src/server/logger.js";
 import { finalizeOpenAiProxyTransaction } from "../src/server/openai-proxy-transaction.js";
 import { StudioEventBroadcaster } from "../src/server/studio-events.js";
 import { emptyUsageMetrics } from "../src/server/proxy-support.js";
+import { CodexVersionMonitor } from "../src/server/codex-version.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -21,6 +22,70 @@ afterEach(async () => {
 });
 
 describe("finalizeOpenAiProxyTransaction", () => {
+  it("attaches the current protocol status to compact log inserts", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-finalize-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"));
+    const studioEvents = new StudioEventBroadcaster();
+    const monitor = new CodexVersionMonitor({ probe: () => null });
+    const broadcastSpy = vi.spyOn(studioEvents, "broadcastLog");
+    const captureWriter = { isEnabled: () => false } as unknown as DebugCaptureWriter;
+
+    try {
+      await finalizeOpenAiProxyTransaction({
+        logger,
+        captureWriter,
+        studioEvents,
+        codexVersionMonitor: monitor,
+        route: "compact",
+        compactionMode: "remote_v2",
+        compactionDetectionSource: "input",
+        req: {
+          method: "POST",
+          headers: { "user-agent": "codex-tui/0.144.1-cometix" }
+        } as IncomingMessage,
+        url: new URL("http://compactgate.local/v1/responses"),
+        status: 200,
+        upstreamStatus: 200,
+        streamTerminalEvent: "response.completed",
+        streamOutcome: "success",
+        startedAt: performance.now(),
+        startedAtIso: "2026-07-15T00:00:00.000Z",
+        requestMetadata: null,
+        requestType: "stream",
+        upstream: new URL("https://upstream.example/v1/responses"),
+        requestId: "compact-status-event",
+        sourceModel: "gpt-5.6-sol",
+        targetModel: "gpt-5.6-sol",
+        firstTokenMs: 10,
+        usage: emptyUsageMetrics(),
+        errorSummary: null,
+        compactBridgeReplacements: 0,
+        rawBody: Buffer.from("{}"),
+        requestHeaders: {},
+        upstreamBody: Buffer.from("{}"),
+        responseBody: Buffer.from(`event: response.completed\ndata: {"type":"response.completed"}\n\n`),
+        responseHeaders: {},
+        clientResponseBody: null,
+        clientResponseHeaders: null,
+        persistBody: false,
+        compactResponseNormalized: false,
+        compactResponseNormalizeReason: null,
+        compactResponseSyntheticSource: null
+      });
+
+      expect(broadcastSpy.mock.calls[0]?.[2]).toMatchObject({
+        observed_protocol: "remote_v2",
+        protocol_source: "request",
+        observed_clients: [{ raw_version: "0.144.1-cometix", protocols: ["remote_v2"] }]
+      });
+    } finally {
+      logger.close();
+      studioEvents.close();
+      monitor.close();
+    }
+  });
+
   it("persists the request log before waiting for capture IO", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-finalize-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

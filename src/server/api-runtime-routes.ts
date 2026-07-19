@@ -21,6 +21,7 @@ import {
 } from "./primary-failover.js";
 import { classifyOpenAiRequest, previewRoute } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 
 export async function handleRuntimeApi(
   req: IncomingMessage,
@@ -32,7 +33,8 @@ export async function handleRuntimeApi(
   studioEvents: StudioEventBroadcaster,
   fetchClaudeModels: FetchClaudeModels,
   fetchOpenAiModels: FetchOpenAiModels,
-  primaryFailover: PrimaryFailoverState
+  primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor
 ): Promise<boolean> {
   if (req.method === "POST" && url.pathname === "/api/test-route") {
     const body = await readJsonBody(req);
@@ -76,7 +78,7 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, healthForConfig(configStore.get(), logger));
+    sendJson(res, 200, healthForConfig(configStore.get(), logger, codexVersionMonitor));
     return true;
   }
 
@@ -105,7 +107,7 @@ export async function handleRuntimeApi(
     }
 
     const result = logger.purgeStoredBodies();
-    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger));
+    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
     sendJson(res, 200, result);
     return true;
   }
@@ -148,7 +150,7 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/events") {
-    studioEvents.subscribe(req, res, createStudioSnapshot(configStore, logger));
+    studioEvents.subscribe(req, res, createStudioSnapshot(configStore, logger, codexVersionMonitor));
     return true;
   }
 

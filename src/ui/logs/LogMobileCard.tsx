@@ -3,7 +3,13 @@ import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
-import { displayTotalTokens, logStatusKind, logStatusToneClass } from "./log-utils.js";
+import {
+  compactionModeClass,
+  compactionModeLabel,
+  displayTotalTokens,
+  logStatusKind,
+  logStatusToneClass
+} from "./log-utils.js";
 
 export function LogMobileCard({
   entry,
@@ -34,6 +40,7 @@ export function LogMobileCard({
         <span className="log-mobile-head">
           <span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span>
           <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
+          {entry.compaction_mode && <span className={`protocol-chip ${compactionModeClass(entry.compaction_mode)}`}>{compactionModeLabel(entry.compaction_mode)}</span>}
           <time>{formatDateTime(entry.time)}</time>
         </span>
         <strong className="log-mobile-model">{modelLabel}</strong>

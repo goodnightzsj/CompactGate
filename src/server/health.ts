@@ -1,8 +1,14 @@
 import type { CompactGateConfig, HealthResponse } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
 import type { RequestLogger } from "./logger.js";
+import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 
-export function healthForConfig(config: CompactGateConfig, logger: RequestLogger): HealthResponse {
+export function healthForConfig(
+  config: CompactGateConfig,
+  logger: RequestLogger,
+  codexVersionMonitor: CodexVersionMonitor
+): HealthResponse {
   const primaryCredential = resolveRouteCredential("primary", config);
   const compactCredential = resolveRouteCredential("compact", config);
   const claudePrimaryCredential = resolveRouteCredential("claude_primary", config);
@@ -13,6 +19,9 @@ export function healthForConfig(config: CompactGateConfig, logger: RequestLogger
     time: new Date().toISOString(),
     listen: config.listen,
     logger: logger.getPersistenceHealth(),
+    codex: codexVersionMonitor.snapshot(
+      logger.page({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT, offset: 0 }).logs
+    ),
     primary: {
       status: statusForBaseUrl(config.primary.base_url),
       base_url: config.primary.base_url,

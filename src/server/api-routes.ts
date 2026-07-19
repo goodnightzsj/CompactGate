@@ -9,6 +9,7 @@ import type { StudioEventBroadcaster } from "./studio-events.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { PrimaryFailoverState } from "./primary-failover.js";
 import type { FetchOpenAiModels } from "./openai-models.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 
 export async function handleApi(
   req: IncomingMessage,
@@ -20,9 +21,10 @@ export async function handleApi(
   studioEvents: StudioEventBroadcaster,
   fetchClaudeModels: FetchClaudeModels,
   fetchOpenAiModels: FetchOpenAiModels,
-  primaryFailover: PrimaryFailoverState
+  primaryFailover: PrimaryFailoverState,
+  codexVersionMonitor: CodexVersionMonitor
 ): Promise<void> {
-  if (await handleConfigApi(req, res, url, configStore, logger, captureWriter, studioEvents)) {
+  if (await handleConfigApi(req, res, url, configStore, logger, captureWriter, studioEvents, codexVersionMonitor)) {
     return;
   }
 
@@ -37,7 +39,8 @@ export async function handleApi(
       studioEvents,
       fetchClaudeModels,
       fetchOpenAiModels,
-      primaryFailover
+      primaryFailover,
+      codexVersionMonitor
     )
   ) {
     return;

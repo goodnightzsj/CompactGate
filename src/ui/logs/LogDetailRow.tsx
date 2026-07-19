@@ -12,7 +12,11 @@ import {
   logStatusToneClass,
   totalInputTokens,
   responseModelDisplay,
-  responseModelSourceLabel
+  responseModelSourceLabel,
+  compactionDetectionLabel,
+  compactionModeClass,
+  compactionModeLabel,
+  codexClientDisplay
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
@@ -75,12 +79,12 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value is-medium">{entry.target_model ?? entry.source_model ?? "-"}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">响应模型</span>
-                <span className="log-detail-value is-medium">{entry.response_model ?? "上游未返回"}</span>
+                <span className="log-detail-label">有效响应模型</span>
+                <span className="log-detail-value is-medium is-emphasis">{responseModelDisplay(entry)}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">有效模型</span>
-                <span className="log-detail-value is-medium">{responseModelDisplay(entry)}</span>
+                <span className="log-detail-label">上游声明模型</span>
+                <span className="log-detail-value is-medium">{entry.response_model ?? "未声明"}</span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">模型来源</span>
@@ -94,16 +98,22 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-label">端点</span>
                 <span className="log-detail-value">{entry.endpoint}</span>
               </div>
+              {entry.codex_client && (
+                <div className="log-detail-item">
+                  <span className="log-detail-label">Codex 客户端</span>
+                  <span className="log-detail-value is-small">{codexClientDisplay(entry)}</span>
+                </div>
+              )}
               {entry.compaction_mode && (
                 <div className="log-detail-item">
                   <span className="log-detail-label">压缩模式</span>
-                  <span className="log-detail-value is-small">{entry.compaction_mode}</span>
+                  <span className="log-detail-value is-small"><span className={`protocol-chip ${compactionModeClass(entry.compaction_mode)}`}>{compactionModeLabel(entry.compaction_mode)}</span></span>
                 </div>
               )}
               {entry.compaction_detection_source && (
                 <div className="log-detail-item">
                   <span className="log-detail-label">判定来源</span>
-                  <span className="log-detail-value is-small">{entry.compaction_detection_source}</span>
+                  <span className="log-detail-value is-small">{compactionDetectionLabel(entry)}</span>
                 </div>
               )}
               <div className="log-detail-item">

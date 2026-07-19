@@ -431,6 +431,25 @@
     grid-column: 1 / -1;
   }
 
+  .protocol-status-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .protocol-status-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .protocol-comparison-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .protocol-comparison-row code,
+  .protocol-comparison-row > span:last-child {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
   .route-foot {
     gap: 8px;
   }

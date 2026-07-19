@@ -22,6 +22,8 @@ import {
   storedPathForUrl
 } from "./proxy-support.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
+import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
+import type { CodexVersionMonitor } from "./codex-version.js";
 import type {
   RequestMetadata,
   TokenUsageMetrics
@@ -68,6 +70,7 @@ export interface OpenAiProxyTransactionInput {
   logger: RequestLogger;
   captureWriter: DebugCaptureWriter;
   studioEvents: StudioEventBroadcaster;
+  codexVersionMonitor?: CodexVersionMonitor;
   req: IncomingMessage;
   url: URL;
   route: RouteKind;
@@ -188,7 +191,12 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     capturePath: null,
     captureStatus: captureEnabled ? "pending" : "none"
   });
-  input.studioEvents.broadcastLog(logEntry, "insert");
+  const codexStatus = input.compactionMode && input.codexVersionMonitor
+    ? input.codexVersionMonitor.snapshot(
+        input.logger.page({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT, offset: 0 }).logs
+      )
+    : undefined;
+  input.studioEvents.broadcastLog(logEntry, "insert", codexStatus);
 
   if (!captureEnabled) {
     return;
