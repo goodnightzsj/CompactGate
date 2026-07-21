@@ -13,15 +13,18 @@ const STAGGER_MS = 250;
  */
 export function useStaggeredLogs(
   logs: RequestLogEntry[],
-  queryKey = "default"
+  queryKey = "default",
+  syncVersion = 0,
+  liveInsertIds: readonly string[] = []
 ): RequestLogEntry[] {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
-  const seenIds = useRef<Set<string>>(new Set());
   const queueRef = useRef<RequestLogEntry[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [queueVersion, setQueueVersion] = useState(0);
   const prevLogsRef = useRef<RequestLogEntry[]>(logs);
   const prevQueryKeyRef = useRef(queryKey);
+  const prevSyncVersionRef = useRef(syncVersion);
+  const latestLogsRef = useRef(logs);
 
   const scheduleQueueDrain = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -32,7 +35,11 @@ export function useStaggeredLogs(
     timerRef.current = setInterval(() => {
       const item = queueRef.current.shift();
       if (item) {
-        setDisplayed((prev) => [item, ...prev]);
+        setDisplayed((prev) => {
+          const visibleIds = new Set(prev.map((entry) => entry.request_id));
+          visibleIds.add(item.request_id);
+          return latestLogsRef.current.filter((entry) => visibleIds.has(entry.request_id));
+        });
       }
       if (queueRef.current.length === 0 && timerRef.current) {
         clearInterval(timerRef.current);
@@ -42,14 +49,15 @@ export function useStaggeredLogs(
   }, []);
 
   useEffect(() => {
-    // Full reset: empty list or no ID overlap with previous batch.
+    latestLogsRef.current = logs;
     const prevIds = new Set(prevLogsRef.current.map((e) => e.request_id));
-    const currIds = new Set(logs.map((e) => e.request_id));
     const isReset = shouldResetStaggeredLogs(
       prevLogsRef.current,
       logs,
       prevQueryKeyRef.current,
-      queryKey
+      queryKey,
+      prevSyncVersionRef.current,
+      syncVersion
     );
 
     if (isReset) {
@@ -57,9 +65,9 @@ export function useStaggeredLogs(
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = null;
       setDisplayed(logs);
-      seenIds.current = new Set(logs.map((e) => e.request_id));
       prevLogsRef.current = logs;
       prevQueryKeyRef.current = queryKey;
+      prevSyncVersionRef.current = syncVersion;
       return;
     }
 
@@ -69,67 +77,45 @@ export function useStaggeredLogs(
       .filter((item) => incoming.has(item.request_id))
       .map((item) => incoming.get(item.request_id) ?? item);
 
-    // Find first known index to split head (SSE) from tail (pagination).
-    let firstKnown = -1;
-    for (let i = 0; i < logs.length; i++) {
-      if (seenIds.current.has(logs[i].request_id)) {
-        firstKnown = i;
-        break;
-      }
-    }
+    const nextStaggeredIds = selectStaggeredLogIds(
+      prevLogsRef.current,
+      logs,
+      liveInsertIds
+    );
+    const staggeredIds = new Set(nextStaggeredIds);
+    const queuedIds = new Set(queueRef.current.map((entry) => entry.request_id));
 
-    seenIds.current = currIds;
-
-    // Apply in-place updates and remove rows that left the loaded window.
+    // Apply updates and show all non-live additions in canonical server order.
     setDisplayed((prev) => {
-      let didChange = false;
-      const updated: RequestLogEntry[] = [];
-      for (const item of prev) {
-        const fresh = incoming.get(item.request_id);
-        if (!fresh) {
-          didChange = true;
-          continue;
+      const visibleIds = new Set(prev.map((entry) => entry.request_id));
+      for (const entry of logs) {
+        if (!prevIds.has(entry.request_id) && !staggeredIds.has(entry.request_id)) {
+          visibleIds.add(entry.request_id);
         }
-        if (fresh !== item) {
-          didChange = true;
-        }
-        updated.push(fresh);
       }
-      return didChange ? updated : prev;
+      const updated = logs.filter(
+        (entry) => visibleIds.has(entry.request_id) && !queuedIds.has(entry.request_id)
+      );
+      const unchanged = (
+        updated.length === prev.length &&
+        updated.every((entry, index) => entry === prev[index])
+      );
+      return unchanged ? prev : updated;
     });
 
-    // New items at tail (pagination): append immediately to displayed.
-    if (firstKnown >= 0) {
-      const tail: RequestLogEntry[] = [];
-      for (let i = firstKnown; i < logs.length; i++) {
-        if (!prevIds.has(logs[i].request_id)) {
-          tail.push(logs[i]);
-        }
-      }
-      if (tail.length > 0) {
-        setDisplayed((prev) => [...prev, ...tail]);
-      }
-    }
-
-    // New items at head (SSE): queue for staggered release.
-    if (firstKnown > 0) {
-      const head: RequestLogEntry[] = [];
-      for (let i = firstKnown - 1; i >= 0; i--) {
-        if (!prevIds.has(logs[i].request_id)) {
-          head.push(logs[i]);
-        }
-      }
-      // Reverse so oldest-first enters the stagger queue (oldest appears first).
-      head.reverse();
-      if (head.length > 0) {
-        queueRef.current.push(...head);
-        setQueueVersion((v) => v + 1);
-      }
+    const nextQueue = nextStaggeredIds
+      .map((requestId) => incoming.get(requestId))
+      .filter((entry): entry is RequestLogEntry => Boolean(entry))
+      .filter((entry) => !queuedIds.has(entry.request_id));
+    if (nextQueue.length > 0) {
+      queueRef.current.push(...nextQueue);
+      setQueueVersion((v) => v + 1);
     }
 
     prevLogsRef.current = logs;
     prevQueryKeyRef.current = queryKey;
-  }, [logs, queryKey]);
+    prevSyncVersionRef.current = syncVersion;
+  }, [logs, queryKey, syncVersion, liveInsertIds]);
 
   // Re-schedule the stagger drain whenever the queue gets new items.
   useEffect(() => {
@@ -146,12 +132,32 @@ export function shouldResetStaggeredLogs(
   previousLogs: RequestLogEntry[],
   nextLogs: RequestLogEntry[],
   previousQueryKey: string,
-  nextQueryKey: string
+  nextQueryKey: string,
+  previousSyncVersion = 0,
+  nextSyncVersion = previousSyncVersion
 ): boolean {
-  if (previousQueryKey !== nextQueryKey || nextLogs.length === 0) {
+  if (
+    previousQueryKey !== nextQueryKey ||
+    previousSyncVersion !== nextSyncVersion ||
+    nextLogs.length === 0
+  ) {
     return true;
   }
 
   const previousIds = new Set(previousLogs.map((entry) => entry.request_id));
   return !nextLogs.some((entry) => previousIds.has(entry.request_id));
+}
+
+export function selectStaggeredLogIds(
+  previousLogs: RequestLogEntry[],
+  nextLogs: RequestLogEntry[],
+  liveInsertIds: readonly string[]
+): string[] {
+  const previousIds = new Set(previousLogs.map((entry) => entry.request_id));
+  const liveIds = new Set(liveInsertIds);
+
+  return nextLogs
+    .filter((entry) => !previousIds.has(entry.request_id) && liveIds.has(entry.request_id))
+    .map((entry) => entry.request_id)
+    .reverse();
 }

@@ -165,6 +165,8 @@ describe("LogsPage loaded rows", () => {
       <LogsPage
         logs={logs}
         pageQueryKey="all-logs"
+        logSyncVersion={1}
+        liveInsertIds={[]}
         logCounts={{ all: 120, primary: 120, compact: 0, claude: 0 }}
         providerCounts={{ all: 120, openai: 120, claude: 0 }}
         statusCounts={{ all: 120, normal: 120, error: 0 }}

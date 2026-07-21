@@ -45,6 +45,12 @@ interface PendingLogLoad {
   snapshot: RequestLogPage | null;
 }
 
+interface LogPresentationState {
+  page: RequestLogPage;
+  syncVersion: number;
+  liveInsertIds: string[];
+}
+
 export function useLogFeed({
   enabled,
   hasConfig,
@@ -58,7 +64,11 @@ export function useLogFeed({
   applyRemoteConfig: (config: PublicConfig) => void;
   setHealth: React.Dispatch<React.SetStateAction<HealthResponse | null>>;
 }) {
-  const [logPage, setLogPage] = useState<RequestLogPage>(() => emptyLogPage(DEFAULT_LOG_PAGE_LIMIT));
+  const [logState, setLogState] = useState<LogPresentationState>(() => ({
+    page: emptyLogPage(DEFAULT_LOG_PAGE_LIMIT),
+    syncVersion: 0,
+    liveInsertIds: []
+  }));
   const [routeFilter, setRouteFilter] = useState<"all" | RouteKind>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | LogStatusKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
@@ -77,6 +87,8 @@ export function useLogFeed({
     limit: DEFAULT_LOG_PAGE_LIMIT
   });
   const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
+
+  const logPage = logState.page;
 
   const deferredFilter = useDeferredValue(routeFilter);
   const deferredStatusFilter = useDeferredValue(statusFilter);
@@ -140,7 +152,11 @@ export function useLogFeed({
             pendingLogLoadRef.current = null;
           }
           appliedQueryRef.current = query;
-          setLogPage(resolvedPage);
+          setLogState((previous) => ({
+            page: resolvedPage,
+            syncVersion: previous.syncVersion + 1,
+            liveInsertIds: []
+          }));
           setPageQueryKey(logPageQueryKey(query));
           setLogError(null);
         }
@@ -194,7 +210,11 @@ export function useLogFeed({
             refreshRequestId
           )
         ) {
-          setLogPage(nextPage);
+          setLogState((previous) => ({
+            page: nextPage,
+            syncVersion: previous.syncVersion + 1,
+            liveInsertIds: []
+          }));
           setLogError(null);
           return true;
         }
@@ -275,7 +295,11 @@ export function useLogFeed({
           appliedQueryRef.current.status === "all" &&
           appliedQueryRef.current.host === ALL_HOSTS_FILTER
         ) {
-          setLogPage((previous) => mergeSnapshotLogPage(previous, snapshot.log_page));
+          setLogState((previous) => ({
+            page: mergeSnapshotLogPage(previous.page, snapshot.log_page),
+            syncVersion: previous.syncVersion + 1,
+            liveInsertIds: []
+          }));
         }
         markStreamConnected();
       } catch (error) {
@@ -291,16 +315,40 @@ export function useLogFeed({
           pendingLoad.liveEvents.push(payload);
         }
         const appliedQuery = appliedQueryRef.current;
-        setLogPage((previous) =>
-          mergeLiveLogPage(
-            previous,
+        setLogState((previous) => {
+          const operation = payload.operation ?? "insert";
+          const nextPage = mergeLiveLogPage(
+            previous.page,
             payload.entry,
             appliedQuery.route,
             appliedQuery.status,
             appliedQuery.host,
-            payload.operation ?? "insert"
-          )
-        );
+            operation
+          );
+          const existing = previous.page.logs.some(
+            (entry) => entry.request_id === payload.entry.request_id
+          );
+          const nextIds = new Set(nextPage.logs.map((entry) => entry.request_id));
+          const retainedLiveIds = previous.liveInsertIds.filter(
+            (requestId) => requestId !== payload.entry.request_id && nextIds.has(requestId)
+          );
+          const isVisibleNewInsert = (
+            operation === "insert" &&
+            !existing &&
+            nextIds.has(payload.entry.request_id)
+          );
+
+          return {
+            page: nextPage,
+            syncVersion: previous.syncVersion,
+            liveInsertIds: isVisibleNewInsert
+              ? [payload.entry.request_id, ...retainedLiveIds].slice(
+                  0,
+                  Math.max(nextPage.limit, nextPage.logs.length)
+                )
+              : retainedLiveIds
+          };
+        });
         markStreamConnected();
       } catch (error) {
         setLogError(errorSummary(error));
@@ -359,7 +407,10 @@ export function useLogFeed({
         requestId,
         loadMoreRequestIdRef.current
       )) {
-        setLogPage((previous) => appendLogPage(previous, nextPage));
+        setLogState((previous) => ({
+          ...previous,
+          page: appendLogPage(previous.page, nextPage)
+        }));
         setLogError(null);
       }
     } catch (error) {
@@ -390,6 +441,8 @@ export function useLogFeed({
 
   return {
     logPage,
+    logSyncVersion: logState.syncVersion,
+    liveInsertIds: logState.liveInsertIds,
     pageQueryKey,
     routeFilter,
     setRouteFilter,

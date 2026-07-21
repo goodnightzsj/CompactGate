@@ -49,12 +49,14 @@ function logEntryKey(entry: RequestLogEntry): string {
 }
 
 export function LogsPage({
-  logs, pageQueryKey, logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
+  logs, pageQueryKey, logSyncVersion, liveInsertIds,
+  logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
   routeFilter, statusFilter, hostFilter,
   onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onLoadMore, error
 }: {
-  logs: RequestLogEntry[]; pageQueryKey: string; logCounts: Record<"all" | RouteKind, number>;
+  logs: RequestLogEntry[]; pageQueryKey: string; logSyncVersion: number; liveInsertIds: string[];
+  logCounts: Record<"all" | RouteKind, number>;
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
   hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
@@ -65,7 +67,12 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
-  const displayedLogs = useStaggeredLogs(logs, pageQueryKey);
+  const displayedLogs = useStaggeredLogs(
+    logs,
+    pageQueryKey,
+    logSyncVersion,
+    liveInsertIds
+  );
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
