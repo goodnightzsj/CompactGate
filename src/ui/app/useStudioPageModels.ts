@@ -10,6 +10,7 @@ import { useHealthRefresh } from "../hooks/useHealthRefresh.js";
 import { useLogFeed } from "../hooks/useLogFeed.js";
 import { useStudioBootstrap } from "../hooks/useStudioBootstrap.js";
 import { DEFAULT_LOG_PAGE_LIMIT } from "../logs/log-utils.js";
+import { useStaggeredLogs } from "../logs/useStaggeredLogs.js";
 import type { HealthResponse } from "../../shared/types.js";
 import type { ProfileDeleteDialogHostProps } from "./ProfileDeleteDialogHost.js";
 import type { StudioPageOutletProps } from "./StudioPageOutlet.js";
@@ -67,6 +68,13 @@ export function useStudioPageModels({
     setPageError
   });
   const logs = logFeed.logPage.logs;
+  const displayedLogs = useStaggeredLogs(
+    logs,
+    logFeed.pageQueryKey,
+    logFeed.logSyncVersion,
+    logFeed.liveInsertIds,
+    currentPage === "logs" && !healthMode
+  );
   const latestLog = logs[0] ?? null;
   const linkedCompactModel = renderLinkedModel(form.primaryModelOverride, form.modelTemplate);
   const configActions = useConfigActions({
@@ -126,7 +134,7 @@ export function useStudioPageModels({
       }),
       logsPage: buildLogsPageModel({
         logFeed,
-        logs,
+        logs: displayedLogs
       })
     },
     profileDeleteDialog: buildProfileDeleteDialogModel({

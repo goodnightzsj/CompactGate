@@ -8,6 +8,7 @@ const STAGGER_MS = 250;
  *
  * - Initial load / filter reset: all logs appear immediately (no stagger).
  * - SSE live push (new logs at head): released one-by-one every STAGGER_MS.
+ * - Inactive log page: live inserts remain queued until the page becomes active.
  * - Pagination (older logs at tail): appear immediately.
  * - Existing rows are updated in-place when their fields change.
  */
@@ -15,7 +16,8 @@ export function useStaggeredLogs(
   logs: RequestLogEntry[],
   queryKey = "default",
   syncVersion = 0,
-  liveInsertIds: readonly string[] = []
+  liveInsertIds: readonly string[] = [],
+  active = true
 ): RequestLogEntry[] {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
   const queueRef = useRef<RequestLogEntry[]>([]);
@@ -28,6 +30,10 @@ export function useStaggeredLogs(
 
   const scheduleQueueDrain = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
+    if (!active) {
+      timerRef.current = null;
+      return;
+    }
     if (queueRef.current.length === 0) {
       timerRef.current = null;
       return;
@@ -46,7 +52,7 @@ export function useStaggeredLogs(
         timerRef.current = null;
       }
     }, STAGGER_MS);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     latestLogsRef.current = logs;
@@ -123,7 +129,7 @@ export function useStaggeredLogs(
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [queueVersion, scheduleQueueDrain]);
+  }, [active, queueVersion, scheduleQueueDrain]);
 
   return displayed;
 }

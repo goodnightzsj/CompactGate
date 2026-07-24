@@ -25,7 +25,6 @@ import {
   compactionModeLabel
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
-import { useStaggeredLogs } from "./useStaggeredLogs.js";
 
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
@@ -49,13 +48,13 @@ function logEntryKey(entry: RequestLogEntry): string {
 }
 
 export function LogsPage({
-  logs, pageQueryKey, logSyncVersion, liveInsertIds,
+  logs,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
   routeFilter, statusFilter, hostFilter,
   onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onLoadMore, error
 }: {
-  logs: RequestLogEntry[]; pageQueryKey: string; logSyncVersion: number; liveInsertIds: string[];
+  logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
@@ -67,17 +66,11 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
-  const displayedLogs = useStaggeredLogs(
-    logs,
-    pageQueryKey,
-    logSyncVersion,
-    liveInsertIds
-  );
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
     isLoadingMoreLogs,
-    logs: displayedLogs,
+    logs,
     onLoadMore
   });
   const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER;
@@ -109,7 +102,7 @@ export function LogsPage({
           <h2>请求日志</h2>
         </div>
         <span className="status-pill">
-          显示 {displayedLogs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
+          显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
         </span>
       </div>
 
@@ -167,9 +160,9 @@ export function LogsPage({
 
       {error && <div className="error-banner">{error}</div>}
 
-      {isLoadingLogs && displayedLogs.length === 0 ? (
+      {isLoadingLogs && logs.length === 0 ? (
         <div className="empty-state"><strong>正在加载日志...</strong></div>
-      ) : displayedLogs.length === 0 ? (
+      ) : logs.length === 0 ? (
         <div className="empty-state">
           <strong>暂无请求记录</strong>
           <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
@@ -212,7 +205,7 @@ export function LogsPage({
               </thead>
               <tbody>
                 <AnimatePresence initial={false} mode="popLayout">
-                  {displayedLogs.flatMap((entry, index) => {
+                  {logs.flatMap((entry, index) => {
                     const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
                     const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
                     const hasError = logStatusKind(entry) === "error";
@@ -285,10 +278,10 @@ export function LogsPage({
         </div>
       )}
 
-      {displayedLogs.length > 0 && (
+      {logs.length > 0 && (
         <MotionDiv className="logs-mobile-list" aria-label="请求日志摘要" layoutScroll>
           <AnimatePresence initial={false} mode="popLayout">
-            {displayedLogs.map((entry, index) => {
+            {logs.map((entry, index) => {
               const logKey = logEntryKey(entry);
               return (
                 <MotionDiv
@@ -316,7 +309,7 @@ export function LogsPage({
       {hasMoreLogs && (
         <div style={{ textAlign: "center", marginTop: 12 }}>
           <button className="btn" onClick={onLoadMore} disabled={isLoadingLogs || isLoadingMoreLogs}>
-            {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${displayedLogs.length}/${totalLogCount})`}
+            {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${logs.length}/${totalLogCount})`}
           </button>
         </div>
       )}
