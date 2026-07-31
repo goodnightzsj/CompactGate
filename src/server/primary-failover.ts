@@ -51,6 +51,7 @@ interface PrimaryFailoverOptions {
 export class PrimaryFailoverState {
   private signature = "";
   private generation = 0;
+  private forcedProfileId: string | null = null;
   private readonly health: PrimaryProfileHealthStore;
   private readonly stickiness: PrimaryStickinessStore;
   private readonly now: () => number;
@@ -91,6 +92,9 @@ export class PrimaryFailoverState {
     }
 
     const now = this.now();
+    if (selection.profileId === this.forcedProfileId) {
+      this.forcedProfileId = null;
+    }
     health.inFlight += 1;
     health.lastSelectedAt = now;
     if (rememberRequestStickiness) {
@@ -223,6 +227,17 @@ export class PrimaryFailoverState {
     return this.health.snapshot();
   }
 
+  boundProfileId(context: PrimaryRouteRequestContext): string | null {
+    const now = this.now();
+    this.cleanupExpiredState(now);
+    return this.stickiness.findProfileId(normalizeRequestContext(context));
+  }
+
+  forceNextProfileSelection(profileId: string): void {
+    this.stickiness.clear();
+    this.forcedProfileId = profileId;
+  }
+
   private selectInternal(
     config: CompactGateConfig,
     context: PrimaryRouteRequestContext,
@@ -250,6 +265,28 @@ export class PrimaryFailoverState {
     }
 
     this.health.reconcile(candidates);
+
+    const forcedCandidate = this.forcedProfileId
+      ? candidates.find((candidate) => candidate.id === this.forcedProfileId) ?? null
+      : null;
+    if (this.forcedProfileId && !forcedCandidate) {
+      this.forcedProfileId = null;
+    }
+    if (forcedCandidate) {
+      const health = this.health.forProfile(forcedCandidate.id);
+      const selection = {
+        config: forcedCandidate.config,
+        profileId: forcedCandidate.id,
+        profileName: forcedCandidate.name,
+        generation: this.generation,
+        healthVersion: health.version,
+        context: normalizedContext
+      };
+      if (reserve) {
+        this.reserveSelection(selection, config.primary_failover.auto_schedule);
+      }
+      return selection;
+    }
 
     if (!config.primary_failover.auto_schedule) {
       const selected = candidates.find((candidate) => candidate.active) ?? candidates[0];

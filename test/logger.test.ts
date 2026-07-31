@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -10,6 +10,8 @@ import {
   RequestLogger
 } from "../src/server/logger.js";
 import { addLog, emptyUsageMetrics } from "../src/server/proxy-support.js";
+import { providerStateBindingIdentityHashes } from "../src/server/provider-state-binding.js";
+import { providerStateTargetHealthKey } from "../src/server/provider-state-evidence.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -26,6 +28,97 @@ afterEach(async () => {
 describe("RequestLogger", () => {
   it("defaults the persisted SQLite database cap to 1 GiB", () => {
     expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(1024 * 1024 * 1024);
+  });
+
+  it("persists only hashed provider-state bindings across logger restarts", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-binding-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const sessionKey = "private-session-identity";
+    const identityHashes = providerStateBindingIdentityHashes({ sessionKey });
+    const logger = new RequestLogger(2, databasePath);
+
+    expect(logger.rememberProviderStateBinding(identityHashes, {
+      stateDomainId: "provider-a",
+      profileId: "profile-a",
+      generation: 3
+    }, 1_000)).toBe(true);
+    expect(logger.findProviderStateBinding(identityHashes, 2_000)).toMatchObject({
+      stateDomainId: "provider-a",
+      profileId: "profile-a",
+      generation: 3
+    });
+    expect(logger.rememberProviderStateBinding(identityHashes, {
+      stateDomainId: "stale-provider",
+      profileId: "stale-profile",
+      generation: 2
+    }, 1_500, 3_000)).toBe(true);
+    expect(logger.findProviderStateBinding(identityHashes, 2_000)).toMatchObject({
+      stateDomainId: "provider-a",
+      profileId: "profile-a",
+      generation: 3
+    });
+    logger.close();
+
+    const databaseText = await readFile(databasePath);
+    expect(databaseText.includes(Buffer.from(sessionKey))).toBe(false);
+
+    const reopened = new RequestLogger(2, databasePath);
+    try {
+      expect(reopened.findProviderStateBinding(identityHashes, 2_000)).toMatchObject({
+        stateDomainId: "provider-a",
+        profileId: "profile-a",
+        generation: 3
+      });
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("persists bounded provider-state recovery evidence without its source values", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-evidence-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const privateDomain = "private-provider-domain";
+    const evidenceKey = providerStateTargetHealthKey({
+      targetStateDomain: privateDomain,
+      model: "private-model",
+      endpoint: "responses"
+    });
+    const logger = new RequestLogger(2, databasePath);
+
+    expect(logger.rememberProviderStateRecoveryEvidence(
+      evidenceKey,
+      "target_health",
+      1_000,
+      100
+    )).toBe(1);
+    expect(logger.hasProviderStateRecoveryEvidence(evidenceKey, 1_099)).toBe(true);
+    logger.close();
+
+    const databaseText = await readFile(databasePath);
+    expect(databaseText.includes(Buffer.from(privateDomain))).toBe(false);
+    expect(databaseText.includes(Buffer.from("private-model"))).toBe(false);
+
+    const reopened = new RequestLogger(2, databasePath);
+    try {
+      expect(reopened.hasProviderStateRecoveryEvidence(evidenceKey, 1_099)).toBe(true);
+      expect(reopened.hasProviderStateRecoveryEvidence(evidenceKey, 1_100)).toBe(false);
+      expect(reopened.rememberProviderStateRecoveryEvidence(
+        evidenceKey,
+        "legacy_failure",
+        1_000,
+        2_000
+      )).toBe(1);
+      expect(reopened.rememberProviderStateRecoveryEvidence(
+        evidenceKey,
+        "legacy_failure",
+        1_000,
+        2_500
+      )).toBe(2);
+    } finally {
+      reopened.close();
+    }
   });
 
   it("does not cap persisted SQLite logs by entry count by default", async () => {

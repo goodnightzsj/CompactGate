@@ -31,7 +31,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     api_key: "",
     api_key_env: "",
     model_override: "",
-    reasoning_effort: ""
+    reasoning_effort: "",
+    state_domain_id: ""
   },
   compact: {
     base_url: "https://compact.example/v1",
@@ -73,7 +74,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     max_database_bytes: 1024 * 1024 * 1024
   },
   primary_failover: {
-    auto_schedule: true
+    auto_schedule: true,
+    state_portability: "recover_on_error"
   },
   profile_scopes: {
     codex: {

@@ -42,6 +42,8 @@ function readSessionKey(
   const metadata = isRecord(parsed?.metadata) ? parsed.metadata : null;
   const clientMetadata = isRecord(parsed?.client_metadata) ? parsed.client_metadata : null;
   return (
+    readTrimmedString(parsed?.prompt_cache_key) ??
+    readTrimmedString(parsed?.promptCacheKey) ??
     readTrimmedString(parsed?.session_hash) ??
     readTrimmedString(parsed?.session_id) ??
     readTrimmedString(parsed?.conversation_id) ??

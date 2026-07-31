@@ -27,8 +27,11 @@ import {
   LOG_FACET_SCHEMA_SQL,
   LOG_TABLE_SQL,
   MIGRATION_COLUMNS,
+  PROVIDER_STATE_BINDING_SCHEMA_SQL,
+  PROVIDER_STATE_RECOVERY_EVIDENCE_SCHEMA_SQL,
   RECENT_LOG_FIELDS
 } from "./logger-schema.js";
+import type { ProviderStateBinding } from "./provider-state-binding.js";
 import { extractResponseModelFromText } from "./response-model.js";
 
 export interface RequestLoggerOptions {
@@ -42,6 +45,9 @@ export const DEFAULT_MAX_LOG_DATABASE_BYTES = 1024 * 1024 * 1024;
 const STORAGE_PRUNE_DELETE_FRACTION = 0.1;
 const STORAGE_PRUNE_MIN_DELETE_ROWS = 100;
 const STORAGE_PRUNE_MAX_PASSES = 20;
+const PROVIDER_STATE_BINDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_PROVIDER_STATE_BINDINGS = 8_192;
+const MAX_PROVIDER_STATE_RECOVERY_EVIDENCE = 8_192;
 
 export function resolveDefaultLogDatabasePath(configPath: string): string {
   const configBaseName = path.basename(configPath, path.extname(configPath));
@@ -92,6 +98,8 @@ export class RequestLogger {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(LOG_TABLE_SQL);
+    this.db.exec(PROVIDER_STATE_BINDING_SCHEMA_SQL);
+    this.db.exec(PROVIDER_STATE_RECOVERY_EVIDENCE_SCHEMA_SQL);
     this.migratePersistedSchema();
     this.ensureFacetSummary();
     this.reconcileInterruptedCaptures();
@@ -124,6 +132,155 @@ export class RequestLogger {
       last_persist_error: this.lastPersistError,
       last_persist_error_at: this.lastPersistErrorAt
     };
+  }
+
+  findProviderStateBinding(identityHashes: string[], now = Date.now()): ProviderStateBinding | null {
+    if (identityHashes.length === 0) {
+      return null;
+    }
+
+    this.db.prepare("DELETE FROM provider_state_bindings WHERE expires_at <= ?").run(now);
+    const query = this.db.prepare(`
+      SELECT state_domain_id, profile_id, generation, expires_at
+      FROM provider_state_bindings
+      WHERE identity_hash = ? AND expires_at > ?
+    `);
+    for (const identityHash of identityHashes) {
+      const row = query.get(identityHash, now) as Record<string, unknown> | undefined;
+      if (row) {
+        return {
+          stateDomainId: String(row.state_domain_id),
+          profileId: String(row.profile_id),
+          generation: Number(row.generation),
+          expiresAt: Number(row.expires_at)
+        };
+      }
+    }
+    return null;
+  }
+
+  rememberProviderStateBinding(
+    identityHashes: string[],
+    binding: Omit<ProviderStateBinding, "expiresAt">,
+    now = Date.now(),
+    version = now
+  ): boolean {
+    if (identityHashes.length === 0) {
+      return false;
+    }
+
+    const expiresAt = now + PROVIDER_STATE_BINDING_TTL_MS;
+    try {
+      this.db.exec("BEGIN IMMEDIATE;");
+      const upsert = this.db.prepare(`
+        INSERT INTO provider_state_bindings (
+          identity_hash, state_domain_id, profile_id, generation, expires_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(identity_hash) DO UPDATE SET
+          state_domain_id = excluded.state_domain_id,
+          profile_id = excluded.profile_id,
+          generation = excluded.generation,
+          expires_at = excluded.expires_at,
+          updated_at = excluded.updated_at
+        WHERE excluded.generation > provider_state_bindings.generation
+          OR (
+            excluded.generation = provider_state_bindings.generation AND
+            excluded.updated_at >= provider_state_bindings.updated_at
+          )
+      `);
+      for (const identityHash of identityHashes) {
+        upsert.run(
+          identityHash,
+          binding.stateDomainId,
+          binding.profileId,
+          binding.generation,
+          expiresAt,
+          version
+        );
+      }
+      this.db.prepare("DELETE FROM provider_state_bindings WHERE expires_at <= ?").run(now);
+      this.db.prepare(`
+        DELETE FROM provider_state_bindings
+        WHERE identity_hash IN (
+          SELECT identity_hash
+          FROM provider_state_bindings
+          ORDER BY updated_at DESC, identity_hash DESC
+          LIMIT -1 OFFSET ?
+        )
+      `).run(MAX_PROVIDER_STATE_BINDINGS);
+      this.db.exec("COMMIT;");
+      return true;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the original SQLite failure.
+      }
+      this.recordPersistenceFailure("persist provider-state binding", error);
+      console.error(`Failed to persist provider-state binding to ${this.databasePath}.`, error);
+      return false;
+    }
+  }
+
+  hasProviderStateRecoveryEvidence(evidenceKey: string, now = Date.now()): boolean {
+    this.db.prepare("DELETE FROM provider_state_recovery_evidence WHERE expires_at <= ?").run(now);
+    return Boolean(this.db.prepare(`
+      SELECT 1
+      FROM provider_state_recovery_evidence
+      WHERE evidence_key = ? AND expires_at > ?
+    `).get(evidenceKey, now));
+  }
+
+  rememberProviderStateRecoveryEvidence(
+    evidenceKey: string,
+    kind: "target_health" | "legacy_failure",
+    ttlMs: number,
+    now = Date.now()
+  ): number {
+    const expiresAt = now + ttlMs;
+    try {
+      this.db.exec("BEGIN IMMEDIATE;");
+      this.db.prepare(`
+        INSERT INTO provider_state_recovery_evidence (
+          evidence_key, evidence_kind, observation_count, observed_at, expires_at
+        ) VALUES (?, ?, 1, ?, ?)
+        ON CONFLICT(evidence_key) DO UPDATE SET
+          evidence_kind = excluded.evidence_kind,
+          observation_count = CASE
+            WHEN provider_state_recovery_evidence.expires_at > excluded.observed_at
+              THEN provider_state_recovery_evidence.observation_count + 1
+            ELSE 1
+          END,
+          observed_at = excluded.observed_at,
+          expires_at = excluded.expires_at
+      `).run(evidenceKey, kind, now, expiresAt);
+      const row = this.db.prepare(`
+        SELECT observation_count
+        FROM provider_state_recovery_evidence
+        WHERE evidence_key = ?
+      `).get(evidenceKey) as Record<string, unknown> | undefined;
+      this.db.prepare("DELETE FROM provider_state_recovery_evidence WHERE expires_at <= ?").run(now);
+      this.db.prepare(`
+        DELETE FROM provider_state_recovery_evidence
+        WHERE evidence_key IN (
+          SELECT evidence_key
+          FROM provider_state_recovery_evidence
+          ORDER BY observed_at DESC, evidence_key DESC
+          LIMIT -1 OFFSET ?
+        )
+      `).run(MAX_PROVIDER_STATE_RECOVERY_EVIDENCE);
+      this.db.exec("COMMIT;");
+      return Number(row?.observation_count ?? 1);
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the original SQLite failure.
+      }
+      this.recordPersistenceFailure("persist provider-state recovery evidence", error);
+      console.error(`Failed to persist provider-state recovery evidence to ${this.databasePath}.`, error);
+      return 0;
+    }
   }
 
   add(entry: RequestLogEntry): void {
@@ -242,6 +399,13 @@ export class RequestLogger {
           entry.capture_path,
           entry.capture_status
       );
+      if (entry.provider_state_portability) {
+        this.db.prepare(`
+          UPDATE request_logs
+          SET provider_state_portability = ?
+          WHERE id = last_insert_rowid()
+        `).run(JSON.stringify(entry.provider_state_portability));
+      }
       this.prunePersistedEntries();
       this.requestStoragePrune();
       this.checkDatabaseSize();

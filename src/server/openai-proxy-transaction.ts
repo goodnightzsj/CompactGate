@@ -5,6 +5,7 @@ import type {
   CompactResponseSyntheticSource,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
+  ProviderStatePortabilityLog,
   RequestTransport,
   RouteKind,
   StreamOutcome
@@ -93,6 +94,7 @@ export interface OpenAiProxyTransactionInput {
   firstTokenMs: number | null;
   usage: TokenUsageMetrics;
   errorSummary: string | null;
+  providerStatePortability?: ProviderStatePortabilityLog | null;
   compactBridgeReplacements: number;
   rawBody: Buffer;
   requestHeaders: Record<string, string>;
@@ -185,6 +187,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     firstTokenMs: input.firstTokenMs,
     usage: input.usage,
     errorSummary: input.errorSummary,
+    providerStatePortability: input.providerStatePortability ?? null,
     compactResponseNormalized: input.compactResponseNormalized,
     compactResponseNormalizeReason: input.compactResponseNormalizeReason,
     compactResponseSyntheticSource: input.compactResponseSyntheticSource,

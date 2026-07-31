@@ -2,6 +2,7 @@ import type {
   ClaudeModelMap,
   ConfigProfileScope,
   PrimaryReasoningEffort,
+  PrimaryStatePortabilityMode,
   PublicConfig
 } from "../../shared/types.js";
 
@@ -30,6 +31,8 @@ export type ConfigFormState = {
   codexPrimaryCredentialPresetId: string;
   primaryModelOverride: string;
   primaryReasoningEffort: PrimaryReasoningEffort;
+  primaryStateDomainId: string;
+  primaryStatePortability: PrimaryStatePortabilityMode;
   codexCompactBaseUrl: string;
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;

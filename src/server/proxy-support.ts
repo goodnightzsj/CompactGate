@@ -7,6 +7,7 @@ import type {
   ClientDisconnectPhase,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
+  ProviderStatePortabilityLog,
   RequestLogEntry,
   ResponseModelSource,
   RequestTransport,
@@ -67,6 +68,7 @@ export function addLog(
     firstTokenMs: number | null;
     usage: TokenUsageMetrics;
     errorSummary: string | null;
+    providerStatePortability?: ProviderStatePortabilityLog | null;
     compactResponseNormalized: boolean;
     compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
     compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
@@ -135,6 +137,7 @@ export function addLog(
     user_agent: userAgent,
     request_id: input.requestId,
     error_summary: input.errorSummary,
+    provider_state_portability: input.providerStatePortability ?? null,
     capture_path: input.capturePath,
     capture_status: input.captureStatus
   };

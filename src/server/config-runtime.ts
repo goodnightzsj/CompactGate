@@ -4,6 +4,7 @@ import type {
   CompactModelMode,
   CompactUpstreamMode,
   PrimaryReasoningEffort,
+  PrimaryStatePortabilityMode,
   UpstreamConfig
 } from "../shared/types.js";
 import { CLAUDE_MODEL_MAP_ROLES, emptyClaudeModelMap } from "./config-defaults.js";
@@ -32,6 +33,7 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validatePrimaryReasoningEffort(config.primary.reasoning_effort);
+  validateStateDomainId(config.primary.state_domain_id);
   validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
   validateClaudeModelMap(config.claude.model_map);
@@ -175,6 +177,10 @@ export function mergeRuntimeConfig(
       auto_schedule: readBoolean(
         readChild(patchRecord.primary_failover).auto_schedule,
         base.primary_failover.auto_schedule
+      ),
+      state_portability: readPrimaryStatePortabilityMode(
+        readChild(patchRecord.primary_failover).state_portability,
+        base.primary_failover.state_portability
       )
     }
   };
@@ -193,6 +199,28 @@ function validateTimeoutMs(value: number, field: string): void {
 function validatePrimaryFailover(value: CompactGateRuntimeConfig["primary_failover"]): void {
   if (typeof value.auto_schedule !== "boolean") {
     throw new ConfigError("primary_failover.auto_schedule must be a boolean.");
+  }
+  if (!["off", "recover_on_error"].includes(value.state_portability)) {
+    throw new ConfigError(
+      "primary_failover.state_portability must be off or recover_on_error."
+    );
+  }
+}
+
+function readPrimaryStatePortabilityMode(
+  value: unknown,
+  fallback: PrimaryStatePortabilityMode
+): PrimaryStatePortabilityMode {
+  const raw = readString(value, fallback);
+  if (raw === "compatibility_first" || raw === "domain_aware") {
+    return "recover_on_error";
+  }
+  return raw as PrimaryStatePortabilityMode;
+}
+
+function validateStateDomainId(value: string): void {
+  if (value.length > 256 || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new ConfigError("primary.state_domain_id must be at most 256 printable characters without surrounding whitespace.");
   }
 }
 
@@ -259,7 +287,8 @@ function mergePrimaryConfig(
     reasoning_effort: readString(
       patch.reasoning_effort,
       base.reasoning_effort
-    ) as PrimaryReasoningEffort
+    ) as PrimaryReasoningEffort,
+    state_domain_id: readString(patch.state_domain_id, base.state_domain_id)
   };
 }
 

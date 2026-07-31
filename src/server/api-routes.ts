@@ -24,7 +24,17 @@ export async function handleApi(
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor
 ): Promise<void> {
-  if (await handleConfigApi(req, res, url, configStore, logger, captureWriter, studioEvents, codexVersionMonitor)) {
+  if (await handleConfigApi(
+    req,
+    res,
+    url,
+    configStore,
+    logger,
+    captureWriter,
+    studioEvents,
+    codexVersionMonitor,
+    primaryFailover
+  )) {
     return;
   }
 

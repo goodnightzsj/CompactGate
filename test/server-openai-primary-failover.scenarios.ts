@@ -17,7 +17,7 @@ import {
 } from "./server-openai-failover-helpers.js";
 
 describe("CompactGate OpenAI routing", () => {
-  it("uses supplied route-preview headers for primary session stickiness", async () => {
+  it("lets an explicit profile apply override prior primary session stickiness", async () => {
     const firstPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "first" }));
     const secondPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "second" }));
     const app = await startApp(firstPrimary.url, firstPrimary.url);
@@ -72,12 +72,12 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(previewResponse.status).toBe(200);
     expect(await previewResponse.json()).toMatchObject({
-      upstream_host: new URL(secondPrimary.url).host,
-      target_model: "preview-model-b"
+      upstream_host: new URL(firstPrimary.url).host,
+      target_model: "preview-model-a"
     });
   });
 
-  it("uses primary failover selection for remote V1 compact previews in primary mode", async () => {
+  it("lets explicit profile apply override compact-preview session stickiness", async () => {
     const firstPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "first" }));
     const secondPrimary = await startCapturedOpenAiUpstream([], (res) => writeJson(res, { ok: "second" }));
     const app = await startApp(firstPrimary.url, firstPrimary.url, {
@@ -136,8 +136,8 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(previewResponse.status).toBe(200);
     expect(await previewResponse.json()).toMatchObject({
-      upstream_host: new URL(secondPrimary.url).host,
-      target_model: "model-b-openai-compact"
+      upstream_host: new URL(firstPrimary.url).host,
+      target_model: "model-a-openai-compact"
     });
   });
 

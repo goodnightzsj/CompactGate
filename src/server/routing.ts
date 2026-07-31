@@ -7,6 +7,7 @@ import type {
   RoutePreviewResponse
 } from "../shared/types.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { resolveUpstreamPath } from "./upstream-url.js";
 
 const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
 
@@ -216,11 +217,7 @@ export function extractJsonModel(rawBody: Buffer): ExtractedModel {
 
 export function buildUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
   const base = new URL(baseUrl);
-  const suffix = requestPath.startsWith("/v1") ? requestPath.slice(3) || "/" : requestPath;
-  const cleanBasePath = base.pathname.replace(/\/+$/, "");
-  const cleanSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-
-  base.pathname = `${cleanBasePath}${cleanSuffix}`.replace(/\/{2,}/g, "/");
+  base.pathname = resolveUpstreamPath(base.pathname, requestPath, "replace-client-api-root");
   const requestSearch = new URLSearchParams(search);
   for (const name of new Set(requestSearch.keys())) {
     base.searchParams.delete(name);

@@ -150,7 +150,8 @@ wire_api = "responses"
     "base_url": "https://primary.example/v1",
     "api_key_env": "PRIMARY_API_KEY",
     "model_override": "",
-    "reasoning_effort": ""
+    "reasoning_effort": "",
+    "state_domain_id": ""
   },
   "compact": {
     "base_url": "https://compact.example/v1",
@@ -172,9 +173,17 @@ wire_api = "responses"
     "capture_body_max_bytes": 1048576,
     "capture_dir_max_bytes": 21474836480,
     "max_database_bytes": 1073741824
+  },
+  "primary_failover": {
+    "auto_schedule": true,
+    "state_portability": "recover_on_error"
   }
 }
 ```
+
+Codex 的 `primary.base_url` 和 `compact.base_url` 表示完整上游 API 根，例如 `https://host/v1` 或 `https://host/api/paas/v4`。CompactGate 会精确移除客户端请求开头的 `/v1`，再把剩余端点拼到该 API 根，因此不会因拼接额外生成 `/v1/v1/responses`，也不会破坏 `/v4` 这类供应商版本路径。
+
+Claude 的 `claude.primary.base_url` 表示上游主机或供应商前缀，例如 `https://api.anthropic.com` 或 `https://host/anthropic`。`/v1/messages` 会追加到该前缀；如果 base URL 已以完整 `/v1` 段结尾，则拼接边界只保留一个 `/v1`。Claude Messages POST 返回 404 时，CompactGate 不会猜测并重试其他路径。
 
 `logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，范围是 1 到 2000，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；超过后先清空历史正文并保留元数据，仍超限时才按时间顺序删除最早的元数据行。
 
@@ -189,6 +198,19 @@ wire_api = "responses"
 普通请求走的主上游。
 
 `primary.model_override` 非空时覆盖请求模型；`primary.reasoning_effort` 可设为 `low`、`medium`、`high`、`xhigh` 或 `max`，仅对 Responses API 写入 `reasoning.effort`。两者留空都表示保留客户端请求。旧配置中的 `none` 仍会按原值转发，但不会出现在 Studio 下拉选项中；需要取消覆盖时应改为“跟随请求”。
+
+`primary.state_domain_id` 用来声明该 profile 的 provider 状态域。保存的 profile 留空时按 profile ID 隔离；没有 profile 的直连配置才回退到上游 URL origin。只有两个 profile 明确配置相同值时，CompactGate 才把它们视为可直接共享 encrypted reasoning/compaction 状态。
+
+旧对话切换 profile 后失败的根因不是路由仍指向旧 host，而是请求正文携带了旧上游签发的 provider-private state。welfare 抓包样本包含 59 个 reasoning item（其中 15 个 `encrypted_content` 为 null 或格式无效）、1 个 compaction item 和 51 组工具调用；原实现切换 host 后仍把这些状态逐字节发给新上游，而新对话没有这批外域状态，所以新对话可以成功。CPA/CLIProxyAPI 只验证 GPT reasoning 密文的外层格式，不能证明新上游可解密；sub2api 还会从不可变正文重建每次尝试、跨 passthrough 边界删除整个 reasoning，并在明确的 `400 invalid_encrypted_content` 后定向重试。CompactGate 组合这些边界，并额外处理 compaction、工具配对、状态域绑定和流式响应提交点。
+
+### `primary_failover.state_portability`
+
+- `off`：不做旧会话迁移。
+- `recover_on_error`：默认值。第一次始终把当前请求原样发给选中的 profile；只有明确的可修复 400，或具有目标健康和状态域证据的兼容性失败，才从原始请求体派生恢复请求。旧配置值 `compatibility_first` 和 `domain_aware` 在加载时归一化为此模式。
+
+明确 `400 invalid_encrypted_content` 或 `previous_response_not_found` 直接执行一次错误专用修复。修复后仍返回同一明确 400 时,若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；错误专用修复按错误位置插入。所有请求固定在当前 profile/host，最多发送 4 个不同 body，且每次都从同一份不可变请求体派生。只有完整成功响应才更新持久绑定。
+
+通过 `POST /api/config/profiles/apply` 手动应用 Codex profile 是一次权威切换：CompactGate 会清除旧的进程内会话 stickiness，并强制下一次 Primary 选择新 profile，即使 `auto_schedule=true`。自动调度内部同步 active profile 不触发该强制逻辑。
 
 ### `compact`
 

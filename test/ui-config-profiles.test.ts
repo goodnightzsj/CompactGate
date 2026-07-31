@@ -88,6 +88,7 @@ function profile(name: string, id = name.toLowerCase().replaceAll(" ", "-")): Pu
     created_at: "2026-06-09T00:00:00.000Z",
     updated_at: "2026-06-09T00:00:00.000Z",
     primary_base_url: "http://127.0.0.1:9101/v1",
+    primary_state_domain_id: "",
     compact_base_url: "http://127.0.0.1:9102/v1",
     claude_primary_base_url: null,
     claude_compact_base_url: null,

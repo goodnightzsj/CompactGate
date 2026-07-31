@@ -115,6 +115,7 @@ export function validateImportCandidateShape(config: Record<string, unknown>): v
   validateOptionalArray(config, "route_url_presets");
   validateOptionalPathType(config, ["listen"]);
   validateOptionalPathType(config, ["primary", "base_url"]);
+  validateOptionalPathType(config, ["primary", "state_domain_id"]);
   validateOptionalPathType(config, ["compact", "base_url"]);
   validateOptionalPathType(config, ["claude", "primary", "base_url"]);
   validateOptionalPathType(config, ["logging", "redact_body"], "boolean");
@@ -125,6 +126,7 @@ export function validateImportCandidateShape(config: Record<string, unknown>): v
   validateOptionalPathType(config, ["logging", "capture_dir_max_bytes"], "number");
   validateOptionalPathType(config, ["logging", "max_database_bytes"], "number");
   validateOptionalPathType(config, ["primary_failover", "auto_schedule"], "boolean");
+  validateOptionalPathType(config, ["primary_failover", "state_portability"]);
 }
 
 function validateOptionalRecord(config: Record<string, unknown>, key: string): void {

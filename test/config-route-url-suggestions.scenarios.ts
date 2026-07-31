@@ -66,6 +66,7 @@ function publicCodexProfile(id: string, name: string, compactBaseUrl: string): P
     created_at: "2026-06-07T00:00:00.000Z",
     updated_at: "2026-06-07T00:00:01.000Z",
     primary_base_url: "http://127.0.0.1:7000/v1",
+    primary_state_domain_id: "",
     compact_base_url: compactBaseUrl,
     claude_primary_base_url: null,
     claude_compact_base_url: null,

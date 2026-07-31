@@ -5,6 +5,7 @@ import type {
   ClientDisconnectPhase,
   LogStatusKind,
   ProviderLogCounts,
+  ProviderStatePortabilityLog,
   RequestLogEntry,
   ResponseModelSource,
   RequestTransport,
@@ -182,6 +183,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     user_agent: userAgent,
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary),
+    provider_state_portability: readProviderStatePortability(row.provider_state_portability),
     capture_path: readNullableString(row.capture_path),
     capture_status: readCaptureStatus(row.capture_status)
   };
@@ -273,6 +275,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readProviderStatePortability(value: unknown): ProviderStatePortabilityLog | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !isRecord(parsed) ||
+      ![
+        "not_applicable",
+        "disabled",
+        "observed",
+        "recovery",
+        "unknown_source",
+        "same_domain",
+        "migration"
+      ].includes(String(parsed.decision)) ||
+      !Array.isArray(parsed.attempts) ||
+      !isRecord(parsed.stateful_item_counts)
+    ) {
+      return null;
+    }
+    return parsed as unknown as ProviderStatePortabilityLog;
+  } catch {
+    return null;
+  }
 }
 
 function readBoolean(value: unknown): boolean {

@@ -18,6 +18,42 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("CompactGate Claude routing", () => {
+  it("does not duplicate /v1 when the Claude base URL already includes it", async () => {
+    const captured: { current: CapturedRequest | null } = { current: null };
+    const claude = await startClaudeUpstream(async (req, res) => {
+      captured.current = {
+        method: req.method ?? "POST",
+        url: req.url ?? "",
+        headers: req.headers,
+        body: await captureBody(req)
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        base_url: `${claude.url}/v1`,
+        api_key: "saved-claude-token"
+      }
+    });
+
+    const response = await fetch(`${app.url}/anthropic/v1/messages?beta=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: "single version segment" }]
+      }),
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      }
+    });
+
+    expect(response.status).toBe(200);
+    assertCaptured(captured.current);
+    expect(captured.current.url).toBe("/v1/messages?beta=true");
+  });
+
   it("uses an HTTP CONNECT proxy for HTTPS Claude upstream requests", async () => {
     setEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
     setEnv("HTTPS_PROXY", "");

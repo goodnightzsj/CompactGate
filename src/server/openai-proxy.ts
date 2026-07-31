@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type {
   CompactGateConfig,
+  ProviderStatePortabilityLog,
   RouteKind
 } from "../shared/types.js";
 import {
@@ -24,6 +25,7 @@ import {
   primaryRouteRequestContextFromBody,
   type PrimaryRouteSelection
 } from "./primary-failover.js";
+import { readResponseId } from "./primary-failover-result.js";
 import {
   buildCompactOpenAiProxyPlan,
   buildPrimaryOpenAiProxyPlan
@@ -54,8 +56,33 @@ import {
   classifyOpenAiUpstreamResult,
   sendOpenAiUpstreamRequest,
   summarizeOpenAiStreamFailure,
-  UpstreamRequestError
+  UpstreamRequestError,
+  writeBufferedUpstreamResult
 } from "./upstream-client.js";
+import {
+  analyzeProviderState,
+  type ProviderStateAnalysis
+} from "./provider-state-portability.js";
+import {
+  runProviderStateMigration,
+  type ProviderStateRecoveryTrigger,
+  type ProviderStateMigrationResult
+} from "./provider-state-migration.js";
+import { providerStateBindingIdentityHashes } from "./provider-state-binding.js";
+import {
+  hashStateDomain,
+  stateDomainForPrimary,
+  stateDomainForProfile
+} from "./provider-state-domain.js";
+import {
+  isEligibleGenericProviderStateFailure,
+  PROVIDER_STATE_LEGACY_FAILURE_THRESHOLD,
+  PROVIDER_STATE_LEGACY_FAILURE_TTL_MS,
+  PROVIDER_STATE_TARGET_HEALTH_TTL_MS,
+  providerStateLegacyFailureKey,
+  providerStateTargetHealthKey,
+  type ProviderStateTargetScope
+} from "./provider-state-evidence.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
 
 export async function proxyOpenAiRequest(
@@ -140,6 +167,7 @@ async function proxyPrimaryRequest(
   let delegatedToCompact = false;
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
+  let providerStatePortability: ProviderStatePortabilityLog | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
   try {
@@ -173,6 +201,13 @@ async function proxyPrimaryRequest(
       return;
     }
 
+    const primaryRequestContext = primaryRouteRequestContextFromBody(
+      transaction.rawBody,
+      req.headers,
+      transaction.requestMetadata.endpoint
+    );
+    const inMemorySourceProfileId = primaryFailover.boundProfileId(primaryRequestContext);
+
     const plan = buildPrimaryOpenAiProxyPlan({
       config,
       url,
@@ -204,7 +239,77 @@ async function proxyPrimaryRequest(
     transaction.requestHeaders = plan.requestHeaders;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 
-    const result = await sendOpenAiUpstreamRequest({
+    const extraResponseHeaders = {
+      "x-compactgate-route": route,
+      ...compactionResponseHeaders(classification),
+      "x-compactgate-request-id": requestId
+    };
+    const bindingIdentityHashes = providerStateBindingIdentityHashes(primaryRequestContext);
+    const persistedBinding = logger.findProviderStateBinding(bindingIdentityHashes);
+    const sourceProfileId = persistedBinding?.profileId ?? inMemorySourceProfileId;
+    const sourceStateDomain = persistedBinding?.stateDomainId ??
+      stateDomainForProfile(config, inMemorySourceProfileId);
+    const targetStateDomain = primarySelection
+      ? stateDomainForPrimary(primarySelection.config.primary, primarySelection.profileId)
+      : stateDomainForPrimary(config.primary);
+    const stateAnalysis = analyzeProviderState(transaction.upstreamBody);
+    const targetScope: ProviderStateTargetScope = {
+      targetStateDomain,
+      model: transaction.targetModel,
+      endpoint: transaction.requestMetadata.endpoint
+    };
+    const targetHealthKey = providerStateTargetHealthKey(targetScope);
+    const targetStateFreeSuccess = logger.hasProviderStateRecoveryEvidence(targetHealthKey);
+    const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error";
+    const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
+      ? await sendRecoveringPrimaryRequest({
+          req,
+          res,
+          upstream,
+          startedAt,
+          timeoutMs: plan.timeoutMs,
+          timeoutMessage: plan.timeoutMessage,
+          requestHeaders: transaction.requestHeaders,
+          canonicalBody: transaction.upstreamBody,
+          extraResponseHeaders,
+          targetStateDomain,
+          startGenericRecovery: (result, afterErrorSpecificRepair) => {
+            if (
+              !targetStateFreeSuccess ||
+              !isEligibleGenericProviderStateFailure(result, afterErrorSpecificRepair)
+            ) {
+              return null;
+            }
+            if (sourceStateDomain) {
+              return sourceStateDomain === targetStateDomain
+                ? null
+                : "profile_switch_failure";
+            }
+            const conversationHash = bindingIdentityHashes[0];
+            if (!conversationHash) {
+              return null;
+            }
+            const count = logger.rememberProviderStateRecoveryEvidence(
+              providerStateLegacyFailureKey(targetScope, conversationHash, result),
+              "legacy_failure",
+              PROVIDER_STATE_LEGACY_FAILURE_TTL_MS
+            );
+            return count >= PROVIDER_STATE_LEGACY_FAILURE_THRESHOLD
+              ? "legacy_failure_threshold"
+              : null;
+          }
+        })
+      : null;
+    if (recovery) {
+      if (recovery.body !== transaction.upstreamBody) {
+        delete transaction.requestHeaders["content-encoding"];
+      }
+      if (recovery.attempts.some((attempt) => attempt.strategy === "cross_domain")) {
+        delete transaction.requestHeaders["x-codex-beta-features"];
+      }
+      transaction.upstreamBody = recovery.body;
+    }
+    const result = recovery?.result ?? await sendOpenAiUpstreamRequest({
       req,
       res,
       upstream,
@@ -213,11 +318,7 @@ async function proxyPrimaryRequest(
       timeoutMessage: plan.timeoutMessage,
       requestHeaders: transaction.requestHeaders,
       body: transaction.upstreamBody,
-      extraResponseHeaders: {
-        "x-compactgate-route": route,
-        ...compactionResponseHeaders(classification),
-        "x-compactgate-request-id": requestId
-      },
+      extraResponseHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       retryEmptyStreamError: transaction.requestType === "stream"
     });
@@ -228,6 +329,50 @@ async function proxyPrimaryRequest(
     transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
     if (transaction.requestMetadata.requestType === "stream") {
       transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
+    }
+    providerStatePortability = buildProviderStatePortabilityLog({
+      enabled: recoveryEnabled,
+      conversationHash: bindingIdentityHashes[0] ?? null,
+      sourceProfileId,
+      targetProfileId: primarySelection?.profileId ?? null,
+      sourceStateDomain,
+      targetStateDomain,
+      targetStateFreeSuccess,
+      analysis: stateAnalysis,
+      recovery
+    });
+
+    const completedSuccessfully =
+      transaction.status >= 200 &&
+      transaction.status < 300 &&
+      transaction.streamOutcome === "success" &&
+      transaction.errorSummary === null;
+    if (completedSuccessfully && !stateAnalysis.hasProviderOwnedState) {
+      logger.rememberProviderStateRecoveryEvidence(
+        targetHealthKey,
+        "target_health",
+        PROVIDER_STATE_TARGET_HEALTH_TTL_MS
+      );
+    }
+    if (
+      primarySelection?.profileId &&
+      completedSuccessfully
+    ) {
+      const responseId = readResponseId({
+        status: transaction.status,
+        errorSummary: null,
+        responseBody: transaction.responseBody,
+        responseHeaders: transaction.responseHeaders
+      });
+      const committedIdentityHashes = providerStateBindingIdentityHashes(
+        primarySelection.context,
+        responseId
+      );
+      logger.rememberProviderStateBinding(committedIdentityHashes, {
+        stateDomainId: targetStateDomain,
+        profileId: primarySelection.profileId,
+        generation: (persistedBinding?.generation ?? 0) + (recovery?.trigger ? 1 : 0)
+      }, Date.now(), Math.round((performance.timeOrigin + startedAt) * 1_000));
     }
   } catch (error) {
     applyUpstreamFailureToTransaction(transaction, error);
@@ -285,6 +430,7 @@ async function proxyPrimaryRequest(
       firstTokenMs: transaction.firstTokenMs,
       usage: transaction.usage,
       errorSummary: transaction.errorSummary,
+      providerStatePortability,
       compactBridgeReplacements: transaction.compactBridgeReplacements,
       rawBody: transaction.rawBody,
       requestHeaders: transaction.requestHeaders,
@@ -299,6 +445,124 @@ async function proxyPrimaryRequest(
       compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
     });
   }
+}
+
+async function sendRecoveringPrimaryRequest(input: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  upstream: URL;
+  startedAt: number;
+  timeoutMs: number;
+  timeoutMessage: string;
+  requestHeaders: Record<string, string>;
+  canonicalBody: Buffer;
+  extraResponseHeaders: Record<string, string>;
+  targetStateDomain: string;
+  startGenericRecovery: (
+    result: Awaited<ReturnType<typeof sendOpenAiUpstreamRequest>>,
+    afterErrorSpecificRepair: boolean
+  ) => Exclude<ProviderStateRecoveryTrigger, "explicit_400"> | null;
+}): Promise<ProviderStateMigrationResult> {
+  const recovery = await runProviderStateMigration({
+    canonicalBody: input.canonicalBody,
+    targetStateDomain: input.targetStateDomain,
+    canReplay: () =>
+      !input.res.headersSent &&
+      !input.res.writableEnded &&
+      !input.res.destroyed &&
+      performance.now() - input.startedAt < input.timeoutMs,
+    startGenericRecovery: input.startGenericRecovery,
+    send: (body, strategy, priorStrategy) => sendOpenAiUpstreamRequest({
+      req: input.req,
+      res: input.res,
+      upstream: input.upstream,
+      startedAt: input.startedAt,
+      timeoutMs: Math.max(1, input.timeoutMs - Math.round(performance.now() - input.startedAt)),
+      timeoutMessage: input.timeoutMessage,
+      requestHeaders: requestHeadersForCompiledBody(
+        input.requestHeaders,
+        input.canonicalBody,
+        body,
+        strategy === "cross_domain" ||
+          (strategy === "error_400" && priorStrategy === "cross_domain")
+      ),
+      body,
+      extraResponseHeaders: input.extraResponseHeaders,
+      deferHttpErrors: true,
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY
+    })
+  });
+  if (recovery.result.status >= 400) {
+    writeBufferedUpstreamResult(input.res, recovery.result, input.extraResponseHeaders);
+  }
+  return recovery;
+}
+
+function requestHeadersForCompiledBody(
+  canonicalHeaders: Record<string, string>,
+  canonicalBody: Buffer,
+  compiledBody: Buffer,
+  strictCrossDomain: boolean
+): Record<string, string> {
+  if (compiledBody === canonicalBody && !strictCrossDomain) {
+    return canonicalHeaders;
+  }
+
+  const headers = { ...canonicalHeaders };
+  if (compiledBody !== canonicalBody) {
+    delete headers["content-encoding"];
+  }
+  if (strictCrossDomain) {
+    delete headers["x-codex-beta-features"];
+  }
+  return headers;
+}
+
+function buildProviderStatePortabilityLog(input: {
+  enabled: boolean;
+  conversationHash: string | null;
+  sourceProfileId: string | null;
+  targetProfileId: string | null;
+  sourceStateDomain: string | null;
+  targetStateDomain: string;
+  targetStateFreeSuccess: boolean;
+  analysis: ProviderStateAnalysis;
+  recovery: ProviderStateMigrationResult | null;
+}): ProviderStatePortabilityLog {
+  const decision: ProviderStatePortabilityLog["decision"] = !input.analysis.hasProviderOwnedState
+    ? "not_applicable"
+    : !input.enabled
+      ? "disabled"
+      : input.recovery?.trigger
+        ? "recovery"
+        : "observed";
+  return {
+    decision,
+    trigger: input.recovery?.trigger ?? "none",
+    target_state_free_success: input.targetStateFreeSuccess,
+    conversation_hash: input.conversationHash,
+    source_profile_id: input.sourceProfileId,
+    target_profile_id: input.targetProfileId,
+    source_state_domain_hash: input.sourceStateDomain
+      ? hashStateDomain(input.sourceStateDomain)
+      : null,
+    target_state_domain_hash: hashStateDomain(input.targetStateDomain),
+    stateful_item_counts: {
+      reasoning: input.analysis.reasoningItemCount,
+      encrypted_reasoning: input.analysis.encryptedReasoningItemCount,
+      invalid_encrypted_reasoning: input.analysis.invalidEncryptedReasoningItemCount,
+      compaction: input.analysis.compactionItemCount,
+      previous_response_id: input.analysis.previousResponseIdPresent ? 1 : 0
+    },
+    attempts: (input.recovery?.attempts ?? []).map((attempt) => ({
+      strategy: attempt.strategy,
+      status: attempt.status,
+      error_code: attempt.errorCode,
+      body_hash: attempt.bodyHash,
+      fidelity: attempt.compiled.fidelity,
+      migration_counts: { ...attempt.compiled.metrics }
+    }))
+  };
 }
 
 async function syncScheduledPrimaryProfile({

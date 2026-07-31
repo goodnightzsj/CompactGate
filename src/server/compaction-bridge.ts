@@ -373,7 +373,7 @@ function deepCloneJsonArray(items: unknown[]): unknown[] {
   return JSON.parse(JSON.stringify(items)) as unknown[];
 }
 
-function synthesizeAssistantMessage(encryptedContent: string): Record<string, unknown> | null {
+export function synthesizeAssistantMessage(encryptedContent: string): Record<string, unknown> | null {
   const text = encryptedContent.trim();
   if (!looksLikeReadableSummary(text)) {
     return null;

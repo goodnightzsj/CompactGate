@@ -13,6 +13,7 @@ import {
   fetchUpstreamModels,
   type UpstreamModelsResponse
 } from "./upstream-models.js";
+import { resolveUpstreamPath } from "./upstream-url.js";
 
 export type FetchClaudeModels = (config: CompactGateConfig) => Promise<UpstreamModelsResponse>;
 
@@ -51,10 +52,7 @@ export function buildAnthropicUpstreamHeaders(
 
 export function buildClaudeUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
   const base = new URL(baseUrl);
-  const cleanBasePath = base.pathname.replace(/\/+$/, "");
-  const cleanRequestPath = requestPath.startsWith("/") ? requestPath : `/${requestPath}`;
-
-  base.pathname = `${cleanBasePath}${cleanRequestPath}`.replace(/\/{2,}/g, "/");
+  base.pathname = resolveUpstreamPath(base.pathname, requestPath, "append-request-path");
   base.search = search;
   return base;
 }

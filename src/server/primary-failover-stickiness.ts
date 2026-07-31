@@ -63,6 +63,10 @@ export class PrimaryStickinessStore {
     return null;
   }
 
+  findProfileId(context: Required<PrimaryRouteRequestContext>): string | null {
+    return this.selectProfileId(context, () => true);
+  }
+
   rememberRequest(
     context: Required<PrimaryRouteRequestContext>,
     profileId: string,

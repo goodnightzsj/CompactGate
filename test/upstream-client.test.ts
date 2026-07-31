@@ -8,7 +8,8 @@ import {
   sendOpenAiUpstreamRequest,
   sendBufferedUpstreamRequest,
   type BufferedUpstreamResult,
-  UpstreamStatusError
+  UpstreamStatusError,
+  writeBufferedUpstreamResult
 } from "../src/server/upstream-client.js";
 import { listen, trackServer } from "./helpers/server-test-lifecycle.js";
 import { startUpstream } from "./helpers/server-test-utils.js";
@@ -279,6 +280,89 @@ describe("sendBufferedUpstreamRequest", () => {
         clientDisconnectPhase: "before_terminal",
         kind: "client_cancel"
       })
+    });
+  });
+
+  it("keeps successful recovery responses independent from the deferred-error limit", async () => {
+    const upstreamBody = "x".repeat(64);
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(upstreamBody);
+    });
+    let bufferedBody: Buffer = Buffer.alloc(0);
+
+    const proxy = http.createServer(async (req, res) => {
+      const result = await sendOpenAiUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        deferHttpErrors: true,
+        maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+        maxDeferredHttpErrorBytes: 8
+      });
+      bufferedBody = result.responseBody;
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(upstreamBody);
+    expect(bufferedBody.toString("utf8")).toBe(upstreamBody);
+  });
+
+  it("bounds directly deferred HTTP errors before recovery classification", async () => {
+    const oversizedBody = "x".repeat(64);
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(502, { "content-type": "text/plain" });
+      res.end(oversizedBody);
+    });
+    let upstreamResult: BufferedUpstreamResult | null = null;
+
+    const proxy = http.createServer(async (req, res) => {
+      upstreamResult = await sendOpenAiUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        deferHttpErrors: true,
+        maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+        maxDeferredHttpErrorBytes: 8
+      });
+      writeBufferedUpstreamResult(res, upstreamResult, {});
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({
+      error: "Upstream response exceeded the internal buffer limit before it could be forwarded."
+    });
+    expect(upstreamResult).toMatchObject({
+      status: 502,
+      responseBodyTruncated: true
     });
   });
 

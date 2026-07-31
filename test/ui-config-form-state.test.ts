@@ -14,12 +14,14 @@ describe("UI config form state", () => {
   it("serializes the primary failover auto scheduling switch", () => {
     const form = {
       ...emptyForm(),
-      autoSchedulePrimaryFailover: false
+      autoSchedulePrimaryFailover: false,
+      primaryStatePortability: "recover_on_error" as const
     };
 
     expect(formToPatch(form)).toMatchObject({
       primary_failover: {
-        auto_schedule: false
+        auto_schedule: false,
+        state_portability: "recover_on_error"
       }
     });
   });

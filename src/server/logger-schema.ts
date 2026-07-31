@@ -51,11 +51,37 @@ export const LOG_TABLE_SQL = `
     user_agent TEXT,
     request_id TEXT NOT NULL,
     error_summary TEXT,
+    provider_state_portability TEXT,
     capture_path TEXT,
     capture_status TEXT NOT NULL DEFAULT 'none'
   );
   CREATE INDEX IF NOT EXISTS idx_request_logs_id ON request_logs(id DESC);
   CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id);
+`;
+
+export const PROVIDER_STATE_BINDING_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS provider_state_bindings (
+    identity_hash TEXT PRIMARY KEY,
+    state_domain_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_provider_state_bindings_expiry
+    ON provider_state_bindings(expires_at);
+`;
+
+export const PROVIDER_STATE_RECOVERY_EVIDENCE_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS provider_state_recovery_evidence (
+    evidence_key TEXT PRIMARY KEY,
+    evidence_kind TEXT NOT NULL,
+    observation_count INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS idx_provider_state_recovery_evidence_expiry
+    ON provider_state_recovery_evidence(expires_at);
 `;
 
 const insertedLogStatusSql = `CASE WHEN ${logStandaloneErrorSql("NEW.")} THEN 'error' ELSE 'normal' END`;
@@ -154,6 +180,7 @@ export const RECENT_LOG_FIELDS = `
   user_agent,
   request_id,
   error_summary,
+  provider_state_portability,
   NULL AS capture_path,
   capture_status
 `;
@@ -182,6 +209,7 @@ export const MIGRATION_COLUMNS: Record<string, string> = {
   stream_outcome: "TEXT",
   stream_oversized_event_count: "INTEGER NOT NULL DEFAULT 0",
   error_summary: "TEXT",
+  provider_state_portability: "TEXT",
   first_token_ms: "INTEGER",
   input_tokens: "INTEGER",
   output_tokens: "INTEGER",

@@ -14,7 +14,8 @@ describe("ConfigStore", () => {
     const next = await store.patch({
       primary: {
         base_url: "http://127.0.0.1:9001/v1",
-        reasoning_effort: "high"
+        reasoning_effort: "high",
+        state_domain_id: "shared-codex"
       },
       compact: {
         base_url: "http://127.0.0.1:9002/v1",
@@ -22,17 +23,22 @@ describe("ConfigStore", () => {
         model_override: "manual-compact"
       },
       logging: { keep_recent: 17, persist_body: true },
-      primary_failover: { auto_schedule: false }
+      primary_failover: {
+        auto_schedule: false,
+        state_portability: "recover_on_error"
+      }
     });
 
     expect(next.primary.base_url).toBe("http://127.0.0.1:9001/v1");
     expect(next.primary.reasoning_effort).toBe("high");
+    expect(next.primary.state_domain_id).toBe("shared-codex");
     expect(store.toPublicConfig().primary.reasoning_effort).toBe("high");
     expect(next.compact.model_mode).toBe("custom");
     expect(next.compact.model_override).toBe("manual-compact");
     expect(next.logging.keep_recent).toBe(17);
     expect(next.logging.persist_body).toBe(true);
     expect(next.primary_failover.auto_schedule).toBe(false);
+    expect(next.primary_failover.state_portability).toBe("recover_on_error");
     expect(next.route_url_presets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "codex_primary", base_url: "http://127.0.0.1:9001/v1" }),
@@ -42,11 +48,12 @@ describe("ConfigStore", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
       primary: {
         base_url: "http://127.0.0.1:9001/v1",
-        reasoning_effort: "high"
+        reasoning_effort: "high",
+        state_domain_id: "shared-codex"
       },
       compact: { model_override: "manual-compact" },
       logging: { persist_body: true },
-      primary_failover: { auto_schedule: false }
+      primary_failover: { auto_schedule: false, state_portability: "recover_on_error" }
     });
   });
 
@@ -59,6 +66,28 @@ describe("ConfigStore", () => {
     expect(store.toPublicConfig().logging.persist_body).toBe(false);
     expect(store.get().primary.model_override).toBe("");
     expect(store.get().primary.reasoning_effort).toBe("");
+    expect(store.get().primary_failover.state_portability).toBe("recover_on_error");
+  });
+
+  it("normalizes legacy provider-state portability modes on load", async () => {
+    for (const legacyMode of ["compatibility_first", "domain_aware"]) {
+      const dir = await makeConfigDir();
+      const configPath = path.join(dir, "compactgate.json");
+      await writeFile(configPath, JSON.stringify({
+        primary_failover: {
+          auto_schedule: false,
+          state_portability: legacyMode
+        }
+      }));
+
+      const store = await ConfigStore.load(configPath);
+
+      expect(store.get().primary_failover).toEqual({
+        auto_schedule: false,
+        state_portability: "recover_on_error"
+      });
+      expect(store.toPublicConfig().primary_failover.state_portability).toBe("recover_on_error");
+    }
   });
 
   it("rejects unsupported primary reasoning effort values", async () => {

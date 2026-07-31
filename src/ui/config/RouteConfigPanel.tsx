@@ -31,7 +31,7 @@ export function RouteConfigPanel({
       <div className="config-row">
         <RouteCredentialFields
           title="Codex 主路由" badge="Codex" tone="primary"
-          baseUrlLabel="基础地址" baseUrlHint="普通 /v1 请求会转发到这里。"
+          baseUrlLabel="基础地址" baseUrlHint="填写完整 API 根（如 /v1 或 /v4）；本地 /v1 会被替换。"
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 主路由", config?.primary ?? null)}
           baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
           storedApiKey={config?.primary.stored_api_key ?? false}
@@ -62,7 +62,7 @@ export function RouteConfigPanel({
         />
         <RouteCredentialFields
           title="Codex 压缩路由" badge="压缩" tone="compact"
-          baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "Local/Remote V1 压缩请求会转发到这里；Remote V2 始终走主路由。" : "Local/Remote V1 复用 Codex 主路由；Remote V2 始终走主路由。"}
+          baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "填写完整 API 根；Local/Remote V1 走这里，Remote V2 仍走主路由。" : "Local/Remote V1 复用 Codex 主路由；Remote V2 始终走主路由。"}
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
           baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
           storedApiKey={config?.compact.stored_api_key ?? false}
@@ -95,7 +95,7 @@ export function RouteConfigPanel({
       <div className="config-row">
         <RouteCredentialFields
           title="Claude 主路由" badge="Claude" tone="claude"
-          baseUrlLabel="基础地址" baseUrlHint="所有 Claude Code Messages 请求都会转发到这里。"
+          baseUrlLabel="基础地址" baseUrlHint="填写主机或供应商前缀；末尾 /v1 会自动避免重复。"
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
           baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
           storedApiKey={config?.claude.primary.stored_api_key ?? false}
@@ -126,6 +126,41 @@ export function RouteConfigPanel({
         />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+        <div className="config-row">
+          <label className="field" htmlFor="primary-state-domain-id">
+            <span className="field-label">Codex 状态域</span>
+            <input
+              id="primary-state-domain-id"
+              value={form.primaryStateDomainId}
+              placeholder="留空时按 profile 隔离"
+              onChange={(event) => onFormChange((previous) => ({
+                ...previous,
+                primaryStateDomainId: event.target.value
+              }))}
+            />
+          </label>
+          <div className="field">
+            <span className="field-label">旧会话切换策略</span>
+            <div className="toggle-group" role="group" aria-label="旧会话切换策略">
+              {([
+                ["off", "关闭"],
+                ["recover_on_error", "出错后恢复"]
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={form.primaryStatePortability === value ? "is-active" : ""}
+                  onClick={() => onFormChange((previous) => ({
+                    ...previous,
+                    primaryStatePortability: value
+                  }))}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
         <div>
           <div className="field-label" style={{ marginBottom: 4 }}>Codex 压缩上游模式</div>
           <div className="toggle-group">

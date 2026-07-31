@@ -10,6 +10,7 @@ import type { RequestLogger } from "./logger.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import type { PrimaryFailoverState } from "./primary-failover.js";
 
 export async function handleConfigApi(
   req: IncomingMessage,
@@ -19,7 +20,8 @@ export async function handleConfigApi(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  primaryFailover: PrimaryFailoverState
 ): Promise<boolean> {
   if (req.method === "GET" && url.pathname === "/api/config") {
     sendJson(res, 200, configStore.toPublicConfig());
@@ -141,7 +143,12 @@ export async function handleConfigApi(
       await readJsonBody(req),
       "config profile apply requires a profile id."
     );
-    await configStore.applyProfile(readProfileScope(body, url), readProfileId(body, "apply"));
+    const scope = readProfileScope(body, url);
+    const profileId = readProfileId(body, "apply");
+    await configStore.applyProfile(scope, profileId);
+    if (scope === "codex") {
+      primaryFailover.forceNextProfileSelection(profileId);
+    }
     broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;

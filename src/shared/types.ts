@@ -26,6 +26,7 @@ export type CompactResponseSyntheticSource = "upstream_response" | "request_inpu
 
 export type PrimaryModelMode = "passthrough" | "linked" | "custom";
 export type PrimaryReasoningEffort = "" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type PrimaryStatePortabilityMode = "off" | "recover_on_error";
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
 export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reasoning" | "subagent";
@@ -66,6 +67,7 @@ export interface UpstreamConfig {
 
 export interface PrimaryUpstreamConfig extends UpstreamConfig {
   reasoning_effort: PrimaryReasoningEffort;
+  state_domain_id: string;
 }
 
 export interface ClaudeCompactConfig extends UpstreamConfig {
@@ -108,6 +110,7 @@ export interface LoggingConfig {
 
 export interface PrimaryFailoverConfig {
   auto_schedule: boolean;
+  state_portability: PrimaryStatePortabilityMode;
 }
 
 export interface CompactGateRuntimeConfig {
@@ -193,6 +196,7 @@ export interface PublicConfigProfile {
   created_at: string;
   updated_at: string;
   primary_base_url: string | null;
+  primary_state_domain_id: string | null;
   compact_base_url: string | null;
   claude_primary_base_url: string | null;
   claude_compact_base_url: string | null;
@@ -250,7 +254,10 @@ export interface PublicConfigProfileScopes {
 
 export interface PublicConfig {
   listen: string;
-  primary: PublicUpstreamConfig & { reasoning_effort: PrimaryReasoningEffort };
+  primary: PublicUpstreamConfig & {
+    reasoning_effort: PrimaryReasoningEffort;
+    state_domain_id: string;
+  };
   compact: PublicCompactConfig;
   claude: PublicClaudeConfig;
   timeouts: TimeoutConfig;
@@ -335,8 +342,35 @@ export interface RequestLogEntry {
   user_agent: string | null;
   request_id: string;
   error_summary: string | null;
+  provider_state_portability?: ProviderStatePortabilityLog | null;
   capture_path: string | null;
   capture_status: "none" | "pending" | "present" | "purged";
+}
+
+export interface ProviderStatePortabilityLog {
+  decision: "not_applicable" | "disabled" | "observed" | "recovery";
+  trigger: "none" | "explicit_400" | "profile_switch_failure" | "legacy_failure_threshold";
+  target_state_free_success: boolean;
+  conversation_hash: string | null;
+  source_profile_id: string | null;
+  target_profile_id: string | null;
+  source_state_domain_hash: string | null;
+  target_state_domain_hash: string;
+  stateful_item_counts: {
+    reasoning: number;
+    encrypted_reasoning: number;
+    invalid_encrypted_reasoning: number;
+    compaction: number;
+    previous_response_id: number;
+  };
+  attempts: Array<{
+    strategy: "original" | "cpa" | "cross_domain" | "error_400";
+    status: number;
+    error_code: string | null;
+    body_hash: string;
+    fidelity: "exact" | "summary" | "degraded";
+    migration_counts: Record<string, number>;
+  }>;
 }
 
 export interface LogBodyPurgeResult {

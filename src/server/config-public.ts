@@ -53,7 +53,8 @@ export function buildPublicConfig({
       active_api_key_env: primaryCredential.activeApiKeyEnv,
       active_credential_scope: primaryCredential.activeCredentialScope,
       model_override: config.primary.model_override ?? "",
-      reasoning_effort: config.primary.reasoning_effort
+      reasoning_effort: config.primary.reasoning_effort,
+      state_domain_id: config.primary.state_domain_id
     },
     compact: {
       base_url: config.compact.base_url,
@@ -143,6 +144,7 @@ function toPublicProfile(
     created_at: profile.created_at,
     updated_at: profile.updated_at,
     primary_base_url: codexProfile ? runtime.primary.base_url : null,
+    primary_state_domain_id: codexProfile ? runtime.primary.state_domain_id : null,
     compact_base_url: codexProfile ? runtime.compact.base_url : null,
     claude_primary_base_url: codexProfile ? null : runtime.claude.primary.base_url,
     claude_compact_base_url: codexProfile ? null : runtime.claude.compact.base_url,

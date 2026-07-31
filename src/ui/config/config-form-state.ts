@@ -18,6 +18,8 @@ export function emptyForm(): ConfigFormState {
     codexPrimaryCredentialPresetId: "",
     primaryModelOverride: "",
     primaryReasoningEffort: "",
+    primaryStateDomainId: "",
+    primaryStatePortability: "recover_on_error",
     codexCompactBaseUrl: "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -55,6 +57,8 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexPrimaryCredentialPresetId: "",
     primaryModelOverride: config.primary.model_override ?? "",
     primaryReasoningEffort: config.primary.reasoning_effort,
+    primaryStateDomainId: config.primary.state_domain_id,
+    primaryStatePortability: config.primary_failover.state_portability,
     codexCompactBaseUrl: config.compact.base_url,
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -91,7 +95,8 @@ export function formToPatch(form: ConfigFormState) {
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
     model_override: form.primaryModelOverride,
-    reasoning_effort: form.primaryReasoningEffort
+    reasoning_effort: form.primaryReasoningEffort,
+    state_domain_id: form.primaryStateDomainId
   };
   const compact = {
     base_url: form.codexCompactBaseUrl,
@@ -124,7 +129,8 @@ export function formToPatch(form: ConfigFormState) {
     compact,
     claude,
     primary_failover: {
-      auto_schedule: form.autoSchedulePrimaryFailover
+      auto_schedule: form.autoSchedulePrimaryFailover,
+      state_portability: form.primaryStatePortability
     },
     logging: {
       persist_body: form.loggingPersistBody,
@@ -154,7 +160,8 @@ export function applyDraftToConfigExport(
       ...config.primary,
       base_url: form.codexPrimaryBaseUrl,
       model_override: form.primaryModelOverride,
-      reasoning_effort: form.primaryReasoningEffort
+      reasoning_effort: form.primaryReasoningEffort,
+      state_domain_id: form.primaryStateDomainId
     },
     compact: {
       ...config.compact,
@@ -189,7 +196,8 @@ export function applyDraftToConfigExport(
       max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
     },
     primary_failover: {
-      auto_schedule: form.autoSchedulePrimaryFailover
+      auto_schedule: form.autoSchedulePrimaryFailover,
+      state_portability: form.primaryStatePortability
     },
     profiles: config.profiles,
     active_profile_id: config.active_profile_id,
@@ -249,6 +257,8 @@ function draftComparisonState(form: ConfigFormState) {
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
     primaryModelOverride: form.primaryModelOverride,
     primaryReasoningEffort: form.primaryReasoningEffort,
+    primaryStateDomainId: form.primaryStateDomainId,
+    primaryStatePortability: form.primaryStatePortability,
     codexCompactBaseUrl: form.codexCompactBaseUrl,
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,
