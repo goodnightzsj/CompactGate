@@ -25,7 +25,7 @@ export function DashboardRecentRequests({
       ) : (
         <>
         <div className="log-table log-table-summary dashboard-request-table">
-          <div className="log-table-body" style={{ maxHeight: "300px" }}>
+          <div className="log-table-body log-table-body-summary">
             <table className="log-table-grid">
               <colgroup>
                 <col className="log-summary-col-started" />

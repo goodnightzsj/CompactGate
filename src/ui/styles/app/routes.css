@@ -54,7 +54,7 @@
 .protocol-status-metrics small {
   display: block;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.68rem;
 }
 
 .protocol-status-metrics strong {
@@ -86,7 +86,7 @@
   overflow: hidden;
   color: var(--ink-soft);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -165,7 +165,7 @@
   border-radius: var(--radius-sm);
   background: var(--forest-soft);
   color: var(--forest);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -180,7 +180,7 @@
 }
 
 .route-mapping-row .tag {
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -201,7 +201,7 @@
 }
 
 .route-slot-label {
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;

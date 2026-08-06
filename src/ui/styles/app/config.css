@@ -47,6 +47,19 @@
   gap: 12px;
 }
 
+.route-config-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.route-config-stack-narrow {
+  gap: 10px;
+}
+
+.field-label-block {
+  margin-bottom: 4px;
+}
+
 .profile-scope-grid {
   display: grid;
   width: 100%;
@@ -308,7 +321,7 @@
   border-radius: 999px;
   background: var(--jade-soft);
   color: var(--jade);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.06em;
 }
@@ -746,7 +759,7 @@
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -755,7 +768,7 @@
   justify-items: end;
   gap: 2px;
   color: var(--muted);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -873,7 +886,7 @@
 
 .config-file-drop span {
   color: var(--jade);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -938,7 +951,7 @@
 .config-import-summary-grid dt {
   margin: 0 0 3px;
   color: var(--muted);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1063,7 +1076,7 @@
   display: block;
   margin: 0 0 4px 2px;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   font-weight: 800;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1121,7 +1134,7 @@
 
 .custom-select-copy small {
   color: currentcolor;
-  font-size: 0.64rem;
+  font-size: 0.68rem;
   font-weight: 700;
   opacity: 0.68;
 }
@@ -1137,7 +1150,7 @@
   background: var(--paper-warm);
   color: inherit;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   font-weight: 900;
 }
 
@@ -1266,7 +1279,7 @@
 
 .model-effective-grid dt {
   color: var(--muted);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 850;
   text-transform: uppercase;
 }
@@ -1388,7 +1401,7 @@
   background: var(--jade-soft);
   color: var(--jade);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1454,7 +1467,7 @@
 .model-role-cell small,
 .model-row-hint {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
   line-height: 1.35;
 }
 
@@ -1487,7 +1500,7 @@
 
 .claude-model-map-row .custom-select-label {
   margin-left: 0;
-  font-size: 0.66rem;
+  font-size: 0.68rem;
   letter-spacing: 0.04em;
   text-transform: none;
 }
@@ -1518,7 +1531,7 @@
 }
 
 .claude-model-map-row .custom-select-copy small {
-  font-size: 0.64rem;
+  font-size: 0.68rem;
 }
 
 .claude-model-map-row .tag {
@@ -1529,7 +1542,7 @@
   border: 1px solid currentColor;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 10%, transparent);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.03em;
 }
@@ -1601,7 +1614,7 @@
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--surface-raised) 86%, transparent);
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.70rem;
 }
 
 .logging-storage-summary strong {
@@ -1697,7 +1710,7 @@
   align-items: center;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 900;
 }
 

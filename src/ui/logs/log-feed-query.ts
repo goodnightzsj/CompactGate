@@ -4,11 +4,12 @@ export interface LogPageQuery {
   route: "all" | RouteKind;
   status: "all" | LogStatusKind;
   host: string;
+  search: string;
   limit: number;
 }
 
 export function logPageQueryKey(query: LogPageQuery): string {
-  return JSON.stringify([query.route, query.status, query.host, query.limit]);
+  return JSON.stringify([query.route, query.status, query.host, query.search, query.limit]);
 }
 
 export function isCurrentLogRequest(

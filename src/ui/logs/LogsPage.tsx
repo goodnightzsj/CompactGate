@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
@@ -51,21 +51,23 @@ export function LogsPage({
   logs,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
-  routeFilter, statusFilter, hostFilter,
-  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onLoadMore, error
+  routeFilter, statusFilter, hostFilter, searchFilter,
+  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, error
 }: {
   logs: RequestLogEntry[];
   logCounts: Record<"all" | RouteKind, number>;
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
   hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
-  routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string;
+  routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string; searchFilter: string;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
   onStatusFilterChange: (status: "all" | LogStatusKind) => void;
   onHostFilterChange: (host: string) => void;
+  onSearchFilterChange: (search: string) => void;
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
+  const mobileListRef = useRef<HTMLDivElement | null>(null);
   const { handleLogScroll, tableBodyRef } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
@@ -73,10 +75,20 @@ export function LogsPage({
     logs,
     onLoadMore
   });
-  const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER;
+  const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
 
   function toggleLog(logKey: string) {
+    // 记录移动列表当前滚动位置,展开详情后恢复,避免内容下推导致视口跑掉。
+    const previousScrollTop = mobileListRef.current?.scrollTop ?? null;
     setExpandedLogKey((currentKey) => currentKey === logKey ? null : logKey);
+    if (previousScrollTop !== null) {
+      window.requestAnimationFrame(() => {
+        const list = mobileListRef.current;
+        if (list) {
+          list.scrollTop = previousScrollTop;
+        }
+      });
+    }
   }
 
   function handleRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, logKey: string) {
@@ -92,6 +104,7 @@ export function LogsPage({
     onRouteFilterChange("all");
     onStatusFilterChange("all");
     onHostFilterChange(ALL_HOSTS_FILTER);
+    onSearchFilterChange("");
   }
 
   return (
@@ -136,7 +149,31 @@ export function LogsPage({
             ...hostOptions.map((host) => ({ value: host.host, label: host.host, count: host.total }))
           ]}
           onChange={onHostFilterChange}
+          wide
         />
+        <label className="logs-search">
+          <span className="logs-search-label">搜索</span>
+          <input
+            className="logs-search-input"
+            type="search"
+            value={searchFilter}
+            placeholder="模型名 / 请求 ID / 端点"
+            aria-label="搜索日志"
+            onChange={(event) => onSearchFilterChange(event.target.value)}
+          />
+        </label>
+        <div className="log-error-filter-field">
+          <span className="log-error-filter-label" aria-hidden="true" />
+          <button
+            className={`log-error-filter ${statusFilter === "error" ? "is-active" : ""}`}
+            type="button"
+            aria-pressed={statusFilter === "error"}
+            onClick={() => onStatusFilterChange(statusFilter === "error" ? "all" : "error")}
+          >
+            <span className="log-error-filter-dot" aria-hidden="true" />
+            {statusFilter === "error" ? "全部状态" : "只看错误"}
+          </button>
+        </div>
         <AnimatePresence initial={false}>
           {hasActiveFilters && (
             <MotionSpan
@@ -163,10 +200,20 @@ export function LogsPage({
       {isLoadingLogs && logs.length === 0 ? (
         <div className="empty-state"><strong>正在加载日志...</strong></div>
       ) : logs.length === 0 ? (
-        <div className="empty-state">
-          <strong>暂无请求记录</strong>
-          <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
-        </div>
+        hasActiveFilters ? (
+          <div className="empty-state">
+            <strong>当前筛选条件下无记录</strong>
+            <span>没有请求匹配当前通道 / 状态 / 上游筛选。</span>
+            <button className="btn empty-state-action" type="button" onClick={clearFilters}>
+              清除筛选
+            </button>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <strong>暂无请求记录</strong>
+            <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
+          </div>
+        )
       ) : (
         <div className="log-table log-table-full">
           <MotionDiv
@@ -279,7 +326,7 @@ export function LogsPage({
       )}
 
       {logs.length > 0 && (
-        <MotionDiv className="logs-mobile-list" aria-label="请求日志摘要" layoutScroll>
+        <MotionDiv ref={mobileListRef} className="logs-mobile-list" aria-label="请求日志摘要" layoutScroll>
           <AnimatePresence initial={false} mode="popLayout">
             {logs.map((entry, index) => {
               const logKey = logEntryKey(entry);
@@ -307,7 +354,7 @@ export function LogsPage({
       )}
 
       {hasMoreLogs && (
-        <div style={{ textAlign: "center", marginTop: 12 }}>
+        <div className="log-load-more">
           <button className="btn" onClick={onLoadMore} disabled={isLoadingLogs || isLoadingMoreLogs}>
             {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${logs.length}/${totalLogCount})`}
           </button>

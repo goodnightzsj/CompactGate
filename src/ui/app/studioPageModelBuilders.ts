@@ -145,9 +145,11 @@ export function buildLogsPageModel({
     routeFilter: logFeed.routeFilter,
     statusFilter: logFeed.statusFilter,
     hostFilter: logFeed.hostFilter,
+    searchFilter: logFeed.searchFilter,
     onRouteFilterChange: logFeed.setRouteFilter,
     onStatusFilterChange: logFeed.setStatusFilter,
     onHostFilterChange: logFeed.setHostFilter,
+    onSearchFilterChange: logFeed.setSearchFilter,
     onLoadMore: logFeed.loadMoreLogs,
     error: logFeed.logError
   };

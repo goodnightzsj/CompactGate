@@ -27,7 +27,7 @@ export function RouteConfigPanel({
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
 }) {
   return (
-    <div style={{ display: "grid", gap: 14 }}>
+    <div className="route-config-stack">
       <div className="config-row">
         <RouteCredentialFields
           title="Codex 主路由" badge="Codex" tone="primary"
@@ -125,7 +125,7 @@ export function RouteConfigPanel({
           }))}
         />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
+      <div className="route-config-stack route-config-stack-narrow">
         <div className="config-row">
           <label className="field" htmlFor="primary-state-domain-id">
             <span className="field-label">Codex 状态域</span>
@@ -162,7 +162,7 @@ export function RouteConfigPanel({
           </div>
         </div>
         <div>
-          <div className="field-label" style={{ marginBottom: 4 }}>Codex 压缩上游模式</div>
+          <div className="field-label field-label-block">Codex 压缩上游模式</div>
           <div className="toggle-group">
             <button className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
             <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>

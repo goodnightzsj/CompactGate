@@ -23,7 +23,7 @@ export function HealthHeroSection({
   const refreshLabel = refreshedAt ? formatDateTime(refreshedAt) : "读取中...";
 
   return (
-    <section className={`health-hero tone-${overallStatus.tone}`} aria-labelledby="health-title" aria-live="polite">
+    <section className={`health-hero tone-${overallStatus.tone}`} aria-labelledby="health-title">
       <div className="health-status-board">
         <span className={`health-state-badge is-${overallStatus.tone}`}>总体</span>
         <strong id="health-title">{overallStatus.label}</strong>
@@ -33,8 +33,8 @@ export function HealthHeroSection({
       <div className="health-hero-readout">
         <div className="health-mini-card">
           <span>可用上游</span>
-          <strong>{readyRoutes}/{totalRoutes}</strong>
-          <small>{failedRoutes > 0 ? `${failedRoutes} 条异常` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全` : "所有路由已就绪"}</small>
+          <strong aria-live="polite">{readyRoutes}/{totalRoutes}</strong>
+          <small aria-live="polite">{failedRoutes > 0 ? `${failedRoutes} 条异常` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全` : "所有路由已就绪"}</small>
         </div>
         <div className="health-mini-card">
           <span>监听地址</span>

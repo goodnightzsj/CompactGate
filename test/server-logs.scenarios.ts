@@ -323,6 +323,82 @@ describe("CompactGate logs and capture", () => {
     });
   });
 
+  it("filters log pages by a search keyword across models and request ids", async () => {
+    const primary = await startJsonUpstream({ ok: true });
+    const compact = await startJsonUpstream({
+      error: {
+        message: "searchable-compact-model rejected",
+        type: "invalid_request_error"
+      }
+    }, 400);
+    const claude = await startClaudeJsonUpstream({
+      type: "message",
+      usage: { input_tokens: 1, output_tokens: 1 }
+    });
+    const app = await startApp(primary.url, compact.url, {
+      claude: {
+        base_url: claude.url,
+        api_key: "saved-claude-token"
+      }
+    });
+
+    await postJson(app.url, "/v1/responses", {
+      model: "gpt-search-model",
+      input: "searchable input"
+    });
+    await postJson(app.url, "/v1/responses/compact", {
+      model: "searchable-compact-model",
+      input: "searchable input"
+    });
+    await postJson(
+      app.url,
+      "/anthropic/v1/messages",
+      {
+        model: "claude-search-model",
+        messages: [{ role: "user", content: "searchable input" }]
+      },
+      {
+        "anthropic-version": "2023-06-01"
+      }
+    );
+
+    const modelSearchPage = await fetchLogPage(
+      app.url,
+      `?${new URLSearchParams({ search: "searchable-compact-model" }).toString()}`
+    );
+    expect(modelSearchPage.total).toBe(1);
+    expect(modelSearchPage.logs).toHaveLength(1);
+    expect(modelSearchPage.logs[0]).toMatchObject({
+      route: "compact",
+      source_model: "searchable-compact-model"
+    });
+    expect(modelSearchPage.counts).toEqual({
+      all: 1,
+      primary: 0,
+      compact: 1,
+      claude: 0
+    });
+
+    const requestIdSearchPage = await fetchLogPage(
+      app.url,
+      `?${new URLSearchParams({ search: "searchable-compact-model" }).toString()}`
+    );
+    const targetRequestId = requestIdSearchPage.logs[0].request_id;
+    const idSearchPage = await fetchLogPage(
+      app.url,
+      `?${new URLSearchParams({ search: targetRequestId.slice(0, 8) }).toString()}`
+    );
+    expect(idSearchPage.logs).toHaveLength(1);
+    expect(idSearchPage.logs[0].request_id).toBe(targetRequestId);
+
+    const noMatchPage = await fetchLogPage(
+      app.url,
+      `?${new URLSearchParams({ search: "does-not-exist-anywhere" }).toString()}`
+    );
+    expect(noMatchPage.logs).toHaveLength(0);
+    expect(noMatchPage.total).toBe(0);
+  });
+
 
   it("captures full proxied request and response bodies when enabled", async () => {
     const captureDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-capture-"));

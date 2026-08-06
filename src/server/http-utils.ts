@@ -202,6 +202,11 @@ export function parseHostFilter(value: string | null): string | undefined {
   return host && host.length > 0 ? host : undefined;
 }
 
+export function parseSearchFilter(value: string | null): string | undefined {
+  const keyword = value?.trim();
+  return keyword && keyword.length > 0 ? keyword : undefined;
+}
+
 export function parsePositiveInteger(value: string | null, fallback: number): number {
   const parsed = parseDecimalInteger(value);
   if (!Number.isInteger(parsed) || parsed < 1) {

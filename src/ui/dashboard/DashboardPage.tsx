@@ -45,7 +45,6 @@ export function DashboardPage({
       </div>
 
       <DashboardStatsGrid
-        config={config}
         health={health}
         listen={listen}
         logCounts={logCounts}

@@ -8,6 +8,7 @@ import {
   parseNonNegativeInteger,
   parsePositiveInteger,
   parseRouteFilter,
+  parseSearchFilter,
   parseStatusFilter,
   readJsonBody,
   sendJson
@@ -241,9 +242,10 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
   const route = parseRouteFilter(url.searchParams.get("route"));
   const status = parseStatusFilter(url.searchParams.get("status"));
   const host = parseHostFilter(url.searchParams.get("host"));
+  const search = parseSearchFilter(url.searchParams.get("search"));
   const keepRecent = configStore.get().logging.keep_recent;
   const requestedLimit = parsePositiveInteger(url.searchParams.get("limit"), keepRecent);
   const limit = Math.min(requestedLimit, keepRecent);
   const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
-  return { route, status, host, limit, offset };
+  return { route, status, host, search, limit, offset };
 }

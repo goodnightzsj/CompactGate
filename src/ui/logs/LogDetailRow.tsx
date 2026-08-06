@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
@@ -30,6 +31,44 @@ export function LogDetailRow({ entry, id }: { entry: RequestLogEntry; id?: strin
   );
 }
 
+function CopyValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+    }
+  }, []);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+    }
+    timerRef.current = setTimeout(() => setCopied(false), 1600);
+  }
+
+  return (
+    <span className="log-copy-value">
+      {value}
+      <button
+        className={`log-copy-button ${copied ? "is-copied" : ""}`}
+        type="button"
+        aria-label="复制请求 ID"
+        onClick={() => void handleCopy()}
+      >
+        {copied ? "已复制" : "复制"}
+      </button>
+    </span>
+  );
+}
+
 export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
   return (
     <div className="log-detail-panel">
@@ -44,7 +83,9 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
             <div className="log-detail-section-grid">
               <div className="log-detail-item is-wide">
                 <span className="log-detail-label">请求 ID</span>
-                <span className="log-detail-value is-small">{entry.request_id}</span>
+                <span className="log-detail-value is-small">
+                  <CopyValue value={entry.request_id} />
+                </span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">开始时间</span>

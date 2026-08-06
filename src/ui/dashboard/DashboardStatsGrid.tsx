@@ -1,27 +1,24 @@
 import type {
   HealthResponse,
-  PublicConfig,
   RouteKind
 } from "../../shared/types.js";
 import { upstreamHealthBadge } from "../health/health-status.js";
 
 export function DashboardStatsGrid({
-  config,
   health,
   listen,
   logCounts
 }: {
-  config: PublicConfig | null;
   health: HealthResponse | null;
   listen: string;
   logCounts: Record<"all" | RouteKind, number>;
 }) {
-  const primaryHost = config?.primary.host ?? "-";
-  const compactHost = config?.compact.host ?? "-";
-  const claudeHost = config?.claude.primary.host ?? "-";
   const codexPrimaryOk = upstreamHealthBadge(health?.primary).tone === "good";
   const codexCompactOk = upstreamHealthBadge(health?.compact).tone === "good";
   const claudeOk = upstreamHealthBadge(health?.claude?.primary).tone === "good";
+  const totalRoutes = 3;
+  const readyRoutes = [codexPrimaryOk, codexCompactOk, claudeOk].filter(Boolean).length;
+  const allReady = readyRoutes === totalRoutes;
 
   return (
     <div className="dashboard-grid">
@@ -57,22 +54,12 @@ export function DashboardStatsGrid({
 
       <div className="stat-card">
         <div className="stat-card-label">上游状态</div>
-        <div className="dashboard-health-list">
-          <div className="dashboard-health-row">
-            <span className="dashboard-health-name">Codex 主路由</span>
-            <span className="dashboard-health-host">{primaryHost}</span>
-            <span className={`status-pill ${codexPrimaryOk ? "is-good" : "is-warn"}`}>{codexPrimaryOk ? "正常" : "异常"}</span>
+        <div className={`dashboard-health-summary ${allReady ? "is-good" : "is-warn"}`}>
+          <div className="dashboard-health-summary-value">{readyRoutes}/{totalRoutes}</div>
+          <div className="dashboard-health-summary-meta">
+            {allReady ? "全部上游可用" : `${totalRoutes - readyRoutes} 条路由需要关注`}
           </div>
-          <div className="dashboard-health-row">
-            <span className="dashboard-health-name">Codex 压缩</span>
-            <span className="dashboard-health-host">{compactHost}</span>
-            <span className={`status-pill ${codexCompactOk ? "is-good" : "is-warn"}`}>{codexCompactOk ? "正常" : "异常"}</span>
-          </div>
-          <div className="dashboard-health-row">
-            <span className="dashboard-health-name">Claude 主路由</span>
-            <span className="dashboard-health-host">{claudeHost}</span>
-            <span className={`status-pill ${claudeOk ? "is-good" : "is-warn"}`}>{claudeOk ? "正常" : "异常"}</span>
-          </div>
+          <a className="dashboard-health-summary-link" href="/#health">查看详情 →</a>
         </div>
       </div>
     </div>

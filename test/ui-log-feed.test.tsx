@@ -23,13 +23,14 @@ describe("log request generations", () => {
   });
 
   it("uses every applied filter in the page query key", () => {
-    const base = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, limit: 200 };
+    const base = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, search: "", limit: 200 };
     expect(logPageQueryKey(base)).not.toBe(logPageQueryKey({ ...base, route: "compact" }));
     expect(logPageQueryKey(base)).not.toBe(logPageQueryKey({ ...base, host: "other.example" }));
+    expect(logPageQueryKey(base)).not.toBe(logPageQueryKey({ ...base, search: "gpt-5" }));
   });
 
   it("rejects responses whose query no longer matches the applied page", () => {
-    const previous = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, limit: 200 };
+    const previous = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, search: "", limit: 200 };
     const current = { ...previous, route: "compact" as const };
 
     expect(isCurrentLogPageRequest(3, 3, previous, current)).toBe(false);
@@ -64,6 +65,7 @@ describe("live log page updates", () => {
       "primary",
       "all",
       ALL_HOSTS_FILTER,
+      "",
       "insert"
     );
     const afterUpdate = mergeLiveLogPage(
@@ -72,6 +74,7 @@ describe("live log page updates", () => {
       "primary",
       "all",
       ALL_HOSTS_FILTER,
+      "",
       "update"
     );
 
@@ -111,6 +114,7 @@ describe("live log page updates", () => {
       "all",
       "all",
       ALL_HOSTS_FILTER,
+      "",
       "insert"
     );
 
@@ -144,7 +148,8 @@ describe("live log page updates", () => {
       ],
       "all",
       "all",
-      ALL_HOSTS_FILTER
+      ALL_HOSTS_FILTER,
+      ""
     );
 
     expect(replayed.logs.map((entry) => entry.request_id)).toEqual([
@@ -178,9 +183,11 @@ describe("LogsPage loaded rows", () => {
         routeFilter="all"
         statusFilter="all"
         hostFilter={ALL_HOSTS_FILTER}
+        searchFilter=""
         onRouteFilterChange={() => undefined}
         onStatusFilterChange={() => undefined}
         onHostFilterChange={() => undefined}
+        onSearchFilterChange={() => undefined}
         onLoadMore={() => undefined}
         error={null}
       />

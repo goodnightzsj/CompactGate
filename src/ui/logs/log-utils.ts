@@ -37,7 +37,7 @@ export function modelReasoningLabel(entry: RequestLogEntry): string {
 }
 
 export function reasoningEffortLabel(entry: RequestLogEntry): string {
-  return entry.reasoning_effort ?? "standard";
+  return entry.reasoning_effort ?? "-";
 }
 
 export function responseModelDisplay(entry: RequestLogEntry): string {
@@ -180,12 +180,14 @@ export async function fetchLogPage({
   route,
   status,
   host,
+  search,
   limit,
   offset
 }: {
   route: "all" | RouteKind;
   status: "all" | LogStatusKind;
   host: string;
+  search: string;
   limit: number;
   offset: number;
 }): Promise<RequestLogPage> {
@@ -204,6 +206,11 @@ export async function fetchLogPage({
 
   if (host !== ALL_HOSTS_FILTER) {
     params.set("host", host);
+  }
+
+  const keyword = search.trim();
+  if (keyword.length > 0) {
+    params.set("search", keyword);
   }
 
   return api<RequestLogPage>(`/api/logs/recent?${params.toString()}`);
@@ -237,6 +244,7 @@ export function mergeLiveLogPage(
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
   hostFilter: string,
+  searchFilter: string,
   operation: "insert" | "update" = "insert"
 ): RequestLogPage {
   if (operation === "update") {
@@ -256,10 +264,10 @@ export function mergeLiveLogPage(
   }
 
   const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
-  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter);
-  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter);
-  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter);
-  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER);
+  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter, searchFilter);
+  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter, searchFilter);
+  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter, searchFilter);
+  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER, searchFilter);
   const loadedWindowSize = Math.max(previous.limit, previous.logs.length);
   const nextLogs = matchesFilter
     ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
@@ -298,7 +306,8 @@ export function replayLiveLogEvents(
   events: StudioLogEvent[],
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
-  hostFilter: string
+  hostFilter: string,
+  searchFilter: string
 ): RequestLogPage {
   return events.reduce(
     (current, event) => mergeLiveLogPage(
@@ -307,6 +316,7 @@ export function replayLiveLogEvents(
       routeFilter,
       statusFilter,
       hostFilter,
+      searchFilter,
       event.operation ?? "insert"
     ),
     page
@@ -333,12 +343,32 @@ function logEntryMatchesFilter(
   entry: RequestLogEntry,
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
-  hostFilter: string
+  hostFilter: string,
+  searchFilter: string
 ): boolean {
   const routeMatches = routeFilter === "all" || entry.route === routeFilter;
   const statusMatches = statusFilter === "all" || logStatusKind(entry) === statusFilter;
   const hostMatches = hostFilter === ALL_HOSTS_FILTER || entry.upstream_host === hostFilter;
-  return routeMatches && statusMatches && hostMatches;
+  const searchMatches = logEntryMatchesSearch(entry, searchFilter);
+  return routeMatches && statusMatches && hostMatches && searchMatches;
+}
+
+function logEntryMatchesSearch(entry: RequestLogEntry, searchFilter: string): boolean {
+  const keyword = searchFilter.trim().toLowerCase();
+  if (keyword.length === 0) {
+    return true;
+  }
+
+  return [
+    entry.request_id,
+    entry.source_model,
+    entry.target_model,
+    entry.endpoint,
+    entry.path,
+    entry.upstream_host,
+    entry.request_summary,
+    String(entry.status)
+  ].some((value) => value !== null && value !== undefined && value.toLowerCase().includes(keyword));
 }
 
 function incrementRouteCounts(

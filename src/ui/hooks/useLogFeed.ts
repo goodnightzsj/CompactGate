@@ -72,6 +72,7 @@ export function useLogFeed({
   const [routeFilter, setRouteFilter] = useState<"all" | RouteKind>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | LogStatusKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
+  const [searchFilter, setSearchFilter] = useState("");
   const [logError, setLogError] = useState<string | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
@@ -84,6 +85,7 @@ export function useLogFeed({
     route: "all",
     status: "all",
     host: ALL_HOSTS_FILTER,
+    search: "",
     limit: DEFAULT_LOG_PAGE_LIMIT
   });
   const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
@@ -93,6 +95,7 @@ export function useLogFeed({
   const deferredFilter = useDeferredValue(routeFilter);
   const deferredStatusFilter = useDeferredValue(statusFilter);
   const deferredHostFilter = useDeferredValue(hostFilter);
+  const deferredSearchFilter = useDeferredValue(searchFilter);
   const hostOptions = useMemo(
     () => buildHostFilterOptions(logPage.host_counts, hostFilter),
     [logPage.host_counts, hostFilter]
@@ -116,6 +119,7 @@ export function useLogFeed({
       route: deferredFilter,
       status: deferredStatusFilter,
       host: deferredHostFilter,
+      search: deferredSearchFilter,
       limit: logPageLimit
     };
     isLoadingLogsRef.current = true;
@@ -147,7 +151,8 @@ export function useLogFeed({
               pendingLoad.liveEvents,
               query.route,
               query.status,
-              query.host
+              query.host,
+              query.search
             );
             pendingLogLoadRef.current = null;
           }
@@ -178,7 +183,7 @@ export function useLogFeed({
     return () => {
       cancelled = true;
     };
-  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, enabled, hasConfig, logPageLimit]);
+  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, enabled, hasConfig, logPageLimit]);
 
   useEffect(() => {
     if (!enabled) {
@@ -286,14 +291,16 @@ export function useLogFeed({
           pendingLoad?.generation === generationRef.current &&
           pendingLoad.query.route === "all" &&
           pendingLoad.query.status === "all" &&
-          pendingLoad.query.host === ALL_HOSTS_FILTER
+          pendingLoad.query.host === ALL_HOSTS_FILTER &&
+          pendingLoad.query.search === ""
         ) {
           pendingLoad.snapshot = snapshot.log_page;
         }
         if (
           appliedQueryRef.current.route === "all" &&
           appliedQueryRef.current.status === "all" &&
-          appliedQueryRef.current.host === ALL_HOSTS_FILTER
+          appliedQueryRef.current.host === ALL_HOSTS_FILTER &&
+          appliedQueryRef.current.search === ""
         ) {
           setLogState((previous) => ({
             page: mergeSnapshotLogPage(previous.page, snapshot.log_page),
@@ -323,6 +330,7 @@ export function useLogFeed({
             appliedQuery.route,
             appliedQuery.status,
             appliedQuery.host,
+            appliedQuery.search,
             operation
           );
           const existing = previous.page.logs.some(
@@ -450,6 +458,8 @@ export function useLogFeed({
     setStatusFilter,
     hostFilter,
     setHostFilter,
+    searchFilter,
+    setSearchFilter,
     hostOptions,
     logError,
     isLoadingLogs,

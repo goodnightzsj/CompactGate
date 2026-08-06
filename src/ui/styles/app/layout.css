@@ -137,7 +137,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 0.69rem;
+  font-size: 0.72rem;
   font-weight: 600;
   color: var(--muted);
   padding: 2.5px 0;
@@ -160,7 +160,7 @@
 
 .sidebar .theme-switch button {
   height: 24px;
-  font-size: 0.64rem;
+  font-size: 0.68rem;
 }
 
 .sidebar .btn-sm.ghost-button,
@@ -234,7 +234,7 @@
 }
 
 .page-header .eyebrow {
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;

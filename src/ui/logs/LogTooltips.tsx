@@ -48,9 +48,14 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
       ref={anchorRef}
       className="token-tooltip"
       data-label="Token"
-      aria-describedby={tooltipId}
+      aria-describedby={placement ? tooltipId : undefined}
+      tabIndex={0}
+      role="button"
+      aria-expanded={placement !== null}
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
+      onFocus={showTooltip}
+      onBlur={hideTooltip}
     >
       <span className="token-total-pill">{formatMetricNumber(displayTotalTokens(entry))}</span>
       {placement &&

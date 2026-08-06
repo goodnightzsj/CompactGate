@@ -76,7 +76,22 @@
   }
 
   .sidebar-footer {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    padding: 0;
+    border-top: 0;
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer .sidebar-health {
     display: none;
+  }
+
+  .sidebar-footer .theme-switch {
+    width: 150px;
   }
 
   .shell {
@@ -136,6 +151,11 @@
   .logs-head {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .log-table-full .log-col-reasoning,
+  .log-table-full .log-col-response-model {
+    visibility: collapse;
   }
 
   .log-filter-stack {
@@ -256,7 +276,18 @@
   }
 
   .sidebar-footer {
+    display: grid;
+    gap: 8px;
+    padding: 8px 2px 0;
+    border-top: 1px solid var(--border-default);
+  }
+
+  .sidebar-footer .sidebar-health {
     display: none;
+  }
+
+  .sidebar-footer .theme-switch {
+    margin-top: 0;
   }
 
   .shell {
@@ -350,8 +381,7 @@
     gap: 10px;
   }
 
-  .card-header .status-pill,
-  .dashboard-health-row .status-pill {
+  .card-header .status-pill {
     width: auto;
     flex-shrink: 0;
   }
@@ -570,8 +600,11 @@
 
   .logs-toolbar .custom-select,
   .logs-toolbar .btn,
+  .logs-toolbar .log-error-filter-field,
+  .logs-toolbar .log-error-filter,
   .logs-provider-counts .route-chip {
     width: 100%;
+    min-width: 0;
   }
 
   .logs-provider-counts {

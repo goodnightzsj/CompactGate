@@ -19,8 +19,38 @@ export interface LogPageOptions {
   route?: RouteKind;
   status?: LogStatusKind;
   host?: string;
+  search?: string;
   limit: number;
   offset: number;
+}
+
+/** Columns searched by the log search box, with SQL-side LIKE fragments. */
+export const LOG_SEARCH_COLUMNS = [
+  "request_id",
+  "source_model",
+  "target_model",
+  "endpoint",
+  "path",
+  "upstream_host",
+  "request_summary",
+  "status"
+] as const;
+
+export function logSearchClause(options: Pick<LogPageOptions, "search">): {
+  sql: string;
+  params: string[];
+} {
+  const keyword = options.search?.trim();
+  if (!keyword) {
+    return { sql: "", params: [] };
+  }
+
+  const like = `%${keyword}%`;
+  const conditions = LOG_SEARCH_COLUMNS.map((column) => `${column} LIKE ?`);
+  return {
+    sql: `(${conditions.join(" OR ")})`,
+    params: LOG_SEARCH_COLUMNS.map(() => like)
+  };
 }
 
 export function logStandaloneErrorSql(columnPrefix = ""): string {
@@ -64,7 +94,7 @@ export function providerCountsFromRouteCounts(
   return providerCounts;
 }
 
-export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host">): {
+export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host" | "search">): {
   sql: string;
   params: Array<RouteKind | string>;
 } {
@@ -85,6 +115,12 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
   if (options.host) {
     conditions.push("upstream_host = ?");
     params.push(options.host);
+  }
+
+  const search = logSearchClause(options);
+  if (search.sql) {
+    conditions.push(search.sql);
+    params.push(...search.params);
   }
 
   return {

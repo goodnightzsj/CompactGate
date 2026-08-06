@@ -14,6 +14,7 @@ export function useThemeMode() {
       root.dataset.theme = resolvedTheme;
       root.style.colorScheme = resolvedTheme;
       window.localStorage.setItem("compactgate-theme-mode", themeMode);
+      updateThemeColorMeta(root, resolvedTheme);
     }
 
     applyTheme();
@@ -27,6 +28,17 @@ export function useThemeMode() {
   }, [themeMode]);
 
   return [themeMode, setThemeMode] as const;
+}
+
+function updateThemeColorMeta(root: HTMLElement, resolvedTheme: "light" | "dark") {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) {
+    return;
+  }
+
+  const fallback = resolvedTheme === "dark" ? "#16181b" : "#faf8f3";
+  const paper = getComputedStyle(root).getPropertyValue("--paper").trim();
+  meta.setAttribute("content", paper || fallback);
 }
 
 function readStoredThemeMode(): ThemeMode {
