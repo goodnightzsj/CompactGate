@@ -104,10 +104,9 @@ function publicProfileScope(
   scope: ConfigProfileScope
 ): PublicConfig["profile_scopes"]["codex"] {
   const state = getProfileScopeState(config, scope);
-  const profiles = state.profiles ?? [];
   return {
-    profiles: profiles.map((profile) => toPublicProfile(profile, scope)),
-    active_profile_id: state.active_profile_id ?? null
+    profiles: state.profiles.map((profile) => toPublicProfile(profile, scope)),
+    active_profile_id: state.active_profile_id
   };
 }
 

@@ -20,10 +20,6 @@ export function readNullableString(value: unknown, fallback: string | null): str
   return trimmed.length === 0 ? null : trimmed;
 }
 
-export function readSensitiveString(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value.trim() : fallback;
-}
-
 export function readNumber(value: unknown, fallback: number): number {
   return typeof value === "number" ? value : fallback;
 }

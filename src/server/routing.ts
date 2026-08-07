@@ -19,10 +19,6 @@ export interface RewriteResult {
   streamRemoved: boolean;
 }
 
-export interface ExtractedModel {
-  sourceModel: string | null;
-}
-
 export type OpenAiRequestClassification =
   | { route: "primary"; compactionMode: null; detectionSource: null }
   | {
@@ -132,7 +128,7 @@ export function rewritePrimaryBody(
   endpoint?: string
 ): RewriteResult {
   const modelOverride = config.primary.model_override?.trim();
-  const reasoningEffort = isResponsesEndpoint(endpoint)
+  const reasoningEffort = endpoint === undefined || endpoint === "/responses" || endpoint === "/v1/responses"
     ? config.primary.reasoning_effort
     : "";
 
@@ -179,12 +175,11 @@ export function rewritePrimaryBody(
   };
 }
 
-function isResponsesEndpoint(endpoint: string | undefined): boolean {
-  return endpoint === undefined || endpoint === "/responses" || endpoint === "/v1/responses";
-}
-
 export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): RewriteResult {
-  const parsed = parseJsonObject(rawBody);
+  const parsed = parseJsonRecord(rawBody);
+  if (!parsed) {
+    throw new Error("JSON body must be an object.");
+  }
   const model = parsed.model;
 
   if (typeof model !== "string" || model.trim().length === 0) {
@@ -202,17 +197,6 @@ export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): 
     bodyRewritten: sourceModel !== targetModel,
     streamRemoved: false
   };
-}
-
-export function extractJsonModel(rawBody: Buffer): ExtractedModel {
-  try {
-    const parsed = parseJsonObject(rawBody);
-    return {
-      sourceModel: typeof parsed.model === "string" ? parsed.model : null
-    };
-  } catch {
-    return { sourceModel: null };
-  }
 }
 
 export function buildUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
@@ -235,10 +219,6 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.primary.base_url;
 }
 
-export function compactUpstreamPath(_config: CompactGateConfig, requestPath: string): string {
-  return requestPath;
-}
-
 export function previewRoute(
   method: string,
   path: string,
@@ -250,10 +230,7 @@ export function previewRoute(
   const classification = classifyOpenAiRequest(parsedUrl.pathname, body, headers);
   const usesPrimaryPlan = classification.route === "primary" || classification.compactionMode === "remote_v2";
   const upstreamBase = usesPrimaryPlan ? config.primary.base_url : compactUpstreamBaseUrl(config);
-  const upstreamPath = usesPrimaryPlan
-    ? parsedUrl.pathname
-    : compactUpstreamPath(config, parsedUrl.pathname);
-  const upstream = buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
+  const upstream = buildUpstreamUrl(upstreamBase, parsedUrl.pathname, parsedUrl.search);
 
   if (usesPrimaryPlan) {
     const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config, parsedUrl.pathname);
@@ -272,7 +249,8 @@ export function previewRoute(
     };
   }
 
-  const sourceModel = extractModelFromUnknown(body);
+  const parsedBody = parseJsonBody(body);
+  const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
   const targetModel = sourceModel ? deriveCompactModel(sourceModel, config) : null;
   return {
     route: classification.route,
@@ -300,11 +278,6 @@ function previewBodyToBuffer(body: unknown): Buffer {
 
   const serialized = JSON.stringify(body);
   return typeof serialized === "string" ? Buffer.from(serialized) : Buffer.alloc(0);
-}
-
-function extractModelFromUnknown(body: unknown): string | null {
-  const parsed = parseJsonBody(body);
-  return typeof parsed?.model === "string" ? parsed.model : null;
 }
 
 function parseJsonBody(body: unknown): Record<string, unknown> | null {
@@ -337,20 +310,9 @@ function hasCompactionItem(input: unknown): boolean {
 }
 
 function hasRemoteV2Metadata(value: unknown): boolean {
-  const text = Array.isArray(value)
-    ? value.find((item): item is string => typeof item === "string")
-    : value;
-  if (typeof text !== "string" || text.length === 0) {
-    return false;
-  }
-
-  try {
-    const metadata = JSON.parse(text) as unknown;
-    return isRecord(metadata) && isRecord(metadata.compaction) &&
-      metadata.compaction.implementation === "responses_compaction_v2";
-  } catch {
-    return false;
-  }
+  const metadata = parseCodexTurnMetadata(value);
+  return isRecord(metadata?.compaction) &&
+    metadata.compaction.implementation === "responses_compaction_v2";
 }
 
 type MetadataRequestKind = "local" | "remote_v2" | "other" | "unavailable";
@@ -406,16 +368,6 @@ function readHeaderValue(
 
   const match = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
   return match?.[1];
-}
-
-function parseJsonObject(rawBody: Buffer): Record<string, unknown> {
-  const parsed = parseJsonRecord(rawBody);
-
-  if (!parsed) {
-    throw new Error("JSON body must be an object.");
-  }
-
-  return parsed;
 }
 
 function primaryClassification(): OpenAiRequestClassification {

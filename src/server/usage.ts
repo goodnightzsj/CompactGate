@@ -15,16 +15,20 @@ export {
   extractSourceModel
 } from "./usage-request.js";
 
-const EMPTY_USAGE: TokenUsageMetrics = {
-  inputTokens: null,
-  outputTokens: null,
-  cachedInputTokens: null,
-  cachedOutputTokens: null,
-  cacheReadInputTokens: null,
-  cacheCreationInputTokens: null,
-  reasoningTokens: null,
-  totalTokens: null
-};
+const EMPTY_USAGE = emptyUsageMetrics();
+
+export function emptyUsageMetrics(): TokenUsageMetrics {
+  return {
+    inputTokens: null,
+    outputTokens: null,
+    cachedInputTokens: null,
+    cachedOutputTokens: null,
+    cacheReadInputTokens: null,
+    cacheCreationInputTokens: null,
+    reasoningTokens: null,
+    totalTokens: null
+  };
+}
 
 export function responseTransport(headers: IncomingHttpHeaders): RequestTransport | null {
   const contentType = readHeader(headers["content-type"]);
@@ -47,7 +51,7 @@ export function extractResponseUsage(
   const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
   const usage = contentType.includes("text/event-stream")
     ? extractSseUsage(text)
-    : extractJsonUsage(text);
+    : extractUsageFromJsonText(text);
 
   return usage ?? EMPTY_USAGE;
 }
@@ -95,8 +99,4 @@ function extractSseUsage(text: string): TokenUsageMetrics | null {
   }
 
   return latestUsage;
-}
-
-function extractJsonUsage(text: string): TokenUsageMetrics | null {
-  return extractUsageFromJsonText(text);
 }

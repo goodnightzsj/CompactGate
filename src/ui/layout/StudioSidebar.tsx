@@ -27,6 +27,26 @@ function IconDashboard() {
   );
 }
 
+function IconAnalytics() {
+  return (
+    <svg {...ICON_PROPS}>
+      <path d="M2.5 13.5h11" />
+      <path d="M3.5 11V8.5M7 11V4.5M10.5 11V6.5M14 11V2.5" />
+    </svg>
+  );
+}
+
+function IconUsage() {
+  return (
+    <svg {...ICON_PROPS}>
+      <path d="M2.5 12.5 5.8 9l2.5 1.8 5.2-6.3" />
+      <circle cx="5.8" cy="9" r="0.8" />
+      <circle cx="8.3" cy="10.8" r="0.8" />
+      <circle cx="13.5" cy="4.5" r="0.8" />
+    </svg>
+  );
+}
+
 function IconRoutes() {
   return (
     <svg {...ICON_PROPS}>
@@ -91,6 +111,8 @@ export function StudioSidebar({
 
   const navItems: Array<{ page: StudioPage; label: string; icon: ReactNode }> = [
     { page: "dashboard", label: "总览", icon: <IconDashboard /> },
+    { page: "analytics", label: "仪表盘", icon: <IconAnalytics /> },
+    { page: "usage", label: "用量", icon: <IconUsage /> },
     { page: "routes", label: "路由", icon: <IconRoutes /> },
     { page: "config", label: "配置", icon: <IconConfig /> },
     { page: "logs", label: "日志", icon: <IconLogs /> },

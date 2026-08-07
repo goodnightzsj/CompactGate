@@ -1,45 +1,19 @@
 import { gzipSync } from "node:zlib";
-import { request, type IncomingMessage, type ServerResponse } from "node:http";
+import { request } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   assertCaptured,
   captureBody,
   type CapturedRequest,
   fetchLogPage,
+  JSON_HEADERS,
   startApp,
-  startUpstream
+  startCapturedOpenAiUpstream,
+  startUpstream,
+  writeJsonResponse
 } from "./helpers/server-test-utils.js";
 import { waitForLogEntry } from "./helpers/server-test-logs.js";
 import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
-
-const JSON_HEADERS = { "content-type": "application/json" };
-
-type CaptureTarget = CapturedRequest[] | { current: CapturedRequest | null };
-
-async function startCapturedOpenAiUpstream(
-  target: CaptureTarget,
-  respond: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
-) {
-  return startUpstream(async (req, res) => {
-    const captured = {
-      method: req.method ?? "POST",
-      url: req.url ?? "",
-      headers: req.headers,
-      body: await captureBody(req)
-    };
-    if (Array.isArray(target)) {
-      target.push(captured);
-    } else {
-      target.current = captured;
-    }
-    await respond(req, res);
-  });
-}
-
-function writeJsonResponse(res: ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, JSON_HEADERS);
-  res.end(JSON.stringify(body));
-}
 
 function postJson(
   appUrl: string,

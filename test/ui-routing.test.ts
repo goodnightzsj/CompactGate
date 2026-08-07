@@ -14,6 +14,8 @@ import type { ConfigTab } from "../src/ui/config/types.js";
 describe("UI routing helpers", () => {
   it.each([
     ["/health", "", "health"],
+    ["/", "#analytics", "analytics"],
+    ["/", "#usage", "usage"],
     ["/", "#routes", "routes"],
     ["/", "#config", "config"],
     ["/", "#logs", "logs"],
@@ -34,6 +36,8 @@ describe("UI routing helpers", () => {
 
   it("builds stable studio page paths", () => {
     expect(pagePathForStudioPage("dashboard")).toBe("/");
+    expect(pagePathForStudioPage("analytics")).toBe("/#analytics");
+    expect(pagePathForStudioPage("usage")).toBe("/#usage");
     expect(pagePathForStudioPage("routes")).toBe("/#routes");
     expect(pagePathForStudioPage("config")).toBe("/config/profiles");
     expect(pagePathForStudioPage("config", "routes")).toBe("/config/routes");

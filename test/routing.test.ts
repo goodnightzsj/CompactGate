@@ -5,7 +5,6 @@ import {
   buildUpstreamUrl,
   classifyOpenAiRequest,
   hasRemoteV2CompactionState,
-  compactUpstreamPath,
   isBodyAwareCompactRequest,
   previewRoute,
   routeForPath,
@@ -442,7 +441,6 @@ describe("routing helpers", () => {
       config
     );
 
-    expect(compactUpstreamPath(config, "/v1/responses/compact")).toBe("/v1/responses/compact");
     expect(preview.route).toBe("compact");
     expect(preview.upstream_url).toBe("https://compact-route.example/v1/responses/compact?trace=1");
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");

@@ -1,12 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(__dirname, "..");
+const projectRoot = path.resolve(import.meta.dirname, "..");
 const keepAlive = process.argv.includes("--keep-alive");
 const sourceServiceUrl = process.env.COMPACTGATE_SOURCE_URL ?? "http://127.0.0.1:7865";
 const iceProfileName = process.env.COMPACTGATE_E2E_PROFILE ?? "冰";
@@ -365,8 +363,4 @@ function waitForShutdown() {
     process.once("SIGINT", done);
     process.once("SIGTERM", done);
   });
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

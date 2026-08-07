@@ -3,7 +3,8 @@ import type { IncomingHttpHeaders } from "node:http";
 import {
   decodeBodyText,
   isRecord,
-  parseJsonRecord
+  parseJsonRecord,
+  readHeaderString
 } from "./http-utils.js";
 import type {
   CompactResponseNormalizeReason,
@@ -58,7 +59,7 @@ export function normalizeCompactResponse({
     : extractRawCompactResponse(responseBody, responseHeaders);
   const upstreamSummary = parsedResponse
     ? usableSummaryOrNull(extractSummaryFromResponse(parsedResponse))
-    : usableSummaryOrNull(extractSummaryFromRawResponse(responseBody, responseHeaders));
+    : usableSummaryOrNull(rawResponseExtraction?.summaryText ?? null);
   const hasUpstreamStructuredOutput = Boolean(rawResponseExtraction && rawResponseExtraction.outputItems.length > 0);
   const requestSummary = upstreamSummary ? null : usableSummaryOrNull(extractSummaryFromRequest(requestBody));
   const syntheticSource: CompactResponseSyntheticSource = upstreamSummary || hasUpstreamStructuredOutput
@@ -209,7 +210,9 @@ function extractOutputItemFromStreamEvent(value: unknown): Record<string, unknow
     return null;
   }
 
-  return isSyntheticOutputItem(value.item) ? value.item : null;
+  return isCompactionItem(value.item) || (value.item.type === "message" && value.item.role === "assistant")
+    ? value.item
+    : null;
 }
 
 function extractUsageFromStreamEvent(value: unknown): Record<string, unknown> | null {
@@ -224,18 +227,11 @@ function extractUsageFromStreamEvent(value: unknown): Record<string, unknown> | 
   return isRecord(value.response) && isRecord(value.response.usage) ? value.response.usage : null;
 }
 
-function extractSummaryFromRawResponse(
-  responseBody: Buffer,
-  responseHeaders: IncomingHttpHeaders
-): string | null {
-  return extractRawCompactResponse(responseBody, responseHeaders).summaryText;
-}
-
 function extractRawCompactResponse(
   responseBody: Buffer,
   responseHeaders: IncomingHttpHeaders
 ): RawCompactResponseExtraction {
-  const contentType = headerText(responseHeaders["content-type"]).toLowerCase();
+  const contentType = (readHeaderString(responseHeaders["content-type"]) ?? "").toLowerCase();
   const text = decodeBodyText(responseBody).trim();
   if (!text) {
     return { outputItems: [], summaryText: null, usage: null };
@@ -345,14 +341,6 @@ function extractContentText(content: unknown): string[] {
   });
 }
 
-function isSyntheticOutputItem(value: Record<string, unknown>): boolean {
-  return isCompactionItem(value) || isAssistantMessageItem(value);
-}
-
-function isAssistantMessageItem(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && value.type === "message" && value.role === "assistant";
-}
-
 function truncateSyntheticSummary(text: string): string {
   if (text.length <= MAX_SYNTHETIC_SUMMARY_CHARS) {
     return text;
@@ -376,8 +364,4 @@ function isCompactionItem(value: unknown): value is { type: "compaction"; encryp
 
 function createCompactGateResponseId(): string {
   return `resp_compactgate_${randomUUID().replaceAll("-", "")}`;
-}
-
-function headerText(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value.join(", ") : value ?? "";
 }

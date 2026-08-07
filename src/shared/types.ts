@@ -454,6 +454,66 @@ export interface RequestLogPage {
   host_counts: HostLogCount[];
 }
 
+export interface LogStatsMetric {
+  requests: number;
+  normal_requests: number;
+  error_requests: number;
+  usage_observed_requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  average_duration_ms: number | null;
+  average_first_token_ms: number | null;
+}
+
+export interface LogStatsSummary extends LogStatsMetric {
+  duration_p50_ms: number | null;
+  duration_p95_ms: number | null;
+  first_token_p50_ms: number | null;
+  first_token_p95_ms: number | null;
+  average_rpm: number;
+  average_tpm: number;
+}
+
+export interface LogStatsSnapshot {
+  generated_at: string;
+  range: {
+    from: string;
+    to: string;
+  };
+  retained_range: {
+    oldest_at: string | null;
+    newest_at: string | null;
+  };
+  summary: LogStatsSummary;
+  trend: Array<LogStatsMetric & { bucket_start: string }>;
+  by_route: Array<LogStatsMetric & { route: RouteKind }>;
+  by_model: Array<{
+    model: string | null;
+    requests: number;
+    error_requests: number;
+    usage_observed_requests: number;
+    input_tokens: number;
+    cache_read_tokens: number;
+    total_tokens: number;
+  }>;
+  by_endpoint: Array<{
+    endpoint: string;
+    requests: number;
+    error_requests: number;
+    total_tokens: number;
+  }>;
+  model_mappings: Array<{
+    source_model: string | null;
+    target_model: string | null;
+    response_model: string | null;
+    requests: number;
+  }>;
+}
+
 export interface HealthResponse {
   status: "ok";
   time: string;

@@ -10,7 +10,7 @@ export interface CapturedRequest {
   body: string;
 }
 
-export interface CaptureFixtureRecord {
+interface CaptureFixtureRecord {
   request_id: string;
   time: string;
   completed_at: string;
@@ -80,6 +80,15 @@ export function captureBody(req: IncomingMessage): Promise<string> {
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
+}
+
+export async function captureRequest(req: IncomingMessage): Promise<CapturedRequest> {
+  return {
+    method: req.method ?? "POST",
+    url: req.url ?? "",
+    headers: req.headers,
+    body: await captureBody(req)
+  };
 }
 
 export async function readCaptureRecords(dir: string) {

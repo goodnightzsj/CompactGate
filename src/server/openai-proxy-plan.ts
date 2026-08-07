@@ -15,7 +15,6 @@ import {
 import {
   buildUpstreamUrl,
   compactUpstreamBaseUrl,
-  compactUpstreamPath,
   deriveCompactModel,
   rewriteCompactBody,
   rewritePrimaryBody
@@ -61,7 +60,11 @@ export function buildPrimaryOpenAiProxyPlan({
   const selectedPrimaryConfig = primarySelection.config;
   const modelRewrite = rewritePrimaryBody(rawBody, selectedPrimaryConfig, endpoint);
   const sourceModel = modelRewrite.sourceModel;
-  const compactBridgeScope = compactBridgeScopeFor(config, sourceModel);
+  const compactBridgeScope: CompactionBridgeScope = {
+    compactUpstream: compactUpstreamBaseUrl(config),
+    sourceModel,
+    targetModel: sourceModel ? deriveCompactModel(sourceModel, config) : null
+  };
   const splitCompactMode = config.compact.upstream_mode === "split";
   const bridgeResult = preserveRemoteV2State
     ? {
@@ -112,11 +115,10 @@ export function buildCompactOpenAiProxyPlan({
   rawBody: Buffer;
 }): OpenAiProxyPlan {
   const rewrite = rewriteCompactBody(rawBody, config);
-  const upstreamPath = compactUpstreamPath(config, url.pathname);
   const credential = resolveRouteCredential("compact", config);
   const plan = withRequestHeaders(headers, credential.apiKey, rawBody, {
     route: "compact",
-    upstream: buildUpstreamUrl(compactUpstreamBaseUrl(config), upstreamPath, url.search),
+    upstream: buildUpstreamUrl(compactUpstreamBaseUrl(config), url.pathname, url.search),
     timeoutMs: config.timeouts.compact_ms,
     timeoutMessage: "Compact upstream request timed out.",
     upstreamBody: rewrite.body,
@@ -134,17 +136,6 @@ export function buildCompactOpenAiProxyPlan({
     delete plan.requestHeaders.authorization;
   }
   return plan;
-}
-
-function compactBridgeScopeFor(
-  config: CompactGateConfig,
-  sourceModel: string | null
-): CompactionBridgeScope {
-  return {
-    compactUpstream: compactUpstreamBaseUrl(config),
-    sourceModel,
-    targetModel: sourceModel ? deriveCompactModel(sourceModel, config) : null
-  };
 }
 
 function withRequestHeaders(

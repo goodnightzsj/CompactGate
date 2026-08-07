@@ -5,7 +5,6 @@ import type {
   PublicRouteUrlPreset,
   RouteUrlPreset,
   RouteUrlPresetKind,
-  SavedConfigProfileConfig,
   UpstreamConfig
 } from "../shared/types.js";
 import { ConfigError } from "./config-error.js";
@@ -46,12 +45,10 @@ export function routeUrlEntriesFromRuntime(config: CompactGateRuntimeConfig): Ro
   ];
 }
 
-export function routeUrlEntriesFromProfileConfig(
-  config: SavedConfigProfileConfig,
-  scope: ConfigProfileScope,
-  profileConfigToRuntime: (config: SavedConfigProfileConfig) => CompactGateRuntimeConfig
+export function routeUrlEntriesFromProfileRuntime(
+  runtime: CompactGateRuntimeConfig,
+  scope: ConfigProfileScope
 ): RouteUrlPresetEntry[] {
-  const runtime = profileConfigToRuntime(config);
   if (scope === "codex") {
     return [
       routeUrlEntry("codex_primary", runtime.primary),

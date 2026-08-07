@@ -1,9 +1,8 @@
 import { glob, readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = path.resolve(import.meta.dirname, "..");
 const SRC_DIR = path.join(ROOT_DIR, "src");
 
 describe("architecture boundaries", () => {

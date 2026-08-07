@@ -34,7 +34,6 @@ import {
   classifyAnthropicUpstreamResult,
   sendBufferedUpstreamRequest,
   summarizeAnthropicStreamFailure,
-  type BufferedUpstreamResult,
   UpstreamRequestError
 } from "./upstream-client.js";
 
@@ -54,7 +53,8 @@ export async function proxyClaudeRequest(
   const config = configStore.get();
   const route: RouteKind = "claude";
   const requestId = randomUUID();
-  const upstreamPath = stripAnthropicProxyPrefix(url.pathname);
+  const strippedUpstreamPath = url.pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
+  const upstreamPath = strippedUpstreamPath || "/";
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
   const transaction = createOpenAiProxyTransactionState();
 
@@ -72,37 +72,25 @@ export async function proxyClaudeRequest(
       delete transaction.requestHeaders["content-encoding"];
     }
 
-    let finalResult: BufferedUpstreamResult | null = null;
-
-    if (!finalResult) {
-      const result = await sendBufferedUpstreamRequest({
-        req,
-        res,
-        upstream,
-        startedAt,
-        timeoutMs: config.timeouts.claude_ms,
-        timeoutMessage: "Claude upstream request timed out.",
-        requestHeaders: transaction.requestHeaders,
-        body: transaction.upstreamBody,
-        extraResponseHeaders: {
-          "x-compactgate-route": route,
-          "x-compactgate-claude-route": "primary",
-          "x-compactgate-request-id": requestId
-        },
-        maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-        streamProtocol: "anthropic",
-        writeResponse: true
-      });
-
-      finalResult = result;
-      applyOpenAiProxyUpstreamResult(transaction, result);
-    }
-
-    if (!finalResult) {
-      throw new Error("Claude upstream request did not complete.");
-    }
-
-    const completedResult = finalResult;
+    const completedResult = await sendBufferedUpstreamRequest({
+      req,
+      res,
+      upstream,
+      startedAt,
+      timeoutMs: config.timeouts.claude_ms,
+      timeoutMessage: "Claude upstream request timed out.",
+      requestHeaders: transaction.requestHeaders,
+      body: transaction.upstreamBody,
+      extraResponseHeaders: {
+        "x-compactgate-route": route,
+        "x-compactgate-claude-route": "primary",
+        "x-compactgate-request-id": requestId
+      },
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      streamProtocol: "anthropic",
+      writeResponse: true
+    });
+    applyOpenAiProxyUpstreamResult(transaction, completedResult);
 
     if (!res.headersSent) {
       copyResponseHeaders(completedResult.responseHeaders, res);
@@ -113,7 +101,6 @@ export async function proxyClaudeRequest(
       res.end(completedResult.responseBody);
     }
 
-    applyOpenAiProxyUpstreamResult(transaction, completedResult);
     transaction.streamOutcome = classifyAnthropicUpstreamResult(completedResult);
     transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
     transaction.usage = completedResult.streamSummary?.usage ??
@@ -194,9 +181,4 @@ export async function proxyClaudeRequest(
 
 export function isAnthropicProxyPath(pathname: string): boolean {
   return pathname === ANTHROPIC_PROXY_PREFIX || pathname.startsWith(`${ANTHROPIC_PROXY_PREFIX}/`);
-}
-
-function stripAnthropicProxyPrefix(pathname: string): string {
-  const stripped = pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
-  return stripped.length > 0 ? stripped : "/";
 }

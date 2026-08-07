@@ -1,11 +1,12 @@
 import {
   isRecord,
+  readTrimmedString,
   summaryForError
 } from "./http-utils.js";
 import {
   requestJson,
   UpstreamStatusError
-} from "./upstream-client.js";
+} from "./upstream-json-client.js";
 
 export type UpstreamModelsResponse = {
   models: string[];
@@ -122,9 +123,9 @@ export function extractModelIds(value: unknown): string[] {
 
   for (const item of candidates) {
     const id = typeof item === "string"
-      ? readString(item)
+      ? readTrimmedString(item)
       : isRecord(item)
-        ? readString(item.id) ?? readString(item.name) ?? readString(item.model)
+        ? readTrimmedString(item.id) ?? readTrimmedString(item.name) ?? readTrimmedString(item.model)
         : null;
     if (id) {
       models.add(id);
@@ -173,8 +174,4 @@ function modelFetchError(error: unknown): string {
   }
 
   return summaryForError(error);
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }

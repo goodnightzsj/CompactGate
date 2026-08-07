@@ -1,4 +1,3 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzipSync, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,46 +5,13 @@ import {
   captureBody,
   type CapturedRequest,
   fetchRecentLogs,
+  postJson,
   startApp,
-  startUpstream
+  startCapturedOpenAiUpstream,
+  startJsonUpstream,
+  startUpstream,
+  writeJsonResponse
 } from "./helpers/server-test-utils.js";
-
-const JSON_HEADERS = { "content-type": "application/json" };
-
-async function startCapturedOpenAiUpstream(
-  target: { current: CapturedRequest | null },
-  respond: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
-) {
-  return startUpstream(async (req, res) => {
-    target.current = {
-      method: req.method ?? "POST",
-      url: req.url ?? "",
-      headers: req.headers,
-      body: await captureBody(req)
-    };
-    await respond(req, res);
-  });
-}
-
-function writeJsonResponse(res: ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, JSON_HEADERS);
-  res.end(JSON.stringify(body));
-}
-
-function startJsonUpstream(body: unknown, status = 200) {
-  return startUpstream(async (req, res) => {
-    await captureBody(req);
-    writeJsonResponse(res, body, status);
-  });
-}
-
-function postJson(appUrl: string, path: string, body: unknown): Promise<Response> {
-  return fetch(`${appUrl}${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: JSON_HEADERS
-  });
-}
 
 describe("CompactGate OpenAI routing", () => {
   it("logs usage metrics from JSON upstream responses", async () => {

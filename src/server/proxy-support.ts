@@ -20,6 +20,8 @@ import { extractResponseModelFromBodies } from "./response-model.js";
 import { effectiveResponseModel } from "./response-model.js";
 import { parseCodexClientUserAgent } from "./codex-version.js";
 
+export { emptyUsageMetrics } from "./usage.js";
+
 const SENSITIVE_QUERY_KEYS = new Set([
   "api_key",
   "api-key",
@@ -107,10 +109,10 @@ export function addLog(
     request_type: input.requestType,
     reasoning_effort: input.reasoningEffort,
     request_summary: input.requestSummary,
-    incoming_request_body: input.persistBody ? bodyText(input.incomingRequestBody) : null,
-    upstream_request_body: input.persistBody ? bodyText(input.upstreamRequestBody) : null,
-    upstream_response_body: input.persistBody ? bodyText(input.upstreamResponseBody) : null,
-    client_response_body: input.persistBody && input.clientResponseBody ? bodyText(input.clientResponseBody) : null,
+    incoming_request_body: input.persistBody ? decodeBodyText(input.incomingRequestBody) : null,
+    upstream_request_body: input.persistBody ? decodeBodyText(input.upstreamRequestBody) : null,
+    upstream_response_body: input.persistBody ? decodeBodyText(input.upstreamResponseBody) : null,
+    client_response_body: input.persistBody && input.clientResponseBody ? decodeBodyText(input.clientResponseBody) : null,
     body_status: input.persistBody ? "present" : "none",
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,
@@ -187,23 +189,6 @@ export function redactUrlForStorage(url: URL): URL {
 export function storedPathForUrl(url: URL): string {
   const storedUrl = redactUrlForStorage(url);
   return `${storedUrl.pathname}${storedUrl.search}`;
-}
-
-function bodyText(body: Buffer): string {
-  return decodeBodyText(body);
-}
-
-export function emptyUsageMetrics(): TokenUsageMetrics {
-  return {
-    inputTokens: null,
-    outputTokens: null,
-    cachedInputTokens: null,
-    cachedOutputTokens: null,
-    cacheReadInputTokens: null,
-    cacheCreationInputTokens: null,
-    reasoningTokens: null,
-    totalTokens: null
-  };
 }
 
 export async function persistCapture(

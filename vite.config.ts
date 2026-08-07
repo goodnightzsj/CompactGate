@@ -22,13 +22,6 @@ export default defineConfig({
     include: [
       "test/**/*.{test,spec}.?(c|m)[jt]s?(x)",
       "test/**/*.scenarios.ts"
-    ],
-    exclude: [
-      "**/node_modules/**",
-      "**/.git/**",
-      "**/.tmp/**",
-      "**/dist/**",
-      "**/test-results/**"
     ]
   }
 });

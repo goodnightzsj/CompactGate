@@ -2,25 +2,24 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import net from "node:net";
 import type { Duplex } from "node:stream";
+import { captureRequest, type CapturedRequest } from "./server-test-capture.js";
 import { LOCALHOST_CERT, LOCALHOST_KEY } from "./server-tls.js";
 import { cleanup, close, listen, trackServer } from "./server-test-lifecycle.js";
 
+type CaptureTarget = CapturedRequest[] | { current: CapturedRequest | null };
+
 export async function startUpstream(handler: (req: IncomingMessage, res: ServerResponse) => void) {
-  const server = http.createServer(handler);
-  await listen(server);
-  trackServer(server);
-  const address = server.address();
-
-  if (!address || typeof address === "string") {
-    throw new Error("Expected TCP server address.");
-  }
-
-  return {
-    url: `http://127.0.0.1:${address.port}/v1`
-  };
+  return startHttpUpstream(handler, "/v1");
 }
 
 export async function startClaudeUpstream(handler: (req: IncomingMessage, res: ServerResponse) => void) {
+  return startHttpUpstream(handler, "");
+}
+
+async function startHttpUpstream(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  pathSuffix: string
+) {
   const server = http.createServer(handler);
   await listen(server);
   trackServer(server);
@@ -31,8 +30,23 @@ export async function startClaudeUpstream(handler: (req: IncomingMessage, res: S
   }
 
   return {
-    url: `http://127.0.0.1:${address.port}`
+    url: `http://127.0.0.1:${address.port}${pathSuffix}`
   };
+}
+
+export async function startCapturedOpenAiUpstream(
+  target: CaptureTarget,
+  respond: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+) {
+  return startUpstream(async (req, res) => {
+    const captured = await captureRequest(req);
+    if (Array.isArray(target)) {
+      target.push(captured);
+    } else {
+      target.current = captured;
+    }
+    await respond(req, res);
+  });
 }
 
 export async function startHttpsClaudeUpstream(

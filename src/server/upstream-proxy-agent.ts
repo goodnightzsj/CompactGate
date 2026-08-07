@@ -207,12 +207,8 @@ function resolveHttpsProxy(upstream: URL): URL | null {
     return null;
   }
 
-  try {
-    const proxy = new URL(configured);
-    return proxy.protocol === "http:" ? proxy : null;
-  } catch {
-    return null;
-  }
+  const proxy = URL.parse(configured);
+  return proxy?.protocol === "http:" ? proxy : null;
 }
 
 function hostMatchesNoProxy(upstream: URL): boolean {

@@ -15,7 +15,6 @@ import {
 import { selectPrimaryCandidate } from "./primary-failover-policy.js";
 import { PrimaryStickinessStore } from "./primary-failover-stickiness.js";
 import type {
-  PrimaryCandidate,
   PrimaryProfileHealthSnapshot,
   PrimaryRouteRequestContext,
   PrimaryRouteResult,
@@ -111,7 +110,12 @@ export class PrimaryFailoverState {
       return;
     }
 
-    const result = normalizeResult(resultOrStatus, maybeErrorSummary);
+    const result = typeof resultOrStatus === "number"
+      ? {
+          status: resultOrStatus,
+          errorSummary: maybeErrorSummary ?? null
+        }
+      : resultOrStatus;
     const health = this.health.get(selection.profileId);
     if (!health || selection.generation !== this.generation) {
       return;
@@ -142,7 +146,7 @@ export class PrimaryFailoverState {
           health.rateLimitUntil = 0;
           health.version += 1;
         }
-        this.rememberResponseStickiness(selection, result, now);
+        this.stickiness.rememberResponse(selection, result, now);
         break;
       case "auth":
       case "quota": {
@@ -315,7 +319,7 @@ export class PrimaryFailoverState {
       random: this.random,
       healthForProfile: (profileId) => this.health.forProfile(profileId),
       blockedUntil: (candidate, candidateContext, candidateNow) =>
-        this.blockedUntil(candidate, candidateContext, candidateNow),
+        this.health.blockedUntil(candidate.id, candidateContext.model, candidateNow),
       stickyProfileId: (isUsable) =>
         this.stickiness.selectProfileId(normalizedContext, isUsable)
     });
@@ -334,38 +338,8 @@ export class PrimaryFailoverState {
     return selection;
   }
 
-  private blockedUntil(
-    candidate: PrimaryCandidate,
-    context: Required<PrimaryRouteRequestContext>,
-    now: number
-  ): number {
-    return this.health.blockedUntil(candidate.id, context.model, now);
-  }
-
   private cleanupExpiredState(now: number): void {
     this.stickiness.cleanup(now);
     this.health.cleanupExpiredModelCooldowns(now);
   }
-
-  private rememberResponseStickiness(
-    selection: PrimaryRouteSelection,
-    result: PrimaryRouteResult,
-    now: number
-  ): void {
-    this.stickiness.rememberResponse(selection, result, now);
-  }
-}
-
-function normalizeResult(
-  resultOrStatus: PrimaryRouteResult | number,
-  maybeErrorSummary?: string | null
-): PrimaryRouteResult {
-  if (typeof resultOrStatus === "number") {
-    return {
-      status: resultOrStatus,
-      errorSummary: maybeErrorSummary ?? null
-    };
-  }
-
-  return resultOrStatus;
 }

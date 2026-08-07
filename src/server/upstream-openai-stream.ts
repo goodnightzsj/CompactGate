@@ -6,6 +6,7 @@ import {
   createZstdDecompress
 } from "node:zlib";
 import { extractResponseModelFromText } from "./response-model.js";
+import { normalizeMaxObservedStreamEventBytes } from "./upstream-response-buffer.js";
 import { mergeUsage } from "./usage-merge.js";
 import { extractUsageFromJsonText } from "./usage-record.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
@@ -38,8 +39,6 @@ export interface OpenAiStreamObserverHandle {
   finish(): Promise<OpenAiStreamSummary>;
 }
 
-const DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES = 64 * 1024;
-
 export function createOpenAiStreamObserver(
   headers: IncomingHttpHeaders,
   options: OpenAiStreamObserverOptions = {}
@@ -66,7 +65,7 @@ function createProtocolStreamObserver(
 
   const observer = new OpenAiStreamObserver(
     protocol,
-    normalizeMaxEventBytes(options.maxEventBytes)
+    normalizeMaxObservedStreamEventBytes(options.maxEventBytes)
   );
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
   if (contentEncoding.includes("br")) {
@@ -504,12 +503,4 @@ function readNonEmptyString(value: unknown): string | null {
 
   const text = value.trim();
   return text.length > 0 ? text : null;
-}
-
-function normalizeMaxEventBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES;
-  }
-
-  return Math.max(0, Math.floor(value));
 }

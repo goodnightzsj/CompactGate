@@ -5,6 +5,7 @@ import type {
   HostLogCount,
   LogBodyPurgeResult,
   LogPersistenceHealth,
+  LogStatsSnapshot,
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
@@ -34,6 +35,7 @@ import {
   PROVIDER_STATE_RECOVERY_EVIDENCE_SCHEMA_SQL,
   RECENT_LOG_FIELDS
 } from "./logger-schema.js";
+import { readLogStats, type LogStatsOptions } from "./logger-analytics.js";
 import type { ProviderStateBinding } from "./provider-state-binding.js";
 import { extractResponseModelFromText } from "./response-model.js";
 
@@ -52,13 +54,9 @@ const PROVIDER_STATE_BINDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_PROVIDER_STATE_BINDINGS = 8_192;
 const MAX_PROVIDER_STATE_RECOVERY_EVIDENCE = 8_192;
 
-export function resolveDefaultLogDatabasePath(configPath: string): string {
+export function resolveLogDatabasePath(configPath: string): string {
   const configBaseName = path.basename(configPath, path.extname(configPath));
   return path.resolve(path.dirname(configPath), `${configBaseName}-logs.sqlite`);
-}
-
-export function resolveLogDatabasePath(configPath: string): string {
-  return resolveDefaultLogDatabasePath(configPath);
 }
 
 export class RequestLogger {
@@ -464,6 +462,10 @@ export class RequestLogger {
       status_counts: statusCounts,
       host_counts: this.hostCounts(options)
     };
+  }
+
+  stats(options: LogStatsOptions): LogStatsSnapshot {
+    return readLogStats(this.db, options);
   }
 
   getByRequestId(requestId: string):
@@ -1029,7 +1031,7 @@ export class RequestLogger {
 
   private recordPersistenceFailure(operation: string, error: unknown): void {
     this.persistErrorCount += 1;
-    this.lastPersistError = `${operation}: ${errorSummary(error)}`;
+    this.lastPersistError = `${operation}: ${error instanceof Error ? error.message : String(error)}`;
     this.lastPersistErrorAt = new Date().toISOString();
   }
 
@@ -1133,10 +1135,6 @@ function sumExistingFileSizes(paths: string[]): number {
   }
 
   return total;
-}
-
-function errorSummary(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeMaxDatabaseBytes(value: number | undefined): number | null {

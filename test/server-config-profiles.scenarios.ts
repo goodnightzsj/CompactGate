@@ -1,25 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PublicConfig } from "../src/shared/types.js";
-import { startApp } from "./helpers/server-test-utils.js";
-
-const JSON_HEADERS = { "content-type": "application/json" };
-
-async function fetchJson<T>(
-  url: string,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
-  body?: unknown
-): Promise<{ response: Response; body: T }> {
-  const response = await fetch(url, {
-    method,
-    headers: JSON_HEADERS,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) })
-  });
-
-  return {
-    response,
-    body: (await response.json()) as T
-  };
-}
+import { fetchJson, startApp } from "./helpers/server-test-utils.js";
 
 describe("CompactGate config API", () => {
   it("saves and applies config profiles through the public API", async () => {

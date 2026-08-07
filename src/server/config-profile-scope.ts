@@ -2,8 +2,6 @@ import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
   ConfigProfileScope,
-  SavedClaudeProfileConfig,
-  SavedCodexProfileConfig,
   SavedConfigProfile,
   SavedConfigProfileConfig,
   SavedConfigProfileScopeState,
@@ -17,7 +15,8 @@ import {
 } from "./config-clone.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
 import {
-  mergeProfileScopes as mergeProfileScopesWithRuntime,
+  extractScopedProfileConfig,
+  mergeProfileScopes,
   shouldPersistProfileNormalization
 } from "./config-profile-scope-merge.js";
 import { cloneRouteUrlPreset } from "./config-route-presets.js";
@@ -67,26 +66,6 @@ export function updateScopedProfileConfig(
   return extractScopedProfileConfig(mergeRuntimeConfig(profileConfigToRuntime(current), patch), scope);
 }
 
-export function extractScopedProfileConfig(
-  runtime: CompactGateRuntimeConfig,
-  scope: ConfigProfileScope
-): SavedCodexProfileConfig | SavedClaudeProfileConfig {
-  if (scope === "codex") {
-    return {
-      primary: { ...runtime.primary },
-      compact: { ...runtime.compact }
-    };
-  }
-
-  return {
-    claude: {
-      primary: { ...runtime.claude.primary },
-      compact: { ...runtime.claude.compact },
-      model_map: { ...runtime.claude.model_map }
-    }
-  };
-}
-
 export function profileConfigToRuntime(config: SavedConfigProfileConfig): CompactGateRuntimeConfig {
   return mergeRuntimeConfig(DEFAULT_CONFIG, config);
 }
@@ -95,17 +74,7 @@ export function validateProfileConfig(config: SavedConfigProfileConfig, scope: C
   validateRuntimeConfig(profileConfigToRuntime(extractScopedProfileConfig(profileConfigToRuntime(config), scope)));
 }
 
-export { shouldPersistProfileNormalization };
-
-export function mergeProfileScopes(
-  base: CompactGateConfig,
-  patchRecord: Record<string, unknown>
-): SavedConfigProfileScopes {
-  return mergeProfileScopesWithRuntime(base, patchRecord, {
-    mergeRuntimeConfig,
-    extractScopedProfileConfig
-  });
-}
+export { extractScopedProfileConfig, mergeProfileScopes, shouldPersistProfileNormalization };
 
 export function getProfileScopeState(
   config: CompactGateConfig,

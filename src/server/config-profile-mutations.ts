@@ -20,7 +20,7 @@ import {
   withProfileScope
 } from "./config-profile-scope.js";
 import {
-  routeUrlEntriesFromProfileConfig,
+  routeUrlEntriesFromProfileRuntime,
   withRecordedRouteUrlPresets
 } from "./config-route-presets.js";
 import { isRecord } from "./config-readers.js";
@@ -247,7 +247,7 @@ function recordProfileRouteUrls(
 ): CompactGateConfig {
     return withRecordedRouteUrlPresets(
       config,
-      routeUrlEntriesFromProfileConfig(profileConfig, scope, profileConfigToRuntime)
+      routeUrlEntriesFromProfileRuntime(profileConfigToRuntime(profileConfig), scope)
     );
 }
 

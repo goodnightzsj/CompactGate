@@ -7,22 +7,22 @@ import type {
   PrimaryStatePortabilityMode,
   UpstreamConfig
 } from "../shared/types.js";
-import { CLAUDE_MODEL_MAP_ROLES, emptyClaudeModelMap } from "./config-defaults.js";
+import { CLAUDE_MODEL_MAP_ROLES } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
+import { isValidBaseUrl } from "./config-url.js";
 import {
   isRecord,
   readBoolean,
   readChild,
   readNullableString,
   readNumber,
-  readSensitiveString,
   readString
 } from "./config-readers.js";
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
 export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
-  validateListen(config.listen);
+  parseListenAddress(config.listen);
   validateBaseUrl(config.primary.base_url, "primary.base_url");
   validateBaseUrl(config.compact.base_url, "compact.base_url");
   validateBaseUrl(config.claude.primary.base_url, "claude.primary.base_url");
@@ -105,12 +105,7 @@ export function parseListenAddress(listen: string): { host: string; port: number
 }
 
 export function validateBaseUrl(value: string, field: string): void {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("Unsupported protocol");
-    }
-  } catch {
+  if (!isValidBaseUrl(value)) {
     throw new ConfigError(`${field} must be a valid http or https URL.`);
   }
 }
@@ -127,7 +122,7 @@ export function mergeRuntimeConfig(
     primary: mergePrimaryConfig(base.primary, readChild(patchRecord.primary)),
     compact: {
       base_url: readString(compactPatch.base_url, base.compact.base_url),
-      api_key: readSensitiveString(compactPatch.api_key, base.compact.api_key),
+      api_key: readString(compactPatch.api_key, base.compact.api_key),
       api_key_env: readString(compactPatch.api_key_env, base.compact.api_key_env),
       upstream_mode: readString(
         compactPatch.upstream_mode,
@@ -184,10 +179,6 @@ export function mergeRuntimeConfig(
       )
     }
   };
-}
-
-function validateListen(listen: string): void {
-  parseListenAddress(listen);
 }
 
 function validateTimeoutMs(value: number, field: string): void {
@@ -269,10 +260,10 @@ function validateUpstreamMode(value: string): asserts value is CompactUpstreamMo
 function mergeUpstreamConfig(
   base: UpstreamConfig,
   patch: Record<string, unknown>
-): UpstreamConfig {
+): UpstreamConfig & { model_override: string } {
   return {
     base_url: readString(patch.base_url, base.base_url),
-    api_key: readSensitiveString(patch.api_key, base.api_key),
+    api_key: readString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
     model_override: readString(patch.model_override, base.model_override ?? "")
   };
@@ -308,7 +299,7 @@ function mergeClaudeConfig(
     }
     return {
       primary: {
-        ...mergeClaudePrimaryConfig(base.primary, primaryPatch),
+        ...mergeUpstreamConfig(base.primary, primaryPatch),
         model_override: modelMap.default
       },
       compact: mergeClaudeCompactConfig(base.compact, compactPatch),
@@ -356,10 +347,7 @@ function mergeClaudeConfig(
 }
 
 function mergeClaudeModelMap(base: ClaudeModelMap, patch: Record<string, unknown>): ClaudeModelMap {
-  const next: ClaudeModelMap = {
-    ...emptyClaudeModelMap(),
-    ...base
-  };
+  const next = { ...base };
 
   for (const role of CLAUDE_MODEL_MAP_ROLES) {
     next[role] = readString(patch[role], next[role]);
@@ -368,23 +356,12 @@ function mergeClaudeModelMap(base: ClaudeModelMap, patch: Record<string, unknown
   return next;
 }
 
-function mergeClaudePrimaryConfig(
-  base: CompactGateRuntimeConfig["claude"]["primary"],
-  patch: Record<string, unknown>
-): CompactGateRuntimeConfig["claude"]["primary"] {
-  return {
-    ...mergeUpstreamConfig(base, patch),
-    model_override: readString(patch.model_override, base.model_override)
-  };
-}
-
 function mergeClaudeCompactConfig(
   base: CompactGateRuntimeConfig["claude"]["compact"],
   patch: Record<string, unknown>
 ): CompactGateRuntimeConfig["claude"]["compact"] {
   return {
     ...mergeUpstreamConfig(base, patch),
-    upstream_mode: readString(patch.upstream_mode, base.upstream_mode) as CompactUpstreamMode,
-    model_override: readString(patch.model_override, base.model_override)
+    upstream_mode: readString(patch.upstream_mode, base.upstream_mode) as CompactUpstreamMode
   };
 }

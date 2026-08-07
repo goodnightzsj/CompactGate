@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { sendJson } from "./http-utils.js";
 
 const STATIC_MIME_TYPES: Record<string, string> = {
@@ -80,9 +79,8 @@ export async function serveStatic(
 }
 
 function resolvePublicDir(): string {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.resolve(currentDir, "../public"),
+    path.resolve(import.meta.dirname, "../public"),
     path.resolve(process.cwd(), "dist/public"),
     path.resolve(process.cwd(), "public")
   ];

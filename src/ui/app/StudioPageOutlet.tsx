@@ -1,5 +1,7 @@
 import type { ComponentProps } from "react";
 import type { StudioPage } from "../app-types.js";
+import { AnalyticsDashboardPage } from "../analytics/AnalyticsDashboardPage.js";
+import { UsageAnalyticsPage } from "../analytics/UsageAnalyticsPage.js";
 import { DashboardPage } from "../dashboard/DashboardPage.js";
 import { HealthPage } from "../health/HealthPage.js";
 import { LogsPage } from "../logs/LogsPage.js";
@@ -36,6 +38,10 @@ export function StudioPageOutlet({
       {pageError && <div className="error-banner">{pageError}</div>}
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}
+
+      {currentPage === "analytics" && <AnalyticsDashboardPage />}
+
+      {currentPage === "usage" && <UsageAnalyticsPage />}
 
       {currentPage === "routes" && <RoutesPage {...routesPage} />}
 

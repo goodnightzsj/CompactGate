@@ -26,7 +26,13 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
       ? (index - activeIndex + candidates.length) % candidates.length
       : index,
     active: profile.id === state.active_profile_id,
-    config: configWithProfilePrimary(config, profile)
+    config: {
+      ...cloneConfig(config),
+      primary: {
+        ...config.primary,
+        ...readProfilePrimary(profile)
+      }
+    }
   }));
 }
 
@@ -48,22 +54,8 @@ function primaryCredentialSignature(config: CompactGateConfig): string {
   return [
     credential.apiKeySource,
     credential.activeApiKeyEnv ?? "",
-    credential.apiKey ? credentialHash(credential.apiKey) : ""
+    credential.apiKey ? createHash("sha256").update(credential.apiKey).digest("hex") : ""
   ].join(":");
-}
-
-function credentialHash(apiKey: string): string {
-  return createHash("sha256").update(apiKey).digest("hex");
-}
-
-function configWithProfilePrimary(config: CompactGateConfig, profile: SavedConfigProfile): CompactGateConfig {
-  return {
-    ...cloneConfig(config),
-    primary: {
-      ...config.primary,
-      ...readProfilePrimary(profile)
-    }
-  };
 }
 
 function readProfilePrimary(profile: SavedConfigProfile): Partial<UpstreamConfig> | null {

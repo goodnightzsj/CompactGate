@@ -1,15 +1,15 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   assertCaptured,
-  captureBody,
+  captureRequest,
   type CapturedRequest,
+  JSON_HEADERS,
+  postJson,
   setEnv,
   startApp,
-  startUpstream
+  startUpstream,
+  writeJsonResponse
 } from "./helpers/server-test-utils.js";
-
-const JSON_HEADERS = { "content-type": "application/json" };
 
 async function fetchJson<T = any>(
   url: string,
@@ -32,33 +32,11 @@ async function fetchJson<T = any>(
   };
 }
 
-function postJson(appUrl: string, path: string, body: unknown): Promise<Response> {
-  return fetch(`${appUrl}${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: JSON_HEADERS
-  });
-}
-
 async function startCapturedJsonUpstream(target: { current: CapturedRequest | null }) {
   return startUpstream(async (req, res) => {
     target.current = await captureRequest(req);
     writeJsonResponse(res, { ok: true });
   });
-}
-
-async function captureRequest(req: IncomingMessage): Promise<CapturedRequest> {
-  return {
-    method: req.method ?? "POST",
-    url: req.url ?? "",
-    headers: req.headers,
-    body: await captureBody(req)
-  };
-}
-
-function writeJsonResponse(res: ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, JSON_HEADERS);
-  res.end(JSON.stringify(body));
 }
 
 describe("CompactGate config API", () => {

@@ -2,12 +2,14 @@ import type { ServerResponse } from "node:http";
 import { expect } from "vitest";
 import type { PublicConfig } from "../src/shared/types.js";
 import {
-  captureBody,
+  captureRequest,
   type CapturedRequest,
-  startUpstream
+  JSON_HEADERS,
+  startUpstream,
+  writeJsonResponse
 } from "./helpers/server-test-utils.js";
 
-export const JSON_HEADERS = { "content-type": "application/json" };
+export { JSON_HEADERS, writeJsonResponse as writeJson };
 
 export async function saveCodexProfile(
   appUrl: string,
@@ -44,19 +46,9 @@ export async function startCapturedOpenAiUpstream(
   respond: (res: ServerResponse) => void
 ) {
   return startUpstream(async (req, res) => {
-    requests.push({
-      method: req.method ?? "POST",
-      url: req.url ?? "",
-      headers: req.headers,
-      body: await captureBody(req)
-    });
+    requests.push(await captureRequest(req));
     respond(res);
   });
-}
-
-export function writeJson(res: ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
 }
 
 export function writeSse(res: ServerResponse, events: unknown[] = []): void {

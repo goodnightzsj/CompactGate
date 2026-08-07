@@ -96,6 +96,11 @@ export async function handleRuntimeApi(
     return true;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/logs/stats") {
+    sendJson(res, 200, logger.stats(readLogStatsQuery(url)));
+    return true;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/logs/maintenance/purge-bodies") {
     const body = await readJsonBody(req);
     if (!isRecord(body) || body.confirm !== true) {
@@ -246,4 +251,42 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
   const limit = Math.min(requestedLimit, keepRecent);
   const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
   return { route, status, host, search, limit, offset };
+}
+
+const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
+
+function readLogStatsQuery(url: URL): { from: string; to: string } {
+  const toTime = parseStatsTimestamp(url.searchParams.get("to"), Date.now(), "to");
+  const fromTime = parseStatsTimestamp(
+    url.searchParams.get("from"),
+    toTime - 24 * 60 * 60 * 1000,
+    "from"
+  );
+
+  if (fromTime >= toTime) {
+    throw new ConfigError("logs stats requires from to be earlier than to.");
+  }
+  if (toTime - fromTime > MAX_LOG_STATS_RANGE_MS) {
+    throw new ConfigError("logs stats range cannot exceed 31 days.");
+  }
+
+  return {
+    from: new Date(fromTime).toISOString(),
+    to: new Date(toTime).toISOString()
+  };
+}
+
+function parseStatsTimestamp(value: string | null, fallback: number, name: string): number {
+  if (value === null || value.length === 0) {
+    return fallback;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    throw new ConfigError(`logs stats ${name} must be an RFC 3339 timestamp.`);
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new ConfigError(`logs stats ${name} must be an RFC 3339 timestamp.`);
+  }
+  return timestamp;
 }

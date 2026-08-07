@@ -31,7 +31,13 @@ export function detectPageFromLocation(location: LocationLike): PageMode {
     return "config";
   }
   const hash = location.hash.slice(1);
-  if (hash === "routes" || hash === "config" || hash === "logs") return hash;
+  if (
+    hash === "analytics" ||
+    hash === "usage" ||
+    hash === "routes" ||
+    hash === "config" ||
+    hash === "logs"
+  ) return hash;
   return "dashboard";
 }
 

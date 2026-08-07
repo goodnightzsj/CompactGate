@@ -1,14 +1,13 @@
 import http from "node:http";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { requestJson, UpstreamStatusError } from "../src/server/upstream-json-client.js";
 import {
   classifyAnthropicUpstreamResult,
   classifyOpenAiUpstreamResult,
-  requestJson,
   sendOpenAiUpstreamRequest,
   sendBufferedUpstreamRequest,
   type BufferedUpstreamResult,
-  UpstreamStatusError,
   writeBufferedUpstreamResult
 } from "../src/server/upstream-client.js";
 import { listen, trackServer } from "./helpers/server-test-lifecycle.js";

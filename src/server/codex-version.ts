@@ -1,40 +1,24 @@
 import { spawnSync } from "node:child_process";
-import type { RequestLogEntry } from "../shared/types.js";
+import type {
+  CodexClientInfo,
+  CodexVersionStatus,
+  OpenAiCompactionMode,
+  RequestLogEntry
+} from "../shared/types.js";
+
+export type {
+  CodexClientInfo,
+  CodexObservedClient,
+  CodexVersionStatus
+} from "../shared/types.js";
 
 export const CODEX_REMOTE_V2_DEFAULT_FROM = "0.140.0";
 export const CODEX_PROTOCOL_LOG_LIMIT = 200;
 const DEFAULT_VERSION_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 
-export type CodexObservedProtocol = "local" | "remote_v1" | "remote_v2";
-export type CodexProtocolSummary = CodexObservedProtocol | "mixed" | "unknown";
-export type CodexProtocolConfidence = "observed" | "inferred" | "unknown";
-export type CodexProtocolSource = "request" | "version_baseline" | "none";
-
-export interface CodexClientInfo {
-  name: string;
-  raw_version: string;
-  base_version: string | null;
-  variant: string | null;
-  is_fork: boolean;
-}
-
-export interface CodexObservedClient extends CodexClientInfo {
-  last_observed_at: string;
-  protocols: CodexObservedProtocol[];
-}
-
-export interface CodexVersionStatus {
-  local_client: CodexClientInfo | null;
-  local_source: "local_cli" | "unavailable";
-  last_checked_at: string | null;
-  observed_clients: CodexObservedClient[];
-  observed_protocol: CodexProtocolSummary;
-  observed_at: string | null;
-  protocol_source: CodexProtocolSource;
-  confidence: CodexProtocolConfidence;
-  v2_default_from: string;
-}
+export type CodexObservedProtocol = OpenAiCompactionMode;
+export type CodexProtocolSummary = CodexVersionStatus["observed_protocol"];
 
 interface CodexVersionMonitorOptions {
   intervalMs?: number;

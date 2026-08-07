@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertCaptured,
   captureBody,
+  captureRequest,
   type CapturedRequest,
   cleanup,
   setEnv,
@@ -21,12 +22,7 @@ describe("CompactGate Claude routing", () => {
   it("does not duplicate /v1 when the Claude base URL already includes it", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startClaudeUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ type: "message", content: [{ type: "text", text: "OK" }] }));
     });
@@ -65,12 +61,7 @@ describe("CompactGate Claude routing", () => {
 
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startHttpsClaudeUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -121,12 +112,7 @@ describe("CompactGate Claude routing", () => {
 
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startHttpsClaudeUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ content: [{ type: "text", text: "SHOULD_NOT_REACH" }] }));
     });
@@ -169,12 +155,7 @@ describe("CompactGate Claude routing", () => {
 
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startHttpsClaudeUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ content: [{ type: "text", text: "SHOULD_NOT_REACH" }] }));
     });
@@ -221,12 +202,7 @@ describe("CompactGate Claude routing", () => {
 
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startHttpsClaudeUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ content: [{ type: "text", text: "SHOULD_NOT_REACH" }] }));
     });

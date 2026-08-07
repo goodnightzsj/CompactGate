@@ -7,7 +7,8 @@ import { resolveRouteCredential } from "./credentials.js";
 import {
   buildUpstreamHeaders,
   isRecord,
-  parseJsonRecord
+  parseJsonRecord,
+  readTrimmedString
 } from "./http-utils.js";
 import {
   fetchUpstreamModels,
@@ -69,16 +70,16 @@ export function resolveClaudeMappedModel(
   }
 
   const role = classifyClaudeModelRole(sourceModel);
-  const roleTarget = role ? readStringField(config.claude.model_map[role]) : null;
+  const roleTarget = role ? readTrimmedString(config.claude.model_map[role]) : null;
   if (roleTarget) {
     return roleTarget;
   }
 
-  return readStringField(config.claude.model_map.default);
+  return readTrimmedString(config.claude.model_map.default);
 }
 
 export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): Buffer {
-  const model = readStringField(modelOverride);
+  const model = readTrimmedString(modelOverride);
   if (!model) {
     return rawBody;
   }
@@ -95,11 +96,7 @@ export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): 
 }
 
 function isMimoClaudeUpstreamHost(config: CompactGateConfig): boolean {
-  try {
-    return new URL(config.claude.primary.base_url).hostname.toLowerCase() === MIMO_IMAGE_INPUT_HOSTNAME;
-  } catch {
-    return false;
-  }
+  return URL.parse(config.claude.primary.base_url)?.hostname.toLowerCase() === MIMO_IMAGE_INPUT_HOSTNAME;
 }
 
 function hasClaudeImageInput(rawBody: Buffer): boolean {
@@ -118,7 +115,7 @@ function containsClaudeImageContent(value: unknown): boolean {
     return false;
   }
 
-  if (readStringField(value.type)?.toLowerCase() === "image") {
+  if (readTrimmedString(value.type)?.toLowerCase() === "image") {
     return true;
   }
 
@@ -156,8 +153,4 @@ function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole
   }
 
   return null;
-}
-
-function readStringField(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }

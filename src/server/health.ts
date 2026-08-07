@@ -3,6 +3,7 @@ import { resolveRouteCredential } from "./credentials.js";
 import type { RequestLogger } from "./logger.js";
 import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import { isValidBaseUrl } from "./config-url.js";
 
 export function healthForConfig(
   config: CompactGateConfig,
@@ -72,18 +73,9 @@ export function healthForConfig(
 }
 
 export function hostOrNull(value: string): string | null {
-  try {
-    return new URL(value).host;
-  } catch {
-    return null;
-  }
+  return URL.parse(value)?.host ?? null;
 }
 
 function statusForBaseUrl(value: string): "configured" | "invalid" {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? "configured" : "invalid";
-  } catch {
-    return "invalid";
-  }
+  return isValidBaseUrl(value) ? "configured" : "invalid";
 }

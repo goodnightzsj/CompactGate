@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
-  captureBody,
+  captureRequest,
   type CapturedRequest,
   startApp,
   startAppInDir,
@@ -202,12 +202,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         if (nextRequests.length === 1) {
           writeJson(res, { id: "resp_target_healthy", output: [] });
         } else if (nextRequests.length <= 3) {
@@ -259,12 +254,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         if (nextRequests.length === 1) {
           writeJson(res, { id: "resp_target_healthy", output: [] });
         } else if (nextRequests.length === 2) {
@@ -318,12 +308,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         writeJson(res, { error: { code: "upstream_error" } }, 502);
       }
     );
@@ -347,12 +332,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         if (nextRequests.length === 1) {
           writeJson(res, { id: "resp_target_healthy", output: [] });
         } else {
@@ -418,12 +398,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         writeSse(res, [{
           type: "response.failed",
           response: { error: { code: "invalid_encrypted_content" } }
@@ -507,12 +482,7 @@ describe("primary provider-state error recovery", () => {
     const setup = await setupProfileSwitch(
       (res) => writeJson(res, { id: "resp_restart_old", output: [] }),
       async (req, res) => {
-        nextRequests.push({
-          method: req.method ?? "POST",
-          url: req.url ?? "",
-          headers: req.headers,
-          body: await captureBody(req)
-        });
+        nextRequests.push(await captureRequest(req));
         if (nextRequests.length === 1) {
           writeJson(res, { id: "resp_target_healthy", output: [] });
         } else if (nextRequests.length <= 3) {

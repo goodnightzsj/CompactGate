@@ -1,16 +1,8 @@
 export function safeHost(value: string): string {
-  try {
-    return new URL(value).host;
-  } catch {
-    return "invalid";
-  }
+  return URL.parse(value)?.host ?? "invalid";
 }
 
 export function isValidBaseUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
+  const protocol = URL.parse(value)?.protocol;
+  return protocol === "http:" || protocol === "https:";
 }

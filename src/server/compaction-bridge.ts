@@ -314,9 +314,9 @@ function compactDedupeKey(input: CompactResponseDedupeInput): string {
   return JSON.stringify([
     (input.method ?? "POST").toUpperCase(),
     input.upstream.toString(),
-    hashText(input.authorization ?? ""),
-    hashText(JSON.stringify(canonicalDedupeHeaders(input.requestHeaders ?? {}))),
-    hashBuffer(input.body)
+    sha256(input.authorization ?? ""),
+    sha256(JSON.stringify(canonicalDedupeHeaders(input.requestHeaders ?? {}))),
+    sha256(input.body)
   ]);
 }
 
@@ -327,11 +327,7 @@ function canonicalDedupeHeaders(headers: Record<string, string>): Array<[string,
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
-function hashText(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function hashBuffer(value: Buffer): string {
+function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 

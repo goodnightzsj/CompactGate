@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +10,7 @@ import {
   cleanupEnvKeys,
   fetchLogPage,
   fetchRecentLogs,
+  postJson,
   readLatestLogBodyFields,
   readLogCount,
   seedLegacyLogDatabase,
@@ -19,41 +19,16 @@ import {
   startApp,
   startAppInDir,
   startClaudeUpstream,
+  startJsonUpstream,
   startUpstream,
-  waitForCaptureRecords
+  waitForCaptureRecords,
+  writeJsonResponse
 } from "./helpers/server-test-utils.js";
-
-const JSON_HEADERS = { "content-type": "application/json" };
-
-function writeJsonResponse(res: ServerResponse, body: unknown, status = 200): void {
-  res.writeHead(status, JSON_HEADERS);
-  res.end(JSON.stringify(body));
-}
-
-function startJsonUpstream(body: unknown, status = 200) {
-  return startUpstream(async (req, res) => {
-    await captureBody(req);
-    writeJsonResponse(res, body, status);
-  });
-}
 
 function startClaudeJsonUpstream(body: unknown, status = 200) {
   return startClaudeUpstream(async (req, res) => {
     await captureBody(req);
     writeJsonResponse(res, body, status);
-  });
-}
-
-function postJson(
-  appUrl: string,
-  path: string,
-  body: unknown,
-  headers: Record<string, string> = {}
-): Promise<Response> {
-  return fetch(`${appUrl}${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: { ...JSON_HEADERS, ...headers }
   });
 }
 

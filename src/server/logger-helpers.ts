@@ -14,6 +14,9 @@ import type {
 } from "../shared/types.js";
 import { effectiveResponseModel } from "./response-model.js";
 import { parseCodexClientUserAgent } from "./codex-version.js";
+import { readNumber as readNullableNumber } from "./usage-utils.js";
+
+export { readNullableNumber };
 
 export interface LogPageOptions {
   route?: RouteKind;
@@ -35,23 +38,6 @@ export const LOG_SEARCH_COLUMNS = [
   "request_summary",
   "status"
 ] as const;
-
-export function logSearchClause(options: Pick<LogPageOptions, "search">): {
-  sql: string;
-  params: string[];
-} {
-  const keyword = options.search?.trim();
-  if (!keyword) {
-    return { sql: "", params: [] };
-  }
-
-  const like = `%${keyword}%`;
-  const conditions = LOG_SEARCH_COLUMNS.map((column) => `${column} LIKE ?`);
-  return {
-    sql: `(${conditions.join(" OR ")})`,
-    params: LOG_SEARCH_COLUMNS.map(() => like)
-  };
-}
 
 export function logStandaloneErrorSql(columnPrefix = ""): string {
   const column = (name: string) => `${columnPrefix}${name}`;
@@ -116,10 +102,11 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
     params.push(options.host);
   }
 
-  const search = logSearchClause(options);
-  if (search.sql) {
-    conditions.push(search.sql);
-    params.push(...search.params);
+  const keyword = options.search?.trim();
+  if (keyword) {
+    const like = `%${keyword}%`;
+    conditions.push(`(${LOG_SEARCH_COLUMNS.map((column) => `${column} LIKE ?`).join(" OR ")})`);
+    params.push(...LOG_SEARCH_COLUMNS.map(() => like));
   }
 
   return {
@@ -196,14 +183,14 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
       responseModelSource
     ),
     codex_client: parseCodexClientUserAgent(userAgent),
-    status: readRequiredNumber(row.status),
+    status: readNullableNumber(row.status) ?? 0,
     upstream_status: readNullableNumber(row.upstream_status),
     stream_terminal_event: readNullableString(row.stream_terminal_event),
     client_disconnect_phase: readClientDisconnectPhase(row.client_disconnect_phase),
     stream_outcome: readStreamOutcome(row.stream_outcome),
     stream_oversized_event_count: readNullableNumber(row.stream_oversized_event_count) ?? 0,
     upstream_response_truncated: readBoolean(row.upstream_response_truncated),
-    duration_ms: readRequiredNumber(row.duration_ms),
+    duration_ms: readNullableNumber(row.duration_ms) ?? 0,
     first_token_ms: readNullableNumber(row.first_token_ms),
     input_tokens: readNullableNumber(row.input_tokens),
     output_tokens: readNullableNumber(row.output_tokens),
@@ -282,28 +269,6 @@ export function readCaptureStatus(value: unknown): RequestLogEntry["capture_stat
 
 export function readBodyStatus(value: unknown): RequestLogEntry["body_status"] {
   return value === "present" || value === "purged" ? value : "none";
-}
-
-export function readNullableNumber(value: unknown): number | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value >= 0 ? value : null;
-  }
-
-  if (typeof value === "string") {
-    const text = value.trim();
-    const number = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-    return Number.isSafeInteger(number) ? number : null;
-  }
-
-  return null;
-}
-
-function readRequiredNumber(value: unknown): number {
-  return readNullableNumber(value) ?? 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

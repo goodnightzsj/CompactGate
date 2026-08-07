@@ -1,9 +1,7 @@
 export function normalizeMaxEntries(value: number | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+  return value !== undefined && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : fallback;
 }
 
 export function rememberMapEntry<Value>(map: Map<string, Value>, key: string, entry: Value): void {

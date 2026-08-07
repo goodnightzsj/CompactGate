@@ -13,7 +13,7 @@ import {
 import type { ConfigStore } from "./config.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
-  copyResponseHeaders,
+  parseJsonRecord,
   RequestBodyTooLargeError,
   readRawBody,
   sendJson,
@@ -37,7 +37,6 @@ import {
 } from "./openai-proxy-transaction.js";
 import {
   classifyOpenAiRequest,
-  extractJsonModel,
   hasRemoteV2CompactionState,
   type OpenAiRequestClassification
 } from "./routing.js";
@@ -676,11 +675,9 @@ async function proxyCompactRequest(
       // 方案 B:Codex compact 期望原始上游 SSE 流,重放缓存的原始响应体而非归一化 JSON。
       transaction.clientResponseBody = null;
       transaction.clientResponseHeaders = null;
-      writeBufferedProxyResponse(
+      writeBufferedUpstreamResult(
         res,
-        transaction.status,
-        transaction.responseHeaders,
-        transaction.responseBody,
+        cachedCompactResponse,
         {
           "x-compactgate-route": route,
           ...compactionResponseHeaders(classification),
@@ -770,7 +767,8 @@ async function proxyCompactRequest(
     transaction.errorSummary = summaryForError(error);
 
     if (!transaction.sourceModel && transaction.rawBody.byteLength > 0) {
-      transaction.sourceModel = extractJsonModel(transaction.rawBody).sourceModel;
+      const parsedBody = parseJsonRecord(transaction.rawBody);
+      transaction.sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
     }
 
     if (!res.headersSent) {
@@ -881,23 +879,4 @@ function applyCachedCompactResponse(
   transaction.compactResponseNormalizeReason = cached.compactResponseNormalizeReason;
   transaction.compactResponseSyntheticSource = cached.compactResponseSyntheticSource;
   transaction.firstTokenMs = cached.firstTokenMs;
-}
-
-function writeBufferedProxyResponse(
-  res: ServerResponse,
-  status: number,
-  headers: IncomingMessage["headers"],
-  body: Buffer,
-  extraResponseHeaders: Record<string, string>
-): void {
-  if (res.headersSent || res.writableEnded) {
-    return;
-  }
-
-  copyResponseHeaders(headers, res);
-  for (const [name, value] of Object.entries(extraResponseHeaders)) {
-    res.setHeader(name, value);
-  }
-  res.writeHead(status);
-  res.end(body);
 }

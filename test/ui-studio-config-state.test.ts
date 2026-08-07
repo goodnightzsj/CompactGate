@@ -12,6 +12,8 @@ import { makeConfigDir } from "./helpers/config-test-utils.js";
 describe("Studio config ownership", () => {
   it("keeps one bootstrap scope across internal Studio navigation", () => {
     expect(studioBootstrapScope("dashboard")).toBe("studio");
+    expect(studioBootstrapScope("analytics")).toBe("studio");
+    expect(studioBootstrapScope("usage")).toBe("studio");
     expect(studioBootstrapScope("routes")).toBe("studio");
     expect(studioBootstrapScope("config")).toBe("studio");
     expect(studioBootstrapScope("logs")).toBe("studio");

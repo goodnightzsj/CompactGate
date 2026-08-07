@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertCaptured,
-  captureBody,
+  captureRequest,
   type CapturedRequest,
   startApp,
   startUpstream
@@ -16,12 +16,7 @@ describe("CompactGate OpenAI routing", () => {
   it("routes compact requests to primary when upstream mode is primary", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const primary = await startUpstream(async (req, res) => {
-      captured.current = {
-        method: req.method ?? "POST",
-        url: req.url ?? "",
-        headers: req.headers,
-        body: await captureBody(req)
-      };
+      captured.current = await captureRequest(req);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });

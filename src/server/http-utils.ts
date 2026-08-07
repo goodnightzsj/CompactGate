@@ -140,6 +140,10 @@ export function readHeaderString(value: string | string[] | undefined): string |
   return text && text.length > 0 ? text : null;
 }
 
+export function readTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
 export function endpointFromPath(pathname: string): string {
   if (pathname === "/v1") {
     return "/";

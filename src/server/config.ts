@@ -43,8 +43,6 @@ import {
   validateRuntimeConfig
 } from "./config-runtime.js";
 
-const PROFILE_SCOPES: ConfigProfileScope[] = ["codex", "claude"];
-
 export { ConfigError } from "./config-error.js";
 export { DEFAULT_CONFIG } from "./config-defaults.js";
 export { parseListenAddress } from "./config-runtime.js";
@@ -199,7 +197,7 @@ export function validateConfig(config: CompactGateConfig): void {
     validateRouteUrlPreset(preset);
   }
 
-  for (const scope of PROFILE_SCOPES) {
+  for (const scope of ["codex", "claude"] as const) {
     const state = getProfileScopeState(config, scope);
     for (const profile of state.profiles) {
       if (profile.id.trim().length === 0) {
@@ -220,7 +218,9 @@ export function validateConfig(config: CompactGateConfig): void {
 }
 
 function validateRouteUrlPreset(preset: RouteUrlPreset): void {
-  validateRouteUrlPresetKind(preset.kind);
+  if (!isRouteUrlPresetKind(preset.kind)) {
+    throw new ConfigError("route_url_presets.kind must be a known route URL preset kind.");
+  }
   validateBaseUrl(preset.base_url, `route_url_presets.${preset.kind}.base_url`);
 
   if (!Number.isInteger(preset.usage_count) || preset.usage_count < 1) {
@@ -232,12 +232,6 @@ function validateRouteUrlPreset(preset: RouteUrlPreset): void {
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(preset.api_key_env)
   ) {
     throw new ConfigError("route_url_presets.api_key_env must be an environment variable name.");
-  }
-}
-
-function validateRouteUrlPresetKind(value: string): void {
-  if (!isRouteUrlPresetKind(value)) {
-    throw new ConfigError("route_url_presets.kind must be a known route URL preset kind.");
   }
 }
 

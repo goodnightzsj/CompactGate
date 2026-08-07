@@ -2,29 +2,36 @@ import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
   ConfigProfileScope,
+  SavedClaudeProfileConfig,
+  SavedCodexProfileConfig,
   SavedConfigProfile,
-  SavedConfigProfileConfig,
   SavedConfigProfileScopeState,
   SavedConfigProfileScopes
 } from "../shared/types.js";
 import { cloneProfile } from "./config-clone.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
 import { isRecord, readChild, readString } from "./config-readers.js";
+import { mergeRuntimeConfig } from "./config-runtime.js";
 
-type MergeRuntimeConfig = (
-  base: CompactGateRuntimeConfig,
-  patch: unknown
-) => CompactGateRuntimeConfig;
-
-type ExtractScopedProfileConfig = (
+export function extractScopedProfileConfig(
   runtime: CompactGateRuntimeConfig,
   scope: ConfigProfileScope
-) => SavedConfigProfileConfig;
+): SavedCodexProfileConfig | SavedClaudeProfileConfig {
+  if (scope === "codex") {
+    return {
+      primary: { ...runtime.primary },
+      compact: { ...runtime.compact }
+    };
+  }
 
-type ProfileScopeMergeOptions = {
-  mergeRuntimeConfig: MergeRuntimeConfig;
-  extractScopedProfileConfig: ExtractScopedProfileConfig;
-};
+  return {
+    claude: {
+      primary: { ...runtime.claude.primary },
+      compact: { ...runtime.claude.compact },
+      model_map: { ...runtime.claude.model_map }
+    }
+  };
+}
 
 export function shouldPersistProfileNormalization(value: unknown): boolean {
   if (!isRecord(value)) {
@@ -44,13 +51,12 @@ export function shouldPersistProfileNormalization(value: unknown): boolean {
 
 export function mergeProfileScopes(
   base: CompactGateConfig,
-  patchRecord: Record<string, unknown>,
-  options: ProfileScopeMergeOptions
+  patchRecord: Record<string, unknown>
 ): SavedConfigProfileScopes {
   const baseScopes = base.profile_scopes;
   const legacyActive = readActiveProfileId(patchRecord.active_profile_id, base.active_profile_id ?? null);
   const legacySource = Array.isArray(patchRecord.profiles) ? patchRecord.profiles : base.profiles;
-  const legacyMigration = migrateLegacyProfiles(legacySource, legacyActive, options);
+  const legacyMigration = migrateLegacyProfiles(legacySource, legacyActive);
   const patchScopes = readChild(patchRecord.profile_scopes);
 
   return {
@@ -59,16 +65,14 @@ export function mergeProfileScopes(
       baseScopes?.codex,
       readChild(patchScopes.codex),
       legacyMigration.codexProfiles,
-      legacyMigration.codexActiveProfileId,
-      options
+      legacyMigration.codexActiveProfileId
     ),
     claude: mergeProfileScopeState(
       "claude",
       baseScopes?.claude,
       readChild(patchScopes.claude),
       legacyMigration.claudeProfiles,
-      legacyMigration.claudeActiveProfileId,
-      options
+      legacyMigration.claudeActiveProfileId
     )
   };
 }
@@ -112,8 +116,7 @@ function mergeProfileScopeState(
   baseState: SavedConfigProfileScopeState | undefined,
   patchState: Record<string, unknown>,
   legacyProfiles: SavedConfigProfile[],
-  legacyActive: string | null,
-  options: ProfileScopeMergeOptions
+  legacyActive: string | null
 ): SavedConfigProfileScopeState {
   const baseProfiles = baseState?.profiles ?? [];
   const hasPatchProfiles = Array.isArray(patchState.profiles);
@@ -122,7 +125,7 @@ function mergeProfileScopeState(
     ? legacyActive
     : baseState?.active_profile_id ?? null;
   return {
-    profiles: hasPatchProfiles ? mergeProfiles(scope, fallbackProfiles, patchState.profiles, options) : fallbackProfiles.map(cloneProfile),
+    profiles: hasPatchProfiles ? mergeProfiles(scope, fallbackProfiles, patchState.profiles) : fallbackProfiles.map(cloneProfile),
     active_profile_id: readActiveProfileId(patchState.active_profile_id, fallbackActive)
   };
 }
@@ -130,22 +133,20 @@ function mergeProfileScopeState(
 function mergeProfiles(
   scope: ConfigProfileScope,
   baseProfiles: SavedConfigProfile[],
-  value: unknown,
-  options: ProfileScopeMergeOptions
+  value: unknown
 ): SavedConfigProfile[] {
   if (!Array.isArray(value)) {
     return baseProfiles.map(cloneProfile);
   }
 
   return value
-    .map((item) => readProfile(item, scope, options))
+    .map((item) => readProfile(item, scope))
     .filter((item): item is SavedConfigProfile => item !== null);
 }
 
 function migrateLegacyProfiles(
   value: unknown,
-  activeProfileId: string | null,
-  options: ProfileScopeMergeOptions
+  activeProfileId: string | null
 ): {
   codexProfiles: SavedConfigProfile[];
   codexActiveProfileId: string | null;
@@ -162,14 +163,14 @@ function migrateLegacyProfiles(
   }
 
   const codexProfiles = value
-    .map((item) => readProfile(item, "codex", options))
+    .map((item) => readProfile(item, "codex"))
     .filter((item): item is SavedConfigProfile => item !== null);
   const claudeProfiles: SavedConfigProfile[] = [];
   const claudeConfigProfileIds = new Map<string, string>();
   let claudeActiveProfileId: string | null = null;
 
   for (const item of value) {
-    const profile = readProfile(item, "claude", options);
+    const profile = readProfile(item, "claude");
     if (!profile) {
       continue;
     }
@@ -202,8 +203,7 @@ function migrateLegacyProfiles(
 
 function readProfile(
   value: unknown,
-  scope: ConfigProfileScope,
-  options: ProfileScopeMergeOptions
+  scope: ConfigProfileScope
 ): SavedConfigProfile | null {
   if (!isRecord(value)) {
     return null;
@@ -215,8 +215,8 @@ function readProfile(
     return null;
   }
 
-  const config = options.extractScopedProfileConfig(
-    options.mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config)),
+  const config = extractScopedProfileConfig(
+    mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config)),
     scope
   );
   return {

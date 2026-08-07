@@ -5,6 +5,8 @@
   .solid-button,
   .custom-select-trigger,
   .custom-select-option,
+  .usage-date-trigger,
+  .usage-date-popover button,
   .sidebar-nav-item,
   .config-tab,
   .profile-item-more summary,
@@ -180,6 +182,49 @@
     justify-content: center;
   }
 
+  .analytics-page-header,
+  .analytics-header-actions,
+  .analytics-header-actions .analytics-segmented,
+  .analytics-header-actions .btn {
+    width: 100%;
+  }
+
+  .analytics-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analytics-chart-grid,
+  .analytics-breakdown-grid,
+  .usage-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analytics-chart-grid,
+  .analytics-breakdown-grid {
+    gap: 12px;
+  }
+
+  .analytics-panel,
+  .analytics-chart-grid,
+  .analytics-breakdown-grid,
+  .usage-filter-bar {
+    margin-bottom: 12px;
+  }
+
+  .analytics-chart-empty {
+    min-height: 160px;
+  }
+
+  .analytics-loading {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-date-picker,
+  .usage-date-trigger,
+  .usage-date-popover {
+    width: 100%;
+  }
+
   .sidebar {
     position: sticky;
     top: 0;
@@ -204,7 +249,7 @@
 
   .sidebar-nav {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
     padding: 0;
   }
@@ -267,6 +312,8 @@
   .solid-button,
   .custom-select-trigger,
   .custom-select-option,
+  .usage-date-trigger,
+  .usage-date-popover button,
   .config-tab,
   input,
   textarea {
@@ -546,6 +593,14 @@
 }
 
 @media (max-width: 420px) {
+  .sidebar-nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .analytics-metric-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .profile-card,
   .route-config-card {
     padding: 10px;
@@ -587,6 +642,19 @@
   .profile-scope-grid .profile-item-actions {
     grid-column: auto;
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1360px) {
+  .analytics-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 761px) and (max-width: 980px) {
+  .analytics-chart-grid,
+  .analytics-breakdown-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

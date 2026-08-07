@@ -2,7 +2,14 @@ import type { HealthResponse } from "../shared/types.js";
 
 export type ThemeMode = "auto" | "light" | "dark";
 
-export type StudioPage = "dashboard" | "routes" | "config" | "logs" | "health";
+export type StudioPage =
+  | "dashboard"
+  | "analytics"
+  | "usage"
+  | "routes"
+  | "config"
+  | "logs"
+  | "health";
 
 export type PageMode = StudioPage;
 

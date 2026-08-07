@@ -24,10 +24,7 @@ export interface PrimaryCandidateSelectionInput {
 }
 
 export function selectPrimaryCandidate(input: PrimaryCandidateSelectionInput): PrimaryCandidate {
-  const selected =
-    selectStickyCandidate(input) ??
-    selectScoredCandidate(input);
-  return selected;
+  return selectStickyCandidate(input) ?? selectScoredCandidate(input);
 }
 
 function selectStickyCandidate(input: PrimaryCandidateSelectionInput): PrimaryCandidate | null {

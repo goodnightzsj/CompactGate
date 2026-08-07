@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  captureBody,
+  captureRequest,
   type CapturedRequest,
   claudeManualCompactPrompt,
   fetchLogPage,
@@ -8,33 +8,16 @@ import {
   startApp,
   startClaudeUpstream
 } from "./helpers/server-test-utils.js";
-
-const CLAUDE_HEADERS = {
-  "content-type": "application/json",
-  "anthropic-version": "2023-06-01"
-};
+import { postClaudeMessage } from "./server-claude-core-helpers.js";
 
 async function startCapturedClaudeUpstream(
   requests: CapturedRequest[],
   responseBody: unknown
 ) {
   return startClaudeUpstream(async (req, res) => {
-    requests.push({
-      method: req.method ?? "POST",
-      url: req.url ?? "",
-      headers: req.headers,
-      body: await captureBody(req)
-    });
+    requests.push(await captureRequest(req));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(responseBody));
-  });
-}
-
-function postClaudeMessage(appUrl: string, path: string, body: unknown): Promise<Response> {
-  return fetch(`${appUrl}${path}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-    headers: CLAUDE_HEADERS
   });
 }
 

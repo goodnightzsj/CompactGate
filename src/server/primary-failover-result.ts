@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { decodeBodyText, isRecord } from "./http-utils.js";
+import { decodeBodyText, isRecord, readTrimmedString } from "./http-utils.js";
 import type {
   PrimaryResultCategory,
   PrimaryRouteResult
@@ -222,10 +222,5 @@ function isModelIncompatibleFailure(status: number, summary: string): boolean {
 }
 
 function readHeader(value: IncomingHttpHeaders[string]): string | null {
-  const raw = Array.isArray(value) ? value[0] : value;
-  return readTrimmedString(raw);
-}
-
-function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return readTrimmedString(Array.isArray(value) ? value[0] : value);
 }
