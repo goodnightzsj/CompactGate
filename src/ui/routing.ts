@@ -21,10 +21,6 @@ interface PageChangeTarget {
   removeEventListener: (type: "hashchange" | "popstate", listener: () => void) => void;
 }
 
-export function detectPage(): PageMode {
-  return detectPageFromLocation(window.location);
-}
-
 export function detectStudioLocation(): StudioLocation {
   return detectStudioLocationFromLocation(window.location);
 }

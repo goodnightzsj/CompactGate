@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import "./helpers/server-test-hooks.js";
 import {
   startApp,
   startUpstream

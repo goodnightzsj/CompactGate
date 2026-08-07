@@ -23,7 +23,7 @@ describe("ConfigStore", () => {
       }
     });
 
-    const saved = await store.saveProfile("Local split", {
+    const saved = await store.saveProfile("codex", "Local split", {
       primary: {
         base_url: "http://127.0.0.1:9201/v1",
         api_key: "profile-primary-key",
@@ -79,7 +79,7 @@ describe("ConfigStore", () => {
     expect(JSON.stringify(publicConfig)).not.toContain("profile-claude-compact-key");
     expect(JSON.stringify(publicConfig.route_url_presets)).not.toContain("profile-compact-key");
 
-    await store.applyProfile(profileId ?? "");
+    await store.applyProfile("codex", profileId ?? "");
     const applied = store.get();
     expect(applied.profile_scopes?.codex?.active_profile_id).toBe(profileId);
     expect(applied.primary.base_url).toBe("http://127.0.0.1:9201/v1");
@@ -108,13 +108,13 @@ describe("ConfigStore", () => {
     });
     expect(patchedCodexConfig).not.toHaveProperty("claude");
 
-    const duplicated = await store.duplicateProfile(profileId ?? "", "Local split copy");
+    const duplicated = await store.duplicateProfile("codex", profileId ?? "", "Local split copy");
     const duplicateId = duplicated.profile_scopes?.codex?.profiles?.find((profile) => profile.name === "Local split copy")?.id;
     expect(duplicateId).toBeTruthy();
     expect(duplicateId).not.toBe(profileId);
     expect(duplicated.profile_scopes?.codex?.profiles).toHaveLength(2);
 
-    await store.updateProfile(profileId ?? "", "Local split updated", {
+    await store.updateProfile("codex", profileId ?? "", "Local split updated", {
       primary: {
         base_url: "http://127.0.0.1:9401/v1",
         reasoning_effort: "max"
@@ -138,7 +138,7 @@ describe("ConfigStore", () => {
     });
     expect(updatedProfile?.config).not.toHaveProperty("claude");
 
-    await store.deleteProfile(profileId ?? "");
+    await store.deleteProfile("codex", profileId ?? "");
     const deleted = store.get();
     expect(deleted.profile_scopes?.codex?.profiles).toHaveLength(1);
     expect(deleted.profile_scopes?.codex?.profiles?.[0]?.id).toBe(duplicateId);

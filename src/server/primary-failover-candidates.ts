@@ -4,7 +4,9 @@ import type {
   SavedConfigProfile,
   UpstreamConfig
 } from "../shared/types.js";
+import { cloneConfig } from "./config-clone.js";
 import { resolveRouteCredential } from "./credentials.js";
+import { isRecord } from "./http-utils.js";
 import type { PrimaryCandidate } from "./primary-failover-types.js";
 
 export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandidate[] {
@@ -71,12 +73,4 @@ function readProfilePrimary(profile: SavedConfigProfile): Partial<UpstreamConfig
   }
 
   return config.primary as Partial<UpstreamConfig>;
-}
-
-function cloneConfig(config: CompactGateConfig): CompactGateConfig {
-  return JSON.parse(JSON.stringify(config)) as CompactGateConfig;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

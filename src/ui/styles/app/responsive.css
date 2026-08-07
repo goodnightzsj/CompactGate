@@ -3,8 +3,6 @@
   button,
   .ghost-button,
   .solid-button,
-  .apply-button,
-  .preview-button,
   .custom-select-trigger,
   .custom-select-option,
   .sidebar-nav-item,
@@ -17,13 +15,10 @@
 
   .profile-item-actions .solid-button,
   .profile-item-actions .ghost-button,
-  .theme-switch button,
-  .mode-switch button,
-  .path-presets button {
+  .theme-switch button {
     min-height: 40px;
   }
 
-  .log-list,
   .profile-list,
   .custom-select-menu {
     -webkit-overflow-scrolling: touch;
@@ -94,33 +89,10 @@
     width: 150px;
   }
 
-  .shell {
-    width: min(100% - 28px, 1180px);
-  }
-
-  .topbar {
-    grid-template-columns: minmax(210px, 1fr) minmax(0, 1.4fr);
-    align-items: stretch;
-  }
-
-  .topbar-endpoints,
-  .status-strip,
-  .toolbar,
-  .topbar-traffic {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
   .dashboard-grid,
   .health-grid,
   .routes-layout {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .route-switchboard,
-  .route-slot-grid,
-  .route-config-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .logging-mode-grid {
@@ -148,23 +120,11 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .logs-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .log-table-full .log-col-reasoning,
   .log-table-full .log-col-response-model {
     visibility: collapse;
   }
 
-  .log-filter-stack {
-    justify-items: stretch;
-  }
-
-  .log-select-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 760px) {
@@ -187,8 +147,6 @@
   .main-content > *,
   .page-header,
   .dashboard-grid,
-  .dashboard-left,
-  .dashboard-right,
   .card,
   .stat-card {
     box-sizing: border-box;
@@ -290,37 +248,8 @@
     margin-top: 0;
   }
 
-  .shell {
-    width: calc(100% - 16px);
-    max-width: 100%;
-    padding: 10px 0 24px;
-  }
-
-  .topbar {
-    position: static;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-    padding: 10px;
-  }
-
-  .brand-lockup {
-    min-width: 0;
-  }
-
-  .topbar-endpoints,
-  .status-strip,
-  .toolbar,
-  .topbar-traffic {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    width: 100%;
-  }
-
-  .endpoint-chip,
   .status-pill,
-  .save-meter,
-  .theme-switch,
-  .toolbar .ghost-button {
+  .theme-switch {
     width: 100%;
     justify-content: center;
   }
@@ -336,8 +265,6 @@
   button,
   .ghost-button,
   .solid-button,
-  .apply-button,
-  .preview-button,
   .custom-select-trigger,
   .custom-select-option,
   .config-tab,
@@ -347,16 +274,9 @@
   }
 
   .dashboard-grid,
-  .dashboard-left,
-  .studio-grid,
   .health-grid,
   .routes-layout,
-  .route-switchboard,
-  .route-slot-grid,
-  .route-config-grid,
-  .route-config-cards,
   .config-row,
-  .provider-summary,
   .logging-storage-intro,
   .logging-mode-grid,
   .logging-settings-grid {
@@ -430,26 +350,12 @@
     min-height: 44px;
   }
 
-  .route-board,
-  .config-dashboard,
-  .logs-panel,
   .profile-card,
-  .route-config-group,
   .route-config-card {
     width: 100%;
     min-width: 0;
     padding: 12px;
     overflow: hidden;
-  }
-
-  .route-rule-row,
-  .route-foot,
-  .mode-card,
-  .compound-input,
-  .preview-readout dl,
-  .token-detail-card,
-  .log-detail-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .route-mapping-row {
@@ -478,10 +384,6 @@
   .protocol-comparison-row > span:last-child {
     grid-column: 1 / -1;
     text-align: left;
-  }
-
-  .route-foot {
-    gap: 8px;
   }
 
   .config-tab-bar {
@@ -558,8 +460,6 @@
   .profile-item-actions .solid-button,
   .profile-item-actions .ghost-button,
   .profile-save-button,
-  .apply-button,
-  .preview-button,
   .log-load-more button {
     min-height: 44px;
     width: 100%;
@@ -582,9 +482,6 @@
     justify-content: center;
   }
 
-  .logs-head,
-  .log-filter-stack,
-  .log-select-row,
   .log-load-more {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -616,18 +513,6 @@
     justify-content: center;
   }
 
-  .log-list {
-    max-height: none;
-    overflow-x: hidden;
-    padding: 0;
-    background: transparent;
-    border: 0;
-  }
-
-  .log-usage-head {
-    display: none;
-  }
-
   .log-row {
     margin-bottom: 10px;
     border: 1px solid var(--border-default);
@@ -636,49 +521,8 @@
     overflow: hidden;
   }
 
-  .log-row-main {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-    min-width: 0;
-    padding: 0;
-  }
-
-  .log-row-main > * {
-    display: grid;
-    grid-template-columns: minmax(92px, 0.42fr) minmax(0, 1fr);
-    gap: 10px;
-    align-items: center;
-    min-width: 0;
-    width: 100%;
-    padding: 9px 10px;
-    border-bottom: 1px solid var(--border-default);
-    text-align: right;
-  }
-
-  .log-row-main > *::before {
-    content: attr(data-label);
-    color: var(--text-tertiary);
-    font-family: var(--font-sans);
-    font-size: 0.63rem;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-align: left;
-    text-transform: uppercase;
-  }
-
-  .log-row-main > *:last-child {
-    border-bottom: 0;
-  }
-
   .log-model-cell,
-  .token-tooltip,
-  .log-time,
-  .log-request-info,
-  .log-endpoint,
-  .log-host,
-  .log-user-agent,
-  .metric-time {
+  .token-tooltip {
     overflow: visible;
     white-space: normal;
     word-break: break-word;
@@ -688,17 +532,8 @@
     justify-items: end;
   }
 
-  .log-status-code,
-  .transport-pill,
-  .token-total-pill,
-  .metric-time {
+  .token-total-pill {
     justify-self: end;
-  }
-
-  .log-detail {
-    margin: 0;
-    border-width: 1px 0 0;
-    border-radius: 0;
   }
 
   .token-tooltip-panel {
@@ -711,41 +546,18 @@
 }
 
 @media (max-width: 420px) {
-  .brand-lockup h1,
-  .route-board .section-heading h2,
-  .config-dashboard .section-heading h2,
-  .logs-panel .section-heading h2 {
-    font-size: 1.2rem;
-  }
-
-  .route-board,
-  .config-dashboard,
-  .logs-panel,
   .profile-card,
-  .route-config-group,
   .route-config-card {
     padding: 10px;
   }
 
-  .log-row-main > * {
-    grid-template-columns: minmax(0, 1fr);
-    text-align: left;
-  }
-
   .log-model-cell,
-  .log-status-code,
-  .transport-pill,
-  .token-total-pill,
-  .metric-time {
+  .token-total-pill {
     justify-self: start;
   }
 }
 
 @media (min-width: 1600px) {
-  .shell {
-    width: min(100% - 56px, 1800px);
-  }
-
   .dashboard-grid {
     grid-template-columns: minmax(0, 1.12fr) minmax(440px, 0.68fr);
   }

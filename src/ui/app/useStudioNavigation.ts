@@ -104,5 +104,3 @@ export function useStudioNavigation() {
     pageMode: navigation.pageMode
   };
 }
-
-export type StudioNavigation = ReturnType<typeof useStudioNavigation>;

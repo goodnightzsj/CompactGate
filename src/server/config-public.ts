@@ -1,13 +1,14 @@
 import type {
   CompactGateConfig,
-  CompactGateRuntimeConfig,
   ConfigProfileScope,
   PublicConfig,
   PublicConfigProfile,
-  SavedConfigProfile,
-  SavedConfigProfileConfig,
-  SavedConfigProfileScopeState
+  SavedConfigProfile
 } from "../shared/types.js";
+import {
+  getProfileScopeState,
+  profileConfigToRuntime
+} from "./config-profile-scope.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { publicRouteUrlPreset } from "./config-route-presets.js";
 import { safeHost } from "./config-url.js";
@@ -15,32 +16,18 @@ import { safeHost } from "./config-url.js";
 export function buildPublicConfig({
   config,
   configPath,
-  lastSavedAt,
-  getProfileScopeState,
-  profileConfigToRuntime
+  lastSavedAt
 }: {
   config: CompactGateConfig;
   configPath: string;
   lastSavedAt: string | null;
-  getProfileScopeState: (config: CompactGateConfig, scope: ConfigProfileScope) => SavedConfigProfileScopeState;
-  profileConfigToRuntime: (config: SavedConfigProfileConfig) => CompactGateRuntimeConfig;
 }): PublicConfig {
   const primaryCredential = resolveRouteCredential("primary", config);
   const compactCredential = resolveRouteCredential("compact", config);
   const claudePrimaryCredential = resolveRouteCredential("claude_primary", config);
   const claudeCompactCredential = resolveRouteCredential("claude_compact", config);
-  const codexProfileScope = publicProfileScope(
-    config,
-    "codex",
-    getProfileScopeState,
-    profileConfigToRuntime
-  );
-  const claudeProfileScope = publicProfileScope(
-    config,
-    "claude",
-    getProfileScopeState,
-    profileConfigToRuntime
-  );
+  const codexProfileScope = publicProfileScope(config, "codex");
+  const claudeProfileScope = publicProfileScope(config, "claude");
 
   return {
     primary: {
@@ -114,22 +101,19 @@ export function buildPublicConfig({
 
 function publicProfileScope(
   config: CompactGateConfig,
-  scope: ConfigProfileScope,
-  getProfileScopeState: (config: CompactGateConfig, scope: ConfigProfileScope) => SavedConfigProfileScopeState,
-  profileConfigToRuntime: (config: SavedConfigProfileConfig) => CompactGateRuntimeConfig
+  scope: ConfigProfileScope
 ): PublicConfig["profile_scopes"]["codex"] {
   const state = getProfileScopeState(config, scope);
   const profiles = state.profiles ?? [];
   return {
-    profiles: profiles.map((profile) => toPublicProfile(profile, scope, profileConfigToRuntime)),
+    profiles: profiles.map((profile) => toPublicProfile(profile, scope)),
     active_profile_id: state.active_profile_id ?? null
   };
 }
 
 function toPublicProfile(
   profile: SavedConfigProfile,
-  scope: ConfigProfileScope,
-  profileConfigToRuntime: (config: SavedConfigProfileConfig) => CompactGateRuntimeConfig
+  scope: ConfigProfileScope
 ): PublicConfigProfile {
   const runtime = profileConfigToRuntime(profile.config);
   const codexProfile = scope === "codex";

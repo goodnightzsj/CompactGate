@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { glob, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -75,20 +75,16 @@ async function readSourceImports(): Promise<SourceImport[]> {
   const files = await readSourceFiles(SRC_DIR);
   return Promise.all(files.map(async (file) => ({
     file,
-    imports: extractImportSpecifiers(await fs.readFile(file, "utf8"))
+    imports: extractImportSpecifiers(await readFile(file, "utf8"))
   })));
 }
 
 async function readSourceFiles(directory: string): Promise<string[]> {
-  const entries = await fs.readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const fullPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      return readSourceFiles(fullPath);
-    }
-    return /\.(tsx?|jsx?)$/.test(entry.name) ? [fullPath] : [];
-  }));
-  return nested.flat().sort();
+  const files: string[] = [];
+  for await (const file of glob("**/*.{ts,tsx,js,jsx}", { cwd: directory })) {
+    files.push(path.join(directory, file));
+  }
+  return files.sort();
 }
 
 function extractImportSpecifiers(source: string): string[] {

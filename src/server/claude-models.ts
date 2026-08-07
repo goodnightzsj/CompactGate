@@ -15,8 +15,6 @@ import {
 } from "./upstream-models.js";
 import { resolveUpstreamPath } from "./upstream-url.js";
 
-export type FetchClaudeModels = (config: CompactGateConfig) => Promise<UpstreamModelsResponse>;
-
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
 

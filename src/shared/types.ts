@@ -25,7 +25,6 @@ export type CompactResponseNormalizeReason =
   | "missing_compaction_output";
 export type CompactResponseSyntheticSource = "upstream_response" | "request_input";
 
-export type PrimaryModelMode = "passthrough" | "linked" | "custom";
 export type PrimaryReasoningEffort = "" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type PrimaryStatePortabilityMode = "off" | "recover_on_error";
 export type CompactModelMode = "linked" | "custom";
@@ -272,13 +271,6 @@ export interface PublicConfig {
   route_url_presets: PublicRouteUrlPreset[];
   config_path: string;
   last_saved_at: string | null;
-}
-
-export interface RoutePreviewRequest {
-  method?: string;
-  path: string;
-  body?: unknown;
-  headers?: Record<string, string>;
 }
 
 export interface RoutePreviewResponse {

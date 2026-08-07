@@ -1,7 +1,6 @@
 import http from "node:http";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import "./helpers/server-test-hooks.js";
 import {
   classifyAnthropicUpstreamResult,
   classifyOpenAiUpstreamResult,

@@ -47,14 +47,6 @@ export function credentialFlagCopy(
     : `当前复用主路由环境变量 ${upstream.active_api_key_env ?? upstream.api_key_env}。`;
 }
 
-export function StatusPill({ label, status }: { label: string; status: HealthBadge }) {
-  return (
-    <span className={`status-pill is-${status.tone}`}>
-      {label}: {status.label}
-    </span>
-  );
-}
-
 export function upstreamHealthBadge(
   upstream?: HealthRouteCredentialConfig | null
 ): HealthBadge {

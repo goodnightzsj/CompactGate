@@ -518,21 +518,6 @@
   bottom: -8px;
 }
 
-.route-config-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.route-config-group {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--paper-warm);
-}
-
-.route-config-group-head,
 .route-config-card-head {
   display: flex;
   gap: 10px;
@@ -540,27 +525,10 @@
   justify-content: space-between;
 }
 
-.route-config-group-head > div {
-  min-width: 0;
-}
-
-.route-config-group-head h3,
 .route-config-card-head h4 {
   margin: 0;
   color: var(--ink);
   line-height: 1.24;
-}
-
-.route-config-group-head p {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.45;
-}
-
-.route-config-cards {
-  display: grid;
-  gap: 8px;
 }
 
 .route-config-card {

@@ -14,13 +14,6 @@ import {
   writeConfigFile
 } from "./config-file-repository.js";
 import {
-  PROFILE_SCOPES,
-  normalizeProfileIdArgs,
-  normalizeProfileIdNameArgs,
-  normalizeProfileMutationArgs,
-  normalizeProfileOperationArgs
-} from "./config-profile-args.js";
-import {
   applyProfile as applyConfigProfile,
   deleteProfile as deleteConfigProfile,
   duplicateProfile as duplicateConfigProfile,
@@ -31,7 +24,6 @@ import {
 import {
   getProfileScopeState,
   mergeProfileScopes,
-  profileConfigToRuntime,
   shouldPersistProfileNormalization,
   syncActiveProfilesFromRuntime,
   validateProfileConfig
@@ -50,6 +42,8 @@ import {
   validateBaseUrl,
   validateRuntimeConfig
 } from "./config-runtime.js";
+
+const PROFILE_SCOPES: ConfigProfileScope[] = ["codex", "claude"];
 
 export { ConfigError } from "./config-error.js";
 export { DEFAULT_CONFIG } from "./config-defaults.js";
@@ -126,28 +120,21 @@ export class ConfigStore {
   }
 
   async saveProfile(
-    scopeOrName: ConfigProfileScope | string,
-    nameOrPatch: string | unknown,
-    maybePatch?: unknown
+    scope: ConfigProfileScope,
+    name: string,
+    patch: unknown
   ): Promise<CompactGateConfig> {
-    const { scope, name, patch } = normalizeProfileOperationArgs(scopeOrName, nameOrPatch, maybePatch);
     return this.mutate(() =>
       saveConfigProfile(this.current, scope, name, applyRouteUrlCredentialPresetBindings(this.current, patch))
     );
   }
 
   async updateProfile(
-    scopeOrProfileId: ConfigProfileScope | string,
-    profileIdOrName: string | undefined,
-    nameOrPatch?: string | unknown,
-    maybePatch?: unknown
+    scope: ConfigProfileScope,
+    profileId: string,
+    name: string | undefined,
+    patch: unknown
   ): Promise<CompactGateConfig> {
-    const { scope, profileId, name, patch } = normalizeProfileMutationArgs(
-      scopeOrProfileId,
-      profileIdOrName,
-      nameOrPatch,
-      maybePatch
-    );
     return this.mutate(() =>
       updateConfigProfile(
         this.current,
@@ -160,16 +147,14 @@ export class ConfigStore {
   }
 
   async duplicateProfile(
-    scopeOrProfileId: ConfigProfileScope | string,
-    profileIdOrName?: string,
-    maybeName?: string
+    scope: ConfigProfileScope,
+    profileId: string,
+    name?: string
   ): Promise<CompactGateConfig> {
-    const { scope, profileId, name } = normalizeProfileIdNameArgs(scopeOrProfileId, profileIdOrName, maybeName);
     return this.mutate(() => duplicateConfigProfile(this.current, scope, profileId, name));
   }
 
-  async deleteProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
-    const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
+  async deleteProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {
     return this.mutate(() => deleteConfigProfile(this.current, scope, profileId));
   }
 
@@ -177,8 +162,7 @@ export class ConfigStore {
     return this.mutate(() => reorderConfigProfiles(this.current, scope, orderedProfileIds));
   }
 
-  async applyProfile(scopeOrProfileId: ConfigProfileScope | string, maybeProfileId?: string): Promise<CompactGateConfig> {
-    const { scope, profileId } = normalizeProfileIdArgs(scopeOrProfileId, maybeProfileId);
+  async applyProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {
     return this.mutate(() => applyConfigProfile(this.current, scope, profileId));
   }
 
@@ -186,9 +170,7 @@ export class ConfigStore {
     return buildPublicConfig({
       config: this.get(),
       configPath: this.configPath,
-      lastSavedAt: this.lastSavedAt,
-      getProfileScopeState,
-      profileConfigToRuntime
+      lastSavedAt: this.lastSavedAt
     });
   }
 

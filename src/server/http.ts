@@ -4,7 +4,6 @@ import http, {
 } from "node:http";
 import { handleApi } from "./api-routes.js";
 import {
-  fetchClaudeModels,
   isAnthropicProxyPath,
   proxyClaudeRequest
 } from "./claude-proxy.js";
@@ -18,16 +17,11 @@ import {
 } from "./http-utils.js";
 import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
 import { proxyOpenAiRequest } from "./openai-proxy.js";
-import { fetchOpenAiModels } from "./openai-models.js";
 import { PrimaryFailoverState } from "./primary-failover.js";
 import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
 import { CodexVersionMonitor } from "./codex-version.js";
-
-export interface CompactGateApp {
-  handler: (req: IncomingMessage, res: ServerResponse) => void;
-}
 
 export function createRequestLogger(configStore: ConfigStore): RequestLogger {
   const config = configStore.get();
@@ -59,37 +53,6 @@ function createDebugCaptureWriter(
   );
 }
 
-export function createCompactGateApp(
-  configStore: ConfigStore,
-  logger?: RequestLogger,
-  captureWriter?: DebugCaptureWriter,
-  compactionBridge = new CompactionBridgeStore(),
-  studioEvents = new StudioEventBroadcaster(),
-  codexVersionMonitor = new CodexVersionMonitor()
-): CompactGateApp {
-  const actualLogger = logger ?? createRequestLogger(configStore);
-  const actualCaptureWriter =
-    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
-  const primaryFailover = new PrimaryFailoverState();
-  codexVersionMonitor.start();
-
-  return {
-    handler: (req, res) => {
-      void routeRequest(
-        req,
-        res,
-        configStore,
-        actualLogger,
-        actualCaptureWriter,
-        compactionBridge,
-        studioEvents,
-        primaryFailover,
-        codexVersionMonitor
-      );
-    }
-  };
-}
-
 export function createCompactGateServer(
   configStore: ConfigStore,
   logger?: RequestLogger,
@@ -101,15 +64,21 @@ export function createCompactGateServer(
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
     captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
-  const app = createCompactGateApp(
-    configStore,
-    actualLogger,
-    actualCaptureWriter,
-    compactionBridge,
-    studioEvents,
-    codexVersionMonitor
-  );
-  const server = http.createServer(app.handler);
+  const primaryFailover = new PrimaryFailoverState();
+  codexVersionMonitor.start();
+  const server = http.createServer((req, res) => {
+    void routeRequest(
+      req,
+      res,
+      configStore,
+      actualLogger,
+      actualCaptureWriter,
+      compactionBridge,
+      studioEvents,
+      primaryFailover,
+      codexVersionMonitor
+    );
+  });
   server.on("upgrade", (_req, socket) => {
     socket.end(
       "HTTP/1.1 426 Upgrade Required\r\n" +
@@ -148,8 +117,6 @@ async function routeRequest(
         logger,
         captureWriter,
         studioEvents,
-        fetchClaudeModels,
-        fetchOpenAiModels,
         primaryFailover,
         codexVersionMonitor
       );

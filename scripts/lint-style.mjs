@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { glob, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = process.cwd();
@@ -9,14 +9,8 @@ const ROOT_FILES = [
   "tsconfig.server.json",
   "vite.config.ts"
 ];
-const TEXT_EXTENSIONS = new Set([
-  ".css",
-  ".js",
-  ".json",
-  ".mjs",
-  ".ts",
-  ".tsx"
-]);
+const TEXT_FILE_GLOB = "**/*.{css,js,json,mjs,ts,tsx}";
+const GLOB_EXCLUDES = ["**/node_modules/**", "**/dist/**"];
 const APP_STYLE_MANIFEST = [
   { file: "tokens.css", role: "tokens" },
   { file: "foundation.css", role: "foundation", ownsSelectors: false },
@@ -65,33 +59,17 @@ console.log("Style drift check passed.");
 async function collectProjectFiles() {
   const files = [];
   for (const directory of SOURCE_DIRS) {
-    files.push(...await collectFiles(path.join(ROOT, directory)));
+    for await (const file of glob(`${directory}/${TEXT_FILE_GLOB}`, {
+      cwd: ROOT,
+      exclude: GLOB_EXCLUDES
+    })) {
+      files.push(path.join(ROOT, file));
+    }
   }
   for (const file of ROOT_FILES) {
     files.push(path.join(ROOT, file));
   }
-  return files
-    .filter((file) => TEXT_EXTENSIONS.has(path.extname(file)))
-    .sort();
-}
-
-async function collectFiles(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const fullPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist") {
-        continue;
-      }
-      files.push(...await collectFiles(fullPath));
-      continue;
-    }
-    if (entry.isFile()) {
-      files.push(fullPath);
-    }
-  }
-  return files;
+  return files.sort();
 }
 
 async function checkTextFile(file) {

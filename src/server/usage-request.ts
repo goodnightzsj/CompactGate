@@ -1,3 +1,4 @@
+import { endpointFromPath } from "./http-utils.js";
 import {
   isRecord,
   parseJsonRecord,
@@ -7,7 +8,7 @@ import {
 import type { RequestMetadata } from "./usage-types.js";
 
 export function extractRequestMetadata(pathname: string, rawBody: Buffer): RequestMetadata {
-  const endpoint = normalizeEndpoint(pathname);
+  const endpoint = endpointFromPath(pathname);
   const parsed = parseJsonRecord(rawBody);
 
   return {
@@ -23,18 +24,6 @@ export function extractSourceModel(rawBody: Buffer): string | null {
   return typeof parsed?.model === "string" && parsed.model.trim().length > 0
     ? parsed.model
     : null;
-}
-
-function normalizeEndpoint(pathname: string): string {
-  if (pathname === "/v1") {
-    return "/";
-  }
-
-  if (pathname.startsWith("/v1/")) {
-    return pathname.slice(3);
-  }
-
-  return pathname || "/";
 }
 
 function extractReasoningEffort(

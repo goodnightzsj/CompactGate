@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { decodeBodyText } from "./http-utils.js";
+import { decodeBodyText, isRecord } from "./http-utils.js";
 import type {
   PrimaryResultCategory,
   PrimaryRouteResult
@@ -228,8 +228,4 @@ function readHeader(value: IncomingHttpHeaders[string]): string | null {
 
 function readTrimmedString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

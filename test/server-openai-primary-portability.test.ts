@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import "./helpers/server-test-hooks.js";
 import {
   captureBody,
   type CapturedRequest,

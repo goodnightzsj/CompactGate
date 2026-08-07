@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { createHash } from "node:crypto";
-import { parseJsonRecord } from "./http-utils.js";
+import { isRecord, parseJsonRecord } from "./http-utils.js";
 import type { PrimaryRouteRequestContext } from "./primary-failover-types.js";
 
 export function primaryRouteRequestContextFromBody(
@@ -89,8 +89,4 @@ function readHeader(value: IncomingHttpHeaders[string]): string | null {
 
 function readTrimmedString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

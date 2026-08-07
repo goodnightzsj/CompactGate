@@ -143,11 +143,6 @@
   display: none;
 }
 
-.log-count {
-  font-size: 0.72rem;
-  color: var(--muted);
-}
-
 .log-load-more {
   display: flex;
   justify-content: center;
@@ -309,11 +304,6 @@
 
 .log-cell-model {
   font-weight: 700;
-}
-
-.log-cell-user-agent {
-  font-size: 0.70rem;
-  max-inline-size: clamp(18ch, 22vw, 44ch);
 }
 
 .log-status {

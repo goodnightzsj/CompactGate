@@ -30,12 +30,6 @@ export type HostFilterOption = HostLogCount;
 export const ALL_HOSTS_FILTER = "__all_hosts__";
 export const DEFAULT_LOG_PAGE_LIMIT = 200;
 
-export function modelReasoningLabel(entry: RequestLogEntry): string {
-  const model = entry.target_model ?? entry.source_model ?? (entry.route === "claude" ? "Claude" : "model");
-  const reasoning = entry.reasoning_effort ?? "standard";
-  return `${model}\u2009·\u2009${reasoning}`;
-}
-
 export function reasoningEffortLabel(entry: RequestLogEntry): string {
   return entry.reasoning_effort ?? "-";
 }

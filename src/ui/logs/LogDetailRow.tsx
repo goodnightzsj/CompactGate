@@ -21,16 +21,6 @@ import {
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
-export function LogDetailRow({ entry, id }: { entry: RequestLogEntry; id?: string }) {
-  return (
-    <tr className="log-detail-row" id={id}>
-      <td colSpan={10}>
-        <LogDetailPanel entry={entry} />
-      </td>
-    </tr>
-  );
-}
-
 function CopyValue({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

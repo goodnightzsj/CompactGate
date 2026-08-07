@@ -8,8 +8,6 @@ import {
 
 export type OpenAiModelsResponse = UpstreamModelsResponse;
 
-export type FetchOpenAiModels = (config: CompactGateConfig) => Promise<OpenAiModelsResponse>;
-
 export async function fetchOpenAiModels(config: CompactGateConfig): Promise<OpenAiModelsResponse> {
   const credential = resolveRouteCredential("primary", config);
   return fetchUpstreamModels({

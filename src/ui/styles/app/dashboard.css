@@ -23,13 +23,6 @@
   box-shadow: var(--shadow-sm);
 }
 
-.stat-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
 .stat-card-label {
   font-size: 0.70rem;
   font-weight: 800;
@@ -76,13 +69,6 @@
 .dashboard-stat-count-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 12px;
-}
-
-.dashboard-provider-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-top: 12px;
 }

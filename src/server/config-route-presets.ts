@@ -9,6 +9,12 @@ import type {
   UpstreamConfig
 } from "../shared/types.js";
 import { ConfigError } from "./config-error.js";
+import {
+  isRecord,
+  readChild,
+  readNumber,
+  readString
+} from "./config-readers.js";
 import { isValidBaseUrl, safeHost } from "./config-url.js";
 
 const ROUTE_URL_PRESET_KINDS: RouteUrlPresetKind[] = [
@@ -325,22 +331,6 @@ function stableHash(value: string): string {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
   return hash.toString(36);
-}
-
-function readString(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value.trim() : fallback;
-}
-
-function readNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" ? value : fallback;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readChild(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
 }
 
 function directApiKeyConfigured(value: string): boolean {

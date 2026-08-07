@@ -18,6 +18,7 @@ export default defineConfig({
     }
   },
   test: {
+    setupFiles: ["./test/helpers/server-test-hooks.ts"],
     include: [
       "test/**/*.{test,spec}.?(c|m)[jt]s?(x)",
       "test/**/*.scenarios.ts"

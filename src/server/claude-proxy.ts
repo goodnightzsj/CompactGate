@@ -39,7 +39,6 @@ import {
 } from "./upstream-client.js";
 
 export const ANTHROPIC_PROXY_PREFIX = "/anthropic";
-export { fetchClaudeModels, type FetchClaudeModels } from "./claude-models.js";
 
 export async function proxyClaudeRequest(
   req: IncomingMessage,

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { FetchClaudeModels } from "./claude-models.js";
+import { fetchClaudeModels } from "./claude-models.js";
 import { ConfigError, type ConfigStore } from "./config.js";
 import { healthForConfig } from "./health.js";
 import {
@@ -15,7 +15,7 @@ import {
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
-import type { FetchOpenAiModels } from "./openai-models.js";
+import { fetchOpenAiModels } from "./openai-models.js";
 import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
@@ -32,8 +32,6 @@ export async function handleRuntimeApi(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  fetchClaudeModels: FetchClaudeModels,
-  fetchOpenAiModels: FetchOpenAiModels,
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor
 ): Promise<boolean> {
