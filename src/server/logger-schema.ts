@@ -35,6 +35,7 @@ export const LOG_TABLE_SQL = `
     client_disconnect_phase TEXT NOT NULL DEFAULT 'none',
     stream_outcome TEXT,
     stream_oversized_event_count INTEGER NOT NULL DEFAULT 0,
+    upstream_response_truncated INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER NOT NULL,
     first_token_ms INTEGER,
     input_tokens INTEGER,
@@ -134,6 +135,15 @@ export const LOG_FACET_REBUILD_SQL = `
   GROUP BY upstream_host, route, CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END;
 `;
 
+export const LOG_INTERNAL_STATE_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS request_log_internal_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  ) WITHOUT ROWID;
+`;
+
+export const LOG_FACET_CLASSIFICATION_VERSION = "2";
+
 export const RECENT_LOG_FIELDS = `
   time,
   completed_at,
@@ -164,6 +174,7 @@ export const RECENT_LOG_FIELDS = `
   client_disconnect_phase,
   stream_outcome,
   stream_oversized_event_count,
+  upstream_response_truncated,
   duration_ms,
   first_token_ms,
   input_tokens,
@@ -208,6 +219,7 @@ export const MIGRATION_COLUMNS: Record<string, string> = {
   client_disconnect_phase: "TEXT NOT NULL DEFAULT 'none'",
   stream_outcome: "TEXT",
   stream_oversized_event_count: "INTEGER NOT NULL DEFAULT 0",
+  upstream_response_truncated: "INTEGER NOT NULL DEFAULT 0",
   error_summary: "TEXT",
   provider_state_portability: "TEXT",
   first_token_ms: "INTEGER",

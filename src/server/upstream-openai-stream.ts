@@ -1,5 +1,14 @@
 import type { IncomingHttpHeaders } from "node:http";
-import { createGunzip } from "node:zlib";
+import {
+  createBrotliDecompress,
+  createGunzip,
+  createInflate,
+  createZstdDecompress
+} from "node:zlib";
+import { extractResponseModelFromText } from "./response-model.js";
+import { mergeUsage } from "./usage-merge.js";
+import { extractUsageFromJsonText } from "./usage-record.js";
+import type { TokenUsageMetrics } from "./usage-types.js";
 
 export interface OpenAiStreamSummary {
   sawTerminalEvent: boolean;
@@ -11,11 +20,17 @@ export interface OpenAiStreamSummary {
   terminalEvent: string | null;
   eventCount: number;
   oversizedEventCount: number;
+  decodeError: boolean;
+  errorSummary: string | null;
+  responseModel: string | null;
+  usage: TokenUsageMetrics | null;
 }
 
 export interface OpenAiStreamObserverOptions {
   maxEventBytes?: number;
 }
+
+type StreamProtocol = "openai" | "anthropic";
 
 export interface OpenAiStreamObserverHandle {
   observe(chunk: Buffer): void;
@@ -29,14 +44,44 @@ export function createOpenAiStreamObserver(
   headers: IncomingHttpHeaders,
   options: OpenAiStreamObserverOptions = {}
 ): OpenAiStreamObserverHandle | null {
+  return createProtocolStreamObserver(headers, "openai", options);
+}
+
+export function createAnthropicStreamObserver(
+  headers: IncomingHttpHeaders,
+  options: OpenAiStreamObserverOptions = {}
+): OpenAiStreamObserverHandle | null {
+  return createProtocolStreamObserver(headers, "anthropic", options);
+}
+
+function createProtocolStreamObserver(
+  headers: IncomingHttpHeaders,
+  protocol: StreamProtocol,
+  options: OpenAiStreamObserverOptions
+): OpenAiStreamObserverHandle | null {
   const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
   if (!contentType.includes("text/event-stream")) {
     return null;
   }
 
-  const observer = new OpenAiStreamObserver(normalizeMaxEventBytes(options.maxEventBytes));
+  const observer = new OpenAiStreamObserver(
+    protocol,
+    normalizeMaxEventBytes(options.maxEventBytes)
+  );
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
-  return contentEncoding.includes("gzip") ? new GzipOpenAiStreamObserver(observer) : observer;
+  if (contentEncoding.includes("br")) {
+    return new CompressedOpenAiStreamObserver(observer, createBrotliDecompress());
+  }
+  if (contentEncoding.includes("gzip")) {
+    return new CompressedOpenAiStreamObserver(observer, createGunzip());
+  }
+  if (contentEncoding.includes("deflate")) {
+    return new CompressedOpenAiStreamObserver(observer, createInflate());
+  }
+  if (contentEncoding.includes("zstd")) {
+    return new CompressedOpenAiStreamObserver(observer, createZstdDecompress());
+  }
+  return observer;
 }
 
 class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
@@ -55,10 +100,17 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     sawDoneMarker: false,
     terminalEvent: null,
     eventCount: 0,
-    oversizedEventCount: 0
+    oversizedEventCount: 0,
+    decodeError: false,
+    errorSummary: null,
+    responseModel: null,
+    usage: null
   };
 
-  constructor(private readonly maxEventBytes: number) {}
+  constructor(
+    private readonly protocol: StreamProtocol,
+    private readonly maxEventBytes: number
+  ) {}
 
   observe(chunk: Buffer): void {
     const text = chunk.toString("utf8");
@@ -84,6 +136,10 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     }
     this.flushEvent();
     return { ...this.summary };
+  }
+
+  markDecodeError(): void {
+    this.summary.decodeError = true;
   }
 
   private observeLine(line: string): void {
@@ -132,6 +188,13 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   }
 
   private recordEvent(eventName: string | null, eventType: string | null, data: string): void {
+    this.recordMetadata(data);
+
+    if (this.protocol === "anthropic") {
+      this.recordAnthropicEvent(eventName, eventType, data);
+      return;
+    }
+
     if (data === "[DONE]") {
       this.summary.sawDoneMarker = true;
       this.summary.sawTerminalEvent = true;
@@ -140,7 +203,11 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
     if (isOpenAiTerminalEvent(eventName) || isOpenAiTerminalEvent(eventType)) {
       this.summary.sawTerminalEvent = true;
-      this.summary.terminalEvent = eventName ?? eventType;
+      this.summary.terminalEvent = terminalEventName(
+        eventName,
+        eventType,
+        isOpenAiTerminalEvent
+      );
     }
     if (isOpenAiCompletedEvent(eventName) || isOpenAiCompletedEvent(eventType)) {
       this.summary.sawCompletedEvent = true;
@@ -154,6 +221,50 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     if (isOpenAiOutputEvent(eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
       this.summary.sawOutputEvent = true;
     }
+  }
+
+  private recordAnthropicEvent(
+    eventName: string | null,
+    eventType: string | null,
+    data: string
+  ): void {
+    if (isAnthropicCompletedEvent(eventName) || isAnthropicCompletedEvent(eventType)) {
+      this.summary.sawTerminalEvent = true;
+      this.summary.sawCompletedEvent = true;
+      this.summary.terminalEvent = terminalEventName(
+        eventName,
+        eventType,
+        isAnthropicCompletedEvent
+      );
+    }
+
+    if (isAnthropicErrorEvent(eventName) || isAnthropicErrorEvent(eventType)) {
+      this.summary.sawTerminalEvent = true;
+      this.summary.sawFailedEvent = true;
+      this.summary.terminalEvent = terminalEventName(
+        eventName,
+        eventType,
+        isAnthropicErrorEvent
+      );
+      this.summary.errorSummary ??= extractAnthropicErrorSummary(data);
+    }
+
+    if (isAnthropicOutputEvent(eventName) || isAnthropicOutputEvent(eventType)) {
+      this.summary.sawOutputEvent = true;
+    }
+  }
+
+  private recordMetadata(data: string): void {
+    if (!data || data === "[DONE]") {
+      return;
+    }
+
+    const usage = extractUsageFromJsonText(data);
+    if (usage) {
+      this.summary.usage = mergeUsage(this.summary.usage, usage);
+    }
+
+    this.summary.responseModel ??= extractResponseModelFromText(data);
   }
 
   private readEventType(data: string): string | null {
@@ -237,20 +348,25 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   }
 }
 
-class GzipOpenAiStreamObserver implements OpenAiStreamObserverHandle {
-  private readonly gunzip = createGunzip();
+class CompressedOpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private readonly completion: Promise<void>;
 
-  constructor(private readonly observer: OpenAiStreamObserver) {
-    this.gunzip.on("data", (chunk: Buffer) => this.observer.observe(chunk));
+  constructor(
+    private readonly observer: OpenAiStreamObserver,
+    private readonly decoder: ReturnType<typeof createGunzip>
+  ) {
+    this.decoder.on("data", (chunk: Buffer) => this.observer.observe(chunk));
     this.completion = new Promise((resolve) => {
-      this.gunzip.once("end", resolve);
-      this.gunzip.once("error", resolve);
+      this.decoder.once("end", resolve);
+      this.decoder.once("error", () => {
+        this.observer.markDecodeError();
+        resolve();
+      });
     });
   }
 
   observe(chunk: Buffer): void {
-    this.gunzip.write(chunk);
+    this.decoder.write(chunk);
   }
 
   snapshot(): OpenAiStreamSummary {
@@ -258,10 +374,22 @@ class GzipOpenAiStreamObserver implements OpenAiStreamObserverHandle {
   }
 
   async finish(): Promise<OpenAiStreamSummary> {
-    this.gunzip.end();
+    this.decoder.end();
     await this.completion;
     return this.observer.finish();
   }
+}
+
+function isAnthropicCompletedEvent(type: string | null): boolean {
+  return type === "message_stop";
+}
+
+function isAnthropicErrorEvent(type: string | null): boolean {
+  return type === "error";
+}
+
+function isAnthropicOutputEvent(type: string | null): boolean {
+  return type === "content_block_start" || type === "content_block_delta";
 }
 
 function isOpenAiTerminalEvent(type: string | null): boolean {
@@ -323,6 +451,40 @@ function hasOpenAiOutputPayload(data: string): boolean {
   }
 }
 
+function extractAnthropicErrorSummary(data: string): string | null {
+  if (!data) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.error)) {
+      return null;
+    }
+
+    const message = readNonEmptyString(parsed.error.message);
+    const qualifier = readNonEmptyString(parsed.error.type) ?? readNonEmptyString(parsed.error.code);
+    const summary = message && qualifier && !message.includes(qualifier)
+      ? `${message} (${qualifier})`
+      : message ?? qualifier;
+    if (!summary) {
+      return null;
+    }
+
+    return summary.length > 240 ? `${summary.slice(0, 237)}...` : summary;
+  } catch {
+    return null;
+  }
+}
+
+function terminalEventName(
+  eventName: string | null,
+  eventType: string | null,
+  isTerminal: (value: string | null) => boolean
+): string | null {
+  return isTerminal(eventName) ? eventName : eventType;
+}
+
 function readHeader(value: IncomingHttpHeaders[string]): string | null {
   if (Array.isArray(value)) {
     return value[0] ?? null;
@@ -333,6 +495,15 @@ function readHeader(value: IncomingHttpHeaders[string]): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const text = value.trim();
+  return text.length > 0 ? text : null;
 }
 
 function normalizeMaxEventBytes(value: number | undefined): number {

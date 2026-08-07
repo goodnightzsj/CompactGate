@@ -419,6 +419,7 @@ async function proxyPrimaryRequest(
       clientDisconnectPhase: transaction.clientDisconnectPhase,
       streamOutcome: transaction.streamOutcome,
       streamOversizedEventCount: transaction.streamOversizedEventCount,
+      upstreamResponseTruncated: transaction.responseBodyTruncated,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,
@@ -804,6 +805,7 @@ async function proxyCompactRequest(
       clientDisconnectPhase: transaction.clientDisconnectPhase,
       streamOutcome: transaction.streamOutcome,
       streamOversizedEventCount: transaction.streamOversizedEventCount,
+      upstreamResponseTruncated: transaction.responseBodyTruncated,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,
@@ -854,6 +856,8 @@ function applyUpstreamFailureToTransaction(
   transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
   transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
   transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
+  transaction.responseBodyTruncated = error.details.responseBodyTruncated;
+  transaction.responseModel = error.details.streamSummary?.responseModel ?? transaction.responseModel;
   transaction.streamOutcome = error.details.kind === "client_cancel"
     ? error.details.clientDisconnectPhase === "after_terminal"
       ? "client_cancel_after_terminal"
@@ -869,6 +873,7 @@ function applyCachedCompactResponse(
   transaction.upstreamStatus = cached.status;
   transaction.streamOutcome = cached.status >= 400 ? "upstream_http_error" : "success";
   transaction.responseBody = cached.responseBody;
+  transaction.responseBodyTruncated = false;
   transaction.responseHeaders = cached.responseHeaders;
   transaction.clientResponseBody = cached.clientResponseBody;
   transaction.clientResponseHeaders = cached.clientResponseHeaders;

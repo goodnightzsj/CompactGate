@@ -111,11 +111,12 @@ export function codexClientDisplay(entry: RequestLogEntry): string {
 
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
   const hasOutcomeError = Boolean(entry.stream_outcome && entry.stream_outcome !== "success");
-  const hasStandaloneError = (
+  const hasErrorSignal =
     entry.status >= 400 ||
     Boolean(entry.error_summary) ||
-    hasOutcomeError
-  ) && !hasTokenDetails(entry);
+    hasOutcomeError;
+  const preservesOpenAiDiagnosticCompatibility = entry.route !== "claude" && hasTokenDetails(entry);
+  const hasStandaloneError = hasErrorSignal && !preservesOpenAiDiagnosticCompatibility;
   return hasStandaloneError ? "error" : "normal";
 }
 

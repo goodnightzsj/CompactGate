@@ -312,6 +312,59 @@ describe("RequestLogger", () => {
     }
   });
 
+  it("rebuilds facet status classification when the persisted formula is stale", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const seedingLogger = new RequestLogger(10, databasePath);
+
+    try {
+      seedingLogger.add({
+        ...logEntry(1),
+        route: "claude",
+        request_type: "stream",
+        status: 200,
+        stream_outcome: "upstream_stream_error",
+        input_tokens: 12,
+        output_tokens: 4,
+        total_tokens: 16,
+        error_summary: "provider stream error",
+        upstream_response_truncated: true
+      });
+    } finally {
+      seedingLogger.close();
+    }
+
+    const staleDb = new DatabaseSync(databasePath);
+    try {
+      staleDb.exec(`
+        UPDATE request_log_facets SET log_status = 'normal';
+        UPDATE request_log_internal_state
+        SET value = '1'
+        WHERE key = 'facet_classification_version';
+      `);
+    } finally {
+      staleDb.close();
+    }
+
+    const logger = new RequestLogger(10, databasePath);
+    try {
+      expect(logger.page({ limit: 10, offset: 0 })).toMatchObject({
+        status_counts: {
+          all: 1,
+          normal: 0,
+          error: 1
+        },
+        logs: [expect.objectContaining({
+          stream_outcome: "upstream_stream_error",
+          upstream_response_truncated: true
+        })]
+      });
+    } finally {
+      logger.close();
+    }
+  });
+
   it("records request start time instead of log write time", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

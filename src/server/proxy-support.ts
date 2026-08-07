@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type { CaptureRecord, DebugCaptureWriter } from "./debug-capture.js";
 import type { RequestLogger } from "./logger.js";
 import type {
@@ -49,6 +49,7 @@ export function addLog(
     clientDisconnectPhase?: ClientDisconnectPhase;
     streamOutcome?: StreamOutcome | null;
     streamOversizedEventCount?: number;
+    upstreamResponseTruncated?: boolean;
     startedAt: number;
     startedAtIso: string;
     completedAtIso: string;
@@ -59,12 +60,15 @@ export function addLog(
     incomingRequestBody: Buffer;
     upstreamRequestBody: Buffer;
     upstreamResponseBody: Buffer;
+    upstreamResponseHeaders?: IncomingHttpHeaders;
     clientResponseBody: Buffer | null;
+    clientResponseHeaders?: IncomingHttpHeaders | null;
     persistBody: boolean;
     upstreamHost: string;
     requestId: string;
     sourceModel: string | null;
     targetModel: string | null;
+    responseModel?: string | null;
     firstTokenMs: number | null;
     usage: TokenUsageMetrics;
     errorSummary: string | null;
@@ -76,9 +80,11 @@ export function addLog(
     captureStatus: RequestLogEntry["capture_status"];
   }
 ): RequestLogEntry {
-  const responseModel = extractResponseModelFromBodies(
+  const responseModel = input.responseModel ?? extractResponseModelFromBodies(
     input.upstreamResponseBody,
-    input.clientResponseBody
+    input.clientResponseBody,
+    input.upstreamResponseHeaders ?? {},
+    input.clientResponseHeaders ?? {}
   );
   const responseModelSource = resolveResponseModelSource({
     responseModel,
@@ -121,6 +127,7 @@ export function addLog(
     client_disconnect_phase: input.clientDisconnectPhase ?? "none",
     stream_outcome: input.streamOutcome ?? null,
     stream_oversized_event_count: input.streamOversizedEventCount ?? 0,
+    upstream_response_truncated: input.upstreamResponseTruncated ?? false,
     duration_ms: Math.max(0, Math.round(performance.now() - input.startedAt)),
     first_token_ms: input.firstTokenMs,
     input_tokens: input.usage.inputTokens,

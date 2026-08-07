@@ -1,9 +1,18 @@
-import { gunzipSync } from "node:zlib";
+import type { IncomingHttpHeaders } from "node:http";
+import {
+  brotliDecompressSync,
+  gunzipSync,
+  inflateSync,
+  zstdDecompressSync
+} from "node:zlib";
 
 const DEFAULT_MAX_DECODED_RESPONSE_BYTES = 8 * 1024 * 1024;
 
-export function decodeResponseText(buffer: Buffer): string | null {
-  const decoded = looksLikeGzip(buffer) ? tryGunzip(buffer) : buffer;
+export function decodeResponseText(
+  buffer: Buffer,
+  headers: IncomingHttpHeaders = {}
+): string | null {
+  const decoded = tryDecodeResponse(buffer, headers);
   if (!decoded) {
     return null;
   }
@@ -74,11 +83,26 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function tryGunzip(buffer: Buffer): Buffer | null {
+function tryDecodeResponse(buffer: Buffer, headers: IncomingHttpHeaders): Buffer | null {
+  const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
+  if (!contentEncoding && !looksLikeGzip(buffer)) {
+    return buffer;
+  }
+
   try {
-    return gunzipSync(buffer, {
-      maxOutputLength: DEFAULT_MAX_DECODED_RESPONSE_BYTES
-    });
+    if (contentEncoding.includes("br")) {
+      return brotliDecompressSync(buffer, { maxOutputLength: DEFAULT_MAX_DECODED_RESPONSE_BYTES });
+    }
+    if (contentEncoding.includes("gzip") || looksLikeGzip(buffer)) {
+      return gunzipSync(buffer, { maxOutputLength: DEFAULT_MAX_DECODED_RESPONSE_BYTES });
+    }
+    if (contentEncoding.includes("deflate")) {
+      return inflateSync(buffer, { maxOutputLength: DEFAULT_MAX_DECODED_RESPONSE_BYTES });
+    }
+    if (contentEncoding.includes("zstd")) {
+      return zstdDecompressSync(buffer, { maxOutputLength: DEFAULT_MAX_DECODED_RESPONSE_BYTES });
+    }
+    return buffer;
   } catch {
     return null;
   }

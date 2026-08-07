@@ -1,8 +1,9 @@
 import http from "node:http";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import "./helpers/server-test-hooks.js";
 import {
+  classifyAnthropicUpstreamResult,
   classifyOpenAiUpstreamResult,
   requestJson,
   sendOpenAiUpstreamRequest,
@@ -140,6 +141,62 @@ describe("sendBufferedUpstreamRequest", () => {
     });
   });
 
+  it("observes and classifies Brotli encoded Anthropic completion events", async () => {
+    const stream = [
+      'event: message_start\ndata: {"type":"message_start","message":{"model":"claude-test","usage":{"input_tokens":3,"output_tokens":1}}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    ].join("");
+    const upstreamBody = brotliCompressSync(Buffer.from(stream));
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "content-encoding": "br"
+      });
+      res.end(upstreamBody);
+    });
+    let upstreamResult: BufferedUpstreamResult | null = null;
+
+    const proxy = http.createServer(async (req, res) => {
+      upstreamResult = await sendBufferedUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        maxBufferedResponseBytes: 0,
+        streamProtocol: "anthropic"
+      });
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("message_stop");
+    const completedResult = upstreamResult as BufferedUpstreamResult | null;
+    expect(completedResult?.responseBodyTruncated).toBe(true);
+    expect(completedResult?.streamSummary).toMatchObject({
+      sawCompletedEvent: true,
+      terminalEvent: "message_stop",
+      responseModel: "claude-test",
+      usage: {
+        inputTokens: 3,
+        outputTokens: 4,
+        totalTokens: 7
+      }
+    });
+    expect(classifyAnthropicUpstreamResult(completedResult!)).toBe("success");
+  });
+
   it("classifies response.incomplete as an upstream stream failure", async () => {
     const upstreamBody = 'event: response.incomplete\ndata: {"type":"response.incomplete"}\n\n';
     const upstream = await startUpstream((_req, res) => {
@@ -234,6 +291,58 @@ describe("sendBufferedUpstreamRequest", () => {
       sawCompletedEvent: true,
       terminalEvent: "response.completed"
     });
+  });
+
+  it("settles an Anthropic message_stop when the client closes before HTTP end", async () => {
+    const completionEvent = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+    const upstream = await startUpstream((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(completionEvent);
+    });
+    let resolveResult!: (result: BufferedUpstreamResult) => void;
+    let rejectResult!: (error: unknown) => void;
+    const resultPromise = new Promise<BufferedUpstreamResult>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+
+    const proxy = http.createServer(async (req, res) => {
+      try {
+        resolveResult(await sendBufferedUpstreamRequest({
+          req,
+          res,
+          upstream: new URL(upstream.url),
+          startedAt: performance.now(),
+          timeoutMs: 1_000,
+          timeoutMessage: "test upstream timed out",
+          requestHeaders: {},
+          body: Buffer.alloc(0),
+          extraResponseHeaders: {},
+          streamProtocol: "anthropic"
+        }));
+      } catch (error) {
+        rejectResult(error);
+      }
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const clientBody = await readUntilAndClose(
+      `http://127.0.0.1:${address.port}/v1/test`,
+      "message_stop"
+    );
+    const result = await resultPromise;
+
+    expect(clientBody).toContain("message_stop");
+    expect(result).toMatchObject({
+      status: 200,
+      clientDisconnectPhase: "after_terminal"
+    });
+    expect(classifyAnthropicUpstreamResult(result)).toBe("success");
   });
 
   it("preserves response context when the client closes before an SSE terminal event", async () => {

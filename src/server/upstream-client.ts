@@ -6,7 +6,11 @@ import http, {
 } from "node:http";
 import https from "node:https";
 import { copyResponseHeaders, decodeBodyText } from "./http-utils.js";
-import { createOpenAiStreamObserver, type OpenAiStreamSummary } from "./upstream-openai-stream.js";
+import {
+  createAnthropicStreamObserver,
+  createOpenAiStreamObserver,
+  type OpenAiStreamSummary
+} from "./upstream-openai-stream.js";
 import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
 import {
   appendBufferedResponseChunk,
@@ -43,6 +47,7 @@ export interface BufferedUpstreamOptions {
   maxBufferedResponseBytes?: number;
   maxDeferredHttpErrorBytes?: number;
   maxObservedStreamEventBytes?: number;
+  streamProtocol?: "openai" | "anthropic";
 }
 
 export interface BufferedUpstreamResult {
@@ -228,10 +233,14 @@ export function sendBufferedUpstreamRequest(
         let bufferedBytes = 0;
         let responseBodyTruncated = false;
         let firstTokenMs: number | null = null;
-        const streamObserver = createOpenAiStreamObserver(response.headers, {
-          maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
-        });
-      const responseState: ActiveUpstreamResponse = {
+        const streamObserver = options.streamProtocol === "anthropic"
+          ? createAnthropicStreamObserver(response.headers, {
+              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
+            })
+          : createOpenAiStreamObserver(response.headers, {
+              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
+            });
+        const responseState: ActiveUpstreamResponse = {
           response,
           status,
           responseChunks,
@@ -472,6 +481,54 @@ export function classifyOpenAiUpstreamResult(result: BufferedUpstreamResult): St
   }
 
   return "success";
+}
+
+export function classifyAnthropicUpstreamResult(result: BufferedUpstreamResult): StreamOutcome {
+  if (result.status >= 400) {
+    return "upstream_http_error";
+  }
+
+  const summary = result.streamSummary;
+  if (summary?.sawFailedEvent) {
+    return "upstream_stream_error";
+  }
+
+  if (result.clientDisconnectPhase === "after_terminal") {
+    return "success";
+  }
+
+  if (result.clientDisconnectPhase === "before_terminal") {
+    return "client_cancel";
+  }
+
+  if (summary && !summary.sawCompletedEvent) {
+    return "upstream_stream_incomplete";
+  }
+
+  return "success";
+}
+
+export function summarizeAnthropicStreamFailure(result: BufferedUpstreamResult): string | null {
+  if (result.status < 200 || result.status >= 300 || !result.streamSummary) {
+    return null;
+  }
+
+  const summary = result.streamSummary;
+  if (summary.sawCompletedEvent) {
+    return null;
+  }
+
+  if (summary.sawFailedEvent) {
+    return summary.errorSummary ?? "Anthropic stream ended with an error event.";
+  }
+
+  if (summary.decodeError) {
+    return "Anthropic stream could not be decoded for completion observation.";
+  }
+
+  return summary.eventCount > 0
+    ? "Anthropic stream closed before message_stop."
+    : "Anthropic stream ended without an observable event.";
 }
 
 function isRetryableEmptyStreamUpstreamError(result: BufferedUpstreamResult): boolean {

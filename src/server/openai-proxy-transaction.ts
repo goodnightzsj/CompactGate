@@ -37,6 +37,7 @@ export interface OpenAiProxyTransactionState {
   clientDisconnectPhase: ClientDisconnectPhase;
   streamOutcome: StreamOutcome | null;
   streamOversizedEventCount: number;
+  responseBodyTruncated: boolean;
   errorSummary: string | null;
   rawBody: Buffer;
   upstreamBody: Buffer;
@@ -51,6 +52,7 @@ export interface OpenAiProxyTransactionState {
   usage: TokenUsageMetrics;
   sourceModel: string | null;
   targetModel: string | null;
+  responseModel: string | null;
   compactBridgeReplacements: number;
   compactResponseNormalized: boolean;
   compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
@@ -61,6 +63,7 @@ export interface OpenAiProxyUpstreamResult {
   status: number;
   errorSummary: string | null;
   responseBody: Buffer;
+  responseBodyTruncated: boolean;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
   clientDisconnectPhase: ClientDisconnectPhase;
@@ -83,6 +86,7 @@ export interface OpenAiProxyTransactionInput {
   clientDisconnectPhase?: ClientDisconnectPhase;
   streamOutcome?: StreamOutcome | null;
   streamOversizedEventCount?: number;
+  upstreamResponseTruncated?: boolean;
   startedAt: number;
   startedAtIso: string;
   requestMetadata: RequestMetadata | null;
@@ -91,6 +95,7 @@ export interface OpenAiProxyTransactionInput {
   requestId: string;
   sourceModel: string | null;
   targetModel: string | null;
+  responseModel?: string | null;
   firstTokenMs: number | null;
   usage: TokenUsageMetrics;
   errorSummary: string | null;
@@ -117,6 +122,7 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
     clientDisconnectPhase: "none",
     streamOutcome: null,
     streamOversizedEventCount: 0,
+    responseBodyTruncated: false,
     errorSummary: null,
     rawBody: Buffer.alloc(0),
     upstreamBody: Buffer.alloc(0),
@@ -131,6 +137,7 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
     usage: emptyUsageMetrics(),
     sourceModel: null,
     targetModel: null,
+    responseModel: null,
     compactBridgeReplacements: 0,
     compactResponseNormalized: false,
     compactResponseNormalizeReason: null,
@@ -147,6 +154,8 @@ export function applyOpenAiProxyUpstreamResult(
   state.streamTerminalEvent = result.streamSummary?.terminalEvent ?? null;
   state.clientDisconnectPhase = result.clientDisconnectPhase;
   state.streamOversizedEventCount = result.streamSummary?.oversizedEventCount ?? 0;
+  state.responseBodyTruncated = result.responseBodyTruncated;
+  state.responseModel = result.streamSummary?.responseModel ?? state.responseModel;
   state.errorSummary = result.errorSummary;
   state.responseBody = result.responseBody;
   state.responseHeaders = result.responseHeaders;
@@ -168,6 +177,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     clientDisconnectPhase: input.clientDisconnectPhase,
     streamOutcome: input.streamOutcome,
     streamOversizedEventCount: input.streamOversizedEventCount,
+    upstreamResponseTruncated: input.upstreamResponseTruncated,
     startedAt: input.startedAt,
     startedAtIso: input.startedAtIso,
     completedAtIso,
@@ -178,12 +188,15 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     incomingRequestBody: input.rawBody,
     upstreamRequestBody: input.upstreamBody,
     upstreamResponseBody: input.responseBody,
+    upstreamResponseHeaders: input.responseHeaders,
     clientResponseBody: input.clientResponseBody,
+    clientResponseHeaders: input.clientResponseHeaders,
     persistBody: input.persistBody,
     upstreamHost: input.upstream.host,
     requestId: input.requestId,
     sourceModel: input.sourceModel,
     targetModel: input.targetModel,
+    responseModel: input.responseModel,
     firstTokenMs: input.firstTokenMs,
     usage: input.usage,
     errorSummary: input.errorSummary,
@@ -232,6 +245,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       client_disconnect_phase: input.clientDisconnectPhase ?? "none",
       stream_outcome: input.streamOutcome ?? null,
       stream_oversized_event_count: input.streamOversizedEventCount ?? 0,
+      upstream_response_truncated: input.upstreamResponseTruncated ?? false,
       incoming_request: {
         headers: serializeHeaders(input.req.headers),
         body: input.captureWriter.serializeBody(input.rawBody)

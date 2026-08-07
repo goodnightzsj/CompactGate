@@ -1,13 +1,20 @@
-import { decodeBodyText } from "./http-utils.js";
+import type { IncomingHttpHeaders } from "node:http";
 import type { ResponseModelSource } from "../shared/types.js";
+import { decodeResponseText } from "./usage-utils.js";
 
 export function extractResponseModelFromBodies(
   upstreamResponseBody: Buffer,
-  clientResponseBody: Buffer | null
+  clientResponseBody: Buffer | null,
+  upstreamResponseHeaders: IncomingHttpHeaders = {},
+  clientResponseHeaders: IncomingHttpHeaders = {}
 ): string | null {
   return (
-    extractResponseModelFromText(decodeBodyText(upstreamResponseBody)) ??
-    extractResponseModelFromText(clientResponseBody ? decodeBodyText(clientResponseBody) : "")
+    extractResponseModelFromText(decodeResponseText(upstreamResponseBody, upstreamResponseHeaders) ?? "") ??
+    extractResponseModelFromText(
+      clientResponseBody
+        ? decodeResponseText(clientResponseBody, clientResponseHeaders) ?? ""
+        : ""
+    )
   );
 }
 

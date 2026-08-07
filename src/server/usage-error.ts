@@ -15,7 +15,7 @@ export function extractResponseErrorSummary(
     return null;
   }
 
-  const text = decodeResponseText(responseBody);
+  const text = decodeResponseText(responseBody, headers);
   if (!text) {
     return `Upstream returned HTTP ${status}.`;
   }

@@ -65,14 +65,13 @@ export function logStandaloneErrorSql(columnPrefix = ""): string {
     ${column("reasoning_tokens")} IS NOT NULL OR
     ${column("total_tokens")} IS NOT NULL
   )`;
-
   return `(
     (
       ${column("status")} >= 400 OR
       ${column("error_summary")} IS NOT NULL OR
       (${column("stream_outcome")} IS NOT NULL AND ${column("stream_outcome")} <> 'success')
     ) AND
-    NOT ${tokenDetailsSql}
+    NOT (${column("route")} <> 'claude' AND ${tokenDetailsSql})
   )`;
 }
 
@@ -203,6 +202,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     client_disconnect_phase: readClientDisconnectPhase(row.client_disconnect_phase),
     stream_outcome: readStreamOutcome(row.stream_outcome),
     stream_oversized_event_count: readNullableNumber(row.stream_oversized_event_count) ?? 0,
+    upstream_response_truncated: readBoolean(row.upstream_response_truncated),
     duration_ms: readRequiredNumber(row.duration_ms),
     first_token_ms: readNullableNumber(row.first_token_ms),
     input_tokens: readNullableNumber(row.input_tokens),
@@ -248,6 +248,7 @@ function readClientDisconnectPhase(value: unknown): ClientDisconnectPhase {
 function readStreamOutcome(value: unknown): StreamOutcome | null {
   return value === "success" ||
     value === "upstream_http_error" ||
+    value === "upstream_stream_error" ||
     value === "upstream_stream_incomplete" ||
     value === "client_cancel" ||
     value === "client_cancel_after_terminal" ||

@@ -39,7 +39,7 @@ export function extractResponseUsage(
     return EMPTY_USAGE;
   }
 
-  const text = decodeResponseText(responseBody);
+  const text = decodeResponseText(responseBody, headers);
   if (!text) {
     return EMPTY_USAGE;
   }

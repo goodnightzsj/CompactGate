@@ -25,7 +25,9 @@ import {
 } from "./logger-helpers.js";
 import {
   LOG_FACET_REBUILD_SQL,
+  LOG_FACET_CLASSIFICATION_VERSION,
   LOG_FACET_SCHEMA_SQL,
+  LOG_INTERNAL_STATE_SCHEMA_SQL,
   LOG_TABLE_SQL,
   MIGRATION_COLUMNS,
   PROVIDER_STATE_BINDING_SCHEMA_SQL,
@@ -319,6 +321,7 @@ export class RequestLogger {
               client_disconnect_phase,
               stream_outcome,
               stream_oversized_event_count,
+              upstream_response_truncated,
               duration_ms,
               first_token_ms,
               input_tokens,
@@ -338,7 +341,7 @@ export class RequestLogger {
               capture_path,
               capture_status
             ) VALUES (
-              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
@@ -381,6 +384,7 @@ export class RequestLogger {
           entry.client_disconnect_phase ?? "none",
           entry.stream_outcome ?? null,
           entry.stream_oversized_event_count ?? 0,
+          entry.upstream_response_truncated ? 1 : 0,
           entry.duration_ms,
           entry.first_token_ms,
           entry.input_tokens,
@@ -642,17 +646,27 @@ export class RequestLogger {
       DROP TRIGGER IF EXISTS trg_request_log_facets_delete;
     `);
     this.db.exec(LOG_FACET_SCHEMA_SQL);
+    this.db.exec(LOG_INTERNAL_STATE_SCHEMA_SQL);
     const persistedTotal = readCount(
       this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
     );
     const facetTotal = this.facetTotal({});
-    if (facetTotal === persistedTotal) {
+    const facetVersionRow = this.db.prepare(
+      "SELECT value FROM request_log_internal_state WHERE key = 'facet_classification_version'"
+    ).get() as { value?: unknown } | undefined;
+    const facetVersion = typeof facetVersionRow?.value === "string" ? facetVersionRow.value : null;
+    if (facetTotal === persistedTotal && facetVersion === LOG_FACET_CLASSIFICATION_VERSION) {
       return;
     }
 
     this.db.exec("BEGIN");
     try {
       this.db.exec(LOG_FACET_REBUILD_SQL);
+      this.db.prepare(`
+        INSERT INTO request_log_internal_state (key, value)
+        VALUES ('facet_classification_version', ?)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value
+      `).run(LOG_FACET_CLASSIFICATION_VERSION);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");

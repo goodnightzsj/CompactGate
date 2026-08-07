@@ -31,8 +31,9 @@ import {
   responseTransport
 } from "./usage.js";
 import {
-  classifyOpenAiUpstreamResult,
+  classifyAnthropicUpstreamResult,
   sendBufferedUpstreamRequest,
+  summarizeAnthropicStreamFailure,
   type BufferedUpstreamResult,
   UpstreamRequestError
 } from "./upstream-client.js";
@@ -90,6 +91,7 @@ export async function proxyClaudeRequest(
           "x-compactgate-request-id": requestId
         },
         maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+        streamProtocol: "anthropic",
         writeResponse: true
       });
 
@@ -113,9 +115,11 @@ export async function proxyClaudeRequest(
     }
 
     applyOpenAiProxyUpstreamResult(transaction, completedResult);
-    transaction.streamOutcome = classifyOpenAiUpstreamResult(completedResult);
+    transaction.streamOutcome = classifyAnthropicUpstreamResult(completedResult);
     transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
-    transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
+    transaction.usage = completedResult.streamSummary?.usage ??
+      extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
+    transaction.errorSummary ??= summarizeAnthropicStreamFailure(completedResult);
   } catch (error) {
     if (error instanceof UpstreamRequestError) {
       transaction.upstreamStatus = error.details.status;
@@ -125,6 +129,9 @@ export async function proxyClaudeRequest(
       transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
       transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
       transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
+      transaction.responseBodyTruncated = error.details.responseBodyTruncated;
+      transaction.responseModel = error.details.streamSummary?.responseModel ?? transaction.responseModel;
+      transaction.usage = error.details.streamSummary?.usage ?? transaction.usage;
       transaction.streamOutcome = error.details.kind === "client_cancel"
         ? error.details.clientDisconnectPhase === "after_terminal"
           ? "client_cancel_after_terminal"
@@ -155,6 +162,7 @@ export async function proxyClaudeRequest(
       clientDisconnectPhase: transaction.clientDisconnectPhase,
       streamOutcome: transaction.streamOutcome,
       streamOversizedEventCount: transaction.streamOversizedEventCount,
+      upstreamResponseTruncated: transaction.responseBodyTruncated,
       startedAt,
       startedAtIso,
       requestMetadata: transaction.requestMetadata,
@@ -163,6 +171,7 @@ export async function proxyClaudeRequest(
       requestId,
       sourceModel: transaction.sourceModel,
       targetModel: transaction.targetModel,
+      responseModel: transaction.responseModel,
       firstTokenMs: transaction.firstTokenMs,
       usage: transaction.usage,
       errorSummary: transaction.errorSummary,

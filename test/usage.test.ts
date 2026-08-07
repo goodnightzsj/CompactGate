@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import {
   extractRequestMetadata,
   extractResponseErrorSummary,
@@ -11,6 +11,25 @@ import {
 } from "../src/server/http-utils.js";
 
 describe("usage metadata extraction", () => {
+  it("extracts usage from Brotli encoded Anthropic responses", () => {
+    const body = brotliCompressSync(Buffer.from(JSON.stringify({
+      type: "message",
+      usage: {
+        input_tokens: 9,
+        output_tokens: 4
+      }
+    })));
+
+    expect(extractResponseUsage(body, {
+      "content-type": "application/json",
+      "content-encoding": "br"
+    })).toMatchObject({
+      inputTokens: 9,
+      outputTokens: 4,
+      totalTokens: 13
+    });
+  });
+
   it("keeps OpenAI-style cached input as an input token subset", () => {
     const usage = extractResponseUsage(
       Buffer.from(JSON.stringify({

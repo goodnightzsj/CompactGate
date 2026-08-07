@@ -20,7 +20,7 @@ describe("UI log status helpers", () => {
     expect(logStatusToneClass(entry)).toBe("is-err");
   });
 
-  it("keeps a diagnostic response with token details in the normal status bucket", () => {
+  it("keeps the existing OpenAI token-bearing diagnostic compatibility", () => {
     const entry = requestLog({
       status: 200,
       input_tokens: 12,
@@ -31,6 +31,21 @@ describe("UI log status helpers", () => {
 
     expect(logStatusKind(entry)).toBe("normal");
     expect(logStatusToneClass(entry)).toBe("is-ok");
+  });
+
+  it("does not let token details mask a Claude stream failure", () => {
+    const entry = requestLog({
+      route: "claude",
+      status: 200,
+      input_tokens: 12,
+      output_tokens: 4,
+      total_tokens: 16,
+      stream_outcome: "upstream_stream_error",
+      error_summary: "Overloaded (overloaded_error)"
+    });
+
+    expect(logStatusKind(entry)).toBe("error");
+    expect(logStatusToneClass(entry)).toBe("is-err");
   });
 
   it("keeps clean 2xx responses in the normal status bucket", () => {

@@ -6,6 +6,7 @@ export type ResponseModelSource = "upstream" | "target_fallback" | "unavailable"
 export type StreamOutcome =
   | "success"
   | "upstream_http_error"
+  | "upstream_stream_error"
   | "upstream_stream_incomplete"
   | "client_cancel"
   | "client_cancel_after_terminal"
@@ -326,6 +327,7 @@ export interface RequestLogEntry {
   client_disconnect_phase?: ClientDisconnectPhase;
   stream_outcome?: StreamOutcome | null;
   stream_oversized_event_count?: number;
+  upstream_response_truncated?: boolean;
   duration_ms: number;
   first_token_ms: number | null;
   input_tokens: number | null;
@@ -426,6 +428,7 @@ export interface CaptureRecord {
   client_disconnect_phase?: ClientDisconnectPhase;
   stream_outcome?: StreamOutcome | null;
   stream_oversized_event_count?: number;
+  upstream_response_truncated?: boolean;
 }
 
 export interface LogPersistenceHealth {

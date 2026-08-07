@@ -198,6 +198,10 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value">{entry.stream_oversized_event_count ?? 0}</span>
               </div>
               <div className="log-detail-item">
+                <span className="log-detail-label">响应缓冲</span>
+                <span className="log-detail-value">{entry.upstream_response_truncated ? "已截断" : "完整"}</span>
+              </div>
+              <div className="log-detail-item">
                 <span className="log-detail-label">类型</span>
                 <span className="log-detail-value">{entry.request_type}</span>
               </div>

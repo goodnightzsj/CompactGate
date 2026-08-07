@@ -293,6 +293,8 @@ function isCaptureRecord(value: unknown): value is CaptureRecord {
       value.response_model_source === "unavailable") &&
     (value.stream_oversized_event_count === undefined ||
       typeof value.stream_oversized_event_count === "number") &&
+    (value.upstream_response_truncated === undefined ||
+      typeof value.upstream_response_truncated === "boolean") &&
     typeof value.compact_bridge_replacements === "number" &&
     typeof value.compact_response_normalized === "boolean" &&
     isNullableString(value.compact_response_normalize_reason) &&
