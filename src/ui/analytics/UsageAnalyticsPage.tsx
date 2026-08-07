@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { formatMetricNumber } from "../shared/format.js";
+import { formatCompactMetricNumber, formatMetricNumber } from "../shared/format.js";
 import {
   AnalyticsDistribution,
   AnalyticsLoadState,
   AnalyticsMetricGrid,
   AnalyticsPanel,
-  AnalyticsTrendChart,
+  AnalyticsSegmented,
+  AnalyticsTokenBreakdownChart,
   RetainedRange,
   cacheHitRate,
   cacheRate
@@ -26,6 +27,7 @@ export function UsageAnalyticsPage() {
   const [toDate, setToDate] = useState(defaults.to);
   const [range, setRange] = useState(() => dateInputsToRange(defaults.from, defaults.to));
   const [granularity, setGranularity] = useState<AnalyticsGranularity>("day");
+  const [endpointMeasure, setEndpointMeasure] = useState<"requests" | "total_tokens">("requests");
   const [formError, setFormError] = useState<string | null>(null);
   const stats = useLogStats(range);
   const trend = useMemo(
@@ -91,7 +93,7 @@ export function UsageAnalyticsPage() {
       </div>
 
       {formError && <div className="error-banner" role="alert">{formError}</div>}
-      <AnalyticsLoadState loading={stats.loading} error={stats.error} />
+      <AnalyticsLoadState loading={stats.loading && !stats.data} error={stats.error} />
 
       {stats.data && (
         <>
@@ -99,48 +101,54 @@ export function UsageAnalyticsPage() {
             <AnalyticsMetricGrid items={[
             {
               label: "总 Token",
-              value: formatMetricNumber(stats.data.summary.total_tokens),
-              meta: `${formatMetricNumber(stats.data.summary.usage_observed_requests)} 条有用量`,
+              value: formatCompactMetricNumber(stats.data.summary.total_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.total_tokens),
+              meta: `${formatCompactMetricNumber(stats.data.summary.usage_observed_requests)} 条有用量`,
               tone: "is-token"
             },
             {
               label: "总输入",
-              value: formatMetricNumber(stats.data.summary.input_tokens),
+              value: formatCompactMetricNumber(stats.data.summary.input_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.input_tokens),
               meta: "含缓存输入",
               tone: "is-request"
             },
             {
               label: "缓存率",
               value: cacheRate(stats.data),
-              meta: `${formatMetricNumber(stats.data.summary.cache_read_tokens)} 读取`,
+              meta: `${formatCompactMetricNumber(stats.data.summary.cache_read_tokens)} 读取`,
               tone: "is-cache"
             },
             {
               label: "输出",
-              value: formatMetricNumber(stats.data.summary.output_tokens),
-              meta: `${formatMetricNumber(stats.data.summary.reasoning_tokens)} 推理`
+              value: formatCompactMetricNumber(stats.data.summary.output_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.output_tokens),
+              meta: `${formatCompactMetricNumber(stats.data.summary.reasoning_tokens)} 推理`
             },
             {
               label: "缓存读取",
-              value: formatMetricNumber(stats.data.summary.cache_read_tokens),
+              value: formatCompactMetricNumber(stats.data.summary.cache_read_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.cache_read_tokens),
               meta: "已复用输入",
               tone: "is-cache"
             },
             {
               label: "缓存创建",
-              value: formatMetricNumber(stats.data.summary.cache_creation_tokens),
+              value: formatCompactMetricNumber(stats.data.summary.cache_creation_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.cache_creation_tokens),
               meta: "新增缓存输入"
             },
             {
               label: "请求",
-              value: formatMetricNumber(stats.data.summary.requests),
-              meta: `${formatMetricNumber(stats.data.summary.error_requests)} 错误`
+              value: formatCompactMetricNumber(stats.data.summary.requests),
+              exactValue: formatMetricNumber(stats.data.summary.requests),
+              meta: `${formatCompactMetricNumber(stats.data.summary.error_requests)} 错误`
             }
             ]} />
           </div>
 
           <AnalyticsPanel title="Token 趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
-            <AnalyticsTrendChart points={trend} metric="total_tokens" />
+            <AnalyticsTokenBreakdownChart points={trend} />
           </AnalyticsPanel>
 
           <AnalyticsPanel title="时段明细" meta={`${trend.length} 个${granularity === "hour" ? "小时" : "日期"}`}>
@@ -205,11 +213,26 @@ export function UsageAnalyticsPage() {
                 </table>
               </div>
             </AnalyticsPanel>
-            <AnalyticsPanel title="端点分布" meta="请求数">
+            <AnalyticsPanel
+              title="端点分布"
+              actions={(
+                <AnalyticsSegmented
+                  label="端点分布度量"
+                  value={endpointMeasure}
+                  options={[
+                    { value: "requests", label: "请求" },
+                    { value: "total_tokens", label: "Token" }
+                  ]}
+                  onChange={setEndpointMeasure}
+                />
+              )}
+            >
               <AnalyticsDistribution rows={stats.data.by_endpoint.map((row) => ({
                 label: row.endpoint,
-                value: row.requests,
-                meta: `${formatMetricNumber(row.error_requests)} 错误 · ${formatMetricNumber(row.total_tokens)} Token`
+                value: row[endpointMeasure],
+                meta: endpointMeasure === "requests"
+                  ? `${formatCompactMetricNumber(row.error_requests)} 错误 · ${formatCompactMetricNumber(row.total_tokens)} Token`
+                  : `${formatCompactMetricNumber(row.requests)} 请求 · ${formatCompactMetricNumber(row.error_requests)} 错误`
               }))} />
             </AnalyticsPanel>
           </div>

@@ -1,19 +1,23 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { LogStatsSnapshot } from "../../shared/types.js";
-import { formatDurationMs, formatMetricNumber } from "../shared/format.js";
+import {
+  formatCompactMetricNumber,
+  formatDurationMs,
+  formatMetricNumber
+} from "../shared/format.js";
 import type { AnalyticsTrendPoint } from "./analytics-data.js";
 
 export function AnalyticsMetricGrid({
   items
 }: {
-  items: Array<{ label: string; value: string; meta: string; tone?: string }>;
+  items: Array<{ label: string; value: string; meta: string; tone?: string; exactValue?: string }>;
 }) {
   return (
     <div className="analytics-metric-grid">
       {items.map((item) => (
         <article className={`analytics-metric ${item.tone ?? ""}`} key={item.label}>
           <span>{item.label}</span>
-          <strong>{item.value}</strong>
+          <strong title={item.exactValue}>{item.value}</strong>
           <small>{item.meta}</small>
         </article>
       ))}
@@ -24,11 +28,13 @@ export function AnalyticsMetricGrid({
 export function AnalyticsPanel({
   title,
   meta,
+  actions,
   className = "",
   children
 }: {
   title: string;
   meta?: string;
+  actions?: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
@@ -36,10 +42,43 @@ export function AnalyticsPanel({
     <section className={`card analytics-panel ${className}`}>
       <div className="card-header">
         <h3>{title}</h3>
-        {meta && <span className="analytics-panel-meta">{meta}</span>}
+        {(meta || actions) && (
+          <div className="analytics-panel-header-side">
+            {meta && <span className="analytics-panel-meta">{meta}</span>}
+            {actions}
+          </div>
+        )}
       </div>
       {children}
     </section>
+  );
+}
+
+export function AnalyticsSegmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string;
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="analytics-segmented analytics-panel-segmented" aria-label={label}>
+      {options.map((option) => (
+        <button
+          type="button"
+          className={value === option.value ? "is-active" : ""}
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+          key={option.value}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -93,7 +132,7 @@ export function AnalyticsTrendChart({
             <g key={ratio}>
               <line x1={inset.left} x2={width - inset.right} y1={tickY} y2={tickY} />
               <text x={inset.left - 8} y={tickY + 4} textAnchor="end">
-                {formatCompactNumber(value)}
+                {formatCompactMetricNumber(Math.round(value))}
               </text>
             </g>
           );
@@ -129,6 +168,112 @@ export function AnalyticsTrendChart({
   );
 }
 
+const TOKEN_SERIES = [
+  { metric: "input_tokens", label: "输入", tone: "is-input" },
+  { metric: "output_tokens", label: "输出", tone: "is-output" },
+  { metric: "cache_read_tokens", label: "缓存读取", tone: "is-cache-read" },
+  { metric: "cache_creation_tokens", label: "缓存创建", tone: "is-cache-creation" }
+] as const;
+
+export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTrendPoint[] }) {
+  const width = 720;
+  const height = 252;
+  const inset = { top: 18, right: 50, bottom: 30, left: 56 };
+  const values = TOKEN_SERIES.flatMap((series) => points.map((point) => point[series.metric]));
+  const max = Math.max(1, ...values);
+  const x = (index: number) => inset.left +
+    (points.length <= 1 ? 0 : index / (points.length - 1)) * (width - inset.left - inset.right);
+  const tokenY = (value: number) => inset.top +
+    (1 - value / max) * (height - inset.top - inset.bottom);
+  const rate = (point: AnalyticsTrendPoint) => point.input_tokens === 0
+    ? 0
+    : Math.min(100, (point.cache_read_tokens / point.input_tokens) * 100);
+  const rateY = (value: number) => inset.top +
+    (1 - value / 100) * (height - inset.top - inset.bottom);
+  const tickIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])]
+    .filter((index) => index >= 0);
+
+  if (points.length === 0 || values.every((value) => value === 0)) {
+    return (
+      <div className="analytics-chart-empty">
+        <strong>当前区间暂无 Token 数据</strong>
+        <span>统计仅包含 SQLite 中仍保留且记录到用量的请求。</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="analytics-chart-wrap">
+      <div className="analytics-chart-legend is-token-breakdown" aria-hidden="true">
+        {TOKEN_SERIES.map((series) => (
+          <span className={series.tone} key={series.metric}>{series.label}</span>
+        ))}
+        <span className="is-cache-rate">缓存率</span>
+      </div>
+      <svg
+        className="analytics-chart analytics-token-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="输入、输出、缓存读取、缓存创建与缓存命中率趋势"
+      >
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+          const value = max * ratio;
+          const tickY = tokenY(value);
+          return (
+            <g key={ratio}>
+              <line x1={inset.left} x2={width - inset.right} y1={tickY} y2={tickY} />
+              <text x={inset.left - 8} y={tickY + 4} textAnchor="end">
+                {formatCompactMetricNumber(Math.round(value))}
+              </text>
+              <text
+                className="analytics-chart-rate-axis"
+                x={width - inset.right + 8}
+                y={tickY + 4}
+                textAnchor="start"
+              >
+                {Math.round(ratio * 100)}%
+              </text>
+            </g>
+          );
+        })}
+        {TOKEN_SERIES.map((series) => (
+          <polyline
+            className={`analytics-chart-line ${series.tone}`}
+            points={points.map((point, index) => `${x(index)},${tokenY(point[series.metric])}`).join(" ")}
+            key={series.metric}
+          />
+        ))}
+        <polyline
+          className="analytics-chart-line is-cache-rate"
+          points={points.map((point, index) => `${x(index)},${rateY(rate(point))}`).join(" ")}
+        />
+        {points.map((point, index) => (
+          <circle
+            className="analytics-chart-hit-target"
+            cx={x(index)}
+            cy={tokenY(point.cache_read_tokens)}
+            r="7"
+            key={point.key}
+          >
+            <title>{`${point.label}：输入 ${formatMetricNumber(point.input_tokens)}，输出 ${formatMetricNumber(point.output_tokens)}，缓存读取 ${formatMetricNumber(point.cache_read_tokens)}，缓存创建 ${formatMetricNumber(point.cache_creation_tokens)}，缓存率 ${cacheHitRate(point.input_tokens, point.cache_read_tokens)}`}</title>
+          </circle>
+        ))}
+        {tickIndexes.map((index) => (
+          <text
+            className="analytics-chart-x-label"
+            x={x(index)}
+            y={height - 6}
+            textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}
+            key={points[index].key}
+          >
+            {points[index].label}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 export function AnalyticsDistribution({
   rows
 }: {
@@ -145,7 +290,7 @@ export function AnalyticsDistribution({
         <div className="analytics-distribution-row" key={row.label}>
           <div className="analytics-distribution-label">
             <span title={row.label}>{row.label}</span>
-            <strong>{formatMetricNumber(row.value)}</strong>
+            <strong title={formatMetricNumber(row.value)}>{formatCompactMetricNumber(row.value)}</strong>
           </div>
           <div className="analytics-distribution-track">
             <span
@@ -213,13 +358,6 @@ export function cacheHitRate(inputTokens: number, cacheReadTokens: number): stri
 
 export function durationPair(p50: number | null, p95: number | null): string {
   return `${formatDurationMs(p50)} / ${formatDurationMs(p95)}`;
-}
-
-function formatCompactNumber(value: number): string {
-  return new Intl.NumberFormat("zh-CN", {
-    notation: value >= 10_000 ? "compact" : "standard",
-    maximumFractionDigits: 1
-  }).format(Math.round(value));
 }
 
 function formatShortDate(iso: string): string {

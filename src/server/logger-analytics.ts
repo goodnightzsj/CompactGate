@@ -12,6 +12,7 @@ import {
 export interface LogStatsOptions {
   from: string;
   to: string;
+  includeOverview?: boolean;
 }
 
 const validToken = (column: string) =>
@@ -71,6 +72,7 @@ const ANALYTICS_ROWS_SQL = `
     SELECT
       time,
       route,
+      upstream_host,
       ${DISPLAY_ENDPOINT} AS endpoint,
       source_model,
       target_model,
@@ -134,6 +136,15 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
     ORDER BY requests DESC, route
   `).all(...params) as Array<Record<string, unknown>>;
 
+  const hosts = db.prepare(`
+    ${ANALYTICS_ROWS_SQL}
+    SELECT upstream_host AS host, ${METRIC_SQL}
+    FROM analytics_rows
+    GROUP BY upstream_host
+    ORDER BY requests DESC, host
+    LIMIT 12
+  `).all(...params) as Array<Record<string, unknown>>;
+
   const models = db.prepare(`
     ${ANALYTICS_ROWS_SQL}
     SELECT
@@ -191,6 +202,10 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       route: normalizeRoute(row.route),
       ...readMetric(row)
     })),
+    by_host: hosts.map((row) => ({
+      host: readString(row.host) ?? "未知 Host",
+      ...readMetric(row)
+    })),
     by_model: models.map((row) => ({
       model: readString(row.model),
       requests: readNumber(row.requests),
@@ -211,8 +226,36 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       target_model: readString(row.target_model),
       response_model: readString(row.response_model),
       requests: readNumber(row.requests)
-    }))
+    })),
+    overview: options.includeOverview ? readOverview(db, options.to) : null
   };
+}
+
+function readOverview(db: DatabaseSync, to: string): NonNullable<LogStatsSnapshot["overview"]> {
+  const end = new Date(to);
+  const today = new Date(end);
+  today.setHours(0, 0, 0, 0);
+  return {
+    today: {
+      from: today.toISOString(),
+      to,
+      summary: readSummaryMetric(db, today.toISOString(), to)
+    },
+    retained: {
+      summary: readSummaryMetric(
+        db,
+        "0000-01-01T00:00:00.000Z",
+        "9999-12-31T23:59:59.999Z"
+      )
+    }
+  };
+}
+
+function readSummaryMetric(db: DatabaseSync, from: string, to: string): LogStatsMetric {
+  const row = db.prepare(
+    `${ANALYTICS_ROWS_SQL} SELECT ${METRIC_SQL} FROM analytics_rows`
+  ).get(from, to) as Record<string, unknown>;
+  return readMetric(row);
 }
 
 function readMetric(row: Record<string, unknown>): LogStatsMetric {

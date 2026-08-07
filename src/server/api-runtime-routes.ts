@@ -255,7 +255,7 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
 
 const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
 
-function readLogStatsQuery(url: URL): { from: string; to: string } {
+function readLogStatsQuery(url: URL): { from: string; to: string; includeOverview: boolean } {
   const toTime = parseStatsTimestamp(url.searchParams.get("to"), Date.now(), "to");
   const fromTime = parseStatsTimestamp(
     url.searchParams.get("from"),
@@ -272,7 +272,8 @@ function readLogStatsQuery(url: URL): { from: string; to: string } {
 
   return {
     from: new Date(fromTime).toISOString(),
-    to: new Date(toTime).toISOString()
+    to: new Date(toTime).toISOString(),
+    includeOverview: url.searchParams.get("overview") === "1"
   };
 }
 

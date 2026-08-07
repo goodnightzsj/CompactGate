@@ -62,7 +62,8 @@ describe("RequestLogger stats", () => {
         cache_creation_input_tokens: 20,
         reasoning_tokens: 3,
         additive_cached_input_tokens: true,
-        total_tokens: 0
+        total_tokens: 0,
+        upstream_host: "claude.example"
       }));
       logger.add(logEntry({
         time: "2026-08-07T02:00:00.000Z",
@@ -71,7 +72,8 @@ describe("RequestLogger stats", () => {
 
       const stats = logger.stats({
         from: "2026-08-07T00:00:00.000Z",
-        to: "2026-08-07T02:00:00.000Z"
+        to: "2026-08-07T02:00:00.000Z",
+        includeOverview: true
       });
 
       expect(stats.summary).toMatchObject({
@@ -106,6 +108,10 @@ describe("RequestLogger stats", () => {
         ["compact", 1],
         ["primary", 1]
       ]);
+      expect(stats.by_host.map((row) => [row.host, row.requests, row.total_tokens])).toEqual([
+        ["upstream.example", 2, 120],
+        ["claude.example", 1, 65]
+      ]);
       expect(stats.by_model).toEqual(expect.arrayContaining([
         expect.objectContaining({
           model: "upstream-model",
@@ -139,6 +145,9 @@ describe("RequestLogger stats", () => {
         oldest_at: "2026-08-07T00:15:00.000Z",
         newest_at: "2026-08-07T02:00:00.000Z"
       });
+      expect(stats.overview?.today.summary.requests).toBe(3);
+      expect(stats.overview?.retained.summary.requests).toBe(4);
+      expect(stats.overview?.retained.summary.total_tokens).toBe(185);
     } finally {
       logger.close();
     }

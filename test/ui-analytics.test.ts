@@ -9,17 +9,42 @@ import type {
 import {
   dateInputsToRange,
   groupTrend,
+  platformBreakdown,
+  presetForRange,
   rangeForPreset,
   usageCsv
 } from "../src/ui/analytics/analytics-data.js";
-import { cacheHitRate } from "../src/ui/analytics/AnalyticsShared.js";
+import {
+  AnalyticsTokenBreakdownChart,
+  cacheHitRate
+} from "../src/ui/analytics/AnalyticsShared.js";
 import { DateRangePicker } from "../src/ui/analytics/DateRangePicker.js";
+import { formatCompactMetricNumber } from "../src/ui/shared/format.js";
 
 describe("analytics data helpers", () => {
+  it("formats analytics-scale values without changing precise formatters", () => {
+    expect(formatCompactMetricNumber(999)).toBe("999");
+    expect(formatCompactMetricNumber(1_900_000)).toBe("1.9M");
+    expect(formatCompactMetricNumber(2_360_000_000)).toBe("2.4B");
+  });
+
   it("uses the shared cache rate formula for overall and model metrics", () => {
     expect(cacheHitRate(100, 42)).toBe("42.0%");
     expect(cacheHitRate(100, 120)).toBe("100.0%");
     expect(cacheHitRate(0, 0)).toBe("-");
+  });
+
+  it("groups primary and compact traffic as GPT while keeping Claude separate", () => {
+    const rows = [
+      { route: "primary" as const, ...metric({ requests: 3, error_requests: 1, total_tokens: 30 }) },
+      { route: "compact" as const, ...metric({ requests: 2, total_tokens: 20 }) },
+      { route: "claude" as const, ...metric({ requests: 4, total_tokens: 40 }) }
+    ];
+
+    expect(platformBreakdown(rows)).toEqual([
+      { label: "GPT", requests: 5, error_requests: 1, total_tokens: 50 },
+      { label: "Claude", requests: 4, error_requests: 0, total_tokens: 40 }
+    ]);
   });
 
   it("renders the custom range trigger without native date inputs", () => {
@@ -32,6 +57,29 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("日期范围");
     expect(markup).toContain("aria-haspopup=\"dialog\"");
     expect(markup).not.toContain("type=\"date\"");
+  });
+
+  it("renders token components and cache rate with exact point details", () => {
+    const stats = snapshot([
+      {
+        bucket_start: "2026-08-07T00:00:00.000Z",
+        ...metric({
+          input_tokens: 1_000,
+          output_tokens: 50,
+          cache_read_tokens: 500,
+          cache_creation_tokens: 100,
+          total_tokens: 1_150
+        })
+      }
+    ]);
+    const markup = renderToStaticMarkup(createElement(AnalyticsTokenBreakdownChart, {
+      points: groupTrend(stats, "hour")
+    }));
+
+    expect(markup).toContain("缓存创建");
+    expect(markup).toContain("缓存率");
+    expect(markup).toContain("输入 1,000");
+    expect(markup).toContain("缓存率 50.0%");
   });
 
   it("treats date inputs as inclusive local calendar days with a 31-day limit", () => {
@@ -61,6 +109,14 @@ describe("analytics data helpers", () => {
       0
     ]);
     expect(range.to).toBe(now.toISOString());
+  });
+
+  it("derives the displayed preset from the rendered snapshot range", () => {
+    const now = new Date(2026, 7, 7, 15, 30, 0).getTime();
+
+    expect(presetForRange(rangeForPreset("24h", now))).toBe("24h");
+    expect(presetForRange(rangeForPreset("7d", now))).toBe("7d");
+    expect(presetForRange(rangeForPreset("30d", now))).toBe("30d");
   });
 
   it("fills missing hours and exports the visible usage rows", () => {
@@ -100,9 +156,11 @@ function snapshot(trend: LogStatsSnapshot["trend"]): LogStatsSnapshot {
     summary,
     trend,
     by_route: [],
+    by_host: [],
     by_model: [],
     by_endpoint: [],
-    model_mappings: []
+    model_mappings: [],
+    overview: null
   };
 }
 

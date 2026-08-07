@@ -5,6 +5,7 @@
 
 /* ── Palette ── */
 :root {
+  view-transition-name: none;
   --paper: #faf8f3;
   --paper-warm: #f4efe5;
   --surface: #fefdfb;

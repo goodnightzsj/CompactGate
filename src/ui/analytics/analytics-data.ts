@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { LogStatsMetric, LogStatsSnapshot } from "../../shared/types.js";
 import { api, errorSummary } from "../shared/api.js";
 
 export type AnalyticsGranularity = "hour" | "day";
 export type AnalyticsRange = LogStatsSnapshot["range"];
 export type AnalyticsPreset = "24h" | "7d" | "30d";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface AnalyticsTrendPoint {
   key: string;
@@ -21,22 +24,39 @@ export interface AnalyticsTrendPoint {
   total_tokens: number;
 }
 
-export function useLogStats(range: AnalyticsRange) {
+export function useLogStats(
+  range: AnalyticsRange,
+  options: { includeOverview?: boolean; transitionUpdates?: boolean } = {}
+) {
+  const { includeOverview = false, transitionUpdates = false } = options;
   const [data, setData] = useState<LogStatsSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
+  const hasData = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     const query = new URLSearchParams({ from: range.from, to: range.to });
-    setData(null);
+    if (includeOverview) {
+      query.set("overview", "1");
+    }
     setError(null);
     setLoading(true);
     void api<LogStatsSnapshot>(`/api/logs/stats?${query.toString()}`, {
       signal: controller.signal
     }).then((snapshot) => {
-      setData(snapshot);
+      if (
+        transitionUpdates &&
+        hasData.current &&
+        typeof document.startViewTransition === "function" &&
+        !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ) {
+        document.startViewTransition(() => flushSync(() => setData(snapshot)));
+      } else {
+        setData(snapshot);
+      }
+      hasData.current = true;
     }).catch((cause: unknown) => {
       if (!(cause instanceof DOMException && cause.name === "AbortError")) {
         setError(errorSummary(cause));
@@ -48,7 +68,7 @@ export function useLogStats(range: AnalyticsRange) {
     });
 
     return () => controller.abort();
-  }, [range.from, range.to, revision]);
+  }, [includeOverview, range.from, range.to, revision, transitionUpdates]);
 
   return {
     data,
@@ -56,6 +76,23 @@ export function useLogStats(range: AnalyticsRange) {
     loading,
     refresh: () => setRevision((current) => current + 1)
   };
+}
+
+export function platformBreakdown(rows: LogStatsSnapshot["by_route"]) {
+  const result = {
+    GPT: { requests: 0, error_requests: 0, total_tokens: 0 },
+    Claude: { requests: 0, error_requests: 0, total_tokens: 0 }
+  };
+  for (const row of rows) {
+    const platform = row.route === "claude" ? result.Claude : result.GPT;
+    platform.requests += row.requests;
+    platform.error_requests += row.error_requests;
+    platform.total_tokens += row.total_tokens;
+  }
+  return [
+    { label: "GPT", ...result.GPT },
+    { label: "Claude", ...result.Claude }
+  ];
 }
 
 export function rangeForPreset(preset: AnalyticsPreset, now = Date.now()): AnalyticsRange {
@@ -73,6 +110,11 @@ export function rangeForPreset(preset: AnalyticsPreset, now = Date.now()): Analy
     from: from.toISOString(),
     to: end.toISOString()
   };
+}
+
+export function presetForRange(range: AnalyticsRange): AnalyticsPreset {
+  const duration = Date.parse(range.to) - Date.parse(range.from);
+  return duration <= DAY_MS ? "24h" : duration <= 7 * DAY_MS ? "7d" : "30d";
 }
 
 export function defaultUsageDates(now = new Date()): { from: string; to: string } {

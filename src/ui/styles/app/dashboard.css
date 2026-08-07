@@ -238,6 +238,15 @@
   margin-bottom: 16px;
 }
 
+.analytics-data-view { view-transition-name: analytics-data; }
+
+::view-transition-old(analytics-data),
+::view-transition-new(analytics-data) {
+  animation-duration: 280ms;
+  animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  mix-blend-mode: normal;
+}
+
 .analytics-metric {
   display: grid;
   min-width: 0;
@@ -309,6 +318,22 @@
   font-size: 0.69rem;
 }
 
+.analytics-panel-header-side,
+.analytics-panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.analytics-panel-segmented {
+  grid-auto-columns: minmax(54px, 1fr);
+  min-height: 26px;
+}
+
+.analytics-panel-segmented button { padding: 3px 8px; }
+
 .analytics-chart-wrap { min-width: 0; }
 
 .analytics-chart-legend {
@@ -333,6 +358,15 @@
 }
 
 .analytics-chart-legend .is-error::before { background: var(--brick); }
+.analytics-chart-legend .is-input::before { background: var(--accent); }
+.analytics-chart-legend .is-output::before { background: var(--jade); }
+.analytics-chart-legend .is-cache-read::before { background: var(--amber); }
+.analytics-chart-legend .is-cache-creation::before { background: var(--brick); }
+.analytics-chart-legend .is-cache-rate::before {
+  background: repeating-linear-gradient(90deg, var(--forest) 0 5px, transparent 5px 8px);
+}
+
+.analytics-chart-legend.is-token-breakdown { flex-wrap: wrap; }
 
 .analytics-chart {
   display: block;
@@ -366,6 +400,23 @@
 .analytics-chart-line.is-error {
   stroke: var(--brick);
   stroke-width: 1.75;
+}
+
+.analytics-chart-line.is-output { stroke: var(--jade); }
+.analytics-chart-line.is-cache-read { stroke: var(--amber); }
+.analytics-chart-line.is-cache-creation { stroke: var(--brick); }
+
+.analytics-chart-line.is-cache-rate {
+  stroke: var(--forest);
+  stroke-dasharray: 6 4;
+  stroke-width: 1.75;
+}
+
+.analytics-chart text.analytics-chart-rate-axis { fill: var(--forest); }
+
+.analytics-chart-hit-target {
+  fill: transparent;
+  pointer-events: all;
 }
 
 .analytics-chart-point {

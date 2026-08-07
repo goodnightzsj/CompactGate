@@ -11,11 +11,14 @@ describe("log stats API", () => {
     const compact = await startUpstream((_req, res) => res.end("{}"));
     const app = await startApp(primary.url, compact.url);
 
-    const response = await fetch(`${app.url}/api/logs/stats`);
+    const response = await fetch(`${app.url}/api/logs/stats?overview=1`);
     expect(response.status).toBe(200);
     const stats = await response.json() as LogStatsSnapshot;
     expect(stats.summary.requests).toBe(0);
     expect(stats.trend).toEqual([]);
+    expect(stats.by_host).toEqual([]);
+    expect(stats.overview?.today.summary.requests).toBe(0);
+    expect(stats.overview?.retained.summary.requests).toBe(0);
     expect(stats.range.from < stats.range.to).toBe(true);
 
     const invalid = await fetch(`${app.url}/api/logs/stats?from=not-a-date`);

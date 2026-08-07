@@ -10,6 +10,17 @@ export function formatMetricNumber(value: number | null): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+export function formatCompactMetricNumber(value: number | null): string {
+  if (value === null) {
+    return "-";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value);
+}
+
 export function formatDurationMs(value: number | null): string {
   if (value === null) {
     return "-";

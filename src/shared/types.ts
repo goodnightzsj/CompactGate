@@ -491,6 +491,7 @@ export interface LogStatsSnapshot {
   summary: LogStatsSummary;
   trend: Array<LogStatsMetric & { bucket_start: string }>;
   by_route: Array<LogStatsMetric & { route: RouteKind }>;
+  by_host: Array<LogStatsMetric & { host: string }>;
   by_model: Array<{
     model: string | null;
     requests: number;
@@ -512,6 +513,16 @@ export interface LogStatsSnapshot {
     response_model: string | null;
     requests: number;
   }>;
+  overview: {
+    today: {
+      from: string;
+      to: string;
+      summary: LogStatsMetric;
+    };
+    retained: {
+      summary: LogStatsMetric;
+    };
+  } | null;
 }
 
 export interface HealthResponse {
