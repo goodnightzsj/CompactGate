@@ -52,6 +52,16 @@ function canonicalStatefulBody(): Buffer {
   }));
 }
 
+function canonicalCompactionBody(): Buffer {
+  return Buffer.from(JSON.stringify({
+    model: "gpt-5.5",
+    input: [
+      { type: "compaction", encrypted_content: "opaque-provider-state" },
+      { type: "message", role: "user", content: "continue" }
+    ]
+  }));
+}
+
 describe("provider-state recovery state machine", () => {
   it("can use all four distinct attempts without mutating prior bodies", async () => {
     const canonicalBody = canonicalStatefulBody();
@@ -177,6 +187,80 @@ describe("provider-state recovery state machine", () => {
     ]);
     expect(recovery.trigger).toBe("explicit_400");
     expect(recovery.result.status).toBe(200);
+  });
+
+  it("repairs invalid_responses_request only when canonical input carries compaction", async () => {
+    const canonicalBody = canonicalCompactionBody();
+    const sentBodies: Buffer[] = [];
+
+    const recovery = await runProviderStateMigration({
+      canonicalBody,
+      targetStateDomain: "target",
+      canReplay: () => true,
+      startGenericRecovery: () => null,
+      send: async (body) => {
+        sentBodies.push(body);
+        return sentBodies.length === 1
+          ? upstreamResult(400, { error: { code: "invalid_responses_request" } })
+          : upstreamResult(200, { id: "resp_recovered" });
+      }
+    });
+
+    expect(recovery.attempts.map((attempt) => attempt.strategy)).toEqual([
+      "original",
+      "error_400"
+    ]);
+    expect(sentBodies[0]).toBe(canonicalBody);
+    expect(JSON.parse(sentBodies[1].toString("utf8")).input).toEqual([
+      { type: "message", role: "user", content: "continue" }
+    ]);
+    expect(recovery.attempts[1].compiled.fidelity).toBe("degraded");
+    expect(recovery.trigger).toBe("explicit_400");
+  });
+
+  it("does not recover invalid_responses_request without compaction", async () => {
+    const canonicalBody = canonicalStatefulBody();
+    let sends = 0;
+
+    const recovery = await runProviderStateMigration({
+      canonicalBody,
+      targetStateDomain: "target",
+      canReplay: () => true,
+      startGenericRecovery: () => {
+        throw new Error("generic recovery must not be evaluated");
+      },
+      send: async () => {
+        sends += 1;
+        return upstreamResult(400, { error: { code: "invalid_responses_request" } });
+      }
+    });
+
+    expect(sends).toBe(1);
+    expect(recovery.trigger).toBeNull();
+    expect(recovery.result.status).toBe(400);
+  });
+
+  it("stops when compaction removal receives the same invalid_responses_request", async () => {
+    const canonicalBody = canonicalCompactionBody();
+    let sends = 0;
+
+    const recovery = await runProviderStateMigration({
+      canonicalBody,
+      targetStateDomain: "target",
+      canReplay: () => true,
+      startGenericRecovery: () => "profile_switch_failure",
+      send: async () => {
+        sends += 1;
+        return upstreamResult(400, { error: { code: "invalid_responses_request" } });
+      }
+    });
+
+    expect(sends).toBe(2);
+    expect(recovery.attempts.map((attempt) => attempt.strategy)).toEqual([
+      "original",
+      "error_400"
+    ]);
+    expect(recovery.result.status).toBe(400);
   });
 });
 

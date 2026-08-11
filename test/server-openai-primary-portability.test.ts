@@ -197,6 +197,82 @@ describe("primary provider-state error recovery", () => {
     ]);
   });
 
+  it("removes rejected remote-v2 compaction and retries once", async () => {
+    const requests: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(requests, (res) => {
+      if (requests.length === 1) {
+        writeJson(res, {
+          error: { code: "invalid_responses_request", type: "new_api_error" }
+        }, 400);
+      } else {
+        writeJson(res, { id: "resp_recovered", output: [] });
+      }
+    });
+    const app = await startApp(upstream.url, upstream.url, {
+      primary_failover: { auto_schedule: false, state_portability: "recover_on_error" }
+    });
+    const body = JSON.stringify({
+      model: "gpt-5.5",
+      input: [
+        { type: "compaction", encrypted_content: "opaque-provider-state" },
+        { type: "message", role: "user", content: "continue" }
+      ]
+    });
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "x-codex-beta-features": "remote_compaction_v2" },
+      body
+    });
+
+    expect(response.status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].body).toBe(body);
+    expect(JSON.parse(requests[1].body).input).toEqual([
+      { type: "message", role: "user", content: "continue" }
+    ]);
+    const log = await waitForLogEntry(
+      app.url,
+      (entry) => entry.provider_state_portability?.decision === "recovery"
+    );
+    expect(log.provider_state_portability).toMatchObject({
+      trigger: "explicit_400",
+      attempts: [
+        { strategy: "original", status: 400, error_code: "invalid_responses_request" },
+        {
+          strategy: "error_400",
+          status: 200,
+          fidelity: "degraded",
+          migration_counts: { compactionItemsRemoved: 1 }
+        }
+      ]
+    });
+  });
+
+  it("does not retry invalid_responses_request without compaction", async () => {
+    const requests: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(requests, (res) => {
+      writeJson(res, { error: { code: "invalid_responses_request" } }, 400);
+    });
+    const app = await startApp(upstream.url, upstream.url, {
+      primary_failover: { auto_schedule: false, state_portability: "recover_on_error" }
+    });
+    const body = JSON.stringify({
+      model: "gpt-5.5",
+      input: [{ type: "reasoning", encrypted_content: validEncryptedContent(), summary: [] }]
+    });
+
+    const response = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body
+    });
+
+    expect(response.status).toBe(400);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body).toBe(body);
+  });
+
   it("uses original then CPA then strict after target state-free success", async () => {
     const nextRequests: CapturedRequest[] = [];
     const setup = await setupProfileSwitch(

@@ -7,6 +7,7 @@ export type ProviderStateBaseStrategy = Exclude<ProviderStateStrategy, "error_40
 export type ProviderStateFidelity = "exact" | "summary" | "degraded";
 export type ProviderStateErrorCode =
   | "invalid_encrypted_content"
+  | "invalid_responses_request"
   | "previous_response_not_found";
 
 export interface ProviderStateAnalysis {
@@ -151,6 +152,9 @@ export function compileProviderStateAttempt(
       ? applyCrossDomainCleanup(parsed, metrics, options.targetStateDomain)
       : (applyCpaCleanup(parsed, metrics), "exact");
     applyErrorRecovery(parsed, metrics, options.errorCode);
+    if (metrics.compactionItemsRemoved > 0) {
+      fidelity = "degraded";
+    }
   }
 
   const changed = hasChanges(metrics) || hasPromptCacheKeyRewrite(canonicalBody, parsed);
@@ -178,6 +182,13 @@ export function providerStateErrorCode(
 
   const parsed = parseJsonRecord(responseBody);
   const error = isRecord(parsed?.error) ? parsed.error : null;
+  if (
+    typeof error?.code === "string" &&
+    error.code.trim().toLowerCase() === "invalid_responses_request"
+  ) {
+    return "invalid_responses_request";
+  }
+
   const candidates = [error?.code, parsed?.code, error?.type, parsed?.type];
   for (const candidate of candidates) {
     if (typeof candidate !== "string") {
@@ -363,6 +374,16 @@ function applyErrorRecovery(
     }
   } else if (errorCode === "previous_response_not_found") {
     removePreviousResponseIds(body, metrics);
+  } else if (errorCode === "invalid_responses_request") {
+    if (!Array.isArray(body.input)) {
+      return;
+    }
+
+    body.input = body.input.filter((item) => {
+      const remove = isRecord(item) && item.type === "compaction";
+      metrics.compactionItemsRemoved += remove ? 1 : 0;
+      return !remove;
+    });
   }
 }
 

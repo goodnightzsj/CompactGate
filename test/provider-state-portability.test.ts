@@ -5,7 +5,8 @@ import {
   analyzeProviderState,
   compileProviderStateAttempt,
   hashProviderStateBody,
-  isValidGptReasoningEncryptedContent
+  isValidGptReasoningEncryptedContent,
+  providerStateErrorCode
 } from "../src/server/provider-state-portability.js";
 
 function validEncryptedContent(): string {
@@ -169,6 +170,43 @@ describe("provider state portability", () => {
       summary: [{ type: "summary_text", text: "keep this summary" }]
     }]);
     expect(recovery.bodyHash).not.toBe(cpa.bodyHash);
+  });
+
+  it("removes only compaction for invalid_responses_request", () => {
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_same_provider",
+      encrypted_content: validEncryptedContent(),
+      summary: []
+    };
+    const message = { type: "message", role: "user", content: "continue" };
+    const canonicalBody = Buffer.from(JSON.stringify({
+      previous_response_id: "resp_same_provider",
+      input: [
+        reasoning,
+        { type: "compaction", id: "cmp_rejected", encrypted_content: "opaque-state" },
+        message
+      ]
+    }));
+
+    const recovery = compileProviderStateAttempt(canonicalBody, {
+      strategy: "error_400",
+      priorStrategy: "original",
+      errorCode: "invalid_responses_request"
+    });
+
+    expect(parseBody(recovery.body)).toEqual({
+      previous_response_id: "resp_same_provider",
+      input: [reasoning, message]
+    });
+    expect(recovery.metrics.compactionItemsRemoved).toBe(1);
+    expect(recovery.fidelity).toBe("degraded");
+    expect(providerStateErrorCode(400, Buffer.from(JSON.stringify({
+      error: { code: "invalid_responses_request", type: "new_api_error" }
+    })))).toBe("invalid_responses_request");
+    expect(providerStateErrorCode(400, Buffer.from(JSON.stringify({
+      type: "invalid_responses_request"
+    })))).toBeNull();
   });
 
   it("removes an invalid previous_response_id when input is not an item array", () => {

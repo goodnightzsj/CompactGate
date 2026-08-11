@@ -1,5 +1,6 @@
 import type { BufferedUpstreamResult } from "./upstream-client.js";
 import {
+  analyzeProviderState,
   compileProviderStateAttempt,
   providerStateErrorCode,
   type CompiledProviderStateAttempt,
@@ -48,6 +49,7 @@ const MAX_PROVIDER_STATE_ATTEMPTS = 4;
 export async function runProviderStateMigration(
   options: RunProviderStateMigrationOptions
 ): Promise<ProviderStateMigrationResult> {
+  const canonicalHasCompaction = analyzeProviderState(options.canonicalBody).compactionItemCount > 0;
   const attemptedBodyHashes = new Set<string>();
   const attemptedStrategies = new Set<ProviderStateStrategy>();
   const attempts: ProviderStateMigrationAttempt[] = [];
@@ -93,6 +95,14 @@ export async function runProviderStateMigration(
     });
 
     if (result.status < 400 || !options.canReplay()) {
+      return { result, body: compiled.body, attempts, trigger };
+    }
+
+    if (
+      responseErrorCode === "invalid_responses_request" &&
+      (!canonicalHasCompaction ||
+        (strategy === "error_400" && errorCode === "invalid_responses_request"))
+    ) {
       return { result, body: compiled.body, attempts, trigger };
     }
 
