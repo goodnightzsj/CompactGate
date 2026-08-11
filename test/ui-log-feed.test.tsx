@@ -162,41 +162,53 @@ describe("live log page updates", () => {
 });
 
 describe("LogsPage loaded rows", () => {
+  it("keeps the empty table shell mounted for the first live-row animation", () => {
+    const markup = renderLogsPage([]);
+
+    expect(markup).toContain("暂无请求记录");
+    expect(markup).toContain('class="log-table log-table-full" hidden=""');
+  });
+
   it("renders every loaded row instead of hiding rows after the first 100", () => {
     const logs = Array.from({ length: 120 }, (_, index) =>
       requestLog(`request-${String(index).padStart(3, "0")}`)
     );
-    const markup = renderToStaticMarkup(
-      <LogsPage
-        logs={logs}
-        logCounts={{ all: 120, primary: 120, compact: 0, claude: 0 }}
-        providerCounts={{ all: 120, openai: 120, claude: 0 }}
-        statusCounts={{ all: 120, normal: 120, error: 0 }}
-        totalLogCount={120}
-        allLogCount={120}
-        hostOptions={[
-          { host: "upstream.example", total: 120, primary: 120, compact: 0, claude: 0 }
-        ]}
-        hasMoreLogs={false}
-        isLoadingLogs={false}
-        isLoadingMoreLogs={false}
-        routeFilter="all"
-        statusFilter="all"
-        hostFilter={ALL_HOSTS_FILTER}
-        searchFilter=""
-        onRouteFilterChange={() => undefined}
-        onStatusFilterChange={() => undefined}
-        onHostFilterChange={() => undefined}
-        onSearchFilterChange={() => undefined}
-        onLoadMore={() => undefined}
-        error={null}
-      />
-    );
+    const markup = renderLogsPage(logs);
 
     expect(markup).toContain("显示 120 / 共 120 条");
     expect(markup.match(/class="log-row is-clickable/g)).toHaveLength(120);
   });
 });
+
+function renderLogsPage(logs: RequestLogEntry[]): string {
+  const total = logs.length;
+  return renderToStaticMarkup(
+    <LogsPage
+      logs={logs}
+      logCounts={{ all: total, primary: total, compact: 0, claude: 0 }}
+      providerCounts={{ all: total, openai: total, claude: 0 }}
+      statusCounts={{ all: total, normal: total, error: 0 }}
+      totalLogCount={total}
+      allLogCount={total}
+      hostOptions={total === 0 ? [] : [
+        { host: "upstream.example", total, primary: total, compact: 0, claude: 0 }
+      ]}
+      hasMoreLogs={false}
+      isLoadingLogs={false}
+      isLoadingMoreLogs={false}
+      routeFilter="all"
+      statusFilter="all"
+      hostFilter={ALL_HOSTS_FILTER}
+      searchFilter=""
+      onRouteFilterChange={() => undefined}
+      onStatusFilterChange={() => undefined}
+      onHostFilterChange={() => undefined}
+      onSearchFilterChange={() => undefined}
+      onLoadMore={() => undefined}
+      error={null}
+    />
+  );
+}
 
 function emptyPage(limit: number): RequestLogPage {
   return {

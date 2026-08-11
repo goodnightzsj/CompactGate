@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
-const STAGGER_MS = 250;
+const STAGGER_MS = 120;
 
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array.
  *
  * - Initial load / filter reset: all logs appear immediately (no stagger).
  * - SSE live push (new logs at head): released one-by-one every STAGGER_MS.
- * - Inactive log page: live inserts remain queued until the page becomes active.
+ * - Inactive log page: the visible snapshot freezes until the page becomes active.
+ * - Large catch-up: releases every item in the current log window.
  * - Pagination (older logs at tail): appear immediately.
  * - Existing rows are updated in-place when their fields change.
  */
@@ -20,138 +21,135 @@ export function useStaggeredLogs(
   active = true
 ): RequestLogEntry[] {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
+  const displayedRef = useRef(displayed);
   const queueRef = useRef<RequestLogEntry[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [queueVersion, setQueueVersion] = useState(0);
   const prevLogsRef = useRef<RequestLogEntry[]>(logs);
   const prevQueryKeyRef = useRef(queryKey);
   const prevSyncVersionRef = useRef(syncVersion);
   const latestLogsRef = useRef(logs);
+  const wasActiveRef = useRef(active);
 
   const scheduleQueueDrain = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (!active) {
-      timerRef.current = null;
+    if (!active || timerRef.current || queueRef.current.length === 0) {
       return;
     }
-    if (queueRef.current.length === 0) {
+
+    timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      return;
-    }
-    timerRef.current = setInterval(() => {
       const item = queueRef.current.shift();
       if (item) {
         setDisplayed((prev) => {
-          const visibleIds = new Set(prev.map((entry) => entry.request_id));
-          visibleIds.add(item.request_id);
-          return latestLogsRef.current.filter((entry) => visibleIds.has(entry.request_id));
+          const next = queueRef.current.length === 0
+            ? latestLogsRef.current
+            : revealStaggeredLog(prev, latestLogsRef.current, item);
+          displayedRef.current = next;
+          return next;
         });
       }
-      if (queueRef.current.length === 0 && timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      setQueueVersion((version) => version + 1);
     }, STAGGER_MS);
   }, [active]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestLogsRef.current = logs;
-    const prevIds = new Set(prevLogsRef.current.map((e) => e.request_id));
+    const wasActive = wasActiveRef.current;
+    const syncChanged = prevSyncVersionRef.current !== syncVersion;
     const isReset = shouldResetStaggeredLogs(
-      prevLogsRef.current,
       logs,
       prevQueryKeyRef.current,
-      queryKey,
-      prevSyncVersionRef.current,
-      syncVersion
+      queryKey
+    );
+    const isInitialSync = (
+      syncChanged &&
+      prevLogsRef.current.length === 0 &&
+      displayedRef.current.length === 0
     );
 
-    if (isReset) {
-      queueRef.current = [];
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
-      setDisplayed(logs);
+    const rememberInputs = () => {
       prevLogsRef.current = logs;
       prevQueryKeyRef.current = queryKey;
       prevSyncVersionRef.current = syncVersion;
+      wasActiveRef.current = active;
+    };
+
+    const replaceDisplayed = (next: RequestLogEntry[]) => {
+      displayedRef.current = next;
+      setDisplayed((current) => sameLogEntries(current, next) ? current : next);
+    };
+
+    if (isReset || isInitialSync) {
+      queueRef.current = [];
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      replaceDisplayed(logs);
+      rememberInputs();
       return;
     }
 
-    // Build a map of the incoming data for in-place updates.
-    const incoming = new Map(logs.map((e) => [e.request_id, e]));
-    queueRef.current = queueRef.current
-      .filter((item) => incoming.has(item.request_id))
-      .map((item) => incoming.get(item.request_id) ?? item);
-
-    const nextStaggeredIds = selectStaggeredLogIds(
-      prevLogsRef.current,
-      logs,
-      liveInsertIds
-    );
-    const staggeredIds = new Set(nextStaggeredIds);
-    const queuedIds = new Set(queueRef.current.map((entry) => entry.request_id));
-
-    // Apply updates and show all non-live additions in canonical server order.
-    setDisplayed((prev) => {
-      const visibleIds = new Set(prev.map((entry) => entry.request_id));
-      for (const entry of logs) {
-        if (!prevIds.has(entry.request_id) && !staggeredIds.has(entry.request_id)) {
-          visibleIds.add(entry.request_id);
-        }
-      }
-      const updated = logs.filter(
-        (entry) => visibleIds.has(entry.request_id) && !queuedIds.has(entry.request_id)
-      );
-      const unchanged = (
-        updated.length === prev.length &&
-        updated.every((entry, index) => entry === prev[index])
-      );
-      return unchanged ? prev : updated;
-    });
-
-    const nextQueue = nextStaggeredIds
-      .map((requestId) => incoming.get(requestId))
-      .filter((entry): entry is RequestLogEntry => Boolean(entry))
-      .filter((entry) => !queuedIds.has(entry.request_id));
-    if (nextQueue.length > 0) {
-      queueRef.current.push(...nextQueue);
-      setQueueVersion((v) => v + 1);
+    if (!active) {
+      queueRef.current = [];
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      rememberInputs();
+      return;
     }
 
-    prevLogsRef.current = logs;
-    prevQueryKeyRef.current = queryKey;
-    prevSyncVersionRef.current = syncVersion;
-  }, [logs, queryKey, syncVersion, liveInsertIds]);
+    let pendingIds: string[];
+    if (!wasActive || syncChanged) {
+      const visibleIds = new Set(displayedRef.current.map((entry) => entry.request_id));
+      pendingIds = logs
+        .filter((entry) => !visibleIds.has(entry.request_id))
+        .map((entry) => entry.request_id);
+    } else {
+      pendingIds = [
+        ...queueRef.current.map((entry) => entry.request_id),
+        ...selectStaggeredLogIds(prevLogsRef.current, logs, liveInsertIds)
+      ];
+    }
 
-  // Re-schedule the stagger drain whenever the queue gets new items.
+    const plan = planStaggeredLogCatchUp(displayedRef.current, logs, pendingIds);
+    queueRef.current = plan.queue;
+    replaceDisplayed(plan.displayed);
+    if (plan.queue.length > 0) {
+      setQueueVersion((version) => version + 1);
+    } else if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    rememberInputs();
+  }, [active, liveInsertIds, logs, queryKey, syncVersion]);
+
   useEffect(() => {
+    if (!active) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
+      return;
+    }
+
     scheduleQueueDrain();
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
   }, [active, queueVersion, scheduleQueueDrain]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   return displayed;
 }
 
 export function shouldResetStaggeredLogs(
-  previousLogs: RequestLogEntry[],
   nextLogs: RequestLogEntry[],
   previousQueryKey: string,
-  nextQueryKey: string,
-  previousSyncVersion = 0,
-  nextSyncVersion = previousSyncVersion
+  nextQueryKey: string
 ): boolean {
-  if (
+  return (
     previousQueryKey !== nextQueryKey ||
-    previousSyncVersion !== nextSyncVersion ||
     nextLogs.length === 0
-  ) {
-    return true;
-  }
-
-  const previousIds = new Set(previousLogs.map((entry) => entry.request_id));
-  return !nextLogs.some((entry) => previousIds.has(entry.request_id));
+  );
 }
 
 export function selectStaggeredLogIds(
@@ -166,4 +164,62 @@ export function selectStaggeredLogIds(
     .filter((entry) => !previousIds.has(entry.request_id) && liveIds.has(entry.request_id))
     .map((entry) => entry.request_id)
     .reverse();
+}
+
+export function planStaggeredLogCatchUp(
+  displayed: RequestLogEntry[],
+  latest: RequestLogEntry[],
+  pendingIds: readonly string[]
+): { displayed: RequestLogEntry[]; queue: RequestLogEntry[] } {
+  const displayedIds = new Set(displayed.map((entry) => entry.request_id));
+  const pendingIdSet = new Set(pendingIds);
+  const pending = latest
+    .filter((entry) => pendingIdSet.has(entry.request_id) && !displayedIds.has(entry.request_id))
+    .reverse();
+  const queue = pending;
+  const queueIds = new Set(queue.map((entry) => entry.request_id));
+
+  const latestIds = new Set(latest.map((entry) => entry.request_id));
+  const visibleIds = new Set(displayedIds);
+  for (const entry of latest) {
+    if (!pendingIdSet.has(entry.request_id)) {
+      visibleIds.add(entry.request_id);
+    }
+  }
+
+  const current = latest.filter(
+    (entry) => visibleIds.has(entry.request_id) && !queueIds.has(entry.request_id)
+  );
+  const stale = displayed.filter((entry) => !latestIds.has(entry.request_id));
+  const targetLength = Math.max(
+    Math.min(displayed.length, latest.length),
+    latest.length - queue.length
+  );
+
+  return {
+    displayed: [...current, ...stale].slice(0, targetLength),
+    queue
+  };
+}
+
+export function revealStaggeredLog(
+  displayed: RequestLogEntry[],
+  latest: RequestLogEntry[],
+  entry: RequestLogEntry
+): RequestLogEntry[] {
+  const latestIds = new Set(latest.map((item) => item.request_id));
+  const visibleIds = new Set(displayed.map((item) => item.request_id));
+  visibleIds.add(entry.request_id);
+
+  const current = latest.filter((item) => visibleIds.has(item.request_id));
+  const stale = displayed.filter((item) => !latestIds.has(item.request_id));
+  const targetLength = Math.min(latest.length, Math.max(displayed.length, current.length));
+  return [...current, ...stale].slice(0, targetLength);
+}
+
+function sameLogEntries(left: RequestLogEntry[], right: RequestLogEntry[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((entry, index) => entry === right[index])
+  );
 }

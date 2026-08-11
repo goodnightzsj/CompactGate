@@ -29,6 +29,7 @@ import { useLogTableScroll } from "./useLogTableScroll.js";
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
+const MAX_LAYOUT_ANIMATED_LOGS = 40;
 
 const logRowTransition = {
   type: "spring" as const,
@@ -76,6 +77,7 @@ export function LogsPage({
     onLoadMore
   });
   const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
+  const animateRowLayout = logs.length <= MAX_LAYOUT_ANIMATED_LOGS;
 
   function toggleLog(logKey: string) {
     // 记录移动列表当前滚动位置,展开详情后恢复,避免内容下推导致视口跑掉。
@@ -214,8 +216,9 @@ export function LogsPage({
             <span>将 Codex base_url 指向代理地址后，这里会实时出现路由记录。</span>
           </div>
         )
-      ) : (
-        <div className="log-table log-table-full">
+      ) : null}
+
+      <div className="log-table log-table-full" hidden={logs.length === 0}>
           <MotionDiv
             ref={tableBodyRef}
             className="log-table-body"
@@ -262,7 +265,7 @@ export function LogsPage({
                     const rows = [
                       <MotionTr
                         key={logKey}
-                        layout="position"
+                        layout={animateRowLayout ? "position" : false}
                         initial={{ opacity: 0, y: -14, scale: 0.995 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: -6 }}
@@ -301,7 +304,7 @@ export function LogsPage({
                       rows.push(
                         <MotionTr
                           key={`${logKey}-detail`}
-                          layout="position"
+                          layout={animateRowLayout ? "position" : false}
                           initial={{ opacity: 0, y: -6 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -4 }}
@@ -322,11 +325,15 @@ export function LogsPage({
               </tbody>
             </table>
           </MotionDiv>
-        </div>
-      )}
+      </div>
 
-      {logs.length > 0 && (
-        <MotionDiv ref={mobileListRef} className="logs-mobile-list" aria-label="请求日志摘要" layoutScroll>
+      <MotionDiv
+        ref={mobileListRef}
+        className="logs-mobile-list"
+        aria-label="请求日志摘要"
+        layoutScroll
+        hidden={logs.length === 0}
+      >
           <AnimatePresence initial={false} mode="popLayout">
             {logs.map((entry, index) => {
               const logKey = logEntryKey(entry);
@@ -334,7 +341,7 @@ export function LogsPage({
                 <MotionDiv
                   key={`mobile-${logKey}`}
                   className="log-mobile-motion-item"
-                  layout="position"
+                  layout={animateRowLayout ? "position" : false}
                   initial={{ opacity: 0, y: -10, scale: 0.995 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -5 }}
@@ -350,8 +357,7 @@ export function LogsPage({
               );
             })}
           </AnimatePresence>
-        </MotionDiv>
-      )}
+      </MotionDiv>
 
       {hasMoreLogs && (
         <div className="log-load-more">
