@@ -216,6 +216,10 @@
   animation: page-fade-up 250ms var(--ease-out) 200ms both;
 }
 
+.main-content > .page-appear-logs > * {
+  animation: none;
+}
+
 /* ── Page Header ── */
 .page-header {
   display: flex;

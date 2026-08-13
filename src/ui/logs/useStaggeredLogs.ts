@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
-const STAGGER_MS = 120;
+export const STAGGER_MS = 150;
 
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array.
@@ -9,7 +9,7 @@ const STAGGER_MS = 120;
  * - Initial load / filter reset: all logs appear immediately (no stagger).
  * - SSE live push (new logs at head): released one-by-one every STAGGER_MS.
  * - Inactive log page: the visible snapshot freezes until the page becomes active.
- * - Large catch-up: releases every item in the current log window.
+ * - Page/visibility resume: drains the backlog collected while inactive.
  * - Pagination (older logs at tail): appear immediately.
  * - Existing rows are updated in-place when their fields change.
  */
@@ -29,7 +29,6 @@ export function useStaggeredLogs(
   const prevQueryKeyRef = useRef(queryKey);
   const prevSyncVersionRef = useRef(syncVersion);
   const latestLogsRef = useRef(logs);
-  const wasActiveRef = useRef(active);
 
   const scheduleQueueDrain = useCallback(() => {
     if (!active || timerRef.current || queueRef.current.length === 0) {
@@ -41,9 +40,7 @@ export function useStaggeredLogs(
       const item = queueRef.current.shift();
       if (item) {
         setDisplayed((prev) => {
-          const next = queueRef.current.length === 0
-            ? latestLogsRef.current
-            : revealStaggeredLog(prev, latestLogsRef.current, item);
+          const next = revealStaggeredLog(prev, latestLogsRef.current, item);
           displayedRef.current = next;
           return next;
         });
@@ -54,24 +51,23 @@ export function useStaggeredLogs(
 
   useLayoutEffect(() => {
     latestLogsRef.current = logs;
-    const wasActive = wasActiveRef.current;
     const syncChanged = prevSyncVersionRef.current !== syncVersion;
     const isReset = shouldResetStaggeredLogs(
       logs,
       prevQueryKeyRef.current,
       queryKey
     );
-    const isInitialSync = (
-      syncChanged &&
-      prevLogsRef.current.length === 0 &&
-      displayedRef.current.length === 0
+    const isInitialSync = shouldApplyInitialStaggeredSync(
+      prevSyncVersionRef.current,
+      syncVersion,
+      prevLogsRef.current,
+      displayedRef.current
     );
 
     const rememberInputs = () => {
       prevLogsRef.current = logs;
       prevQueryKeyRef.current = queryKey;
       prevSyncVersionRef.current = syncVersion;
-      wasActiveRef.current = active;
     };
 
     const replaceDisplayed = (next: RequestLogEntry[]) => {
@@ -89,7 +85,17 @@ export function useStaggeredLogs(
     }
 
     if (!active) {
-      queueRef.current = [];
+      const visibleIds = new Set(displayedRef.current.map((entry) => entry.request_id));
+      const pendingIds = syncChanged
+        ? logs
+          .filter((entry) => !visibleIds.has(entry.request_id))
+          .map((entry) => entry.request_id)
+        : [
+          ...queueRef.current.map((entry) => entry.request_id),
+          ...selectStaggeredLogIds(prevLogsRef.current, logs, liveInsertIds)
+        ];
+      const plan = planStaggeredLogCatchUp(displayedRef.current, logs, pendingIds);
+      queueRef.current = plan.queue;
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = null;
       rememberInputs();
@@ -97,7 +103,7 @@ export function useStaggeredLogs(
     }
 
     let pendingIds: string[];
-    if (!wasActive || syncChanged) {
+    if (syncChanged) {
       const visibleIds = new Set(displayedRef.current.map((entry) => entry.request_id));
       pendingIds = logs
         .filter((entry) => !visibleIds.has(entry.request_id))
@@ -149,6 +155,20 @@ export function shouldResetStaggeredLogs(
   return (
     previousQueryKey !== nextQueryKey ||
     nextLogs.length === 0
+  );
+}
+
+export function shouldApplyInitialStaggeredSync(
+  previousSyncVersion: number,
+  nextSyncVersion: number,
+  previousLogs: RequestLogEntry[],
+  displayed: RequestLogEntry[]
+): boolean {
+  return (
+    previousSyncVersion === 0 &&
+    previousSyncVersion !== nextSyncVersion &&
+    previousLogs.length === 0 &&
+    displayed.length === 0
   );
 }
 

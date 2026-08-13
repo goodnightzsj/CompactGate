@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
@@ -29,14 +29,12 @@ import { useLogTableScroll } from "./useLogTableScroll.js";
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
-const MAX_LAYOUT_ANIMATED_LOGS = 40;
-
 const logRowTransition = {
   type: "spring" as const,
-  stiffness: 460,
-  damping: 34,
-  mass: 0.72,
-  opacity: { duration: 0.14 }
+  stiffness: 500,
+  damping: 30,
+  mass: 1,
+  opacity: { duration: 0.2 }
 };
 
 const detailTransition = {
@@ -68,8 +66,14 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
-  const mobileListRef = useRef<HTMLDivElement | null>(null);
-  const { handleLogScroll, tableBodyRef } = useLogTableScroll({
+  const {
+    handleLogScroll,
+    handleMobileLogScroll,
+    mobileListRef,
+    scrollToLatest,
+    tableBodyRef,
+    unseenLogCount
+  } = useLogTableScroll({
     hasMoreLogs,
     isLoadingLogs,
     isLoadingMoreLogs,
@@ -77,7 +81,6 @@ export function LogsPage({
     onLoadMore
   });
   const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
-  const animateRowLayout = logs.length <= MAX_LAYOUT_ANIMATED_LOGS;
 
   function toggleLog(logKey: string) {
     // 记录移动列表当前滚动位置,展开详情后恢复,避免内容下推导致视口跑掉。
@@ -116,9 +119,27 @@ export function LogsPage({
           <p className="eyebrow">流量日志</p>
           <h2>请求日志</h2>
         </div>
-        <span className="status-pill">
-          显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
-        </span>
+        <div className="logs-page-actions">
+          <AnimatePresence initial={false}>
+            {unseenLogCount > 0 && (
+              <MotionSpan
+                className="logs-new-entries-motion"
+                aria-live="polite"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -3 }}
+                transition={detailTransition}
+              >
+                <button className="btn btn-sm logs-new-entries" type="button" onClick={scrollToLatest}>
+                  新增 {unseenLogCount} 条 · 回到最新
+                </button>
+              </MotionSpan>
+            )}
+          </AnimatePresence>
+          <span className="status-pill">
+            显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
+          </span>
+        </div>
       </div>
 
       <div className="logs-toolbar">
@@ -265,11 +286,12 @@ export function LogsPage({
                     const rows = [
                       <MotionTr
                         key={logKey}
-                        layout={animateRowLayout ? "position" : false}
-                        initial={{ opacity: 0, y: -14, scale: 0.995 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -6 }}
+                        layout
+                        initial={{ opacity: 0, y: -20, height: 0 }}
+                        animate={{ opacity: 1, y: 0, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
                         transition={logRowTransition}
+                        data-log-id={entry.request_id}
                         className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
                         tabIndex={0}
                         aria-expanded={expanded}
@@ -304,7 +326,7 @@ export function LogsPage({
                       rows.push(
                         <MotionTr
                           key={`${logKey}-detail`}
-                          layout={animateRowLayout ? "position" : false}
+                          layout
                           initial={{ opacity: 0, y: -6 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -4 }}
@@ -332,6 +354,7 @@ export function LogsPage({
         className="logs-mobile-list"
         aria-label="请求日志摘要"
         layoutScroll
+        onScroll={handleMobileLogScroll}
         hidden={logs.length === 0}
       >
           <AnimatePresence initial={false} mode="popLayout">
@@ -341,11 +364,12 @@ export function LogsPage({
                 <MotionDiv
                   key={`mobile-${logKey}`}
                   className="log-mobile-motion-item"
-                  layout={animateRowLayout ? "position" : false}
-                  initial={{ opacity: 0, y: -10, scale: 0.995 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -5 }}
+                  layout
+                  initial={{ opacity: 0, y: -20, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
                   transition={logRowTransition}
+                  data-log-id={entry.request_id}
                 >
                   <LogMobileCard
                     entry={entry}

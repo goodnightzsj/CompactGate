@@ -34,7 +34,7 @@ export function StudioPageOutlet({
   }
 
   return (
-    <div className="page-appear">
+    <div className={`page-appear ${currentPage === "logs" ? "page-appear-logs" : ""}`}>
       {pageError && <div className="error-banner">{pageError}</div>}
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}

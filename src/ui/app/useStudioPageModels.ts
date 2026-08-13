@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { PageMode, StudioPage } from "../app-types.js";
 import type { ConfigTab } from "../config/types.js";
 import {
@@ -68,12 +68,17 @@ export function useStudioPageModels({
     setPageError
   });
   const logs = logFeed.logPage.logs;
+  const documentVisible = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    readDocumentVisibility,
+    readServerVisibility
+  );
   const displayedLogs = useStaggeredLogs(
     logs,
     logFeed.pageQueryKey,
     logFeed.logSyncVersion,
     logFeed.liveInsertIds,
-    currentPage === "logs" && !healthMode
+    currentPage === "logs" && !healthMode && documentVisible
   );
   const latestLog = logs[0] ?? null;
   const linkedCompactModel = renderLinkedModel(form.primaryModelOverride, form.modelTemplate);
@@ -143,4 +148,17 @@ export function useStudioPageModels({
     }),
     sidebarHealth: health
   };
+}
+
+function subscribeDocumentVisibility(onChange: () => void): () => void {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+function readDocumentVisibility(): boolean {
+  return document.visibilityState === "visible";
+}
+
+function readServerVisibility(): boolean {
+  return true;
 }

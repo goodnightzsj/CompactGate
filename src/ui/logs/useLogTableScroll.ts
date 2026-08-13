@@ -1,9 +1,43 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UIEvent } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
 const LOG_LAZY_LOAD_THRESHOLD_PX = 220;
 const LOG_STICKY_TOP_THRESHOLD_PX = 24;
+
+export function countPrependedLogs(
+  previousLogs: RequestLogEntry[],
+  nextLogs: RequestLogEntry[]
+): number {
+  const previousFirstId = previousLogs[0]?.request_id;
+  if (!previousFirstId) {
+    return 0;
+  }
+
+  const previousFirstIndex = nextLogs.findIndex(
+    (entry) => entry.request_id === previousFirstId
+  );
+  return Math.max(0, previousFirstIndex);
+}
+
+export function planPrependedLogScroll(
+  previousScrollTop: number,
+  anchorOffsetDelta: number,
+  prependedCount: number
+): { scrollTop: number; unseenIncrement: number } {
+  if (prependedCount === 0) {
+    return { scrollTop: previousScrollTop, unseenIncrement: 0 };
+  }
+
+  if (previousScrollTop <= LOG_STICKY_TOP_THRESHOLD_PX) {
+    return { scrollTop: 0, unseenIncrement: 0 };
+  }
+
+  return {
+    scrollTop: previousScrollTop + Math.max(0, anchorOffsetDelta),
+    unseenIncrement: prependedCount
+  };
+}
 
 export function useLogTableScroll({
   hasMoreLogs,
@@ -19,12 +53,37 @@ export function useLogTableScroll({
   onLoadMore: () => void;
 }) {
   const tableBodyRef = useRef<HTMLDivElement | null>(null);
+  const mobileListRef = useRef<HTMLDivElement | null>(null);
+  const logsRef = useRef(logs);
+  logsRef.current = logs;
+  const [unseenLogCount, setUnseenLogCount] = useState(0);
   const scrollSnapshotRef = useRef({
-    firstLogId: null as string | null,
-    scrollHeight: 0,
+    body: null as HTMLDivElement | null,
+    logs: [] as RequestLogEntry[],
+    firstLogOffset: 0,
     scrollTop: 0
   });
   const autoLoadPendingRef = useRef(false);
+
+  const scrollToLatest = useCallback(() => {
+    window.scrollTo(0, 0);
+    for (const body of [tableBodyRef.current, mobileListRef.current]) {
+      if (body) body.scrollTop = 0;
+    }
+
+    const body = visibleLogBody(tableBodyRef.current, mobileListRef.current);
+    scrollSnapshotRef.current = {
+      body,
+      logs: logsRef.current,
+      firstLogOffset: firstLogOffset(body, logsRef.current),
+      scrollTop: 0
+    };
+    setUnseenLogCount(0);
+  }, []);
+
+  useLayoutEffect(() => {
+    scrollToLatest();
+  }, [scrollToLatest]);
 
   useEffect(() => {
     if (!isLoadingMoreLogs) {
@@ -33,39 +92,41 @@ export function useLogTableScroll({
   }, [isLoadingMoreLogs, logs.length]);
 
   useLayoutEffect(() => {
-    const body = tableBodyRef.current;
+    const body = visibleLogBody(tableBodyRef.current, mobileListRef.current);
     if (!body) {
       return;
     }
 
     const previous = scrollSnapshotRef.current;
-    const firstLogId = logs[0]?.request_id ?? null;
-    const previousFirstIndex = previous.firstLogId
-      ? logs.findIndex((entry) => entry.request_id === previous.firstLogId)
-      : -1;
-    const liveLogsWerePrepended = previousFirstIndex > 0 && firstLogId !== previous.firstLogId;
+    const prependedCount = previous.body === body
+      ? countPrependedLogs(previous.logs, logs)
+      : 0;
 
-    if (liveLogsWerePrepended && previous.scrollTop > LOG_STICKY_TOP_THRESHOLD_PX) {
-      const delta = body.scrollHeight - previous.scrollHeight;
-      if (delta > 0) {
-        body.scrollTop = previous.scrollTop + delta;
+    if (prependedCount > 0) {
+      const plan = planPrependedLogScroll(
+        previous.scrollTop,
+        logOffset(body, previous.logs[0]?.request_id) - previous.firstLogOffset,
+        prependedCount
+      );
+      body.scrollTop = plan.scrollTop;
+      if (plan.unseenIncrement > 0) {
+        setUnseenLogCount((count) => count + plan.unseenIncrement);
+      } else {
+        setUnseenLogCount(0);
       }
     }
 
     scrollSnapshotRef.current = {
-      firstLogId,
-      scrollHeight: body.scrollHeight,
+      body,
+      logs,
+      firstLogOffset: firstLogOffset(body, logs),
       scrollTop: body.scrollTop
     };
   }, [logs]);
 
   function handleLogScroll(event: UIEvent<HTMLDivElement>) {
     const body = event.currentTarget;
-    scrollSnapshotRef.current = {
-      ...scrollSnapshotRef.current,
-      scrollHeight: body.scrollHeight,
-      scrollTop: body.scrollTop
-    };
+    rememberScroll(body);
 
     const remainingScroll = body.scrollHeight - body.scrollTop - body.clientHeight;
     if (
@@ -80,8 +141,49 @@ export function useLogTableScroll({
     }
   }
 
+  function handleMobileLogScroll(event: UIEvent<HTMLDivElement>) {
+    rememberScroll(event.currentTarget);
+  }
+
+  function rememberScroll(body: HTMLDivElement) {
+    scrollSnapshotRef.current = {
+      body,
+      logs: logsRef.current,
+      firstLogOffset: firstLogOffset(body, logsRef.current),
+      scrollTop: body.scrollTop
+    };
+    if (body.scrollTop <= LOG_STICKY_TOP_THRESHOLD_PX) {
+      setUnseenLogCount(0);
+    }
+  }
+
   return {
     handleLogScroll,
-    tableBodyRef
+    handleMobileLogScroll,
+    mobileListRef,
+    scrollToLatest,
+    tableBodyRef,
+    unseenLogCount
   };
+}
+
+function visibleLogBody(
+  tableBody: HTMLDivElement | null,
+  mobileList: HTMLDivElement | null
+): HTMLDivElement | null {
+  const bodies = [tableBody, mobileList].filter(
+    (body): body is HTMLDivElement => body !== null
+  );
+  return bodies.find((body) => body.offsetParent !== null) ?? bodies[0] ?? null;
+}
+
+function firstLogOffset(body: HTMLDivElement | null, logs: RequestLogEntry[]): number {
+  return body ? logOffset(body, logs[0]?.request_id) : 0;
+}
+
+function logOffset(body: HTMLDivElement, requestId: string | undefined): number {
+  if (!requestId) return 0;
+  const entry = Array.from(body.querySelectorAll<HTMLElement>("[data-log-id]"))
+    .find((element) => element.dataset.logId === requestId);
+  return entry?.offsetTop ?? 0;
 }
