@@ -45,6 +45,7 @@ export function LogMobileCard({
         </span>
         <strong className="log-mobile-model">{modelLabel}</strong>
         <span className="log-mobile-host">{entry.upstream_host}</span>
+        <span className="log-mobile-endpoint">{entry.endpoint}</span>
         <span className="log-mobile-metrics">
           <span>{entry.request_type}</span>
           <span>{formatMetricNumber(displayTotalTokens(entry))} Token</span>

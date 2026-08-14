@@ -255,6 +255,7 @@ export function LogsPage({
                 <col className="log-col-reasoning" />
                 <col className="log-col-response-model" />
                 <col className="log-col-host" />
+                <col className="log-col-endpoint" />
                 <col className="log-col-type" />
                 <col className="log-col-token" />
                 <col className="log-col-first-token" />
@@ -268,6 +269,7 @@ export function LogsPage({
                   <th scope="col">思考</th>
                   <th scope="col">响应模型</th>
                   <th scope="col">上游 Host</th>
+                  <th scope="col">端点</th>
                   <th scope="col">类型</th>
                   <th scope="col">Token</th>
                   <th scope="col">首 Token</th>
@@ -315,6 +317,7 @@ export function LogsPage({
                         <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
                         <td><LogTextTooltip className="log-cell-code" value={responseModelDisplay(entry)} /></td>
                         <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
+                        <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
                         <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
                         <td><TokenTooltip entry={entry} /></td>
                         <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
@@ -334,7 +337,7 @@ export function LogsPage({
                           className="log-detail-row"
                           id={detailId}
                         >
-                          <td colSpan={10}>
+                          <td colSpan={11}>
                             <LogDetailPanel entry={entry} />
                           </td>
                         </MotionTr>
