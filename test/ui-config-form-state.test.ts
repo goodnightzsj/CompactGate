@@ -26,6 +26,36 @@ describe("UI config form state", () => {
     });
   });
 
+  it("round-trips upstream protocols through patches and export drafts", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    const form = {
+      ...formFromConfig(store.toPublicConfig()),
+      codexPrimaryUpstreamProtocol: "anthropic_messages" as const,
+      codexCompactUpstreamProtocol: "openai_chat" as const,
+      claudePrimaryUpstreamProtocol: "openai_responses" as const,
+      claudeCompactUpstreamProtocol: "openai_chat" as const
+    };
+
+    expect(formToPatch(form)).toMatchObject({
+      primary: { upstream_protocol: "anthropic_messages" },
+      compact: { upstream_protocol: "openai_chat" },
+      claude: {
+        primary: { upstream_protocol: "openai_responses" },
+        compact: { upstream_protocol: "openai_chat" }
+      }
+    });
+    expect(applyDraftToConfigExport(store.get(), form)).toMatchObject({
+      primary: { upstream_protocol: "anthropic_messages" },
+      compact: { upstream_protocol: "openai_chat" },
+      claude: {
+        primary: { upstream_protocol: "openai_responses" },
+        compact: { upstream_protocol: "openai_chat" }
+      }
+    });
+    expect(isFormDirty(store.toPublicConfig(), form)).toBe(true);
+  });
+
   it("serializes hidden credential preset ids for route URL selections", () => {
     const form = {
       ...emptyForm(),

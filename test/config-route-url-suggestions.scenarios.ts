@@ -79,6 +79,10 @@ function publicCodexProfile(id: string, name: string, compactBaseUrl: string): P
     claude_model_map: null,
     compact_upstream_mode: "split",
     claude_compact_upstream_mode: null,
+    primary_upstream_protocol: "openai_responses",
+    compact_upstream_protocol: "openai_responses",
+    claude_primary_upstream_protocol: null,
+    claude_compact_upstream_protocol: null,
     stored_api_key_count: 0
   };
 }

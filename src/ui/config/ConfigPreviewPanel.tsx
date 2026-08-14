@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RoutePreviewResponse } from "../../shared/types.js";
+import { upstreamProtocolLabel } from "./profile-utils.js";
 
 export function ConfigPreviewPanel({
   previewPath,
@@ -30,6 +31,7 @@ export function ConfigPreviewPanel({
         <div className="config-preview-actions">
           <button type="button" className="btn btn-sm" onClick={() => onPathChange("/v1/responses")}>普通响应</button>
           <button type="button" className="btn btn-sm" onClick={() => onPathChange("/v1/responses/compact")}>压缩响应</button>
+          <button type="button" className="btn btn-sm" onClick={() => onPathChange("/anthropic/v1/messages")}>Claude 消息</button>
         </div>
         <input className="input" value={previewPath} onChange={(event) => onPathChange(event.target.value)} />
       </div>
@@ -49,10 +51,17 @@ export function ConfigPreviewPanel({
           <div><span className="field-hint">压缩模式</span><div><code>{preview.compaction_mode ?? "-"}</code></div></div>
           <div><span className="field-hint">判定来源</span><div><code>{preview.detection_source ?? "-"}</code></div></div>
           <div><span className="field-hint">上游</span><div className="config-preview-mono">{preview.upstream_host}</div></div>
+          <div><span className="field-hint">入口协议</span><div><code>{protocolPreviewLabel(preview.ingress_protocol)}</code></div></div>
+          <div><span className="field-hint">上游协议</span><div><code>{protocolPreviewLabel(preview.upstream_protocol)}</code></div></div>
+          <div><span className="field-hint">协议路径</span><div><code>{preview.translation_mode === "translate" ? "协议转换 (translate)" : "直通 (passthrough)"}</code></div></div>
           <div><span className="field-hint">原始模型</span><div><code>{preview.source_model ?? "-"}</code></div></div>
           <div><span className="field-hint">目标模型</span><div><code>{preview.target_model ?? "-"}</code></div></div>
         </div>
       )}
     </div>
   );
+}
+
+function protocolPreviewLabel(protocol: RoutePreviewResponse["ingress_protocol"]): string {
+  return `${upstreamProtocolLabel(protocol)} (${protocol})`;
 }

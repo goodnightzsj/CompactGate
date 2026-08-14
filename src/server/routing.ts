@@ -7,9 +7,14 @@ import type {
   RoutePreviewResponse
 } from "../shared/types.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
+import {
+  buildClaudeUpstreamUrl,
+  resolveClaudeMappedModel
+} from "./claude-models.js";
 import { resolveUpstreamPath } from "./upstream-url.js";
 
 const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
+const ANTHROPIC_PROXY_PREFIX = "/anthropic";
 
 export interface RewriteResult {
   sourceModel: string | null;
@@ -227,10 +232,27 @@ export function previewRoute(
   headers?: IncomingHttpHeaders
 ): RoutePreviewResponse {
   const parsedUrl = new URL(path, "http://compactgate.local");
+  if (isClaudeIngressPath(parsedUrl.pathname)) {
+    return previewClaudeRoute(method, path, parsedUrl, body, config);
+  }
   const classification = classifyOpenAiRequest(parsedUrl.pathname, body, headers);
   const usesPrimaryPlan = classification.route === "primary" || classification.compactionMode === "remote_v2";
-  const upstreamBase = usesPrimaryPlan ? config.primary.base_url : compactUpstreamBaseUrl(config);
-  const upstream = buildUpstreamUrl(upstreamBase, parsedUrl.pathname, parsedUrl.search);
+  const upstreamConfig = usesPrimaryPlan
+    ? config.primary
+    : config.compact.upstream_mode === "split"
+      ? config.compact
+      : config.primary;
+  const upstreamBase = upstreamConfig.base_url;
+  const upstreamPath = upstreamConfig.upstream_protocol === "anthropic_messages"
+    ? "/v1/messages"
+    : upstreamConfig.upstream_protocol === "openai_chat"
+      ? "/v1/chat/completions"
+      : parsedUrl.pathname;
+  const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
+    ? buildClaudeUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search)
+    : buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
+  const ingressProtocol = "openai_responses" as const;
+  const translationMode = upstreamConfig.upstream_protocol === ingressProtocol ? "passthrough" : "translate";
 
   if (usesPrimaryPlan) {
     const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config, parsedUrl.pathname);
@@ -242,6 +264,9 @@ export function previewRoute(
       path,
       upstream_url: upstream.toString(),
       upstream_host: upstream.host,
+      ingress_protocol: ingressProtocol,
+      upstream_protocol: upstreamConfig.upstream_protocol,
+      translation_mode: translationMode,
       source_model: rewrite.sourceModel,
       target_model: rewrite.targetModel,
       body_rewritten: rewrite.bodyRewritten,
@@ -260,9 +285,58 @@ export function previewRoute(
     path,
     upstream_url: upstream.toString(),
     upstream_host: upstream.host,
+    ingress_protocol: ingressProtocol,
+    upstream_protocol: upstreamConfig.upstream_protocol,
+    translation_mode: translationMode,
     source_model: sourceModel,
     target_model: targetModel,
     body_rewritten: Boolean(sourceModel && sourceModel !== targetModel),
+    stream_removed: false
+  };
+}
+
+export function isClaudeIngressPath(pathname: string): boolean {
+  return pathname === ANTHROPIC_PROXY_PREFIX || pathname.startsWith(`${ANTHROPIC_PROXY_PREFIX}/`);
+}
+
+function previewClaudeRoute(
+  method: string,
+  path: string,
+  parsedUrl: URL,
+  body: unknown,
+  config: CompactGateConfig
+): RoutePreviewResponse {
+  const requestPath = parsedUrl.pathname.slice(ANTHROPIC_PROXY_PREFIX.length) || "/";
+  const countTokens = requestPath === "/v1/messages/count_tokens" || requestPath === "/messages/count_tokens";
+  const upstreamConfig = config.claude.primary;
+  const upstreamPath = upstreamConfig.upstream_protocol === "anthropic_messages"
+    ? requestPath
+    : upstreamConfig.upstream_protocol === "openai_chat"
+      ? "/v1/chat/completions"
+      : countTokens
+        ? "/v1/responses/input_tokens"
+        : "/v1/responses";
+  const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
+    ? buildClaudeUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search)
+    : buildUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search);
+  const rawBody = previewBodyToBuffer(body);
+  const parsedBody = parseJsonBody(body);
+  const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
+  const targetModel = resolveClaudeMappedModel(sourceModel, config, rawBody) ?? sourceModel;
+  return {
+    route: "claude",
+    compaction_mode: null,
+    detection_source: null,
+    method,
+    path,
+    upstream_url: upstream.toString(),
+    upstream_host: upstream.host,
+    ingress_protocol: "anthropic_messages",
+    upstream_protocol: upstreamConfig.upstream_protocol,
+    translation_mode: upstreamConfig.upstream_protocol === "anthropic_messages" ? "passthrough" : "translate",
+    source_model: sourceModel,
+    target_model: targetModel,
+    body_rewritten: Boolean(sourceModel && targetModel && sourceModel !== targetModel),
     stream_removed: false
   };
 }

@@ -34,6 +34,7 @@ export function buildPublicConfig({
       base_url: config.primary.base_url,
       api_key_env: config.primary.api_key_env,
       host: safeHost(config.primary.base_url),
+      upstream_protocol: config.primary.upstream_protocol,
       stored_api_key: directApiKeyConfigured(config.primary.api_key),
       api_key_configured: primaryCredential.apiKeyConfigured,
       api_key_source: primaryCredential.apiKeySource,
@@ -47,6 +48,7 @@ export function buildPublicConfig({
       base_url: config.compact.base_url,
       api_key_env: config.compact.api_key_env,
       host: safeHost(config.compact.base_url),
+      upstream_protocol: config.compact.upstream_protocol,
       stored_api_key: directApiKeyConfigured(config.compact.api_key),
       api_key_configured: compactCredential.apiKeyConfigured,
       api_key_source: compactCredential.apiKeySource,
@@ -62,6 +64,7 @@ export function buildPublicConfig({
         base_url: config.claude.primary.base_url,
         api_key_env: config.claude.primary.api_key_env,
         host: safeHost(config.claude.primary.base_url),
+        upstream_protocol: config.claude.primary.upstream_protocol,
         stored_api_key: directApiKeyConfigured(config.claude.primary.api_key),
         api_key_configured: claudePrimaryCredential.apiKeyConfigured,
         api_key_source: claudePrimaryCredential.apiKeySource,
@@ -73,6 +76,7 @@ export function buildPublicConfig({
         base_url: config.claude.compact.base_url,
         api_key_env: config.claude.compact.api_key_env,
         host: safeHost(config.claude.compact.base_url),
+        upstream_protocol: config.claude.compact.upstream_protocol,
         stored_api_key: directApiKeyConfigured(config.claude.compact.api_key),
         api_key_configured: claudeCompactCredential.apiKeyConfigured,
         api_key_source: claudeCompactCredential.apiKeySource,
@@ -140,6 +144,10 @@ function toPublicProfile(
     claude_model_map: codexProfile ? null : { ...runtime.claude.model_map },
     compact_upstream_mode: codexProfile ? runtime.compact.upstream_mode : null,
     claude_compact_upstream_mode: codexProfile ? null : runtime.claude.compact.upstream_mode,
+    primary_upstream_protocol: codexProfile ? runtime.primary.upstream_protocol : null,
+    compact_upstream_protocol: codexProfile ? runtime.compact.upstream_protocol : null,
+    claude_primary_upstream_protocol: codexProfile ? null : runtime.claude.primary.upstream_protocol,
+    claude_compact_upstream_protocol: codexProfile ? null : runtime.claude.compact.upstream_protocol,
     stored_api_key_count: storedApiKeys.filter(directApiKeyConfigured).length
   };
 }

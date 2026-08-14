@@ -11,6 +11,7 @@ import {
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
+  buildUpstreamHeaders,
   copyResponseHeaders,
   RequestBodyTooLargeError,
   readRawBody,
@@ -31,11 +32,24 @@ import {
   responseTransport
 } from "./usage.js";
 import {
+  classifyOpenAiUpstreamResult,
   classifyAnthropicUpstreamResult,
   sendBufferedUpstreamRequest,
+  summarizeOpenAiStreamFailure,
   summarizeAnthropicStreamFailure,
   UpstreamRequestError
 } from "./upstream-client.js";
+import {
+  anthropicRequestToChat,
+  anthropicRequestToResponses,
+  ProtocolConversionError
+} from "./protocol-conversion.js";
+import {
+  createChatToAnthropicResponseTransform,
+  createOpenAiInputTokensToAnthropicResponseTransform,
+  createResponsesToAnthropicResponseTransform
+} from "./protocol-stream.js";
+import { buildUpstreamUrl } from "./routing.js";
 
 export const ANTHROPIC_PROXY_PREFIX = "/anthropic";
 
@@ -64,10 +78,30 @@ export async function proxyClaudeRequest(
     transaction.requestType = transaction.requestMetadata.requestType;
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
     transaction.targetModel = resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ?? transaction.sourceModel;
-    upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
     transaction.upstreamBody = rewriteClaudeModelBody(transaction.rawBody, transaction.targetModel ?? "");
-    const auth = resolveClaudeCredential(config);
-    transaction.requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
+    const upstreamProtocol = config.claude.primary.upstream_protocol;
+    const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
+    if (upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat") {
+      const conversion = upstreamProtocol === "openai_chat"
+        ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
+        : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });
+      transaction.upstreamBody = conversion.body;
+      upstream = buildUpstreamUrl(
+        config.claude.primary.base_url,
+        upstreamProtocol === "openai_chat"
+          ? "/v1/chat/completions"
+          : countTokens
+            ? "/v1/responses/input_tokens"
+            : "/v1/responses",
+        url.search
+      );
+      const auth = resolveClaudeCredential(config);
+      transaction.requestHeaders = buildOpenAiRequestHeaders(req.headers, auth.apiKey);
+    } else {
+      upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
+      const auth = resolveClaudeCredential(config);
+      transaction.requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
+    }
     if (transaction.upstreamBody !== transaction.rawBody) {
       delete transaction.requestHeaders["content-encoding"];
     }
@@ -87,25 +121,49 @@ export async function proxyClaudeRequest(
         "x-compactgate-request-id": requestId
       },
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-      streamProtocol: "anthropic",
-      writeResponse: true
+      streamProtocol: upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
+      writeResponse: true,
+      responseTransform: upstreamProtocol === "openai_responses"
+        ? countTokens
+          ? createOpenAiInputTokensToAnthropicResponseTransform
+          : createResponsesToAnthropicResponseTransform
+        : upstreamProtocol === "openai_chat"
+          ? createChatToAnthropicResponseTransform
+          : undefined
     });
     applyOpenAiProxyUpstreamResult(transaction, completedResult);
 
     if (!res.headersSent) {
-      copyResponseHeaders(completedResult.responseHeaders, res);
+      copyResponseHeaders(completedResult.clientResponseHeaders ?? completedResult.responseHeaders, res);
       res.setHeader("x-compactgate-route", route);
       res.setHeader("x-compactgate-claude-route", "primary");
       res.setHeader("x-compactgate-request-id", requestId);
       res.writeHead(completedResult.status);
-      res.end(completedResult.responseBody);
+      res.end(completedResult.clientResponseBody ?? completedResult.responseBody);
     }
 
-    transaction.streamOutcome = classifyAnthropicUpstreamResult(completedResult);
-    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
-    transaction.usage = completedResult.streamSummary?.usage ??
-      extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
-    transaction.errorSummary ??= summarizeAnthropicStreamFailure(completedResult);
+    const responseWasTransformed = completedResult.clientResponseHeaders !== null &&
+      completedResult.clientResponseHeaders !== undefined;
+    const clientResult = responseWasTransformed
+      ? { ...completedResult, streamSummary: completedResult.clientStreamSummary ?? null }
+      : completedResult;
+    transaction.streamOutcome = responseWasTransformed
+      ? classifyAnthropicUpstreamResult(clientResult)
+      : upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat"
+        ? classifyOpenAiUpstreamResult(completedResult)
+        : classifyAnthropicUpstreamResult(completedResult);
+    const clientResponseBody = completedResult.clientResponseBody ?? transaction.responseBody;
+    const clientResponseHeaders = completedResult.clientResponseHeaders ?? transaction.responseHeaders;
+    transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
+    transaction.usage = completedResult.clientStreamSummary?.usage ??
+      extractResponseUsage(clientResponseBody, clientResponseHeaders);
+    if (transaction.requestMetadata.requestType === "stream") {
+      transaction.errorSummary ??= responseWasTransformed
+        ? summarizeAnthropicStreamFailure(clientResult)
+        : upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat"
+          ? summarizeOpenAiStreamFailure(completedResult)
+          : summarizeAnthropicStreamFailure(completedResult);
+    }
   } catch (error) {
     if (error instanceof UpstreamRequestError) {
       transaction.upstreamStatus = error.details.status;
@@ -124,7 +182,11 @@ export async function proxyClaudeRequest(
           : "client_cancel"
         : error.details.kind;
     }
-    transaction.status = error instanceof RequestBodyTooLargeError ? 413 : 502;
+    transaction.status = error instanceof ProtocolConversionError
+      ? error.status
+      : error instanceof RequestBodyTooLargeError
+        ? 413
+        : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
       sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
@@ -181,4 +243,22 @@ export async function proxyClaudeRequest(
 
 export function isAnthropicProxyPath(pathname: string): boolean {
   return pathname === ANTHROPIC_PROXY_PREFIX || pathname.startsWith(`${ANTHROPIC_PROXY_PREFIX}/`);
+}
+
+function buildOpenAiRequestHeaders(
+  headers: IncomingMessage["headers"],
+  apiKey: string | null
+): Record<string, string> {
+  const next = buildUpstreamHeaders(headers, apiKey);
+  next["accept-encoding"] = "identity";
+  for (const name of Object.keys(next)) {
+    if (
+      name.startsWith("anthropic-") ||
+      name === "x-api-key" ||
+      name === "x-anthropic-api-key"
+    ) {
+      delete next[name];
+    }
+  }
+  return next;
 }

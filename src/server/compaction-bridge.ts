@@ -5,6 +5,7 @@ import type {
   CompactResponseSyntheticSource
 } from "../shared/types.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { decodeCompactGateCompactionSummary } from "./protocol-conversion.js";
 
 export interface PrimaryBridgeResult {
   body: Buffer;
@@ -228,14 +229,10 @@ export class CompactionBridgeStore {
         continue;
       }
 
-      if (!allowReadableFallback) {
-        rewrittenInput.push(item);
-        remainingCompactionCount += 1;
-        knownMissingCompactionCount += this.knownCompactionStateByContent.has(item.encrypted_content) ? 1 : 0;
-        continue;
-      }
-
-      const synthesizedMessage = synthesizeAssistantMessage(item.encrypted_content);
+      const synthesizedMessage = synthesizeAssistantMessage(
+        item.encrypted_content,
+        allowReadableFallback
+      );
       if (!synthesizedMessage) {
         rewrittenInput.push(item);
         remainingCompactionCount += 1;
@@ -369,9 +366,13 @@ function deepCloneJsonArray(items: unknown[]): unknown[] {
   return JSON.parse(JSON.stringify(items)) as unknown[];
 }
 
-export function synthesizeAssistantMessage(encryptedContent: string): Record<string, unknown> | null {
-  const text = encryptedContent.trim();
-  if (!looksLikeReadableSummary(text)) {
+export function synthesizeAssistantMessage(
+  encryptedContent: string,
+  allowReadableFallback = true
+): Record<string, unknown> | null {
+  const portableSummary = decodeCompactGateCompactionSummary(encryptedContent);
+  const text = (portableSummary ?? encryptedContent).trim();
+  if (!portableSummary && (!allowReadableFallback || !looksLikeReadableSummary(text))) {
     return null;
   }
 

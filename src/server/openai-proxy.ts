@@ -52,12 +52,20 @@ import {
   type RequestMetadata
 } from "./usage.js";
 import {
+  classifyAnthropicUpstreamResult,
   classifyOpenAiUpstreamResult,
   sendOpenAiUpstreamRequest,
   summarizeOpenAiStreamFailure,
+  summarizeAnthropicStreamFailure,
   UpstreamRequestError,
   writeBufferedUpstreamResult
 } from "./upstream-client.js";
+import { ProtocolConversionError } from "./protocol-conversion.js";
+import {
+  createAnthropicToResponsesCompactionResponseTransform,
+  createAnthropicToResponsesResponseTransform,
+  createChatToResponsesResponseTransform
+} from "./protocol-stream.js";
 import {
   analyzeProviderState,
   type ProviderStateAnalysis
@@ -231,10 +239,12 @@ async function proxyPrimaryRequest(
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
-    transaction.requestMetadata.reasoningEffort = extractRequestMetadata(
-      url.pathname,
-      transaction.upstreamBody
-    ).reasoningEffort;
+    if (plan.upstreamProtocol === "openai_responses") {
+      transaction.requestMetadata.reasoningEffort = extractRequestMetadata(
+        url.pathname,
+        transaction.upstreamBody
+      ).reasoningEffort;
+    }
     transaction.requestHeaders = plan.requestHeaders;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 
@@ -259,7 +269,8 @@ async function proxyPrimaryRequest(
     };
     const targetHealthKey = providerStateTargetHealthKey(targetScope);
     const targetStateFreeSuccess = logger.hasProviderStateRecoveryEvidence(targetHealthKey);
-    const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error";
+    const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error" &&
+      plan.upstreamProtocol === "openai_responses";
     const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
       ? await sendRecoveringPrimaryRequest({
           req,
@@ -319,15 +330,38 @@ async function proxyPrimaryRequest(
       body: transaction.upstreamBody,
       extraResponseHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-      retryEmptyStreamError: transaction.requestType === "stream"
+      retryEmptyStreamError: plan.upstreamProtocol === "openai_responses" && transaction.requestType === "stream",
+      streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
+      responseTransform: plan.upstreamProtocol === "anthropic_messages"
+        ? classification.compactionMode === "remote_v2"
+          ? createAnthropicToResponsesCompactionResponseTransform
+          : createAnthropicToResponsesResponseTransform
+        : plan.upstreamProtocol === "openai_chat"
+          ? createChatToResponsesResponseTransform
+          : undefined
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    transaction.streamOutcome = classifyOpenAiUpstreamResult(result);
-    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
-    transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
+    const responseWasTransformed = result.clientResponseHeaders !== null &&
+      result.clientResponseHeaders !== undefined;
+    const clientResult = responseWasTransformed
+      ? { ...result, streamSummary: result.clientStreamSummary ?? null }
+      : result;
+    transaction.streamOutcome = responseWasTransformed
+      ? classifyOpenAiUpstreamResult(clientResult)
+      : plan.upstreamProtocol === "anthropic_messages"
+        ? classifyAnthropicUpstreamResult(result)
+        : classifyOpenAiUpstreamResult(result);
+    const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
+    const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
+    transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
+    transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
     if (transaction.requestMetadata.requestType === "stream") {
-      transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
+      transaction.errorSummary ??= responseWasTransformed
+        ? summarizeOpenAiStreamFailure(clientResult)
+        : plan.upstreamProtocol === "anthropic_messages"
+          ? summarizeAnthropicStreamFailure(result)
+          : summarizeOpenAiStreamFailure(result);
     }
     providerStatePortability = buildProviderStatePortabilityLog({
       enabled: recoveryEnabled,
@@ -375,7 +409,9 @@ async function proxyPrimaryRequest(
     }
   } catch (error) {
     applyUpstreamFailureToTransaction(transaction, error);
-    transaction.status = error instanceof RequestBodyTooLargeError
+    transaction.status = error instanceof ProtocolConversionError
+      ? error.status
+      : error instanceof RequestBodyTooLargeError
       ? 413
       : error instanceof UnresolvedCompactionStateError
         ? 422
@@ -639,7 +675,8 @@ async function proxyCompactRequest(
       config: selectedPrimary?.config ?? config,
       url,
       headers: req.headers,
-      rawBody: transaction.rawBody
+      rawBody: transaction.rawBody,
+      nativeCompaction: classification.compactionMode === "remote_v1"
     });
     if (selectedPrimary) {
       primaryFailover.reserveSelection(selectedPrimary, config.primary_failover.auto_schedule);
@@ -667,7 +704,9 @@ async function proxyCompactRequest(
       requestHeaders: transaction.requestHeaders,
       body: transaction.upstreamBody
     };
-    const cachedCompactResponse = classification.compactionMode === "remote_v1"
+    const canDedupeCompactResponse = classification.compactionMode === "remote_v1" &&
+      plan.upstreamProtocol === "openai_responses";
+    const cachedCompactResponse = canDedupeCompactResponse
       ? compactionBridge.getCachedCompactResponse(dedupeInput)
       : null;
     if (cachedCompactResponse) {
@@ -708,23 +747,50 @@ async function proxyCompactRequest(
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY
+      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
+      responseTransform: plan.upstreamProtocol === "anthropic_messages"
+        ? classification.compactionMode === "remote_v1"
+          ? createAnthropicToResponsesCompactionResponseTransform
+          : createAnthropicToResponsesResponseTransform
+        : plan.upstreamProtocol === "openai_chat"
+          ? createChatToResponsesResponseTransform
+          : undefined
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    transaction.streamOutcome = classifyOpenAiUpstreamResult(result);
+    const responseWasTransformed = result.clientResponseHeaders !== null &&
+      result.clientResponseHeaders !== undefined;
+    const clientResult = responseWasTransformed
+      ? { ...result, streamSummary: result.clientStreamSummary ?? null }
+      : result;
+    transaction.streamOutcome = responseWasTransformed
+      ? classifyOpenAiUpstreamResult(clientResult)
+      : plan.upstreamProtocol === "anthropic_messages"
+        ? classifyAnthropicUpstreamResult(result)
+        : classifyOpenAiUpstreamResult(result);
+    const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
+    const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     // 远程压缩归一化仅用于桥接存储和诊断日志,不写回客户端。本地摘要压缩返回普通
     // Responses 流,不能把它误记为缺失 compaction output。
     const normalizedResponse = classification.compactionMode === "remote_v1"
-      ? normalizeCompactResponse({
-          status: transaction.status,
-          responseBody: transaction.responseBody,
-          responseHeaders: transaction.responseHeaders,
-          requestBody: transaction.upstreamBody
-        })
+      ? plan.upstreamProtocol === "openai_responses"
+        ? normalizeCompactResponse({
+            status: transaction.status,
+            responseBody: transaction.responseBody,
+            responseHeaders: transaction.responseHeaders,
+            requestBody: transaction.upstreamBody
+          })
+        : {
+            body: clientResponseBody,
+            headers: clientResponseHeaders,
+            normalized: false,
+            reason: null,
+            syntheticSource: null
+          }
       : {
-          body: transaction.responseBody,
-          headers: transaction.responseHeaders,
+          body: clientResponseBody,
+          headers: clientResponseHeaders,
           normalized: false,
           reason: null,
           syntheticSource: null
@@ -732,10 +798,14 @@ async function proxyCompactRequest(
     transaction.compactResponseNormalized = normalizedResponse.normalized;
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
-    transaction.requestType = responseTransport(transaction.responseHeaders) ?? transaction.requestType;
-    transaction.usage = extractResponseUsage(transaction.responseBody, transaction.responseHeaders);
-    if (result.streamSummary) {
-      transaction.errorSummary ??= summarizeOpenAiStreamFailure(result);
+    transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
+    transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
+    if (responseWasTransformed && result.clientStreamSummary) {
+      transaction.errorSummary ??= summarizeOpenAiStreamFailure(clientResult);
+    } else if (result.streamSummary) {
+      transaction.errorSummary ??= plan.upstreamProtocol === "anthropic_messages"
+        ? summarizeAnthropicStreamFailure(result)
+        : summarizeOpenAiStreamFailure(result);
     }
     if (
       transaction.status >= 200 &&
@@ -748,22 +818,30 @@ async function proxyCompactRequest(
           scope: plan.compactBridgeScope,
           source: normalizedResponse.normalized ? "synthetic" : "standard"
         });
-        compactionBridge.storeCompactDedupeResponse(dedupeInput, {
-          status: transaction.status,
-          responseBody: transaction.responseBody,
-          responseHeaders: transaction.responseHeaders,
-          clientResponseBody: normalizedResponse.body,
-          clientResponseHeaders: normalizedResponse.headers,
-          compactResponseNormalized: transaction.compactResponseNormalized,
-          compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-          compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
-          firstTokenMs: transaction.firstTokenMs
-        });
+        if (canDedupeCompactResponse) {
+          compactionBridge.storeCompactDedupeResponse(dedupeInput, {
+            status: transaction.status,
+            responseBody: transaction.responseBody,
+            responseHeaders: transaction.responseHeaders,
+            clientResponseBody: normalizedResponse.body,
+            clientResponseHeaders: normalizedResponse.headers,
+            compactResponseNormalized: transaction.compactResponseNormalized,
+            compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+            compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+            firstTokenMs: transaction.firstTokenMs
+          });
+        }
       }
     }
   } catch (error) {
     applyUpstreamFailureToTransaction(transaction, error);
-    transaction.status = error instanceof RequestBodyTooLargeError ? 413 : attemptedUpstream ? 502 : 400;
+    transaction.status = error instanceof ProtocolConversionError
+      ? error.status
+      : error instanceof RequestBodyTooLargeError
+        ? 413
+        : attemptedUpstream
+          ? 502
+          : 400;
     transaction.errorSummary = summaryForError(error);
 
     if (!transaction.sourceModel && transaction.rawBody.byteLength > 0) {

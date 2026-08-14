@@ -1,4 +1,8 @@
-import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
+import type {
+  ConfigProfileScope,
+  PublicConfig,
+  UpstreamProtocol
+} from "../../shared/types.js";
 import type { ProfileActionState } from "./types.js";
 
 export function compactModeLabel(mode: "split" | "primary"): string {
@@ -22,6 +26,8 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
     const primaryModel = profile.claude_primary_model_override?.trim();
     return [
       `Claude ${profile.claude_primary_host ?? "未配置"}`,
+      `主 ${upstreamProtocolLabel(profile.claude_primary_upstream_protocol)}`,
+      `压缩 ${upstreamProtocolLabel(profile.claude_compact_upstream_protocol)}`,
       `主模型 ${primaryModel || "透传"}`,
       secretCopy
     ].join("；");
@@ -29,9 +35,24 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
 
   return [
     `Codex ${profile.primary_host ?? "未配置"} / ${profile.compact_host ?? "未配置"}`,
+    `主 ${upstreamProtocolLabel(profile.primary_upstream_protocol)}`,
+    `压缩 ${upstreamProtocolLabel(profile.compact_upstream_protocol)}`,
     `Codex compact ${compactModeLabel(profile.compact_upstream_mode ?? "primary")}`,
     secretCopy
   ].join("；");
+}
+
+export function upstreamProtocolLabel(protocol: UpstreamProtocol | null): string {
+  switch (protocol) {
+    case "openai_responses":
+      return "OpenAI Responses";
+    case "anthropic_messages":
+      return "Anthropic Messages";
+    case "openai_chat":
+      return "OpenAI Chat";
+    case null:
+      return "未配置";
+  }
 }
 
 export function profileActionLabel(state: ProfileActionState): string {

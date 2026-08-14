@@ -65,8 +65,38 @@ describe("ConfigStore", () => {
     expect(store.get().logging.persist_body).toBe(false);
     expect(store.toPublicConfig().logging.persist_body).toBe(false);
     expect(store.get().primary.model_override).toBe("");
+    expect(store.get().primary.upstream_protocol).toBe("openai_responses");
+    expect(store.get().compact.upstream_protocol).toBe("openai_responses");
+    expect(store.get().claude.primary.upstream_protocol).toBe("anthropic_messages");
+    expect(store.get().claude.compact.upstream_protocol).toBe("anthropic_messages");
     expect(store.get().primary.reasoning_effort).toBe("");
     expect(store.get().primary_failover.state_portability).toBe("recover_on_error");
+  });
+
+  it("round-trips explicit upstream protocols and rejects unsupported values", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    await store.patch({
+      primary: { upstream_protocol: "anthropic_messages" },
+      compact: { upstream_protocol: "anthropic_messages" },
+      claude: {
+        primary: { upstream_protocol: "openai_responses" },
+        compact: { upstream_protocol: "openai_chat" }
+      }
+    });
+
+    expect(store.toPublicConfig()).toMatchObject({
+      primary: { upstream_protocol: "anthropic_messages" },
+      compact: { upstream_protocol: "anthropic_messages" },
+      claude: {
+        primary: { upstream_protocol: "openai_responses" },
+        compact: { upstream_protocol: "openai_chat" }
+      }
+    });
+    await expect(store.patch({ primary: { upstream_protocol: "auto" } })).rejects.toThrow(
+      "primary.upstream_protocol must be openai_responses, anthropic_messages, or openai_chat."
+    );
   });
 
   it("normalizes legacy provider-state portability modes on load", async () => {
@@ -290,6 +320,7 @@ describe("ConfigStore", () => {
       base_url: "http://127.0.0.1:9010",
       api_key: "legacy-claude-key",
       api_key_env: "LEGACY_CLAUDE_KEY",
+      upstream_protocol: "anthropic_messages",
       model_override: ""
     });
     expect(config.claude.compact).toEqual({

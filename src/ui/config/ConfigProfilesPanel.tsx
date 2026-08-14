@@ -20,6 +20,7 @@ export function ConfigProfilesPanel({
   onUpdateProfile,
   onReorderProfiles,
   onDuplicateProfile,
+  onCopyProfileRoutes,
   onDeleteProfile
 }: {
   config: PublicConfig | null;
@@ -39,6 +40,7 @@ export function ConfigProfilesPanel({
   onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onCopyProfileRoutes: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
 }) {
   return (
@@ -62,6 +64,7 @@ export function ConfigProfilesPanel({
         onUpdateProfile={onUpdateProfile}
         onReorderProfiles={onReorderProfiles}
         onDuplicateProfile={onDuplicateProfile}
+        onCopyProfileRoutes={onCopyProfileRoutes}
         onDeleteProfile={onDeleteProfile}
       />
       <ProfileScopeCard
@@ -83,6 +86,7 @@ export function ConfigProfilesPanel({
         onUpdateProfile={onUpdateProfile}
         onReorderProfiles={onReorderProfiles}
         onDuplicateProfile={onDuplicateProfile}
+        onCopyProfileRoutes={onCopyProfileRoutes}
         onDeleteProfile={onDeleteProfile}
       />
     </div>

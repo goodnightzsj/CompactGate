@@ -5,6 +5,7 @@ import http, {
   type ServerResponse
 } from "node:http";
 import https from "node:https";
+import type { Duplex } from "node:stream";
 import { copyResponseHeaders, decodeBodyText } from "./http-utils.js";
 import {
   createAnthropicStreamObserver,
@@ -37,6 +38,13 @@ export interface BufferedUpstreamOptions {
   maxDeferredHttpErrorBytes?: number;
   maxObservedStreamEventBytes?: number;
   streamProtocol?: "openai" | "anthropic";
+  responseTransform?: (status: number, headers: IncomingHttpHeaders) => UpstreamResponseTransform | null;
+}
+
+export interface UpstreamResponseTransform {
+  stream: Duplex;
+  responseHeaders: IncomingHttpHeaders;
+  streamProtocol: "openai" | "anthropic";
 }
 
 export interface BufferedUpstreamResult {
@@ -47,6 +55,9 @@ export interface BufferedUpstreamResult {
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
   streamSummary: OpenAiStreamSummary | null;
+  clientStreamSummary?: OpenAiStreamSummary | null;
+  clientResponseBody?: Buffer | null;
+  clientResponseHeaders?: IncomingHttpHeaders | null;
   clientDisconnectPhase: ClientDisconnectPhase;
 }
 
@@ -219,6 +230,43 @@ export function sendBufferedUpstreamRequest(
       (response) => {
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
+        let responseTransform: UpstreamResponseTransform | null = null;
+        try {
+          responseTransform = options.writeResponse !== false
+            ? options.responseTransform?.(status, response.headers) ?? null
+            : null;
+        } catch (error) {
+          response.resume();
+          rejectOnce(new UpstreamRequestError(
+            error instanceof Error ? error.message : "Upstream response transform failed.",
+            responseDetails("upstream_request_error", "before_headers")
+          ));
+          return;
+        }
+        const clientResponseChunks: Buffer[] = [];
+        let clientResponseBytes = 0;
+        const clientStreamObserver = responseTransform
+          ? responseTransform.streamProtocol === "anthropic"
+            ? createAnthropicStreamObserver(responseTransform.responseHeaders)
+            : createOpenAiStreamObserver(responseTransform.responseHeaders)
+          : null;
+        let responseTransformCompletion: Promise<void> | null = null;
+        if (responseTransform) {
+          responseTransform.stream.on("data", (chunk: Buffer) => {
+            clientResponseBytes += chunk.byteLength;
+            if (clientResponseBytes <= maxBufferedResponseBytes) {
+              clientResponseChunks.push(Buffer.from(chunk));
+            }
+            clientStreamObserver?.observe(chunk);
+          });
+          responseTransformCompletion = new Promise<void>((resolve, reject) => {
+            responseTransform.stream.once("end", resolve);
+            responseTransform.stream.once("error", reject);
+          });
+          responseTransform.stream.once("error", (error) => {
+            response.destroy(error);
+          });
+        }
         let bufferedBytes = 0;
         const streamObserver = options.streamProtocol === "anthropic"
           ? createAnthropicStreamObserver(response.headers, {
@@ -234,6 +282,10 @@ export function sendBufferedUpstreamRequest(
           responseBodyTruncated: false,
           firstTokenMs: null,
           streamObserver,
+          clientStreamObserver,
+          clientResponseChunks,
+          responseTransform,
+          responseTransformCompletion,
           clientDisconnectPhase: "none",
           responseResolutionStarted: false
         };
@@ -249,7 +301,7 @@ export function sendBufferedUpstreamRequest(
             ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes)
             : Number.POSITIVE_INFINITY;
         if (shouldWriteResponse) {
-          copyResponseHeaders(response.headers, options.res);
+          copyResponseHeaders(responseTransform?.responseHeaders ?? response.headers, options.res);
           for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
             options.res.setHeader(name, value);
           }
@@ -285,7 +337,11 @@ export function sendBufferedUpstreamRequest(
           }
         });
         if (shouldWriteResponse) {
-          response.pipe(options.res);
+          if (responseTransform) {
+            response.pipe(responseTransform.stream).pipe(options.res);
+          } else {
+            response.pipe(options.res);
+          }
         }
 
         response.on("end", () => {
@@ -304,6 +360,17 @@ export function sendBufferedUpstreamRequest(
 
     async function resolveUpstreamResponse(responseState: ActiveUpstreamResponse) {
       const responseBody = Buffer.concat(responseState.responseChunks);
+      if (responseState.responseTransformCompletion) {
+        try {
+          await responseState.responseTransformCompletion;
+        } catch (error) {
+          rejectOnce(new UpstreamRequestError(
+            error instanceof Error ? error.message : "Upstream response transform failed.",
+            responseDetails("upstream_stream_incomplete", "before_terminal")
+          ));
+          return;
+        }
+      }
       const streamSummary = responseState.streamObserver
         ? await responseState.streamObserver.finish()
         : null;
@@ -319,6 +386,13 @@ export function sendBufferedUpstreamRequest(
         responseHeaders: responseState.response.headers,
         firstTokenMs: responseState.firstTokenMs,
         streamSummary,
+        clientStreamSummary: responseState.clientStreamObserver
+          ? await responseState.clientStreamObserver.finish()
+          : null,
+        clientResponseBody: responseState.responseTransform
+          ? Buffer.concat(responseState.clientResponseChunks)
+          : null,
+        clientResponseHeaders: responseState.responseTransform?.responseHeaders ?? null,
         clientDisconnectPhase: responseState.clientDisconnectPhase
       });
     }
@@ -356,6 +430,10 @@ interface ActiveUpstreamResponse {
   responseBodyTruncated: boolean;
   firstTokenMs: number | null;
   streamObserver: ReturnType<typeof createOpenAiStreamObserver>;
+  clientStreamObserver: ReturnType<typeof createOpenAiStreamObserver>;
+  clientResponseChunks: Buffer[];
+  responseTransform: UpstreamResponseTransform | null;
+  responseTransformCompletion: Promise<void> | null;
   clientDisconnectPhase: ClientDisconnectPhase;
   responseResolutionStarted: boolean;
 }

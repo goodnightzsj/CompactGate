@@ -16,6 +16,7 @@ export function emptyForm(): ConfigFormState {
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
+    codexPrimaryUpstreamProtocol: "openai_responses",
     primaryModelOverride: "",
     primaryReasoningEffort: "",
     primaryStateDomainId: "",
@@ -24,15 +25,18 @@ export function emptyForm(): ConfigFormState {
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
     codexCompactCredentialPresetId: "",
+    codexCompactUpstreamProtocol: "openai_responses",
     claudePrimaryBaseUrl: "",
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
+    claudePrimaryUpstreamProtocol: "anthropic_messages",
     claudeModelMap: emptyClaudeModelMap(),
     claudeCompactBaseUrl: "",
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
     claudeCompactCredentialPresetId: "",
+    claudeCompactUpstreamProtocol: "anthropic_messages",
     claudeCompactModelOverride: "",
     claudeCompactUpstreamMode: "primary",
     upstreamMode: "split",
@@ -55,6 +59,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
+    codexPrimaryUpstreamProtocol: config.primary.upstream_protocol,
     primaryModelOverride: config.primary.model_override ?? "",
     primaryReasoningEffort: config.primary.reasoning_effort,
     primaryStateDomainId: config.primary.state_domain_id,
@@ -63,15 +68,18 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
     codexCompactCredentialPresetId: "",
+    codexCompactUpstreamProtocol: config.compact.upstream_protocol,
     claudePrimaryBaseUrl: config.claude.primary.base_url,
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
+    claudePrimaryUpstreamProtocol: config.claude.primary.upstream_protocol,
     claudeModelMap: normalizeClaudeModelMap(config.claude.model_map),
     claudeCompactBaseUrl: config.claude.compact.base_url,
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
     claudeCompactCredentialPresetId: "",
+    claudeCompactUpstreamProtocol: config.claude.compact.upstream_protocol,
     claudeCompactModelOverride: config.claude.compact.model_override,
     claudeCompactUpstreamMode: readUpstreamMode(config.claude.compact.upstream_mode, "primary"),
     upstreamMode: readUpstreamMode(config.compact.upstream_mode, "split"),
@@ -95,6 +103,7 @@ export function formToPatch(form: ConfigFormState) {
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
     model_override: form.primaryModelOverride,
+    upstream_protocol: form.codexPrimaryUpstreamProtocol,
     reasoning_effort: form.primaryReasoningEffort,
     state_domain_id: form.primaryStateDomainId
   };
@@ -105,14 +114,16 @@ export function formToPatch(form: ConfigFormState) {
     upstream_mode: form.upstreamMode,
     model_mode: form.modelMode,
     model_template: form.modelTemplate,
-    model_override: form.modelOverride
+    model_override: form.modelOverride,
+    upstream_protocol: form.codexCompactUpstreamProtocol
   };
   const claude = {
     primary: {
       base_url: form.claudePrimaryBaseUrl,
       ...credentialPresetPatch(form.claudePrimaryCredentialPresetId),
       ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey),
-      model_override: claudeModelMap.default
+      model_override: claudeModelMap.default,
+      upstream_protocol: form.claudePrimaryUpstreamProtocol
     },
     model_map: claudeModelMap,
     compact: {
@@ -120,7 +131,8 @@ export function formToPatch(form: ConfigFormState) {
       ...credentialPresetPatch(form.claudeCompactCredentialPresetId),
       ...apiKeyPatch(form.claudeCompactApiKey, form.clearClaudeCompactApiKey),
       upstream_mode: form.claudeCompactUpstreamMode,
-      model_override: form.claudeCompactModelOverride
+      model_override: form.claudeCompactModelOverride,
+      upstream_protocol: form.claudeCompactUpstreamProtocol
     }
   };
 
@@ -159,6 +171,7 @@ export function applyDraftToConfigExport(
     primary: {
       ...config.primary,
       base_url: form.codexPrimaryBaseUrl,
+      upstream_protocol: form.codexPrimaryUpstreamProtocol,
       model_override: form.primaryModelOverride,
       reasoning_effort: form.primaryReasoningEffort,
       state_domain_id: form.primaryStateDomainId
@@ -166,6 +179,7 @@ export function applyDraftToConfigExport(
     compact: {
       ...config.compact,
       base_url: form.codexCompactBaseUrl,
+      upstream_protocol: form.codexCompactUpstreamProtocol,
       upstream_mode: form.upstreamMode,
       model_mode: form.modelMode,
       model_template: form.modelTemplate,
@@ -175,11 +189,13 @@ export function applyDraftToConfigExport(
       primary: {
         ...config.claude.primary,
         base_url: form.claudePrimaryBaseUrl,
+        upstream_protocol: form.claudePrimaryUpstreamProtocol,
         model_override: claudeModelMap.default
       },
       compact: {
         ...config.claude.compact,
         base_url: form.claudeCompactBaseUrl,
+        upstream_protocol: form.claudeCompactUpstreamProtocol,
         upstream_mode: form.claudeCompactUpstreamMode,
         model_override: form.claudeCompactModelOverride
       },
@@ -245,6 +261,40 @@ export function renderLinkedModel(model: string, template: string): string {
   return template.replaceAll("{model}", model || "model");
 }
 
+export function copyProfileRoutesToOtherDraft(
+  form: ConfigFormState,
+  profile: PublicConfig["profiles"][number]
+): ConfigFormState {
+  if (profile.scope === "codex") {
+    return {
+      ...form,
+      claudePrimaryBaseUrl: profile.primary_base_url ?? form.claudePrimaryBaseUrl,
+      claudePrimaryCredentialPresetId: "",
+      claudePrimaryUpstreamProtocol:
+        profile.primary_upstream_protocol ?? form.claudePrimaryUpstreamProtocol,
+      claudeCompactBaseUrl: profile.compact_base_url ?? form.claudeCompactBaseUrl,
+      claudeCompactCredentialPresetId: "",
+      claudeCompactUpstreamProtocol:
+        profile.compact_upstream_protocol ?? form.claudeCompactUpstreamProtocol,
+      claudeCompactUpstreamMode:
+        profile.compact_upstream_mode ?? form.claudeCompactUpstreamMode
+    };
+  }
+
+  return {
+    ...form,
+    codexPrimaryBaseUrl: profile.claude_primary_base_url ?? form.codexPrimaryBaseUrl,
+    codexPrimaryCredentialPresetId: "",
+    codexPrimaryUpstreamProtocol:
+      profile.claude_primary_upstream_protocol ?? form.codexPrimaryUpstreamProtocol,
+    codexCompactBaseUrl: profile.claude_compact_base_url ?? form.codexCompactBaseUrl,
+    codexCompactCredentialPresetId: "",
+    codexCompactUpstreamProtocol:
+      profile.claude_compact_upstream_protocol ?? form.codexCompactUpstreamProtocol,
+    upstreamMode: profile.claude_compact_upstream_mode ?? form.upstreamMode
+  };
+}
+
 function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split" | "primary" {
   return value === "split" || value === "primary" ? value : fallback;
 }
@@ -255,6 +305,7 @@ function draftComparisonState(form: ConfigFormState) {
     codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),
     clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
+    codexPrimaryUpstreamProtocol: form.codexPrimaryUpstreamProtocol,
     primaryModelOverride: form.primaryModelOverride,
     primaryReasoningEffort: form.primaryReasoningEffort,
     primaryStateDomainId: form.primaryStateDomainId,
@@ -263,15 +314,18 @@ function draftComparisonState(form: ConfigFormState) {
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,
     codexCompactCredentialPresetId: form.codexCompactCredentialPresetId,
+    codexCompactUpstreamProtocol: form.codexCompactUpstreamProtocol,
     claudePrimaryBaseUrl: form.claudePrimaryBaseUrl,
     claudePrimaryApiKey: normalizedApiKey(form.claudePrimaryApiKey),
     clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
     claudePrimaryCredentialPresetId: form.claudePrimaryCredentialPresetId,
+    claudePrimaryUpstreamProtocol: form.claudePrimaryUpstreamProtocol,
     claudeModelMap: normalizeClaudeModelMap(form.claudeModelMap),
     claudeCompactBaseUrl: form.claudeCompactBaseUrl,
     claudeCompactApiKey: normalizedApiKey(form.claudeCompactApiKey),
     clearClaudeCompactApiKey: form.clearClaudeCompactApiKey,
     claudeCompactCredentialPresetId: form.claudeCompactCredentialPresetId,
+    claudeCompactUpstreamProtocol: form.claudeCompactUpstreamProtocol,
     claudeCompactModelOverride: form.claudeCompactModelOverride,
     claudeCompactUpstreamMode: form.claudeCompactUpstreamMode,
     upstreamMode: form.upstreamMode,

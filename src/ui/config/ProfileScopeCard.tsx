@@ -32,6 +32,7 @@ export function ProfileScopeCard({
   onUpdateProfile,
   onReorderProfiles,
   onDuplicateProfile,
+  onCopyProfileRoutes,
   onDeleteProfile
 }: {
   scope: ConfigProfileScope;
@@ -52,6 +53,7 @@ export function ProfileScopeCard({
   onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onCopyProfileRoutes: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
 }) {
   const titleId = `${scope}-profile-card-title`;
@@ -66,6 +68,7 @@ export function ProfileScopeCard({
   const activeProfile = profiles.find((profile) => profile.id === scopeState.active_profile_id) ?? null;
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const scopeLabel = scope === "codex" ? "Codex" : "Claude";
+  const destinationScopeLabel = scope === "codex" ? "Claude" : "Codex";
   const namedProfile = profiles.find((profile) => profile.name === profileName.trim()) ?? null;
   const saveWillApply = Boolean(namedProfile && namedProfile.id === activeProfile?.id);
   const saveTargetsSelected = Boolean(
@@ -316,12 +319,21 @@ export function ProfileScopeCard({
                         className="ghost-button"
                         type="button"
                         disabled={profileBusy}
+                        title={`仅复制 URL、协议和压缩模式到 ${destinationScopeLabel} 草稿；密钥保持不变。`}
+                        onClick={() => onCopyProfileRoutes(profile)}
+                      >
+                        复制路由到 {destinationScopeLabel} 草稿
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        disabled={profileBusy}
                         onClick={() => {
                           onSelectedProfileChange(scope, profile.id);
                           void onDuplicateProfile(scope, profile.id);
                         }}
                       >
-                        {profileState === "duplicating" && isSelected ? "复制中..." : "复制"}
+                        {profileState === "duplicating" && isSelected ? "复制中..." : "复制档案"}
                       </button>
                       <button
                         className="ghost-button profile-danger-button"

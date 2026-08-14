@@ -1,6 +1,26 @@
 import { useEffect, useId, useState } from "react";
+import type { UpstreamProtocol } from "../../shared/types.js";
 import { formatClock } from "../shared/format.js";
+import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
 import { Field } from "./Field.js";
+
+const UPSTREAM_PROTOCOL_OPTIONS: SelectOption[] = [
+  {
+    value: "openai_responses",
+    label: "OpenAI Responses",
+    meta: "/v1/responses"
+  },
+  {
+    value: "anthropic_messages",
+    label: "Anthropic Messages",
+    meta: "/v1/messages"
+  },
+  {
+    value: "openai_chat",
+    label: "OpenAI Chat",
+    meta: "/v1/chat/completions"
+  }
+];
 
 export type RouteUrlSuggestion = {
   baseUrl: string;
@@ -21,6 +41,7 @@ export function RouteCredentialFields({
   baseUrlHint,
   apiKeyLabel,
   apiKeyHint,
+  upstreamProtocol,
   baseUrl,
   apiKey,
   storedApiKey,
@@ -29,6 +50,7 @@ export function RouteCredentialFields({
   onBaseUrlChange,
   onSuggestionSelect,
   onApiKeyChange,
+  onUpstreamProtocolChange,
   onToggleClearApiKey
 }: {
   title: string;
@@ -38,6 +60,7 @@ export function RouteCredentialFields({
   baseUrlHint: string;
   apiKeyLabel: string;
   apiKeyHint: string;
+  upstreamProtocol: UpstreamProtocol;
   baseUrl: string;
   apiKey: string;
   storedApiKey: boolean;
@@ -46,6 +69,7 @@ export function RouteCredentialFields({
   onBaseUrlChange: (value: string) => void;
   onSuggestionSelect?: (suggestion: RouteUrlSuggestion) => void;
   onApiKeyChange: (value: string) => void;
+  onUpstreamProtocolChange: (value: UpstreamProtocol) => void;
   onToggleClearApiKey: () => void;
 }) {
   const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
@@ -85,6 +109,14 @@ export function RouteCredentialFields({
         <h4>{title}</h4>
         <span className={`route-chip ${tone}`}>{badge}</span>
       </div>
+
+      <CustomSelect
+        label={`${title} 上游格式`}
+        value={upstreamProtocol}
+        options={UPSTREAM_PROTOCOL_OPTIONS}
+        onChange={(value) => onUpstreamProtocolChange(value as UpstreamProtocol)}
+        wide
+      />
 
       <Field label={baseUrlLabel} hint={baseUrlHint}>
         <div className="route-url-input-wrap">

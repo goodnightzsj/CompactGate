@@ -5,7 +5,8 @@ import type {
   CompactUpstreamMode,
   PrimaryReasoningEffort,
   PrimaryStatePortabilityMode,
-  UpstreamConfig
+  UpstreamConfig,
+  UpstreamProtocol
 } from "../shared/types.js";
 import { CLAUDE_MODEL_MAP_ROLES } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
@@ -27,6 +28,10 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateBaseUrl(config.compact.base_url, "compact.base_url");
   validateBaseUrl(config.claude.primary.base_url, "claude.primary.base_url");
   validateBaseUrl(config.claude.compact.base_url, "claude.compact.base_url");
+  validateUpstreamProtocol(config.primary.upstream_protocol, "primary.upstream_protocol");
+  validateUpstreamProtocol(config.compact.upstream_protocol, "compact.upstream_protocol");
+  validateUpstreamProtocol(config.claude.primary.upstream_protocol, "claude.primary.upstream_protocol");
+  validateUpstreamProtocol(config.claude.compact.upstream_protocol, "claude.compact.upstream_protocol");
   validateEnvName(config.primary.api_key_env, "primary.api_key_env");
   validateEnvName(config.compact.api_key_env, "compact.api_key_env");
   validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
@@ -124,6 +129,7 @@ export function mergeRuntimeConfig(
       base_url: readString(compactPatch.base_url, base.compact.base_url),
       api_key: readString(compactPatch.api_key, base.compact.api_key),
       api_key_env: readString(compactPatch.api_key_env, base.compact.api_key_env),
+      upstream_protocol: readUpstreamProtocol(compactPatch.upstream_protocol, base.compact.upstream_protocol),
       upstream_mode: readString(
         compactPatch.upstream_mode,
         base.compact.upstream_mode
@@ -257,6 +263,16 @@ function validateUpstreamMode(value: string): asserts value is CompactUpstreamMo
   }
 }
 
+function validateUpstreamProtocol(value: string, field: string): asserts value is UpstreamProtocol {
+  if (!["openai_responses", "anthropic_messages", "openai_chat"].includes(value)) {
+    throw new ConfigError(`${field} must be openai_responses, anthropic_messages, or openai_chat.`);
+  }
+}
+
+function readUpstreamProtocol(value: unknown, fallback: UpstreamProtocol): UpstreamProtocol {
+  return readString(value, fallback) as UpstreamProtocol;
+}
+
 function mergeUpstreamConfig(
   base: UpstreamConfig,
   patch: Record<string, unknown>
@@ -265,6 +281,7 @@ function mergeUpstreamConfig(
     base_url: readString(patch.base_url, base.base_url),
     api_key: readString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
+    upstream_protocol: readUpstreamProtocol(patch.upstream_protocol, base.upstream_protocol),
     model_override: readString(patch.model_override, base.model_override ?? "")
   };
 }

@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     base_url: "https://primary.example/v1",
     api_key: "",
     api_key_env: "",
+    upstream_protocol: "openai_responses",
     model_override: "",
     reasoning_effort: "",
     state_domain_id: ""
@@ -38,6 +39,7 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     base_url: "https://compact.example/v1",
     api_key: "",
     api_key_env: "",
+    upstream_protocol: "openai_responses",
     upstream_mode: "split",
     model_mode: "linked",
     model_template: "{model}-openai-compact",
@@ -48,12 +50,14 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       base_url: "https://api.anthropic.com",
       api_key: "",
       api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      upstream_protocol: "anthropic_messages",
       model_override: ""
     },
     compact: {
       base_url: "https://api.anthropic.com",
       api_key: "",
       api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      upstream_protocol: "anthropic_messages",
       upstream_mode: "primary",
       model_override: ""
     },

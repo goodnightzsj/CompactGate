@@ -33,6 +33,7 @@ export function RouteConfigPanel({
           title="Codex 主路由" badge="Codex" tone="primary"
           baseUrlLabel="基础地址" baseUrlHint="填写完整 API 根（如 /v1 或 /v4）；本地 /v1 会被替换。"
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 主路由", config?.primary ?? null)}
+          upstreamProtocol={form.codexPrimaryUpstreamProtocol}
           baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
           storedApiKey={config?.primary.stored_api_key ?? false}
           clearApiKey={form.clearCodexPrimaryApiKey}
@@ -53,6 +54,10 @@ export function RouteConfigPanel({
             clearCodexPrimaryApiKey: false,
             codexPrimaryCredentialPresetId: ""
           }))}
+          onUpstreamProtocolChange={(codexPrimaryUpstreamProtocol) => onFormChange((previous) => ({
+            ...previous,
+            codexPrimaryUpstreamProtocol
+          }))}
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             codexPrimaryApiKey: "",
@@ -64,6 +69,7 @@ export function RouteConfigPanel({
           title="Codex 压缩路由" badge="压缩" tone="compact"
           baseUrlLabel="基础地址" baseUrlHint={form.upstreamMode === "split" ? "填写完整 API 根；Local/Remote V1 走这里，Remote V2 仍走主路由。" : "Local/Remote V1 复用 Codex 主路由；Remote V2 始终走主路由。"}
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Codex 压缩路由", config?.compact ?? null)}
+          upstreamProtocol={form.codexCompactUpstreamProtocol}
           baseUrl={form.codexCompactBaseUrl} apiKey={form.codexCompactApiKey}
           storedApiKey={config?.compact.stored_api_key ?? false}
           clearApiKey={form.clearCodexCompactApiKey}
@@ -84,6 +90,10 @@ export function RouteConfigPanel({
             clearCodexCompactApiKey: false,
             codexCompactCredentialPresetId: ""
           }))}
+          onUpstreamProtocolChange={(codexCompactUpstreamProtocol) => onFormChange((previous) => ({
+            ...previous,
+            codexCompactUpstreamProtocol
+          }))}
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             codexCompactApiKey: "",
@@ -97,6 +107,7 @@ export function RouteConfigPanel({
           title="Claude 主路由" badge="Claude" tone="claude"
           baseUrlLabel="基础地址" baseUrlHint="填写主机或供应商前缀；末尾 /v1 会自动避免重复。"
           apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 主路由", config?.claude.primary ?? null)}
+          upstreamProtocol={form.claudePrimaryUpstreamProtocol}
           baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
           storedApiKey={config?.claude.primary.stored_api_key ?? false}
           clearApiKey={form.clearClaudePrimaryApiKey}
@@ -117,11 +128,51 @@ export function RouteConfigPanel({
             clearClaudePrimaryApiKey: false,
             claudePrimaryCredentialPresetId: ""
           }))}
+          onUpstreamProtocolChange={(claudePrimaryUpstreamProtocol) => onFormChange((previous) => ({
+            ...previous,
+            claudePrimaryUpstreamProtocol
+          }))}
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             claudePrimaryApiKey: "",
             clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey,
             claudePrimaryCredentialPresetId: ""
+          }))}
+        />
+        <RouteCredentialFields
+          title="Claude 压缩路由" badge="压缩" tone="claude"
+          baseUrlLabel="基础地址" baseUrlHint={form.claudeCompactUpstreamMode === "split" ? "填写压缩上游的主机或 API 根。" : "复用 Claude 主路由；切换为独立分流后使用这里的地址。"}
+          apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
+          upstreamProtocol={form.claudeCompactUpstreamProtocol}
+          baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
+          storedApiKey={config?.claude.compact.stored_api_key ?? false}
+          clearApiKey={form.clearClaudeCompactApiKey}
+          routeUrlSuggestions={routeUrlSuggestions(config, "claude_compact")}
+          onBaseUrlChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            claudeCompactBaseUrl: value,
+            claudeCompactCredentialPresetId: ""
+          }))}
+          onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
+            ...previous,
+            claudeCompactBaseUrl: suggestion.baseUrl,
+            claudeCompactCredentialPresetId: suggestion.credentialPresetId
+          }))}
+          onApiKeyChange={(value) => onFormChange((previous) => ({
+            ...previous,
+            claudeCompactApiKey: value,
+            clearClaudeCompactApiKey: false,
+            claudeCompactCredentialPresetId: ""
+          }))}
+          onUpstreamProtocolChange={(claudeCompactUpstreamProtocol) => onFormChange((previous) => ({
+            ...previous,
+            claudeCompactUpstreamProtocol
+          }))}
+          onToggleClearApiKey={() => onFormChange((previous) => ({
+            ...previous,
+            claudeCompactApiKey: "",
+            clearClaudeCompactApiKey: !previous.clearClaudeCompactApiKey,
+            claudeCompactCredentialPresetId: ""
           }))}
         />
       </div>
@@ -161,11 +212,20 @@ export function RouteConfigPanel({
             </div>
           </div>
         </div>
-        <div>
-          <div className="field-label field-label-block">Codex 压缩上游模式</div>
-          <div className="toggle-group">
-            <button className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
-            <button className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
+        <div className="config-row">
+          <div>
+            <div className="field-label field-label-block">Codex 压缩上游模式</div>
+            <div className="toggle-group" role="group" aria-label="Codex 压缩上游模式">
+              <button type="button" className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
+              <button type="button" className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
+            </div>
+          </div>
+          <div>
+            <div className="field-label field-label-block">Claude 压缩上游模式</div>
+            <div className="toggle-group" role="group" aria-label="Claude 压缩上游模式">
+              <button type="button" className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
+              <button type="button" className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
+            </div>
           </div>
         </div>
         <section className="auto-schedule-card" aria-labelledby="auto-schedule-title">

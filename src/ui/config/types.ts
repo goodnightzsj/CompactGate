@@ -3,7 +3,8 @@ import type {
   ConfigProfileScope,
   PrimaryReasoningEffort,
   PrimaryStatePortabilityMode,
-  PublicConfig
+  PublicConfig,
+  UpstreamProtocol
 } from "../../shared/types.js";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -29,6 +30,7 @@ export type ConfigFormState = {
   codexPrimaryApiKey: string;
   clearCodexPrimaryApiKey: boolean;
   codexPrimaryCredentialPresetId: string;
+  codexPrimaryUpstreamProtocol: UpstreamProtocol;
   primaryModelOverride: string;
   primaryReasoningEffort: PrimaryReasoningEffort;
   primaryStateDomainId: string;
@@ -37,15 +39,18 @@ export type ConfigFormState = {
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;
   codexCompactCredentialPresetId: string;
+  codexCompactUpstreamProtocol: UpstreamProtocol;
   claudePrimaryBaseUrl: string;
   claudePrimaryApiKey: string;
   clearClaudePrimaryApiKey: boolean;
   claudePrimaryCredentialPresetId: string;
+  claudePrimaryUpstreamProtocol: UpstreamProtocol;
   claudeModelMap: ClaudeModelMap;
   claudeCompactBaseUrl: string;
   claudeCompactApiKey: string;
   clearClaudeCompactApiKey: boolean;
   claudeCompactCredentialPresetId: string;
+  claudeCompactUpstreamProtocol: UpstreamProtocol;
   claudeCompactModelOverride: string;
   claudeCompactUpstreamMode: "split" | "primary";
   upstreamMode: "split" | "primary";

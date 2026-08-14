@@ -14,6 +14,7 @@ import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
 import { ConfigSaveBar } from "./ConfigSaveBar.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
+import { copyProfileRoutesToOtherDraft } from "./config-form-state.js";
 import type { ConfigFormState, ConfigTab, ProfileActionState, SaveState } from "./types.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
 
@@ -152,6 +153,9 @@ export function ConfigPage({
                 onUpdateProfile={profiles.onUpdateProfile}
                 onReorderProfiles={profiles.onReorderProfiles}
                 onDuplicateProfile={profiles.onDuplicateProfile}
+                onCopyProfileRoutes={(profile) => onFormChange((previous) =>
+                  copyProfileRoutesToOtherDraft(previous, profile)
+                )}
                 onDeleteProfile={profiles.onDeleteProfile}
               />
             )}

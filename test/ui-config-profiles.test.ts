@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { nextDuplicateProfileName } from "../src/ui/hooks/configProfileCollectionActions.js";
 import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
+import { profileSummary } from "../src/ui/config/profile-utils.js";
 import type { PublicConfig } from "../src/shared/types.js";
 
 describe("UI config profile actions", () => {
@@ -78,6 +79,11 @@ describe("UI config profile actions", () => {
       dirty: false
     });
   });
+
+  it("includes saved upstream protocols in profile summaries", () => {
+    expect(profileSummary(profile("Local split"))).toContain("主 OpenAI Responses");
+    expect(profileSummary(profile("Local split"))).toContain("压缩 OpenAI Responses");
+  });
 });
 
 function profile(name: string, id = name.toLowerCase().replaceAll(" ", "-")): PublicConfig["profiles"][number] {
@@ -101,6 +107,10 @@ function profile(name: string, id = name.toLowerCase().replaceAll(" ", "-")): Pu
     claude_model_map: null,
     compact_upstream_mode: "split",
     claude_compact_upstream_mode: null,
+    primary_upstream_protocol: "openai_responses",
+    compact_upstream_protocol: "openai_responses",
+    claude_primary_upstream_protocol: null,
+    claude_compact_upstream_protocol: null,
     stored_api_key_count: 0
   };
 }

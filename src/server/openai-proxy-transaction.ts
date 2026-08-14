@@ -68,6 +68,9 @@ export interface OpenAiProxyUpstreamResult {
   firstTokenMs: number | null;
   clientDisconnectPhase: ClientDisconnectPhase;
   streamSummary: OpenAiStreamSummary | null;
+  clientStreamSummary?: OpenAiStreamSummary | null;
+  clientResponseBody?: Buffer | null;
+  clientResponseHeaders?: IncomingHttpHeaders | null;
 }
 
 export interface OpenAiProxyTransactionInput {
@@ -149,16 +152,19 @@ export function applyOpenAiProxyUpstreamResult(
   state: OpenAiProxyTransactionState,
   result: OpenAiProxyUpstreamResult
 ): void {
+  const streamSummary = result.clientStreamSummary ?? result.streamSummary;
   state.status = result.status;
   state.upstreamStatus = result.status;
-  state.streamTerminalEvent = result.streamSummary?.terminalEvent ?? null;
+  state.streamTerminalEvent = streamSummary?.terminalEvent ?? null;
   state.clientDisconnectPhase = result.clientDisconnectPhase;
-  state.streamOversizedEventCount = result.streamSummary?.oversizedEventCount ?? 0;
+  state.streamOversizedEventCount = streamSummary?.oversizedEventCount ?? 0;
   state.responseBodyTruncated = result.responseBodyTruncated;
-  state.responseModel = result.streamSummary?.responseModel ?? state.responseModel;
+  state.responseModel = streamSummary?.responseModel ?? state.responseModel;
   state.errorSummary = result.errorSummary;
   state.responseBody = result.responseBody;
   state.responseHeaders = result.responseHeaders;
+  state.clientResponseBody = result.clientResponseBody ?? null;
+  state.clientResponseHeaders = result.clientResponseHeaders ?? null;
   state.firstTokenMs = result.firstTokenMs;
 }
 

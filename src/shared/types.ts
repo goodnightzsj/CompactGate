@@ -1,5 +1,7 @@
 export type RouteKind = "primary" | "compact" | "claude";
 export type ProviderFamily = "openai" | "claude";
+export type UpstreamProtocol = "openai_responses" | "anthropic_messages" | "openai_chat";
+export type ProtocolTranslationMode = "passthrough" | "translate";
 export type LogStatusKind = "normal" | "error";
 export type ClientDisconnectPhase = "none" | "before_headers" | "before_terminal" | "after_terminal";
 export type ResponseModelSource = "upstream" | "target_fallback" | "unavailable";
@@ -62,6 +64,7 @@ export interface UpstreamConfig {
   base_url: string;
   api_key: string;
   api_key_env: string;
+  upstream_protocol: UpstreamProtocol;
   model_override?: string;
 }
 
@@ -209,6 +212,10 @@ export interface PublicConfigProfile {
   claude_model_map: ClaudeModelMap | null;
   compact_upstream_mode: CompactUpstreamMode | null;
   claude_compact_upstream_mode: CompactUpstreamMode | null;
+  primary_upstream_protocol: UpstreamProtocol | null;
+  compact_upstream_protocol: UpstreamProtocol | null;
+  claude_primary_upstream_protocol: UpstreamProtocol | null;
+  claude_compact_upstream_protocol: UpstreamProtocol | null;
   stored_api_key_count: number;
 }
 
@@ -224,12 +231,14 @@ export interface PublicCredentialState {
 export interface PublicUpstreamConfig extends PublicCredentialState {
   base_url: string;
   host: string;
+  upstream_protocol: UpstreamProtocol;
   model_override: string;
 }
 
 export interface PublicCompactConfig extends PublicCredentialState {
   base_url: string;
   host: string;
+  upstream_protocol: UpstreamProtocol;
   upstream_mode: CompactUpstreamMode;
   model_mode: CompactModelMode;
   model_template: string;
@@ -281,6 +290,9 @@ export interface RoutePreviewResponse {
   path: string;
   upstream_url: string;
   upstream_host: string;
+  ingress_protocol: UpstreamProtocol;
+  upstream_protocol: UpstreamProtocol;
+  translation_mode: ProtocolTranslationMode;
   source_model: string | null;
   target_model: string | null;
   body_rewritten: boolean;

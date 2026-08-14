@@ -20,7 +20,11 @@ import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "./primary-failover.js";
-import { classifyOpenAiRequest, previewRoute } from "./routing.js";
+import {
+  classifyOpenAiRequest,
+  isClaudeIngressPath,
+  previewRoute
+} from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
 
@@ -51,20 +55,23 @@ export async function handleRuntimeApi(
             Object.entries(body.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string")
           )
         : undefined;
-      const classification = classifyOpenAiRequest(parsedUrl.pathname, body.body, previewHeaders);
-      const usesPrimaryPlan = classification.route === "primary" ||
-        classification.compactionMode === "remote_v2" ||
-        (classification.route === "compact" && config.compact.upstream_mode === "primary");
-      const previewConfig = usesPrimaryPlan
-        ? primaryFailover.preview(
+      let previewConfig = config;
+      if (!isClaudeIngressPath(parsedUrl.pathname)) {
+        const classification = classifyOpenAiRequest(parsedUrl.pathname, body.body, previewHeaders);
+        const usesPrimaryPlan = classification.route === "primary" ||
+          classification.compactionMode === "remote_v2" ||
+          (classification.route === "compact" && config.compact.upstream_mode === "primary");
+        if (usesPrimaryPlan) {
+          previewConfig = primaryFailover.preview(
             config,
             primaryRouteRequestContextFromBody(
               Buffer.from(typeof body.body === "string" ? body.body : JSON.stringify(body.body ?? {})),
               previewHeaders,
               parsedUrl.pathname
             )
-          ).config
-        : config;
+          ).config;
+        }
+      }
       sendJson(res, 200, previewRoute(method, body.path, body.body, previewConfig, previewHeaders));
     } catch (error) {
       if (error instanceof TypeError) {

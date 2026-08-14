@@ -169,6 +169,66 @@ describe("routing helpers", () => {
     expect(preview.target_model).toBe("gpt-5.5-openai-compact");
     expect(preview.body_rewritten).toBe(true);
     expect(preview.stream_removed).toBe(false);
+    expect(preview.ingress_protocol).toBe("openai_responses");
+    expect(preview.upstream_protocol).toBe("openai_responses");
+    expect(preview.translation_mode).toBe("passthrough");
+  });
+
+  it("previews protocol translation for an Anthropic compact upstream", () => {
+    const preview = previewRoute(
+      "POST",
+      "/v1/responses/compact",
+      { model: "gpt-5.5", input: [] },
+      {
+        ...DEFAULT_CONFIG,
+        compact: {
+          ...DEFAULT_CONFIG.compact,
+          upstream_protocol: "anthropic_messages"
+        }
+      }
+    );
+
+    expect(preview.ingress_protocol).toBe("openai_responses");
+    expect(preview.upstream_protocol).toBe("anthropic_messages");
+    expect(preview.translation_mode).toBe("translate");
+    expect(preview.upstream_url).toBe("https://compact.example/v1/messages");
+  });
+
+  it("previews Claude Messages translation to an OpenAI Chat upstream", () => {
+    const preview = previewRoute(
+      "POST",
+      "/anthropic/v1/messages?trace=1",
+      { model: "claude-opus-4-8", messages: [{ role: "user", content: "hello" }] },
+      {
+        ...DEFAULT_CONFIG,
+        claude: {
+          ...DEFAULT_CONFIG.claude,
+          primary: {
+            ...DEFAULT_CONFIG.claude.primary,
+            base_url: "https://chat.example/v1",
+            upstream_protocol: "openai_chat"
+          },
+          model_map: {
+            ...DEFAULT_CONFIG.claude.model_map,
+            opus: "gpt-5.5-chat"
+          }
+        }
+      }
+    );
+
+    expect(preview).toMatchObject({
+      route: "claude",
+      method: "POST",
+      path: "/anthropic/v1/messages?trace=1",
+      upstream_url: "https://chat.example/v1/chat/completions?trace=1",
+      upstream_host: "chat.example",
+      ingress_protocol: "anthropic_messages",
+      upstream_protocol: "openai_chat",
+      translation_mode: "translate",
+      source_model: "claude-opus-4-8",
+      target_model: "gpt-5.5-chat",
+      body_rewritten: true
+    });
   });
 
   it("treats /v1/responses compaction_trigger requests as compact route traffic", () => {

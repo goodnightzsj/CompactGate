@@ -1,12 +1,13 @@
 # CompactGate
 
-CompactGate 是一个给 Codex CLI 用的本地代理。
+CompactGate 是一个给 Codex CLI 和 Claude Code 用的本地路由与协议适配代理。
 
 它的作用很简单：
 
 - 普通请求继续发到你的主上游
 - 只有 compact 请求单独分流
 - 必要时自动改写 compact 模型名
+- Codex Responses 与 Claude Messages 可以接入不同格式的兼容上游
 - 你还能在本地页面里看配置、健康状态和最近日志
 
 如果你现在还不清楚 “compact 请求” 是什么，也没关系。你只要记住：
@@ -21,6 +22,7 @@ CompactGate 是一个给 Codex CLI 用的本地代理。
 2. 你想把 compact 请求单独走另一家兼容 OpenAI API 的服务。
 3. 你想保留原来的 Codex 使用方式，只在中间加一层本地代理。
 4. 你想在本地看最近请求都走到了哪条路由，并保留完整请求 / 响应正文方便排查。
+5. 你的客户端和上游分别使用 Responses、Messages 或 Chat Completions，需要在代理层转换。
 
 CompactGate 就是为这个场景做的。
 
@@ -149,6 +151,7 @@ wire_api = "responses"
   "primary": {
     "base_url": "https://primary.example/v1",
     "api_key_env": "PRIMARY_API_KEY",
+    "upstream_protocol": "openai_responses",
     "model_override": "",
     "reasoning_effort": "",
     "state_domain_id": ""
@@ -156,6 +159,7 @@ wire_api = "responses"
   "compact": {
     "base_url": "https://compact.example/v1",
     "api_key_env": "COMPACT_API_KEY",
+    "upstream_protocol": "openai_responses",
     "upstream_mode": "split",
     "model_mode": "linked",
     "model_template": "{model}-openai-compact",
@@ -184,6 +188,34 @@ wire_api = "responses"
 Codex 的 `primary.base_url` 和 `compact.base_url` 表示完整上游 API 根，例如 `https://host/v1` 或 `https://host/api/paas/v4`。CompactGate 会精确移除客户端请求开头的 `/v1`，再把剩余端点拼到该 API 根，因此不会因拼接额外生成 `/v1/v1/responses`，也不会破坏 `/v4` 这类供应商版本路径。
 
 Claude 的 `claude.primary.base_url` 表示上游主机或供应商前缀，例如 `https://api.anthropic.com` 或 `https://host/anthropic`。`/v1/messages` 会追加到该前缀；如果 base URL 已以完整 `/v1` 段结尾，则拼接边界只保留一个 `/v1`。Claude Messages POST 返回 404 时，CompactGate 不会猜测并重试其他路径。
+
+### `*.upstream_protocol`
+
+主路由与压缩路由都保存明确的上游协议。可选值为：
+
+- `openai_responses`：OpenAI Responses API
+- `anthropic_messages`：Anthropic Messages API
+- `openai_chat`：OpenAI Chat Completions API
+
+旧配置不需要手工迁移：Codex 的 `primary` / `compact` 默认保持
+`openai_responses`，Claude 的 `claude.primary` / `claude.compact` 默认保持
+`anthropic_messages`。同协议请求继续直通，只有协议不同时才转换请求和响应。
+
+| 客户端入口 | Responses 上游 | Messages 上游 | Chat 上游 |
+|---|---|---|---|
+| Codex `/v1/responses` | 直通 | 转换 | 转换 |
+| Codex `/v1/responses/compact` | 直通 | 原生或可移植压缩转换 | 明确拒绝 |
+| Claude `/anthropic/v1/messages` | 转换 | 直通 | 转换 |
+| Claude `/anthropic/v1/messages/count_tokens` | 转换为 `/v1/responses/input_tokens` | 直通 | 返回 501 |
+
+协议转换覆盖文本、图片、自定义 function tools、tool result、JSON/SSE、usage
+和错误响应。Responses 与 Messages 之间还会保留可移植的 reasoning/compaction
+状态；无法安全移植的 provider-private 状态会明确失败。Chat 路径只承诺无状态的
+文本、图片和 function tool 交互；reasoning、compaction、structured output、
+provider tools 和多 choice 不会被静默丢弃，而是在请求发送前或流解析时返回明确错误。
+
+Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，CompactGate 不根据
+提示词猜测压缩流量；`claude.compact` 继续作为独立配置、凭据和 profile 元数据保存。
 
 `logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，范围是 1 到 2000，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；超过后先清空历史正文并保留元数据，仍超限时才按时间顺序删除最早的元数据行。
 
@@ -271,6 +303,7 @@ my-compact-model
 打开 `http://127.0.0.1:7865/` 后，你可以直接：
 
 - 修改主上游和 compact 上游地址
+- 为 Codex/Claude 的主路由和压缩路由选择上游协议
 - 切换 `split` / `primary` 模式
 - 切换 linked / custom 模型改写方式
 - 从已保存的 Primary/Claude 上游按需拉取模型并选择思考强度，或保留自定义兼容模型
