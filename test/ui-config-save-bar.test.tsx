@@ -14,6 +14,12 @@ describe("ConfigSaveBar", () => {
 
     expect(saveButtonTag(markup)).not.toContain("disabled");
   });
+
+  it("offers saving the current draft as a new profile", () => {
+    const markup = renderSaveBar(true);
+
+    expect(markup).toContain("另存为新档案");
+  });
 });
 
 function renderSaveBar(hasPendingChanges: boolean): string {
@@ -24,6 +30,7 @@ function renderSaveBar(hasPendingChanges: boolean): string {
       saveError={null}
       hasPendingChanges={hasPendingChanges}
       onSaveConfig={() => undefined}
+      onSaveProfileAsNew={() => Promise.resolve(true)}
     />
   );
 }

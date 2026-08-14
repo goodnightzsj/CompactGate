@@ -70,4 +70,9 @@ export type ConfigTab =
   | "portable";
 export type PublicConfigProfile = PublicConfig["profiles"][number];
 export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
+export type ProfileOverwriteCandidate = {
+  scope: ConfigProfileScope;
+  profile: PublicConfigProfile;
+  suggestedName: string;
+};
 export type ProfileDropPosition = "before" | "after";

@@ -133,6 +133,22 @@
   min-height: 42px;
 }
 
+.profile-control-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.profile-control-row .profile-save-button {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.profile-new-button {
+  white-space: nowrap;
+}
+
 .profile-empty-card {
   display: grid;
   gap: 4px;
@@ -423,6 +439,19 @@
 
 .config-save-bar.is-dirty {
   border-color: color-mix(in srgb, var(--amber) 40%, var(--hairline));
+}
+
+.config-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.config-save-actions .ghost-button {
+  white-space: nowrap;
 }
 
 .config-save-bar .btn-primary:disabled {
@@ -1033,6 +1062,46 @@
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.confirm-overwrite-name {
+  display: grid;
+  grid-column: 2;
+  gap: 6px;
+  min-width: 0;
+}
+
+.confirm-overwrite-name input {
+  min-height: 38px;
+}
+
+.confirm-field-label {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.confirm-field-error {
+  color: var(--brick);
+  font-size: 0.78rem;
+}
+
+.confirm-icon-neutral {
+  background: var(--forest-soft);
+  color: var(--forest);
+}
+
+.scope-toggle-row {
+  display: flex;
+  grid-column: 2;
+  gap: 8px;
+}
+
+.scope-toggle-row .ghost-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--hairline));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 58%, var(--hairline));
 }
 
 .custom-select {

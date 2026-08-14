@@ -28,6 +28,7 @@ type ConfigPageSaveProps = {
   saveError: string | null;
   hasPendingChanges: boolean;
   onSaveConfig: (event: React.FormEvent) => void;
+  onSaveProfileAsNew: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
 };
 
 type ConfigPageProfileProps = {
@@ -42,7 +43,7 @@ type ConfigPageProfileProps = {
   onProfileNameChange: (name: string) => void;
   onClaudeProfileNameChange: (name: string) => void;
   onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
-  onSaveProfile: (scope: ConfigProfileScope) => void | Promise<void>;
+  onSaveProfile: (scope: ConfigProfileScope, name?: string) => void | Promise<boolean>;
   onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
@@ -209,6 +210,7 @@ export function ConfigPage({
           saveError={save.saveError}
           hasPendingChanges={save.hasPendingChanges}
           onSaveConfig={save.onSaveConfig}
+          onSaveProfileAsNew={save.onSaveProfileAsNew}
         />
       </div>
     </>

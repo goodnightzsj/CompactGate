@@ -17,13 +17,13 @@ export function createConfigProfilePersistenceActions({
   setSaveState,
   scopedProfileAccessors
 }: ConfigProfilePersistenceActionContext) {
-  async function saveConfigProfile(scope: ConfigProfileScope = "codex") {
+  async function saveConfigProfile(scope: ConfigProfileScope = "codex", nameOverride?: string): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
-    const trimmedName = accessors.name.trim();
+    const trimmedName = (nameOverride ?? accessors.name).trim();
     if (!trimmedName) {
       accessors.setState("error");
       accessors.setError("请先填写配置档案名称。");
-      return;
+      return false;
     }
 
     accessors.setState("saving");
@@ -61,9 +61,11 @@ export function createConfigProfilePersistenceActions({
       accessors.setName(savedProfile?.name ?? trimmedName);
       accessors.setState("saved");
       window.setTimeout(() => accessors.setState("idle"), 1600);
+      return true;
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
+      return false;
     }
   }
 

@@ -67,6 +67,20 @@ export function profileActionLabel(state: ProfileActionState): string {
   }
 }
 
+export function nextUniqueProfileName(baseName: string, existingNames: string[]): string {
+  const existing = new Set(existingNames);
+  if (!existing.has(baseName)) {
+    return baseName;
+  }
+
+  for (let index = 2; ; index += 1) {
+    const candidate = `${baseName} ${index}`;
+    if (!existing.has(candidate)) {
+      return candidate;
+    }
+  }
+}
+
 export function isProfileActionBusy(state: ProfileActionState): boolean {
   return (
     state === "saving" ||

@@ -47,7 +47,8 @@ export function ConfigWorkspace({
         saveState: actions.saveState,
         saveError: actions.saveError,
         hasPendingChanges,
-        onSaveConfig: actions.saveConfig
+        onSaveConfig: actions.saveConfig,
+        onSaveProfileAsNew: actions.saveConfigProfile
       }}
       profiles={{
         profileName: actions.profileName,
