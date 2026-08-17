@@ -17,73 +17,9 @@ RESTART_LOG="$RUNTIME_DIR/compactgate.restart.log"
 SERVER_LOG="$RUNTIME_DIR/compactgate.server.log"
 RUNNER_SCRIPT="$RUNTIME_DIR/compactgate-runner.sh"
 
-timestamp() {
-  date "+%Y-%m-%d %H:%M:%S"
-}
-
-resolve_listen_target() {
-  local resolved
-  resolved="$(
-    PROJECT_DIR="$PROJECT_DIR" CONFIG_PATH="$CONFIG_PATH" "$NODE_BIN" --input-type=module <<'NODE'
-import fs from "node:fs";
-import path from "node:path";
-
-const projectDir = process.env.PROJECT_DIR;
-const rawConfigPath = process.env.CONFIG_PATH;
-const configPath = path.isAbsolute(rawConfigPath)
-  ? rawConfigPath
-  : path.resolve(projectDir, rawConfigPath);
-
-let listen = "127.0.0.1:7865";
-
-try {
-  const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  if (parsed && typeof parsed.listen === "string" && parsed.listen.trim().length > 0) {
-    listen = parsed.listen.trim();
-  }
-} catch {
-  // Fall back to the default target when the config is missing or malformed.
-}
-
-const index = listen.lastIndexOf(":");
-if (index <= 0) {
-  process.stdout.write("127.0.0.1\n7865\n");
-  process.exit(0);
-}
-
-const host = listen.slice(0, index).trim() || "127.0.0.1";
-const port = listen.slice(index + 1).trim() || "7865";
-process.stdout.write(`${host}\n${port}\n`);
-NODE
-  )"
-
-  HOST="$(printf '%s\n' "$resolved" | sed -n '1p')"
-  PORT="$(printf '%s\n' "$resolved" | sed -n '2p')"
-  HEALTHCHECK_HOST="$HOST"
-
-  if [[ "$HEALTHCHECK_HOST" == "0.0.0.0" || "$HEALTHCHECK_HOST" == "::" || "$HEALTHCHECK_HOST" == "[::]" ]]; then
-    HEALTHCHECK_HOST="127.0.0.1"
-  fi
-}
+source "$(dirname "$SCRIPT_PATH")/service-common.sh"
 
 resolve_listen_target
-
-list_listener_pids() {
-  lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
-}
-
-wait_for_port_to_close() {
-  local deadline=$((SECONDS + 10))
-
-  while [[ $SECONDS -lt $deadline ]]; do
-    if [[ -z "$(list_listener_pids)" ]]; then
-      return 0
-    fi
-    sleep 0.2
-  done
-
-  return 1
-}
 
 start_server() {
   cat >"$RUNNER_SCRIPT" <<RUNNER
@@ -211,35 +147,16 @@ else
   echo "Skipping build before restart."
 fi
 
-if command -v setsid >/dev/null 2>&1; then
-  setsid env \
-    PROJECT_DIR="$PROJECT_DIR" \
-    COMPACTGATE_RESTART_DELAY_SECONDS="$RESTART_DELAY_SECONDS" \
-    RUNTIME_DIR="$RUNTIME_DIR" \
-    NODE_BIN="$NODE_BIN" \
-    PATH="$PATH" \
-    HTTPS_PROXY="${HTTPS_PROXY:-}" \
-    https_proxy="${https_proxy:-}" \
-    HTTP_PROXY="${HTTP_PROXY:-}" \
-    http_proxy="${http_proxy:-}" \
-    NO_PROXY="${NO_PROXY:-}" \
-    no_proxy="${no_proxy:-}" \
-    bash "$SCRIPT_PATH" --worker >>"$RESTART_LOG" 2>&1 </dev/null &
-else
-  nohup env \
-    PROJECT_DIR="$PROJECT_DIR" \
-    COMPACTGATE_RESTART_DELAY_SECONDS="$RESTART_DELAY_SECONDS" \
-    RUNTIME_DIR="$RUNTIME_DIR" \
-    NODE_BIN="$NODE_BIN" \
-    PATH="$PATH" \
-    HTTPS_PROXY="${HTTPS_PROXY:-}" \
-    https_proxy="${https_proxy:-}" \
-    HTTP_PROXY="${HTTP_PROXY:-}" \
-    http_proxy="${http_proxy:-}" \
-    NO_PROXY="${NO_PROXY:-}" \
-    no_proxy="${no_proxy:-}" \
-    bash "$SCRIPT_PATH" --worker >>"$RESTART_LOG" 2>&1 </dev/null &
-fi
+LAUNCHER="$(command -v setsid || echo nohup)"
+
+# The worker is a direct child of this shell, so it inherits PATH and the proxy
+# variables already present in the environment. Only the shell-local values need
+# exporting. (The launchd runner script is different: launchd does not inherit
+# this environment, so it must keep re-passing PATH and the proxy variables.)
+export PROJECT_DIR RUNTIME_DIR NODE_BIN
+export COMPACTGATE_RESTART_DELAY_SECONDS="$RESTART_DELAY_SECONDS"
+
+"$LAUNCHER" bash "$SCRIPT_PATH" --worker >>"$RESTART_LOG" 2>&1 </dev/null &
 
 echo "Scheduled CompactGate restart for http://$HOST:$PORT"
 echo "Build before restart: $BUILD_BEFORE_RESTART"

@@ -33,9 +33,9 @@ describe("cross-protocol compaction", () => {
         content: [{ type: "input_text", text: "summarize this conversation" }]
       }]
     })));
-    const body = JSON.parse(converted.body.toString("utf8"));
+    const body = JSON.parse(converted.toString("utf8"));
 
-    expect(converted.stream).toBe(true);
+    expect(body.stream).toBe(true);
     expect(body).toMatchObject({
       model: "claude-opus-5",
       messages: [{ role: "user", content: [{ type: "text", text: "summarize this conversation" }] }],

@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DebugCaptureWriter } from "../src/server/debug-capture.js";
 import { RequestLogger } from "../src/server/logger.js";
-import { finalizeOpenAiProxyTransaction } from "../src/server/openai-proxy-transaction.js";
+import {
+  applyUpstreamFailureToTransaction,
+  createOpenAiProxyTransactionState,
+  finalizeOpenAiProxyTransaction
+} from "../src/server/openai-proxy-transaction.js";
 import { StudioEventBroadcaster } from "../src/server/studio-events.js";
 import { emptyUsageMetrics } from "../src/server/proxy-support.js";
 import { CodexVersionMonitor } from "../src/server/codex-version.js";
@@ -19,6 +23,45 @@ afterEach(async () => {
       await clean();
     }
   }
+});
+
+describe("applyUpstreamFailureToTransaction", () => {
+  it("salvages usage observed before a stream failure", () => {
+    const state = createOpenAiProxyTransactionState();
+    const usage = {
+      ...emptyUsageMetrics(),
+      inputTokens: 12,
+      outputTokens: 4,
+      totalTokens: 16
+    };
+
+    applyUpstreamFailureToTransaction(state, {
+      status: 200,
+      responseBody: Buffer.from("partial"),
+      responseBodyTruncated: false,
+      responseHeaders: { "content-type": "text/event-stream" },
+      firstTokenMs: 9,
+      streamSummary: {
+        sawTerminalEvent: false,
+        sawCompletedEvent: false,
+        sawFailedEvent: false,
+        sawIncompleteEvent: false,
+        sawOutputEvent: true,
+        sawDoneMarker: false,
+        terminalEvent: null,
+        eventCount: 2,
+        oversizedEventCount: 0,
+        decodeError: false,
+        errorSummary: null,
+        responseModel: "gpt-test",
+        usage
+      },
+      clientDisconnectPhase: "none",
+      kind: "upstream_stream_error"
+    });
+
+    expect(state.usage).toEqual(usage);
+  });
 });
 
 describe("finalizeOpenAiProxyTransaction", () => {

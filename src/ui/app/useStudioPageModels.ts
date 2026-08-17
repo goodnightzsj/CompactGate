@@ -14,14 +14,6 @@ import { useStaggeredLogs } from "../logs/useStaggeredLogs.js";
 import type { HealthResponse } from "../../shared/types.js";
 import type { ProfileDeleteDialogHostProps } from "./ProfileDeleteDialogHost.js";
 import type { StudioPageOutletProps } from "./StudioPageOutlet.js";
-import {
-  buildConfigPageModel,
-  buildDashboardPageModel,
-  buildHealthPageModel,
-  buildLogsPageModel,
-  buildProfileDeleteDialogModel,
-  buildRoutesPageModel
-} from "./studioPageModelBuilders.js";
 
 export function useStudioPageModels({
   currentPage,
@@ -105,47 +97,76 @@ export function useStudioPageModels({
       currentPage,
       healthMode,
       pageError,
-      healthPage: buildHealthPageModel({
+      healthPage: {
         health,
-        healthRefresh,
-        pageError
-      }),
-      dashboardPage: buildDashboardPageModel({
+        error: pageError,
+        isRefreshing: healthRefresh.isRefreshingHealth,
+        onRefresh: healthRefresh.refreshHealth
+      },
+      dashboardPage: {
         config,
-        configActions,
+        health,
+        logs,
+        logCounts: logFeed.logPage.counts,
+        saveState: configActions.saveState,
         hasPendingChanges,
-        health,
-        logFeed,
-        logs
-      }),
-      routesPage: buildRoutesPageModel({
+        onExport: configActions.exportConfig
+      },
+      routesPage: {
+        config,
+        currentModel: form.primaryModelOverride,
         compactModel: effectiveCompactModel,
-        config,
-        form,
-        health,
+        compactMode: form.upstreamMode,
+        activeRoute: previewRoute ?? latestLog?.route ?? null,
+        activeCompactionMode: previewRoute
+          ? configActions.preview?.compaction_mode ?? null
+          : latestLog?.compaction_mode ?? null,
+        activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
         latestLog,
-        previewRoute,
-        previewCompactionMode: configActions.preview?.compaction_mode ?? null
-      }),
-      configPage: buildConfigPageModel({
+        codexStatus: health?.codex ?? null
+      },
+      configPage: {
+        actions: configActions,
         config,
-        configActions,
         configTab,
         form,
         hasPendingChanges,
         linkedCompactModel,
-        setForm,
+        onFormChange: setForm,
         onConfigTabChange
-      }),
-      logsPage: buildLogsPageModel({
-        logFeed,
-        logs: displayedLogs
-      })
+      },
+      logsPage: {
+        logs: displayedLogs,
+        logCounts: logFeed.logPage.counts,
+        providerCounts: logFeed.logPage.provider_counts,
+        statusCounts: logFeed.logPage.status_counts,
+        totalLogCount: logFeed.logPage.total,
+        allLogCount: logFeed.logPage.all_total,
+        hostOptions: logFeed.hostOptions,
+        hasMoreLogs: logFeed.logPage.has_more,
+        isLoadingLogs: logFeed.isLoadingLogs,
+        isLoadingMoreLogs: logFeed.isLoadingMoreLogs,
+        routeFilter: logFeed.routeFilter,
+        statusFilter: logFeed.statusFilter,
+        hostFilter: logFeed.hostFilter,
+        searchFilter: logFeed.searchFilter,
+        onRouteFilterChange: logFeed.setRouteFilter,
+        onStatusFilterChange: logFeed.setStatusFilter,
+        onHostFilterChange: logFeed.setHostFilter,
+        onSearchFilterChange: logFeed.setSearchFilter,
+        onLoadMore: logFeed.loadMoreLogs,
+        error: logFeed.logError
+      }
     },
-    profileDeleteDialog: buildProfileDeleteDialogModel({
-      configActions,
-      healthMode
-    }),
+    profileDeleteDialog: healthMode
+      ? null
+      : {
+          candidate: configActions.profileDeleteCandidate,
+          claudeProfileState: configActions.claudeProfileState,
+          codexProfileState: configActions.profileState,
+          onCancel: () => configActions.setProfileDeleteCandidate(null),
+          onConfirm: configActions.confirmDeleteSelectedProfile
+        },
     sidebarHealth: health
   };
 }

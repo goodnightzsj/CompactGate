@@ -10,6 +10,7 @@ import { normalizeMaxObservedStreamEventBytes } from "./upstream-response-buffer
 import { mergeUsage } from "./usage-merge.js";
 import { extractUsageFromJsonText } from "./usage-record.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
+import { isRecord, readTrimmedString } from "../shared/records.js";
 
 export interface OpenAiStreamSummary {
   sawTerminalEvent: boolean;
@@ -461,8 +462,8 @@ function extractAnthropicErrorSummary(data: string): string | null {
       return null;
     }
 
-    const message = readNonEmptyString(parsed.error.message);
-    const qualifier = readNonEmptyString(parsed.error.type) ?? readNonEmptyString(parsed.error.code);
+    const message = readTrimmedString(parsed.error.message);
+    const qualifier = readTrimmedString(parsed.error.type) ?? readTrimmedString(parsed.error.code);
     const summary = message && qualifier && !message.includes(qualifier)
       ? `${message} (${qualifier})`
       : message ?? qualifier;
@@ -490,17 +491,4 @@ function readHeader(value: IncomingHttpHeaders[string]): string | null {
   }
 
   return value ?? null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const text = value.trim();
-  return text.length > 0 ? text : null;
 }

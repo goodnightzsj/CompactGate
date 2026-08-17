@@ -71,6 +71,24 @@ describe("agent launcher", () => {
     });
   });
 
+  it("rejects flags missing a value and leaves lookalike flags as agent arguments", () => {
+    expect(() => parseAgentCommand(["codex", "--url"])).toThrow("--url requires a value.");
+    expect(() => parseAgentCommand(["codex", "--url="])).toThrow("--url requires a value.");
+    expect(() => parseAgentCommand(["codex", "--profile"])).toThrow("--profile requires a value.");
+    expect(() => parseAgentCommand(["codex", "--profile="])).toThrow("--profile requires a value.");
+    // "=" inside the value survives; lookalikes and short flags stay positional.
+    expect(parseAgentCommand(["codex", "--url=http://a?x=y"]).options.serverUrl)
+      .toBe("http://a?x=y");
+    expect(parseAgentCommand(["codex", "--urlfoo", "-m", "gpt"]).args)
+      .toEqual(["--urlfoo", "-m", "gpt"]);
+    expect(parseAgentCommand(["codex", "--url", "http://a", "-m", "gpt"]))
+      .toEqual({
+        kind: "codex",
+        options: { serverUrl: "http://a", profileId: undefined },
+        args: ["-m", "gpt"]
+      });
+  });
+
   it("rejects profile IDs that could inject another header", () => {
     expect(() => buildClaudeLaunch({
       profileId: "profile\r\nx-injected: true"

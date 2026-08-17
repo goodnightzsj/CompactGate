@@ -1,7 +1,9 @@
+import type { Dispatch, SetStateAction } from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import { profileScopeState } from "../config/profile-utils.js";
+import type { ProfileDeleteCandidate } from "../config/types.js";
 import { api, errorSummary } from "../shared/api.js";
-import type { ConfigProfileCollectionActionContext } from "./configProfileActionContext.js";
+import type { ScopedProfileAccessors } from "./useScopedProfileControls.js";
 
 export function createConfigProfileCollectionActions({
   config,
@@ -9,7 +11,13 @@ export function createConfigProfileCollectionActions({
   setConfig,
   setProfileDeleteCandidate,
   scopedProfileAccessors
-}: ConfigProfileCollectionActionContext) {
+}: {
+  config: PublicConfig | null;
+  profileDeleteCandidate: ProfileDeleteCandidate | null;
+  setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
+  setProfileDeleteCandidate: Dispatch<SetStateAction<ProfileDeleteCandidate | null>>;
+  scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
+}) {
   async function reorderProfiles(scope: ConfigProfileScope, profileIds: string[]) {
     const accessors = scopedProfileAccessors(scope);
     if (!config) {

@@ -2,13 +2,11 @@ import { routeProvider } from "../../shared/route-meta.js";
 import type {
   HostLogCount,
   LogStatusKind,
-  ProviderLogCounts,
   RequestLogEntry,
   RequestLogPage,
   OpenAiCompactionMode,
   RouteKind,
-  StudioLogEvent,
-  StatusLogCounts
+  StudioLogEvent
 } from "../../shared/types.js";
 import { api } from "../shared/api.js";
 import { hasTokenDetails } from "./log-token-metrics.js";
@@ -134,13 +132,7 @@ export function buildHostFilterOptions(
     });
   }
 
-  return options.sort((left, right) => {
-    if (right.total !== left.total) {
-      return right.total - left.total;
-    }
-
-    return left.host.localeCompare(right.host);
-  });
+  return options.sort(compareHostCounts);
 }
 
 export function emptyLogPage(limit: number): RequestLogPage {
@@ -269,7 +261,7 @@ export function mergeLiveLogPage(
         .slice(0, loadedWindowSize)
     : previous.logs;
   const nextTotal = previous.total + (matchesFilter && !duplicate ? 1 : 0);
-  const nextRouteCounts = incrementRouteCounts(
+  const nextRouteCounts = bump(
     previous.counts,
     nextEntry.route,
     duplicate || !matchesRouteCountScope
@@ -282,12 +274,12 @@ export function mergeLiveLogPage(
     all_total: previous.all_total + (duplicate ? 0 : 1),
     has_more: nextLogs.length < nextTotal,
     counts: nextRouteCounts,
-    provider_counts: incrementProviderCounts(
+    provider_counts: bump(
       previous.provider_counts,
-      nextEntry.route,
+      routeProvider(nextEntry.route),
       duplicate || !matchesRouteCountScope
     ),
-    status_counts: incrementStatusCounts(
+    status_counts: bump(
       previous.status_counts,
       logStatusKind(nextEntry),
       duplicate || !matchesStatusCountScope
@@ -366,44 +358,11 @@ function logEntryMatchesSearch(entry: RequestLogEntry, searchFilter: string): bo
   ].some((value) => value !== null && value !== undefined && value.toLowerCase().includes(keyword));
 }
 
-function incrementRouteCounts(
-  counts: Record<"all" | RouteKind, number>,
-  route: RouteKind,
-  duplicate: boolean
-): Record<"all" | RouteKind, number> {
-  if (duplicate) {
-    return counts;
-  }
-
-  return {
-    ...counts,
-    all: counts.all + 1,
-    [route]: counts[route] + 1
-  };
-}
-
-function incrementProviderCounts(
-  counts: ProviderLogCounts,
-  route: RouteKind,
-  duplicate: boolean
-): ProviderLogCounts {
-  if (duplicate) {
-    return counts;
-  }
-
-  const provider = routeProvider(route);
-  return {
-    ...counts,
-    all: counts.all + 1,
-    [provider]: counts[provider] + 1
-  };
-}
-
-function incrementStatusCounts(
-  counts: StatusLogCounts,
-  status: LogStatusKind,
+function bump<K extends string>(
+  counts: Record<"all" | K, number>,
+  key: K,
   skip: boolean
-): StatusLogCounts {
+): Record<"all" | K, number> {
   if (skip) {
     return counts;
   }
@@ -411,7 +370,7 @@ function incrementStatusCounts(
   return {
     ...counts,
     all: counts.all + 1,
-    [status]: counts[status] + 1
+    [key]: counts[key] + 1
   };
 }
 
@@ -440,11 +399,13 @@ function incrementHostCounts(
     });
   }
 
-  return next.sort((left, right) => {
-    if (right.total !== left.total) {
-      return right.total - left.total;
-    }
+  return next.sort(compareHostCounts);
+}
 
-    return left.host.localeCompare(right.host);
-  });
+function compareHostCounts(left: HostLogCount, right: HostLogCount): number {
+  if (right.total !== left.total) {
+    return right.total - left.total;
+  }
+
+  return left.host.localeCompare(right.host);
 }

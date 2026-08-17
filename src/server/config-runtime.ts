@@ -11,17 +11,17 @@ import type {
   UpstreamProtocol
 } from "../shared/types.js";
 import { CLAUDE_MODEL_MAP_ROLES, CLAUDE_SCENES } from "./config-defaults.js";
-import { ConfigError } from "./config-error.js";
-import { isValidBaseUrl } from "./config-url.js";
-import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 import {
+  ConfigError,
   isRecord,
+  isValidBaseUrl,
   readBoolean,
   readChild,
   readNullableString,
   readNumber,
   readString
-} from "./config-readers.js";
+} from "./config-internals.js";
+import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_EXTRA_HEADERS = 64;
@@ -48,34 +48,21 @@ const FORBIDDEN_EXTRA_HEADERS = new Set([
 
 export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   parseListenAddress(config.listen);
-  validateBaseUrl(config.primary.base_url, "primary.base_url");
-  validateBaseUrl(config.compact.base_url, "compact.base_url");
-  validateBaseUrl(config.claude.primary.base_url, "claude.primary.base_url");
-  validateBaseUrl(config.claude.compact.base_url, "claude.compact.base_url");
-  validateUpstreamProtocol(config.primary.upstream_protocol, "primary.upstream_protocol");
-  validateUpstreamProtocol(config.compact.upstream_protocol, "compact.upstream_protocol");
-  validateUpstreamProtocol(config.claude.primary.upstream_protocol, "claude.primary.upstream_protocol");
-  validateUpstreamProtocol(config.claude.compact.upstream_protocol, "claude.compact.upstream_protocol");
-  validateEnvName(config.primary.api_key_env, "primary.api_key_env");
-  validateEnvName(config.compact.api_key_env, "compact.api_key_env");
-  validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
-  validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
-  validateExtraHeaders(config.primary.extra_headers, "primary.extra_headers");
-  validateExtraHeaders(config.compact.extra_headers, "compact.extra_headers");
-  validateExtraHeaders(config.claude.primary.extra_headers, "claude.primary.extra_headers");
-  validateExtraHeaders(config.claude.compact.extra_headers, "claude.compact.extra_headers");
-  validateProxyUrl(config.primary.proxy_url, config.primary.base_url, "primary.proxy_url");
-  validateProxyUrl(config.compact.proxy_url, config.compact.base_url, "compact.proxy_url");
-  validateProxyUrl(
-    config.claude.primary.proxy_url,
-    config.claude.primary.base_url,
-    "claude.primary.proxy_url"
-  );
-  validateProxyUrl(
-    config.claude.compact.proxy_url,
-    config.claude.compact.base_url,
-    "claude.compact.proxy_url"
-  );
+  // ponytail: per-route grouping means a config broken in two categories now surfaces the
+  // first route's error instead of the first category's. Messages are unchanged; if error
+  // precedence ever becomes contractual, hoist each check back into its own loop.
+  for (const [field, upstream] of [
+    ["primary", config.primary],
+    ["compact", config.compact],
+    ["claude.primary", config.claude.primary],
+    ["claude.compact", config.claude.compact]
+  ] as const) {
+    validateBaseUrl(upstream.base_url, `${field}.base_url`);
+    validateUpstreamProtocol(upstream.upstream_protocol, `${field}.upstream_protocol`);
+    validateEnvName(upstream.api_key_env, `${field}.api_key_env`);
+    validateExtraHeaders(upstream.extra_headers, `${field}.extra_headers`);
+    validateProxyUrl(upstream.proxy_url, upstream.base_url, `${field}.proxy_url`);
+  }
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validatePrimaryReasoningEffort(config.primary.reasoning_effort);
   validateStateDomainId(config.primary.state_domain_id);

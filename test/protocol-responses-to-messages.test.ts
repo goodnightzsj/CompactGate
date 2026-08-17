@@ -57,8 +57,7 @@ describe("Responses to Anthropic Messages conversion", () => {
       ]
     })));
 
-    expect(translated.stream).toBe(true);
-    expect(JSON.parse(translated.body.toString("utf8"))).toEqual({
+    expect(JSON.parse(translated.toString("utf8"))).toEqual({
       model: "claude-sonnet-4-5",
       system: [{ type: "text", text: "Be concise." }],
       messages: [
@@ -122,7 +121,7 @@ describe("Responses to Anthropic Messages conversion", () => {
       ]
     })));
 
-    expect(JSON.parse(translated.body.toString("utf8")).messages).toEqual([
+    expect(JSON.parse(translated.toString("utf8")).messages).toEqual([
       {
         role: "assistant",
         content: [{ type: "thinking", thinking: "Check first.", signature: "signed-state" }]

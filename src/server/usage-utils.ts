@@ -5,6 +5,8 @@ import {
   inflateSync,
   zstdDecompressSync
 } from "node:zlib";
+import { isRecord, readTrimmedString } from "../shared/records.js";
+export { isRecord, readTrimmedString };
 
 const DEFAULT_MAX_DECODED_RESPONSE_BYTES = 8 * 1024 * 1024;
 
@@ -34,9 +36,6 @@ export function parseJsonRecord(buffer: Buffer): Record<string, unknown> | null 
   }
 }
 
-export function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
 
 export function readNestedNumber(value: unknown, key: string): number | null {
   return isRecord(value) ? readNumber(value[key]) : null;
@@ -79,9 +78,6 @@ export function readHeader(value: string | string[] | number | undefined): strin
   return typeof value === "number" ? String(value) : null;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function tryDecodeResponse(buffer: Buffer, headers: IncomingHttpHeaders): Buffer | null {
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";

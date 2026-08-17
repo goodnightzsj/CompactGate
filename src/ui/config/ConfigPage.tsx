@@ -1,8 +1,6 @@
 import type * as React from "react";
 import type {
-  ConfigProfileScope,
-  PublicConfig,
-  RoutePreviewResponse
+  PublicConfig
 } from "../../shared/types.js";
 import {
   ConfigImportExportPanel
@@ -15,90 +13,31 @@ import { ConfigSaveBar } from "./ConfigSaveBar.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
 import { copyProfileRoutesToOtherDraft } from "./config-form-state.js";
-import type { ConfigFormState, ConfigTab, ProfileActionState, SaveState } from "./types.js";
+import type { ConfigFormState, ConfigTab } from "./types.js";
+import type { ConfigActions } from "../hooks/useConfigActions.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
 
-type ConfigPageModelProps = {
-  linkedCompactModel: string;
-  onUnlockCompactModel: () => void;
-  onRestoreLinkedMode: () => void;
-};
-
-type ConfigPageSaveProps = {
-  saveState: SaveState;
-  saveError: string | null;
-  hasPendingChanges: boolean;
-  onSaveConfig: (event: React.FormEvent) => void;
-  onSaveProfileAsNew: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
-};
-
-type ConfigPageProfileProps = {
-  profileName: string;
-  selectedProfileId: string;
-  profileState: ProfileActionState;
-  profileError: string | null;
-  claudeProfileName: string;
-  selectedClaudeProfileId: string;
-  claudeProfileState: ProfileActionState;
-  claudeProfileError: string | null;
-  onProfileNameChange: (name: string) => void;
-  onClaudeProfileNameChange: (name: string) => void;
-  onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
-  onSaveProfile: (scope: ConfigProfileScope, name?: string) => void | Promise<boolean>;
-  onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-  onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
-  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-  onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-};
-
-type ConfigPagePreviewProps = {
-  previewPath: string;
-  previewBody: string;
-  previewHeaders: string;
-  preview: RoutePreviewResponse | null;
-  previewError: string | null;
-  onPathChange: (path: string) => void;
-  onBodyChange: (body: string) => void;
-  onHeadersChange: (headers: string) => void;
-  onPreviewSubmit: (event: React.FormEvent) => void;
-};
-
-type ConfigPageTabProps = {
-  configTab: ConfigTab;
-  onConfigTabChange: (tab: ConfigTab) => void;
-};
-
-type ConfigPagePortableProps = {
-  onExportConfig: () => void | Promise<void>;
-  onImportConfig: (payload: Record<string, unknown>) => void | Promise<void>;
-};
-
-type ConfigPageProps = {
-  config: PublicConfig | null;
-  form: ConfigFormState;
-  model: ConfigPageModelProps;
-  save: ConfigPageSaveProps;
-  profiles: ConfigPageProfileProps;
-  previewState: ConfigPagePreviewProps;
-  tab: ConfigPageTabProps;
-  portable: ConfigPagePortableProps;
-  onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
-};
-
 export function ConfigPage({
+  actions,
   config,
+  configTab,
   form,
-  model,
-  save,
-  profiles,
-  previewState,
-  tab,
-  portable,
-  onFormChange
-}: ConfigPageProps) {
+  hasPendingChanges,
+  linkedCompactModel,
+  onFormChange,
+  onConfigTabChange
+}: {
+  actions: ConfigActions;
+  config: PublicConfig | null;
+  configTab: ConfigTab;
+  form: ConfigFormState;
+  hasPendingChanges: boolean;
+  linkedCompactModel: string;
+  onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
+  onConfigTabChange: (tab: ConfigTab) => void;
+}) {
   const importWorkflow = useConfigImportWorkflow({
-    onImportConfig: portable.onImportConfig
+    onImportConfig: actions.importConfig
   });
 
   return (
@@ -119,10 +58,10 @@ export function ConfigPage({
                 role="tab"
                 id={`config-tab-${tabItem.id}`}
                 aria-controls={`config-panel-${tabItem.id}`}
-                aria-selected={tab.configTab === tabItem.id}
+                aria-selected={configTab === tabItem.id}
                 key={tabItem.id}
-                className={`config-tab ${tab.configTab === tabItem.id ? "is-active" : ""}`}
-                onClick={() => tab.onConfigTabChange(tabItem.id)}
+                className={`config-tab ${configTab === tabItem.id ? "is-active" : ""}`}
+                onClick={() => onConfigTabChange(tabItem.id)}
               >
                 {tabItem.label}
               </button>
@@ -130,77 +69,77 @@ export function ConfigPage({
           </div>
 
           <div
-            id={`config-panel-${tab.configTab}`}
+            id={`config-panel-${configTab}`}
             role="tabpanel"
-            aria-labelledby={`config-tab-${tab.configTab}`}
+            aria-labelledby={`config-tab-${configTab}`}
           >
-            {tab.configTab === "profiles" && (
+            {configTab === "profiles" && (
               <ConfigProfilesPanel
                 config={config}
-                profileName={profiles.profileName}
-                selectedProfileId={profiles.selectedProfileId}
-                profileState={profiles.profileState}
-                profileError={profiles.profileError}
-                claudeProfileName={profiles.claudeProfileName}
-                selectedClaudeProfileId={profiles.selectedClaudeProfileId}
-                claudeProfileState={profiles.claudeProfileState}
-                claudeProfileError={profiles.claudeProfileError}
-                onProfileNameChange={profiles.onProfileNameChange}
-                onClaudeProfileNameChange={profiles.onClaudeProfileNameChange}
-                onSelectedProfileChange={profiles.onSelectedProfileChange}
-                onSaveProfile={profiles.onSaveProfile}
-                onApplyProfile={profiles.onApplyProfile}
-                onUpdateProfile={profiles.onUpdateProfile}
-                onReorderProfiles={profiles.onReorderProfiles}
-                onDuplicateProfile={profiles.onDuplicateProfile}
+                profileName={actions.profileName}
+                selectedProfileId={actions.selectedProfileId}
+                profileState={actions.profileState}
+                profileError={actions.profileError}
+                claudeProfileName={actions.claudeProfileName}
+                selectedClaudeProfileId={actions.selectedClaudeProfileId}
+                claudeProfileState={actions.claudeProfileState}
+                claudeProfileError={actions.claudeProfileError}
+                onProfileNameChange={actions.setProfileName}
+                onClaudeProfileNameChange={actions.setClaudeProfileName}
+                onSelectedProfileChange={actions.selectConfigProfile}
+                onSaveProfile={actions.saveConfigProfile}
+                onApplyProfile={actions.applySelectedProfile}
+                onUpdateProfile={actions.updateSelectedProfile}
+                onReorderProfiles={actions.reorderProfiles}
+                onDuplicateProfile={actions.duplicateSelectedProfile}
                 onCopyProfileRoutes={(profile) => onFormChange((previous) =>
                   copyProfileRoutesToOtherDraft(previous, profile)
                 )}
-                onDeleteProfile={profiles.onDeleteProfile}
+                onDeleteProfile={actions.requestDeleteSelectedProfile}
               />
             )}
 
-            {tab.configTab === "routes" && (
+            {configTab === "routes" && (
               <RouteConfigPanel config={config} form={form} onFormChange={onFormChange} />
             )}
 
-            {tab.configTab === "model" && (
+            {configTab === "model" && (
               <ConfigModelPanel
                 config={config}
                 form={form}
-                linkedCompactModel={model.linkedCompactModel}
+                linkedCompactModel={linkedCompactModel}
                 onFormChange={onFormChange}
-                onUnlockCompactModel={model.onUnlockCompactModel}
-                onRestoreLinkedMode={model.onRestoreLinkedMode}
+                onUnlockCompactModel={actions.unlockCompactModel}
+                onRestoreLinkedMode={actions.restoreLinkedMode}
               />
             )}
 
-            {tab.configTab === "logging" && (
+            {configTab === "logging" && (
               <LoggingStoragePanel form={form} onFormChange={onFormChange} />
             )}
 
-            {tab.configTab === "preview" && (
+            {configTab === "preview" && (
               <ConfigPreviewPanel
-                previewPath={previewState.previewPath}
-                previewBody={previewState.previewBody}
-                previewHeaders={previewState.previewHeaders}
-                preview={previewState.preview}
-                previewError={previewState.previewError}
-                onPathChange={previewState.onPathChange}
-                onBodyChange={previewState.onBodyChange}
-                onHeadersChange={previewState.onHeadersChange}
-                onPreviewSubmit={previewState.onPreviewSubmit}
+                previewPath={actions.previewPath}
+                previewBody={actions.previewBody}
+                previewHeaders={actions.previewHeaders}
+                preview={actions.preview}
+                previewError={actions.previewError}
+                onPathChange={actions.setPreviewPath}
+                onBodyChange={actions.setPreviewBody}
+                onHeadersChange={actions.setPreviewHeaders}
+                onPreviewSubmit={actions.previewRoute}
               />
             )}
 
-            {tab.configTab === "portable" && (
+            {configTab === "portable" && (
               <ConfigImportExportPanel
                 config={config}
                 importCandidate={importWorkflow.importCandidate}
                 importState={importWorkflow.importState}
                 importError={importWorkflow.importError}
                 onFileChange={importWorkflow.handleImportFileChange}
-                onExportConfig={portable.onExportConfig}
+                onExportConfig={actions.exportConfig}
                 onConfirmImport={importWorkflow.confirmImportConfig}
                 onClearImport={importWorkflow.clearImportCandidate}
               />
@@ -210,11 +149,11 @@ export function ConfigPage({
 
         <ConfigSaveBar
           config={config}
-          saveState={save.saveState}
-          saveError={save.saveError}
-          hasPendingChanges={save.hasPendingChanges}
-          onSaveConfig={save.onSaveConfig}
-          onSaveProfileAsNew={save.onSaveProfileAsNew}
+          saveState={actions.saveState}
+          saveError={actions.saveError}
+          hasPendingChanges={hasPendingChanges}
+          onSaveConfig={actions.saveConfig}
+          onSaveProfileAsNew={actions.saveConfigProfile}
         />
       </div>
     </>

@@ -14,6 +14,7 @@ export {
   extractRequestMetadata,
   extractSourceModel
 } from "./usage-request.js";
+import { sseDataFrames } from "./sse-frames.js";
 
 const EMPTY_USAGE = emptyUsageMetrics();
 
@@ -75,23 +76,8 @@ export function hasTokenUsage(usage: TokenUsageMetrics | null | undefined): bool
 
 function extractSseUsage(text: string): TokenUsageMetrics | null {
   let latestUsage: TokenUsageMetrics | null = null;
-  const frames = text.split(/\r?\n\r?\n/);
 
-  for (const frame of frames) {
-    const dataLines = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim());
-
-    if (dataLines.length === 0) {
-      continue;
-    }
-
-    const data = dataLines.join("\n");
-    if (data === "[DONE]") {
-      continue;
-    }
-
+  for (const data of sseDataFrames(text)) {
     const usage = extractUsageFromJsonText(data);
     if (usage) {
       latestUsage = mergeUsage(latestUsage, usage);

@@ -1,11 +1,13 @@
+import type { Dispatch, SetStateAction } from "react";
 import type { ConfigProfileScope, HealthResponse, PublicConfig } from "../../shared/types.js";
 import {
   formFromConfig,
   formToPatch
 } from "../config/config-form-state.js";
 import { profileScopeState } from "../config/profile-utils.js";
+import type { ConfigFormState, SaveState } from "../config/types.js";
 import { api, errorSummary } from "../shared/api.js";
-import type { ConfigProfilePersistenceActionContext } from "./configProfileActionContext.js";
+import type { ScopedProfileAccessors } from "./useScopedProfileControls.js";
 
 export function createConfigProfilePersistenceActions({
   config,
@@ -16,7 +18,16 @@ export function createConfigProfilePersistenceActions({
   setSaveError,
   setSaveState,
   scopedProfileAccessors
-}: ConfigProfilePersistenceActionContext) {
+}: {
+  config: PublicConfig | null;
+  form: ConfigFormState;
+  setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
+  setForm: Dispatch<SetStateAction<ConfigFormState>>;
+  setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
+  setSaveError: Dispatch<SetStateAction<string | null>>;
+  setSaveState: Dispatch<SetStateAction<SaveState>>;
+  scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
+}) {
   async function saveConfigProfile(scope: ConfigProfileScope = "codex", nameOverride?: string): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
     const trimmedName = (nameOverride ?? accessors.name).trim();

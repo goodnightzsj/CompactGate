@@ -1,4 +1,5 @@
 import type { ConfigProfileScope } from "../../shared/types.js";
+import { isRecord } from "../../shared/records.js";
 
 export type ImportState = "idle" | "ready" | "importing" | "imported" | "error";
 
@@ -91,8 +92,4 @@ function hostLabel(value: string | null): string {
   } catch {
     return "无效 URL";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

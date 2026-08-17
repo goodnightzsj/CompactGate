@@ -178,6 +178,7 @@
   display: grid;
   gap: 20px;
   align-content: start;
+  background: var(--surface);
 }
 
 .page-appear {

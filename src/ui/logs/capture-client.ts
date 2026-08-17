@@ -1,4 +1,5 @@
 import type { CaptureRecord, RequestLogEntry } from "../../shared/types.js";
+import { isRecord } from "../../shared/records.js";
 
 export class CaptureRequestError extends Error {
   constructor(
@@ -61,8 +62,4 @@ function readCaptureStatus(payload: unknown): RequestLogEntry["capture_status"] 
   return value === "none" || value === "pending" || value === "present" || value === "purged"
     ? value
     : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

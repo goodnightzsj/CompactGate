@@ -1,7 +1,4 @@
-import type {
-  PrimaryCandidate,
-  PrimaryProfileHealthSnapshot
-} from "./primary-failover-types.js";
+import type { PrimaryCandidate } from "./primary-failover-types.js";
 import {
   enforceMaxEntries,
   normalizeMaxEntries,
@@ -122,22 +119,5 @@ export class PrimaryProfileHealthStore {
         }
       }
     }
-  }
-
-  snapshot(): PrimaryProfileHealthSnapshot[] {
-    return [...this.health.entries()].map(([profileId, health]) => ({
-      profileId,
-      inFlight: health.inFlight,
-      transientFailures: health.transientFailures,
-      emptyStreamFailures: health.emptyStreamFailures,
-      cooldownUntil: health.cooldownUntil,
-      quarantineUntil: health.quarantineUntil,
-      rateLimitUntil: health.rateLimitUntil,
-      modelCooldowns: [...health.modelCooldowns.entries()].map(([model, cooldown]) => ({
-        model,
-        until: cooldown.until,
-        reason: cooldown.reason
-      }))
-    }));
   }
 }

@@ -3,7 +3,7 @@ import type {
   CompactGateConfig,
   ConfigProfileScope
 } from "../shared/types.js";
-import { ConfigError } from "./config-error.js";
+import { ConfigError } from "./config-internals.js";
 import { applyProfile } from "./config-profile-mutations.js";
 import { getProfileScopeState } from "./config-profile-scope.js";
 import { readHeaderString } from "./http-utils.js";

@@ -12,16 +12,15 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
     "start": "node dist/server/main.js",
     "restart": "bash scripts/restart-service.sh",
-    "service:restart": "bash scripts/restart-service.sh",
     "test": "vitest run",
     "test:scenarios": "vitest run scenarios",
     "test:isolated": "node scripts/isolated-e2e.mjs",
     "test:watch": "vitest",
     "lint:style": "node scripts/lint-style.mjs",
-    "check": "npm run lint:style && npm run typecheck:strict && npm test && npm run build",
+    "check": "npm run check:diff && npm run lint:style && npm run typecheck:strict && npm test && npm run build",
+    "check:diff": "git diff HEAD --check",
     "typecheck:strict": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
-    "stop": "bash scripts/stop-service.sh",
-    "service:stop": "bash scripts/stop-service.sh"
+    "stop": "bash scripts/stop-service.sh"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.3.0",

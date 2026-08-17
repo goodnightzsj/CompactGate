@@ -16,6 +16,7 @@ import type {
 import { effectiveResponseModel } from "./response-model.js";
 import { parseCodexClientUserAgent } from "./codex-version.js";
 import { readNumber as readNullableNumber } from "./usage-utils.js";
+import { isRecord } from "../shared/records.js";
 
 export { readNullableNumber };
 
@@ -301,9 +302,6 @@ export function readBodyStatus(value: unknown): RequestLogEntry["body_status"] {
   return value === "present" || value === "purged" ? value : "none";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;

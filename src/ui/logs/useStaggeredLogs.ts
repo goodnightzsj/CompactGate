@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
 export const STAGGER_MS = 150;
@@ -21,128 +21,96 @@ export function useStaggeredLogs(
   active = true
 ): RequestLogEntry[] {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
-  const displayedRef = useRef(displayed);
-  const queueRef = useRef<RequestLogEntry[]>([]);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [queueVersion, setQueueVersion] = useState(0);
-  const prevLogsRef = useRef<RequestLogEntry[]>(logs);
-  const prevQueryKeyRef = useRef(queryKey);
-  const prevSyncVersionRef = useRef(syncVersion);
-  const latestLogsRef = useRef(logs);
+  const state = useRef({
+    displayed,
+    queue: [] as RequestLogEntry[],
+    timer: null as ReturnType<typeof setTimeout> | null,
+    latestLogs: logs,
+    prevLogs: logs,
+    prevQueryKey: queryKey,
+    prevSyncVersion: syncVersion
+  }).current;
 
-  const scheduleQueueDrain = useCallback(() => {
-    if (!active || timerRef.current || queueRef.current.length === 0) {
-      return;
+  const clearTimer = () => {
+    if (state.timer) {
+      clearTimeout(state.timer);
     }
-
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      const item = queueRef.current.shift();
-      if (item) {
-        setDisplayed((prev) => {
-          const next = revealStaggeredLog(prev, latestLogsRef.current, item);
-          displayedRef.current = next;
-          return next;
-        });
-      }
-      setQueueVersion((version) => version + 1);
-    }, STAGGER_MS);
-  }, [active]);
+    state.timer = null;
+  };
 
   useLayoutEffect(() => {
-    latestLogsRef.current = logs;
-    const syncChanged = prevSyncVersionRef.current !== syncVersion;
-    const isReset = shouldResetStaggeredLogs(
-      logs,
-      prevQueryKeyRef.current,
-      queryKey
-    );
-    const isInitialSync = shouldApplyInitialStaggeredSync(
-      prevSyncVersionRef.current,
-      syncVersion,
-      prevLogsRef.current,
-      displayedRef.current
-    );
-
-    const rememberInputs = () => {
-      prevLogsRef.current = logs;
-      prevQueryKeyRef.current = queryKey;
-      prevSyncVersionRef.current = syncVersion;
-    };
-
     const replaceDisplayed = (next: RequestLogEntry[]) => {
-      displayedRef.current = next;
+      state.displayed = next;
       setDisplayed((current) => sameLogEntries(current, next) ? current : next);
     };
 
-    if (isReset || isInitialSync) {
-      queueRef.current = [];
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = null;
-      replaceDisplayed(logs);
-      rememberInputs();
-      return;
-    }
+    state.latestLogs = logs;
+    const syncChanged = state.prevSyncVersion !== syncVersion;
+    const isReset = shouldResetStaggeredLogs(logs, state.prevQueryKey, queryKey);
+    const isInitialSync = shouldApplyInitialStaggeredSync(
+      state.prevSyncVersion,
+      syncVersion,
+      state.prevLogs,
+      state.displayed
+    );
 
-    if (!active) {
-      const visibleIds = new Set(displayedRef.current.map((entry) => entry.request_id));
+    if (isReset || isInitialSync) {
+      state.queue = [];
+      clearTimer();
+      replaceDisplayed(logs);
+    } else {
+      const visibleIds = new Set(state.displayed.map((entry) => entry.request_id));
       const pendingIds = syncChanged
         ? logs
           .filter((entry) => !visibleIds.has(entry.request_id))
           .map((entry) => entry.request_id)
         : [
-          ...queueRef.current.map((entry) => entry.request_id),
-          ...selectStaggeredLogIds(prevLogsRef.current, logs, liveInsertIds)
+          ...state.queue.map((entry) => entry.request_id),
+          ...selectStaggeredLogIds(state.prevLogs, logs, liveInsertIds)
         ];
-      const plan = planStaggeredLogCatchUp(displayedRef.current, logs, pendingIds);
-      queueRef.current = plan.queue;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = null;
-      rememberInputs();
-      return;
+      const plan = planStaggeredLogCatchUp(state.displayed, logs, pendingIds);
+      state.queue = plan.queue;
+      if (active) {
+        replaceDisplayed(plan.displayed);
+      }
+      // A queued backlog is drained by the post-commit effect below; anything
+      // left pending while inactive stays frozen with no timer running.
+      if (!active || plan.queue.length === 0) {
+        clearTimer();
+      }
     }
 
-    let pendingIds: string[];
-    if (syncChanged) {
-      const visibleIds = new Set(displayedRef.current.map((entry) => entry.request_id));
-      pendingIds = logs
-        .filter((entry) => !visibleIds.has(entry.request_id))
-        .map((entry) => entry.request_id);
-    } else {
-      pendingIds = [
-        ...queueRef.current.map((entry) => entry.request_id),
-        ...selectStaggeredLogIds(prevLogsRef.current, logs, liveInsertIds)
-      ];
-    }
-
-    const plan = planStaggeredLogCatchUp(displayedRef.current, logs, pendingIds);
-    queueRef.current = plan.queue;
-    replaceDisplayed(plan.displayed);
-    if (plan.queue.length > 0) {
-      setQueueVersion((version) => version + 1);
-    } else if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-
-    rememberInputs();
+    state.prevLogs = logs;
+    state.prevQueryKey = queryKey;
+    state.prevSyncVersion = syncVersion;
   }, [active, liveInsertIds, logs, queryKey, syncVersion]);
 
+  // Intentionally dep-free: it must re-arm after every commit that reveals a row
+  // or refills the queue. Re-running is a no-op while a timer is already pending.
   useEffect(() => {
     if (!active) {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = null;
+      clearTimer();
       return;
     }
 
-    scheduleQueueDrain();
-  }, [active, queueVersion, scheduleQueueDrain]);
+    if (state.timer || state.queue.length === 0) {
+      return;
+    }
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      const item = state.queue.shift();
+      if (item) {
+        setDisplayed((previous) => {
+          const next = revealStaggeredLog(previous, state.latestLogs, item);
+          state.displayed = next;
+          return next;
+        });
+      }
+    }, STAGGER_MS);
+  });
+
+  useEffect(() => () => clearTimer(), []);
 
   return displayed;
 }

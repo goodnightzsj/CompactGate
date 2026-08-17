@@ -41,27 +41,78 @@ describe("architecture boundaries", () => {
 
   it("keeps persistence and proxy transaction helpers below orchestration modules", async () => {
     const imports = await readSourceImports();
-    const byFile = new Map(imports.map((entry) => [relativePath(entry.file), entry.imports]));
+    const known = new Set(imports.map((entry) => relativePath(entry.file)));
 
-    expect(forbiddenImports(byFile, {
-      "src/server/config.ts": ["node:fs", "node:fs/promises"],
-      "src/server/config-profile-mutations.ts": ["node:fs", "node:fs/promises"],
-      "src/server/config-profile-scope.ts": ["node:fs", "node:fs/promises"],
-      "src/server/config-profile-scope-merge.ts": ["node:fs", "node:fs/promises"],
-      "src/server/compaction-bridge.ts": ["node:zlib"],
-      "src/server/openai-proxy-transaction.ts": [
-        "./openai-proxy.js",
-        "./claude-proxy.js",
-        "./upstream-client.js"
-      ],
-      "src/server/proxy-support.ts": [
-        "./openai-proxy.js",
-        "./claude-proxy.js",
-        "./upstream-client.js"
-      ]
-    })).toEqual([]);
+    // A rule whose files were renamed or deleted would silently pass forever, so
+    // treat a rule that no longer matches reality as a failure in its own right.
+    expect(staleRules(known)).toEqual([]);
+
+    const violations = imports.flatMap((entry) => {
+      const file = relativePath(entry.file);
+      return BOUNDARY_RULES
+        .filter((rule) => rule.pattern.test(file) && !rule.exempt?.includes(file))
+        .flatMap((rule) =>
+          rule.forbidden
+            .filter((specifier) => entry.imports.includes(specifier))
+            .map((specifier) => `${file} must not import ${specifier} (${rule.reason})`)
+        );
+    });
+
+    expect(violations).toEqual([]);
   });
 });
+
+interface BoundaryRule {
+  reason: string;
+  // Matched against every current and future source file, so new files in these
+  // layers are covered without touching this table.
+  pattern: RegExp;
+  exempt?: string[];
+  forbidden: string[];
+}
+
+const BOUNDARY_RULES: BoundaryRule[] = [
+  {
+    reason: "config persistence belongs in config-file-repository.ts",
+    pattern: /^src\/server\/config/,
+    exempt: ["src/server/config-file-repository.ts"],
+    forbidden: ["node:fs", "node:fs/promises"]
+  },
+  {
+    reason: "transport compression belongs in the upstream stream helpers",
+    pattern: /^src\/server\/compaction-bridge\.ts$/,
+    forbidden: ["node:zlib"]
+  },
+  {
+    reason: "this module sits below the orchestration layer",
+    pattern: /^src\/server\/(?:openai-proxy-transaction|proxy-support)\.ts$/,
+    forbidden: ["./openai-proxy.js", "./claude-proxy.js", "./upstream-client.js"]
+  }
+];
+
+function staleRules(known: Set<string>): string[] {
+  return BOUNDARY_RULES.flatMap((rule) => {
+    const matched = [...known].filter((file) => rule.pattern.test(file));
+    const problems = matched.length === 0 ? ["matches no source file"] : [];
+
+    for (const file of rule.exempt ?? []) {
+      if (!known.has(file)) {
+        problems.push(`exempts ${file}, which no longer exists`);
+      }
+    }
+
+    for (const specifier of rule.forbidden) {
+      const resolved = matched.length === 0
+        ? null
+        : resolveLocalImport(path.join(ROOT_DIR, matched[0]), specifier);
+      if (resolved !== null && !known.has(relativePath(resolved))) {
+        problems.push(`forbids ${specifier}, which no longer exists`);
+      }
+    }
+
+    return problems.map((problem) => `rule ${rule.pattern} ${problem}; update or remove it`);
+  });
+}
 
 type Layer = "shared" | "server" | "ui" | "other";
 
@@ -122,18 +173,6 @@ function layerFor(file: string): Layer {
     return "ui";
   }
   return "other";
-}
-
-function forbiddenImports(
-  importsByFile: Map<string, string[]>,
-  rules: Record<string, string[]>
-): string[] {
-  return Object.entries(rules).flatMap(([file, forbidden]) => {
-    const imports = importsByFile.get(file) ?? [];
-    return forbidden
-      .filter((specifier) => imports.includes(specifier))
-      .map((specifier) => `${file} must not import ${specifier}`);
-  });
 }
 
 function formatViolations(

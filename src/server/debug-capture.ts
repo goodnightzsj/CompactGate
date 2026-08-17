@@ -6,6 +6,7 @@ import type {
   CaptureRecord,
   CaptureSerializedBody
 } from "../shared/types.js";
+import { isRecord } from "../shared/records.js";
 
 export type { CaptureRecord } from "../shared/types.js";
 
@@ -119,13 +120,15 @@ export class DebugCaptureWriter {
 
         const content = await handle.readFile();
         const parsed = JSON.parse(content.toString("utf8")) as unknown;
-        if (!isCaptureRecord(parsed) || parsed.request_id !== requestId) {
+        if (!isRecord(parsed) || parsed.request_id !== requestId) {
           return { status: "unavailable" };
         }
 
         return {
           status: "found",
-          record: parsed,
+          // Shape is trusted: this process wrote the file. The real gates are the
+          // managed-filename pattern, O_NOFOLLOW, isFile(), and the request_id match.
+          record: parsed as unknown as CaptureRecord,
           content
         };
       } finally {
@@ -268,98 +271,6 @@ export class DebugCaptureWriter {
 
 function isManagedCaptureFilename(filename: string): boolean {
   return CAPTURE_FILE_PATTERN.test(filename);
-}
-
-function isCaptureRecord(value: unknown): value is CaptureRecord {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.request_id === "string" &&
-    typeof value.time === "string" &&
-    typeof value.completed_at === "string" &&
-    isRouteKind(value.route) &&
-    typeof value.method === "string" &&
-    typeof value.path === "string" &&
-    typeof value.upstream_url === "string" &&
-    typeof value.upstream_host === "string" &&
-    isNullableString(value.source_model) &&
-    isNullableString(value.target_model) &&
-    (value.response_model === undefined || isNullableString(value.response_model)) &&
-    (value.response_model_source === undefined ||
-      value.response_model_source === "upstream" ||
-      value.response_model_source === "target_fallback" ||
-      value.response_model_source === "unavailable") &&
-    (value.stream_oversized_event_count === undefined ||
-      typeof value.stream_oversized_event_count === "number") &&
-    (value.upstream_response_truncated === undefined ||
-      typeof value.upstream_response_truncated === "boolean") &&
-    typeof value.compact_bridge_replacements === "number" &&
-    typeof value.compact_response_normalized === "boolean" &&
-    isNullableString(value.compact_response_normalize_reason) &&
-    isNullableString(value.compact_response_synthetic_source) &&
-    (value.compaction_diagnostics === undefined || isCompactionDiagnostics(value.compaction_diagnostics)) &&
-    isCapturePayload(value.incoming_request) &&
-    isCapturePayload(value.upstream_request) &&
-    isCaptureResponsePayload(value.upstream_response) &&
-    (value.client_response === null || isCaptureResponsePayload(value.client_response))
-  );
-}
-
-function isCapturePayload(value: unknown): boolean {
-  return isRecord(value) && isHeaders(value.headers) && isSerializedBody(value.body);
-}
-
-function isCaptureResponsePayload(value: unknown): boolean {
-  return isCapturePayload(value) && typeof (value as Record<string, unknown>).status === "number";
-}
-
-function isSerializedBody(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.byte_length === "number" &&
-    typeof value.captured_byte_length === "number" &&
-    typeof value.truncated === "boolean" &&
-    typeof value.text === "string" &&
-    typeof value.base64 === "string"
-  );
-}
-
-function isHeaders(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return Object.values(value).every(
-    (header) =>
-      typeof header === "string" ||
-      (Array.isArray(header) && header.every((item) => typeof item === "string"))
-  );
-}
-
-function isRouteKind(value: unknown): boolean {
-  return value === "primary" || value === "compact" || value === "claude";
-}
-
-function isNullableString(value: unknown): boolean {
-  return value === null || typeof value === "string";
-}
-
-function isCompactionDiagnostics(value: unknown): boolean {
-  if (!isRecord(value)) {
-    return value === null;
-  }
-  return (
-    (typeof value.implementation === "string" || value.implementation === null) &&
-    Number.isInteger(value.request_item_count) &&
-    Number.isInteger(value.request_trigger_count) &&
-    Number.isInteger(value.response_item_count)
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function serializeHeaders(

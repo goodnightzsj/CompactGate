@@ -61,9 +61,8 @@ describe("Anthropic Messages to OpenAI Responses conversion", () => {
         }
       ]
     })));
-    const body = JSON.parse(converted.body.toString("utf8"));
+    const body = JSON.parse(converted.toString("utf8"));
 
-    expect(converted.stream).toBe(true);
     expect(body).toMatchObject({
       model: "gpt-5.5",
       max_output_tokens: 6000,

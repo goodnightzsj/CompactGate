@@ -26,34 +26,32 @@ export function appendBufferedResponseChunk(
   return bufferedBytes + bytesToCopy;
 }
 
-export function normalizeMaxBufferedResponseBytes(value: number | undefined): number {
+function normalizeMaxBytes(
+  value: number | undefined,
+  fallback: number,
+  allowInfinity = false
+): number {
   if (value === undefined) {
-    return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
+    return fallback;
   }
 
-  if (value === Number.POSITIVE_INFINITY) {
+  if (allowInfinity && value === Number.POSITIVE_INFINITY) {
     return Number.POSITIVE_INFINITY;
   }
 
   if (!Number.isFinite(value)) {
-    return DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES;
+    return fallback;
   }
 
   return Math.max(0, Math.floor(value));
 }
 
-export function normalizeMaxJsonResponseBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_JSON_RESPONSE_BYTES;
-  }
+/** Unbounded buffering is opt-in via Infinity; the other caps always clamp finite. */
+export const normalizeMaxBufferedResponseBytes = (value: number | undefined): number =>
+  normalizeMaxBytes(value, DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES, true);
 
-  return Math.max(0, Math.floor(value));
-}
+export const normalizeMaxJsonResponseBytes = (value: number | undefined): number =>
+  normalizeMaxBytes(value, DEFAULT_MAX_JSON_RESPONSE_BYTES);
 
-export function normalizeMaxObservedStreamEventBytes(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) {
-    return DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES;
-  }
-
-  return Math.max(0, Math.floor(value));
-}
+export const normalizeMaxObservedStreamEventBytes = (value: number | undefined): number =>
+  normalizeMaxBytes(value, DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES);

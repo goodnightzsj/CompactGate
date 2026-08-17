@@ -12,23 +12,17 @@ import {
 import {
   PrimaryProfileHealthStore
 } from "./primary-failover-health.js";
-import { selectPrimaryCandidate } from "./primary-failover-policy.js";
 import { PrimaryStickinessStore } from "./primary-failover-stickiness.js";
 import type {
-  PrimaryProfileHealthSnapshot,
+  PrimaryCandidate,
   PrimaryRouteRequestContext,
   PrimaryRouteResult,
   PrimaryRouteSelection
 } from "./primary-failover-types.js";
 
 export { primaryRouteRequestContextFromBody } from "./primary-failover-context.js";
-export {
-  classifyPrimaryRouteResult,
-  isReconnectLikePrimaryFailure
-} from "./primary-failover-result.js";
+export { classifyPrimaryRouteResult } from "./primary-failover-result.js";
 export type {
-  PrimaryProfileHealthSnapshot,
-  PrimaryResultCategory,
   PrimaryRouteRequestContext,
   PrimaryRouteResult,
   PrimaryRouteSelection
@@ -39,6 +33,12 @@ const TRANSIENT_COOLDOWN_MS = 60 * 1000;
 const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
+const TOP_K_SCORE_WINDOW = 100;
+
+interface ScoredCandidate {
+  candidate: PrimaryCandidate;
+  score: number;
+}
 
 interface PrimaryFailoverOptions {
   now?: () => number;
@@ -61,20 +61,6 @@ export class PrimaryFailoverState {
     this.random = options.random ?? Math.random;
     this.health = new PrimaryProfileHealthStore(options.maxModelCooldownEntries);
     this.stickiness = new PrimaryStickinessStore(options.maxStickyEntries);
-  }
-
-  select(
-    config: CompactGateConfig,
-    context: PrimaryRouteRequestContext = {}
-  ): PrimaryRouteSelection {
-    return this.selectInternal(config, context, true);
-  }
-
-  preview(
-    config: CompactGateConfig,
-    context: PrimaryRouteRequestContext = {}
-  ): PrimaryRouteSelection {
-    return this.selectInternal(config, context, false);
   }
 
   reserveSelection(
@@ -227,10 +213,6 @@ export class PrimaryFailoverState {
     }
   }
 
-  getHealthSnapshot(): PrimaryProfileHealthSnapshot[] {
-    return this.health.snapshot();
-  }
-
   boundProfileId(context: PrimaryRouteRequestContext): string | null {
     const now = this.now();
     this.cleanupExpiredState(now);
@@ -242,10 +224,9 @@ export class PrimaryFailoverState {
     this.forcedProfileId = profileId;
   }
 
-  private selectInternal(
+  preview(
     config: CompactGateConfig,
-    context: PrimaryRouteRequestContext,
-    reserve: boolean
+    context: PrimaryRouteRequestContext = {}
   ): PrimaryRouteSelection {
     const candidates = codexPrimaryCandidates(config);
     const normalizedContext = normalizeRequestContext(context);
@@ -278,7 +259,7 @@ export class PrimaryFailoverState {
     }
     if (forcedCandidate) {
       const health = this.health.forProfile(forcedCandidate.id);
-      const selection = {
+      return {
         config: forcedCandidate.config,
         profileId: forcedCandidate.id,
         profileName: forcedCandidate.name,
@@ -286,16 +267,12 @@ export class PrimaryFailoverState {
         healthVersion: health.version,
         context: normalizedContext
       };
-      if (reserve) {
-        this.reserveSelection(selection, config.primary_failover.auto_schedule);
-      }
-      return selection;
     }
 
     if (!config.primary_failover.auto_schedule) {
       const selected = candidates.find((candidate) => candidate.active) ?? candidates[0];
       const health = this.health.forProfile(selected.id);
-      const selection = {
+      return {
         config: selected.config,
         profileId: selected.id,
         profileName: selected.name,
@@ -303,28 +280,14 @@ export class PrimaryFailoverState {
         healthVersion: health.version,
         context: normalizedContext
       };
-      if (reserve) {
-        this.reserveSelection(selection, false);
-      }
-      return selection;
     }
 
     const now = this.now();
     this.cleanupExpiredState(now);
 
-    const selected = selectPrimaryCandidate({
-      candidates,
-      context: normalizedContext,
-      now,
-      random: this.random,
-      healthForProfile: (profileId) => this.health.forProfile(profileId),
-      blockedUntil: (candidate, candidateContext, candidateNow) =>
-        this.health.blockedUntil(candidate.id, candidateContext.model, candidateNow),
-      stickyProfileId: (isUsable) =>
-        this.stickiness.selectProfileId(normalizedContext, isUsable)
-    });
+    const selected = this.selectCandidate(candidates, normalizedContext, now);
     const health = this.health.forProfile(selected.id);
-    const selection = {
+    return {
       config: selected.config,
       profileId: selected.id,
       profileName: selected.name,
@@ -332,14 +295,108 @@ export class PrimaryFailoverState {
       healthVersion: health.version,
       context: normalizedContext
     };
-    if (reserve) {
-      this.reserveSelection(selection, true);
+  }
+
+  private selectCandidate(
+    candidates: PrimaryCandidate[],
+    context: Required<PrimaryRouteRequestContext>,
+    now: number
+  ): PrimaryCandidate {
+    const stickyProfileId = this.stickiness.selectProfileId(
+      context,
+      (profileId) => this.usableCandidate(candidates, context, now, profileId) !== null
+    );
+    const sticky = stickyProfileId
+      ? this.usableCandidate(candidates, context, now, stickyProfileId)
+      : null;
+    if (sticky) {
+      return sticky;
     }
-    return selection;
+
+    const eligible = candidates.filter((candidate) => this.isEligible(candidate, context, now));
+    const pool = eligible.length > 0
+      ? eligible
+      : [...candidates].sort((left, right) => {
+          const leftUntil = this.health.blockedUntil(left.id, context.model, now);
+          const rightUntil = this.health.blockedUntil(right.id, context.model, now);
+          return leftUntil === rightUntil ? left.order - right.order : leftUntil - rightUntil;
+        });
+    const scored = pool
+      .map((candidate) => ({
+        candidate,
+        score: this.scoreCandidate(candidate)
+      }))
+      .sort((left, right) => right.score !== left.score
+        ? right.score - left.score
+        : left.candidate.order - right.candidate.order);
+    const best = scored[0];
+    if (!best) {
+      return candidates[0];
+    }
+
+    const topK = scored
+      .filter((candidate) => best.score - candidate.score <= TOP_K_SCORE_WINDOW)
+      .slice(0, 3);
+    return topK.length <= 1 ? best.candidate : weightedChoice(topK, this.random);
+  }
+
+  private scoreCandidate(candidate: PrimaryCandidate): number {
+    const health = this.health.forProfile(candidate.id);
+    const total = health.successes + health.failures;
+    const errorRate = total > 0 ? health.failures / total : 0;
+    const latencyPenalty = health.lastFirstTokenMs === null
+      ? 0
+      : Math.min(200, Math.round(health.lastFirstTokenMs / 100));
+
+    return (
+      10_000 -
+      candidate.order * 500 -
+      health.inFlight * 80 -
+      health.transientFailures * 40 -
+      Math.round(errorRate * 250) -
+      latencyPenalty +
+      (candidate.active ? 1_000 : 0)
+    );
+  }
+
+  private usableCandidate(
+    candidates: PrimaryCandidate[],
+    context: Required<PrimaryRouteRequestContext>,
+    now: number,
+    profileId: string
+  ): PrimaryCandidate | null {
+    const candidate = candidates.find((item) => item.id === profileId);
+    return candidate && this.isEligible(candidate, context, now) ? candidate : null;
+  }
+
+  private isEligible(
+    candidate: PrimaryCandidate,
+    context: Required<PrimaryRouteRequestContext>,
+    now: number
+  ): boolean {
+    return this.health.blockedUntil(candidate.id, context.model, now) <= now;
   }
 
   private cleanupExpiredState(now: number): void {
     this.stickiness.cleanup(now);
     this.health.cleanupExpiredModelCooldowns(now);
   }
+}
+
+function weightedChoice(
+  candidates: ScoredCandidate[],
+  random: () => number
+): PrimaryCandidate {
+  const minScore = Math.min(...candidates.map((candidate) => candidate.score));
+  const weights = candidates.map((candidate) => Math.max(1, candidate.score - minScore + 1));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = random() * total;
+  for (let index = 0; index < candidates.length; index += 1) {
+    roll -= weights[index];
+    if (roll <= 0) {
+      return candidates[index].candidate;
+    }
+  }
+
+  return candidates[0].candidate;
 }

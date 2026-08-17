@@ -6,10 +6,10 @@ import { DashboardPage } from "../dashboard/DashboardPage.js";
 import { HealthPage } from "../health/HealthPage.js";
 import { LogsPage } from "../logs/LogsPage.js";
 import { RoutesPage } from "../routes/RoutesPage.js";
-import { ConfigWorkspace, type ConfigWorkspaceProps } from "./ConfigWorkspace.js";
+import { ConfigPage } from "../config/ConfigPage.js";
 
 export type StudioPageOutletProps = {
-  configPage: ConfigWorkspaceProps;
+  configPage: ComponentProps<typeof ConfigPage>;
   currentPage: StudioPage;
   dashboardPage: ComponentProps<typeof DashboardPage>;
   healthMode: boolean;
@@ -45,7 +45,7 @@ export function StudioPageOutlet({
 
       {currentPage === "routes" && <RoutesPage {...routesPage} />}
 
-      {currentPage === "config" && <ConfigWorkspace {...configPage} />}
+      {currentPage === "config" && <ConfigPage {...configPage} />}
 
       {currentPage === "logs" && <LogsPage {...logsPage} />}
     </div>

@@ -3,6 +3,7 @@ import { inputDate, parseInputDate } from "./analytics-data.js";
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 const MAX_RANGE_DAYS = 31;
+const DAY_MOVES: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
 
 interface DatePreset {
   label: string;
@@ -83,11 +84,19 @@ export function DateRangePicker({
     });
   }, [focusedDate, open, visibleMonth]);
 
+  function focusOn(value: string) {
+    setFocusedDate(value);
+    setVisibleMonth(monthStart(value));
+  }
+
+  function exceedsCap(value: string) {
+    return parseInputDate(value) > addDays(draftFrom, MAX_RANGE_DAYS - 1);
+  }
+
   function showPicker() {
     setDraftFrom(from);
     setDraftTo(to);
-    setVisibleMonth(monthStart(to));
-    setFocusedDate(to);
+    focusOn(to);
     setSelectingEnd(false);
     setOpen(true);
   }
@@ -97,11 +106,10 @@ export function DateRangePicker({
       if (parseInputDate(value) < parseInputDate(draftFrom)) {
         setDraftFrom(value);
         setDraftTo(value);
-        setFocusedDate(value);
-        setVisibleMonth(monthStart(value));
+        focusOn(value);
         return;
       }
-      if (parseInputDate(value) > addDays(draftFrom, MAX_RANGE_DAYS - 1)) {
+      if (exceedsCap(value)) {
         return;
       }
       setDraftTo(value);
@@ -111,16 +119,14 @@ export function DateRangePicker({
       setDraftTo(value);
       setSelectingEnd(true);
     }
-    setFocusedDate(value);
-    setVisibleMonth(monthStart(value));
+    focusOn(value);
   }
 
   function selectPreset(preset: DatePreset) {
     const range = preset.range();
     setDraftFrom(range.from);
     setDraftTo(range.to);
-    setFocusedDate(range.to);
-    setVisibleMonth(monthStart(range.to));
+    focusOn(range.to);
     setSelectingEnd(false);
   }
 
@@ -131,27 +137,17 @@ export function DateRangePicker({
   }
 
   function moveFocus(days: number) {
-    const next = inputDate(addDays(focusedDate, days));
-    setFocusedDate(next);
-    setVisibleMonth(monthStart(next));
+    focusOn(inputDate(addDays(focusedDate, days)));
   }
 
   function moveMonth(months: number) {
-    const next = shiftMonth(focusedDate, months);
-    setFocusedDate(next);
-    setVisibleMonth(monthStart(next));
+    focusOn(shiftMonth(focusedDate, months));
   }
 
   function handleDayKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
-    const moves: Record<string, number> = {
-      ArrowLeft: -1,
-      ArrowRight: 1,
-      ArrowUp: -7,
-      ArrowDown: 7
-    };
-    if (event.key in moves) {
+    if (event.key in DAY_MOVES) {
       event.preventDefault();
-      moveFocus(moves[event.key]);
+      moveFocus(DAY_MOVES[event.key]);
       return;
     }
     if (event.key === "Home" || event.key === "End") {
@@ -229,7 +225,7 @@ export function DateRangePicker({
               const outside = monthStart(value) !== visibleMonth;
               const inRange = value >= draftFrom && value <= draftTo;
               const boundary = value === draftFrom || value === draftTo;
-              const disabled = selectingEnd && parseInputDate(value) > addDays(draftFrom, MAX_RANGE_DAYS - 1);
+              const disabled = selectingEnd && exceedsCap(value);
               return (
                 <span key={value} className="usage-calendar-cell" role="gridcell" aria-selected={inRange}>
                   <button
@@ -288,49 +284,35 @@ function monthStart(value: string): string {
 
 function shiftMonth(value: string, offset: number): string {
   const date = parseInputDate(value);
-  const first = new Date(date.getFullYear(), date.getMonth() + offset, 1);
-  const lastDay = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-  return inputDate(new Date(first.getFullYear(), first.getMonth(), Math.min(date.getDate(), lastDay)));
+  const last = new Date(date.getFullYear(), date.getMonth() + offset + 1, 0);
+  return inputDate(new Date(last.getFullYear(), last.getMonth(), Math.min(date.getDate(), last.getDate())));
 }
 
 function monthGrid(value: string): string[] {
-  const first = parseInputDate(value);
-  const mondayOffset = (first.getDay() + 6) % 7;
-  const start = new Date(first);
-  start.setDate(start.getDate() - mondayOffset);
-  return Array.from({ length: 42 }, (_, index) => inputDate(addDays(inputDate(start), index)));
+  const start = inputDate(addDays(value, -((parseInputDate(value).getDay() + 6) % 7)));
+  return Array.from({ length: 42 }, (_, index) => inputDate(addDays(start, index)));
+}
+
+function zhDate(value: string, options: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat("zh-CN", options).format(parseInputDate(value));
 }
 
 function formatRange(from: string, to: string): string {
-  const start = parseInputDate(from);
-  const end = parseInputDate(to);
-  const startLabel = new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(start);
-  const endLabel = new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit"
-  }).format(end);
+  const startLabel = zhDate(from, { year: "numeric", month: "2-digit", day: "2-digit" });
+  const endLabel = zhDate(to, { month: "2-digit", day: "2-digit" });
   return `${startLabel} - ${endLabel}`;
 }
 
 function formatDay(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(parseInputDate(value));
+  return zhDate(value, { month: "short", day: "numeric" });
 }
 
 function formatMonth(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" }).format(parseInputDate(value));
+  return zhDate(value, { year: "numeric", month: "long" });
 }
 
 function formatAccessibleDay(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "long"
-  }).format(parseInputDate(value));
+  return zhDate(value, { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 }
 
 function CalendarIcon() {

@@ -230,7 +230,7 @@
 }
 
 .log-table .log-row:hover td {
-  background: var(--bg-raised);
+  background: var(--surface-raised);
 }
 
 .log-table .log-row.has-error:hover td {
@@ -375,7 +375,7 @@
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .log-detail-value {
@@ -513,6 +513,8 @@
   display: grid;
   gap: 6px;
   padding: 12px 14px;
+  border-color: var(--hairline);
+  background: var(--surface);
 }
 
 .token-tooltip-title {
@@ -675,7 +677,7 @@
   border-radius: 0;
   background: none;
   box-shadow: none;
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .log-table-full .log-table-body {
@@ -746,8 +748,8 @@
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--paper-lift) 76%, transparent), transparent),
-    color-mix(in srgb, var(--paper-warm) 78%, var(--paper-lift));
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 76%, transparent), transparent),
+    color-mix(in srgb, var(--paper-warm) 78%, var(--surface));
 }
 
 .log-table-full .log-detail-section.is-primary,
@@ -812,7 +814,7 @@
   padding: 0 8px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: var(--paper-lift);
+  background: var(--surface);
   color: var(--ink);
   font-size: 0.68rem;
   font-weight: 800;
@@ -845,7 +847,7 @@
   padding: 0 8px;
   border: 1px solid var(--hairline);
   border-radius: 999px;
-  background: var(--paper-lift);
+  background: var(--surface);
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 800;
@@ -1003,7 +1005,7 @@
   align-items: center;
   padding: 0 7px;
   border-radius: 999px;
-  background: var(--paper-lift);
+  background: var(--surface);
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.68rem;
@@ -1127,7 +1129,7 @@
   align-items: center;
   padding: 0 7px;
   border-radius: 999px;
-  background: var(--paper-lift);
+  background: var(--surface);
   color: var(--muted);
   font-size: 0.66rem;
   font-weight: 800;

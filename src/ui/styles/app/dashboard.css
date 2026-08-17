@@ -28,7 +28,7 @@
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .stat-card-value {
@@ -51,7 +51,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--paper-warm);
+  background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   margin-top: 10px;

@@ -2,6 +2,8 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:
 import { gunzipSync, zstdDecompressSync } from "node:zlib";
 import { ConfigError } from "./config.js";
 import type { LogStatusKind, RouteKind } from "../shared/types.js";
+import { isRecord, readTrimmedString } from "../shared/records.js";
+export { isRecord, readTrimmedString };
 
 const DEFAULT_MAX_DECODED_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -148,9 +150,6 @@ export function readHeaderString(value: string | string[] | undefined): string |
   return text && text.length > 0 ? text : null;
 }
 
-export function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
 
 export function endpointFromPath(pathname: string): string {
   if (pathname === "/v1") {
@@ -281,8 +280,4 @@ export function looksLikeZstd(buffer: Buffer): boolean {
     buffer[1] === 0xb5 &&
     buffer[2] === 0x2f &&
     buffer[3] === 0xfd;
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

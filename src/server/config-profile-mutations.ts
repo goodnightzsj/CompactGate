@@ -6,16 +6,16 @@ import type {
 } from "../shared/types.js";
 import {
   cloneProfile,
-  cloneProfileConfig
-} from "./config-clone.js";
-import { ConfigError } from "./config-error.js";
+  cloneProfileConfig,
+  ConfigError,
+  isRecord
+} from "./config-internals.js";
 import {
   createProfileId,
-  createScopedProfileConfig,
+  extractScopedProfileConfig,
   getProfileScopeState,
   mergeRuntimeForProfileScope,
   profileConfigToRuntime,
-  updateScopedProfileConfig,
   validateProfileConfig,
   withProfileScope
 } from "./config-profile-scope.js";
@@ -23,8 +23,7 @@ import {
   routeUrlEntriesFromProfileRuntime,
   withRecordedRouteUrlPresets
 } from "./config-route-presets.js";
-import { isRecord } from "./config-readers.js";
-import { validateRuntimeConfig } from "./config-runtime.js";
+import { mergeRuntimeConfig, validateRuntimeConfig } from "./config-runtime.js";
 
 export function saveProfile(
   current: CompactGateConfig,
@@ -38,7 +37,7 @@ export function saveProfile(
 
     const trimmedName = requireProfileName(name);
     const now = new Date().toISOString();
-    const profileConfig = createScopedProfileConfig(current, patch, scope);
+    const profileConfig = extractScopedProfileConfig(mergeRuntimeConfig(current, patch), scope);
     validateProfileConfig(profileConfig, scope);
 
     const scopeState = getProfileScopeState(current, scope);
@@ -91,7 +90,10 @@ export function updateProfile(
     }
 
     const now = new Date().toISOString();
-    const profileConfig = updateScopedProfileConfig(profile.config, patch, scope);
+    const profileConfig = extractScopedProfileConfig(
+      mergeRuntimeConfig(profileConfigToRuntime(profile.config), patch),
+      scope
+    );
     validateProfileConfig(profileConfig, scope);
     const nextConfig = withProfileScope(current, scope, {
       profiles: existingProfiles.map((item) =>

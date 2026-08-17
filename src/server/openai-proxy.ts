@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type {
   CompactGateConfig,
@@ -29,7 +29,8 @@ import { normalizeRequestContext } from "./primary-failover-context.js";
 import { readResponseId } from "./primary-failover-result.js";
 import {
   buildCompactOpenAiProxyPlan,
-  buildPrimaryOpenAiProxyPlan
+  buildPrimaryOpenAiProxyPlan,
+  type OpenAiProxyPlan
 } from "./openai-proxy-plan.js";
 import {
   resolveRequestScopedProfile,
@@ -37,8 +38,10 @@ import {
 } from "./request-profile.js";
 import {
   applyOpenAiProxyUpstreamResult,
+  applyUpstreamFailureToTransaction,
   createOpenAiProxyTransactionState,
-  finalizeOpenAiProxyTransaction
+  finalizeFromTransaction,
+  type OpenAiProxyTransactionState
 } from "./openai-proxy-transaction.js";
 import {
   classifyOpenAiRequest,
@@ -63,7 +66,9 @@ import {
   summarizeOpenAiStreamFailure,
   summarizeAnthropicStreamFailure,
   UpstreamRequestError,
-  writeBufferedUpstreamResult
+  writeBufferedUpstreamResult,
+  type BufferedUpstreamResult,
+  type UpstreamResponseTransform
 } from "./upstream-client.js";
 import { ProtocolConversionError } from "./protocol-conversion.js";
 import {
@@ -375,32 +380,15 @@ async function proxyPrimaryRequest(
       retryHttpStatuses: classification.route === "compact" ? [502, 503, 504] : undefined,
       maxHttpStatusRetries: classification.route === "compact" ? 3 : 0,
       streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
-      responseTransform: plan.upstreamProtocol === "anthropic_messages"
-        ? classification.compactionMode === "remote_v2"
-          ? createAnthropicToResponsesCompactionResponseTransform
-          : createAnthropicToResponsesResponseTransform
-        : plan.compactionFallback === "chat_synthesis"
-          ? (status, headers) => createChatToResponsesCompactionResponseTransform(
-              status,
-              headers,
-              transaction.requestType === "stream"
-            )
-        : plan.upstreamProtocol === "openai_chat"
-          ? createChatToResponsesResponseTransform
-          : undefined
+      responseTransform: pickResponseTransform(
+        plan,
+        classification.compactionMode === "remote_v2",
+        transaction
+      )
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    const responseWasTransformed = result.clientResponseHeaders !== null &&
-      result.clientResponseHeaders !== undefined;
-    const clientResult = responseWasTransformed
-      ? { ...result, streamSummary: result.clientStreamSummary ?? null }
-      : result;
-    transaction.streamOutcome = responseWasTransformed
-      ? classifyOpenAiUpstreamResult(clientResult)
-      : plan.upstreamProtocol === "anthropic_messages"
-        ? classifyAnthropicUpstreamResult(result)
-        : classifyOpenAiUpstreamResult(result);
+    const { responseWasTransformed, clientResult } = applyClientResult(transaction, result, plan);
     const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
@@ -457,7 +445,9 @@ async function proxyPrimaryRequest(
       }, Date.now(), Math.round((performance.timeOrigin + startedAt) * 1_000));
     }
   } catch (error) {
-    applyUpstreamFailureToTransaction(transaction, error);
+    if (error instanceof UpstreamRequestError) {
+      applyUpstreamFailureToTransaction(transaction, error.details);
+    }
     transaction.status = error instanceof ProtocolConversionError
       ? error.status
       : error instanceof RequestBodyTooLargeError
@@ -487,49 +477,23 @@ async function proxyPrimaryRequest(
       });
     }
 
-      await finalizeOpenAiProxyTransaction({
+      await finalizeFromTransaction(transaction, {
         logger,
         captureWriter,
         studioEvents,
         codexVersionMonitor,
-      route,
-      compactionMode: classification.compactionMode,
-      compactionDetectionSource: classification.detectionSource,
-      req,
-      url,
-      status: transaction.status,
-      upstreamStatus: transaction.upstreamStatus,
-      streamTerminalEvent: transaction.streamTerminalEvent,
-      clientDisconnectPhase: transaction.clientDisconnectPhase,
-      streamOutcome: transaction.streamOutcome,
-      streamOversizedEventCount: transaction.streamOversizedEventCount,
-      upstreamResponseTruncated: transaction.responseBodyTruncated,
-      startedAt,
-      startedAtIso,
-      requestMetadata: transaction.requestMetadata,
-      requestType: transaction.requestType,
-      upstream,
-      requestId,
-      sourceModel: transaction.sourceModel,
-      targetModel: transaction.targetModel,
-      firstTokenMs: transaction.firstTokenMs,
-      usage: transaction.usage,
-      errorSummary: transaction.errorSummary,
-      providerStatePortability,
-      compactBridgeReplacements: transaction.compactBridgeReplacements,
-      rawBody: transaction.rawBody,
-      requestHeaders: transaction.requestHeaders,
-      upstreamBody: transaction.upstreamBody,
-      responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders,
-      clientResponseBody: transaction.clientResponseBody,
-      clientResponseHeaders: transaction.clientResponseHeaders,
-      persistBody: config.logging.persist_body,
-      compactResponseNormalized: transaction.compactResponseNormalized,
-      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
-      sensitiveHeaderNames: transaction.sensitiveHeaderNames
-    });
+        route,
+        compactionMode: classification.compactionMode,
+        compactionDetectionSource: classification.detectionSource,
+        req,
+        url,
+        startedAt,
+        startedAtIso,
+        upstream,
+        requestId,
+        providerStatePortability,
+        persistBody: config.logging.persist_body
+      });
   }
 }
 
@@ -809,58 +773,35 @@ async function proxyCompactRequest(
       retryHttpStatuses: [502, 503, 504],
       maxHttpStatusRetries: 3,
       streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
-      responseTransform: plan.upstreamProtocol === "anthropic_messages"
-        ? classification.compactionMode === "remote_v1"
-          ? createAnthropicToResponsesCompactionResponseTransform
-          : createAnthropicToResponsesResponseTransform
-        : plan.compactionFallback === "chat_synthesis"
-          ? (status, headers) => createChatToResponsesCompactionResponseTransform(
-              status,
-              headers,
-              transaction.requestType === "stream"
-            )
-        : plan.upstreamProtocol === "openai_chat"
-          ? createChatToResponsesResponseTransform
-          : undefined
+      responseTransform: pickResponseTransform(
+        plan,
+        classification.compactionMode === "remote_v1",
+        transaction
+      )
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    const responseWasTransformed = result.clientResponseHeaders !== null &&
-      result.clientResponseHeaders !== undefined;
-    const clientResult = responseWasTransformed
-      ? { ...result, streamSummary: result.clientStreamSummary ?? null }
-      : result;
-    transaction.streamOutcome = responseWasTransformed
-      ? classifyOpenAiUpstreamResult(clientResult)
-      : plan.upstreamProtocol === "anthropic_messages"
-        ? classifyAnthropicUpstreamResult(result)
-        : classifyOpenAiUpstreamResult(result);
+    const { responseWasTransformed, clientResult } = applyClientResult(transaction, result, plan);
     const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     // 远程压缩归一化仅用于桥接存储和诊断日志,不写回客户端。本地摘要压缩返回普通
     // Responses 流,不能把它误记为缺失 compaction output。
-    const normalizedResponse = classification.compactionMode === "remote_v1"
-      ? plan.upstreamProtocol === "openai_responses"
-        ? normalizeCompactResponse({
-            status: transaction.status,
-            responseBody: transaction.responseBody,
-            responseHeaders: transaction.responseHeaders,
-            requestBody: transaction.upstreamBody
-          })
-        : {
-            body: clientResponseBody,
-            headers: clientResponseHeaders,
-            normalized: false,
-            reason: null,
-            syntheticSource: null
-          }
-      : {
-          body: clientResponseBody,
-          headers: clientResponseHeaders,
-          normalized: false,
-          reason: null,
-          syntheticSource: null
-        };
+    const unnormalizedResponse = {
+      body: clientResponseBody,
+      headers: clientResponseHeaders,
+      normalized: false,
+      reason: null,
+      syntheticSource: null
+    };
+    const normalizedResponse = classification.compactionMode === "remote_v1" &&
+      plan.upstreamProtocol === "openai_responses"
+      ? normalizeCompactResponse({
+          status: transaction.status,
+          responseBody: transaction.responseBody,
+          responseHeaders: transaction.responseHeaders,
+          requestBody: transaction.upstreamBody
+        })
+      : unnormalizedResponse;
     transaction.compactResponseNormalized = normalizedResponse.normalized;
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
@@ -900,7 +841,9 @@ async function proxyCompactRequest(
       }
     }
   } catch (error) {
-    applyUpstreamFailureToTransaction(transaction, error);
+    if (error instanceof UpstreamRequestError) {
+      applyUpstreamFailureToTransaction(transaction, error.details);
+    }
     transaction.status = error instanceof ProtocolConversionError
       ? error.status
       : error instanceof RequestBodyTooLargeError
@@ -931,7 +874,7 @@ async function proxyCompactRequest(
         usage: transaction.usage
       });
     }
-    await finalizeOpenAiProxyTransaction({
+    await finalizeFromTransaction(transaction, {
       logger,
       captureWriter,
       studioEvents,
@@ -941,39 +884,63 @@ async function proxyCompactRequest(
       compactionDetectionSource: classification.detectionSource,
       req,
       url,
-      status: transaction.status,
-      upstreamStatus: transaction.upstreamStatus,
-      streamTerminalEvent: transaction.streamTerminalEvent,
-      clientDisconnectPhase: transaction.clientDisconnectPhase,
-      streamOutcome: transaction.streamOutcome,
-      streamOversizedEventCount: transaction.streamOversizedEventCount,
-      upstreamResponseTruncated: transaction.responseBodyTruncated,
       startedAt,
       startedAtIso,
-      requestMetadata: transaction.requestMetadata,
-      requestType: transaction.requestType,
       upstream,
       requestId,
-      sourceModel: transaction.sourceModel,
-      targetModel: transaction.targetModel,
-      firstTokenMs: transaction.firstTokenMs,
-      usage: transaction.usage,
-      errorSummary: transaction.errorSummary,
-      compactBridgeReplacements: transaction.compactBridgeReplacements,
-      rawBody: transaction.rawBody,
-      requestHeaders: transaction.requestHeaders,
-      upstreamBody: transaction.upstreamBody,
-      responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders,
-      clientResponseBody: transaction.clientResponseBody,
-      clientResponseHeaders: transaction.clientResponseHeaders,
-      persistBody: config.logging.persist_body,
-      compactResponseNormalized: transaction.compactResponseNormalized,
-      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
-      sensitiveHeaderNames: transaction.sensitiveHeaderNames
+      persistBody: config.logging.persist_body
     });
   }
+}
+
+/**
+ * Picks the upstream->Responses body transform for a plan. `nativeCompaction`
+ * selects the compaction variant on the Anthropic path (the caller decides which
+ * compaction mode counts as native). `transaction` is read lazily inside the
+ * returned factory so the stream flag reflects the request at response time.
+ */
+function pickResponseTransform(
+  plan: Pick<OpenAiProxyPlan, "upstreamProtocol" | "compactionFallback">,
+  nativeCompaction: boolean,
+  transaction: OpenAiProxyTransactionState
+): ((status: number, headers: IncomingHttpHeaders) => UpstreamResponseTransform | null) | undefined {
+  if (plan.upstreamProtocol === "anthropic_messages") {
+    return nativeCompaction
+      ? createAnthropicToResponsesCompactionResponseTransform
+      : createAnthropicToResponsesResponseTransform;
+  }
+  if (plan.compactionFallback === "chat_synthesis") {
+    return (status, headers) => createChatToResponsesCompactionResponseTransform(
+      status,
+      headers,
+      transaction.requestType === "stream"
+    );
+  }
+  return plan.upstreamProtocol === "openai_chat" ? createChatToResponsesResponseTransform : undefined;
+}
+
+/**
+ * Records the stream outcome for a completed upstream result and returns the
+ * client-facing view of it. A transformed response is classified with the
+ * client-side stream summary; an untransformed one is classified against the
+ * protocol actually spoken upstream.
+ */
+function applyClientResult(
+  transaction: OpenAiProxyTransactionState,
+  result: BufferedUpstreamResult,
+  plan: Pick<OpenAiProxyPlan, "upstreamProtocol">
+): { responseWasTransformed: boolean; clientResult: BufferedUpstreamResult } {
+  const responseWasTransformed = result.clientResponseHeaders !== null &&
+    result.clientResponseHeaders !== undefined;
+  const clientResult = responseWasTransformed
+    ? { ...result, streamSummary: result.clientStreamSummary ?? null }
+    : result;
+  transaction.streamOutcome = responseWasTransformed
+    ? classifyOpenAiUpstreamResult(clientResult)
+    : plan.upstreamProtocol === "anthropic_messages"
+      ? classifyAnthropicUpstreamResult(result)
+      : classifyOpenAiUpstreamResult(result);
+  return { responseWasTransformed, clientResult };
 }
 
 function compactionResponseHeaders(
@@ -993,30 +960,6 @@ function requestProfileResponseHeaders(
         "x-compactgate-profile-source": requestProfile.source
       }
     : {};
-}
-
-function applyUpstreamFailureToTransaction(
-  transaction: ReturnType<typeof createOpenAiProxyTransactionState>,
-  error: unknown
-): void {
-  if (!(error instanceof UpstreamRequestError)) {
-    return;
-  }
-
-  transaction.upstreamStatus = error.details.status;
-  transaction.responseBody = error.details.responseBody;
-  transaction.responseHeaders = error.details.responseHeaders;
-  transaction.firstTokenMs = error.details.firstTokenMs;
-  transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
-  transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
-  transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
-  transaction.responseBodyTruncated = error.details.responseBodyTruncated;
-  transaction.responseModel = error.details.streamSummary?.responseModel ?? transaction.responseModel;
-  transaction.streamOutcome = error.details.kind === "client_cancel"
-    ? error.details.clientDisconnectPhase === "after_terminal"
-      ? "client_cancel_after_terminal"
-      : "client_cancel"
-    : error.details.kind;
 }
 
 function applyCachedCompactResponse(

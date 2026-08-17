@@ -3,6 +3,7 @@ import type {
   ConfigProfileScope,
   PublicConfig,
   PublicConfigProfile,
+  PublicUpstreamConfig,
   SavedConfigProfile,
   UpstreamConfig
 } from "../shared/types.js";
@@ -10,9 +11,9 @@ import {
   getProfileScopeState,
   profileConfigToRuntime
 } from "./config-profile-scope.js";
-import { resolveRouteCredential } from "./credentials.js";
+import { resolveRouteCredential, type ResolvedCredential } from "./credentials.js";
 import { publicRouteUrlPreset } from "./config-route-presets.js";
-import { safeHost } from "./config-url.js";
+import { safeHost } from "./config-internals.js";
 
 export function buildPublicConfig({
   config,
@@ -23,75 +24,35 @@ export function buildPublicConfig({
   configPath: string;
   lastSavedAt: string | null;
 }): PublicConfig {
-  const primaryCredential = resolveRouteCredential("primary", config);
-  const compactCredential = resolveRouteCredential("compact", config);
-  const claudePrimaryCredential = resolveRouteCredential("claude_primary", config);
-  const claudeCompactCredential = resolveRouteCredential("claude_compact", config);
   const codexProfileScope = publicProfileScope(config, "codex");
   const claudeProfileScope = publicProfileScope(config, "claude");
 
   return {
     primary: {
-      base_url: config.primary.base_url,
-      api_key_env: config.primary.api_key_env,
-      host: safeHost(config.primary.base_url),
-      ...publicTransport(config.primary),
-      upstream_protocol: config.primary.upstream_protocol,
-      stored_api_key: directApiKeyConfigured(config.primary.api_key),
-      api_key_configured: primaryCredential.apiKeyConfigured,
-      api_key_source: primaryCredential.apiKeySource,
-      active_api_key_env: primaryCredential.activeApiKeyEnv,
-      active_credential_scope: primaryCredential.activeCredentialScope,
+      ...publicUpstream(config.primary, resolveRouteCredential("primary", config)),
       model_override: config.primary.model_override ?? "",
       reasoning_effort: config.primary.reasoning_effort,
       state_domain_id: config.primary.state_domain_id
     },
     compact: {
-      base_url: config.compact.base_url,
-      api_key_env: config.compact.api_key_env,
-      host: safeHost(config.compact.base_url),
-      ...publicTransport(config.compact),
-      upstream_protocol: config.compact.upstream_protocol,
-      stored_api_key: directApiKeyConfigured(config.compact.api_key),
-      api_key_configured: compactCredential.apiKeyConfigured,
-      api_key_source: compactCredential.apiKeySource,
-      active_api_key_env: compactCredential.activeApiKeyEnv,
+      ...publicUpstream(config.compact, resolveRouteCredential("compact", config)),
       upstream_mode: config.compact.upstream_mode,
       model_mode: config.compact.model_mode,
       model_template: config.compact.model_template,
-      model_override: config.compact.model_override,
-      active_credential_scope: compactCredential.activeCredentialScope
+      model_override: config.compact.model_override
     },
     claude: {
       primary: {
-        base_url: config.claude.primary.base_url,
-        api_key_env: config.claude.primary.api_key_env,
-        host: safeHost(config.claude.primary.base_url),
-        ...publicTransport(config.claude.primary),
-        upstream_protocol: config.claude.primary.upstream_protocol,
-        stored_api_key: directApiKeyConfigured(config.claude.primary.api_key),
-        api_key_configured: claudePrimaryCredential.apiKeyConfigured,
-        api_key_source: claudePrimaryCredential.apiKeySource,
-        active_api_key_env: claudePrimaryCredential.activeApiKeyEnv,
-        active_credential_scope: claudePrimaryCredential.activeCredentialScope,
+        ...publicUpstream(config.claude.primary, resolveRouteCredential("claude_primary", config)),
         model_override: config.claude.primary.model_override
       },
       compact: {
-        base_url: config.claude.compact.base_url,
-        api_key_env: config.claude.compact.api_key_env,
-        host: safeHost(config.claude.compact.base_url),
-        ...publicTransport(config.claude.compact),
-        upstream_protocol: config.claude.compact.upstream_protocol,
-        stored_api_key: directApiKeyConfigured(config.claude.compact.api_key),
-        api_key_configured: claudeCompactCredential.apiKeyConfigured,
-        api_key_source: claudeCompactCredential.apiKeySource,
-        active_api_key_env: claudeCompactCredential.activeApiKeyEnv,
-        active_credential_scope: claudeCompactCredential.activeCredentialScope,
+        ...publicUpstream(config.claude.compact, resolveRouteCredential("claude_compact", config)),
         upstream_mode: config.claude.compact.upstream_mode,
         model_override: config.claude.compact.model_override
       },
       model_map: { ...config.claude.model_map },
-      scene_map: JSON.parse(JSON.stringify(config.claude.scene_map)),
+      scene_map: structuredClone(config.claude.scene_map),
       long_context_bytes: config.claude.long_context_bytes
     },
     listen: config.listen,
@@ -163,17 +124,24 @@ function directApiKeyConfigured(value: string): boolean {
   return value.trim().length > 0;
 }
 
-function publicTransport(upstream: UpstreamConfig): {
-  extra_header_names: string[];
-  proxy_configured: boolean;
-  proxy_host: string | null;
-  proxy_authenticated: boolean;
-} {
+function publicUpstream(
+  upstream: UpstreamConfig,
+  credential: ResolvedCredential
+): Omit<PublicUpstreamConfig, "model_override"> {
   const proxy = URL.parse(upstream.proxy_url);
   return {
+    base_url: upstream.base_url,
+    api_key_env: upstream.api_key_env,
+    host: safeHost(upstream.base_url),
     extra_header_names: Object.keys(upstream.extra_headers).sort(),
     proxy_configured: upstream.proxy_url.trim().length > 0,
     proxy_host: proxy?.host ?? null,
-    proxy_authenticated: Boolean(proxy && (proxy.username || proxy.password))
+    proxy_authenticated: Boolean(proxy && (proxy.username || proxy.password)),
+    upstream_protocol: upstream.upstream_protocol,
+    stored_api_key: directApiKeyConfigured(upstream.api_key),
+    api_key_configured: credential.apiKeyConfigured,
+    api_key_source: credential.apiKeySource,
+    active_api_key_env: credential.activeApiKeyEnv,
+    active_credential_scope: credential.activeCredentialScope
   };
 }

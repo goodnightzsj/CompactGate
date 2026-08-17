@@ -213,7 +213,7 @@ describe("DebugCaptureWriter safe reads", () => {
       dir,
       `compactgate-capture-0001-primary-v1-responses-${requestId}.json`
     );
-    await writeFile(capturePath, JSON.stringify({ request_id: requestId }));
+    await writeFile(capturePath, `{"request_id": "${requestId}"`);
 
     await expect(writer.readCapture(capturePath, requestId)).resolves.toEqual({
       status: "unavailable"

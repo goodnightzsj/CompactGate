@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
@@ -7,14 +8,15 @@ import type {
   RouteUrlPresetKind,
   UpstreamConfig
 } from "../shared/types.js";
-import { ConfigError } from "./config-error.js";
 import {
+  ConfigError,
   isRecord,
+  isValidBaseUrl,
   readChild,
   readNumber,
-  readString
-} from "./config-readers.js";
-import { isValidBaseUrl, safeHost } from "./config-url.js";
+  readString,
+  safeHost
+} from "./config-internals.js";
 
 const ROUTE_URL_PRESET_KINDS: RouteUrlPresetKind[] = [
   "codex_primary",
@@ -311,7 +313,7 @@ function createRouteUrlPresetId(kind: RouteUrlPresetKind, baseUrl: string): stri
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "url";
-  return `${kind}-${slug}-${stableHash(baseUrl)}`;
+  return `${kind}-${slug}-${hash("sha1", baseUrl, "hex").slice(0, 8)}`;
 }
 
 function routeUrlPresetKey(kind: RouteUrlPresetKind, baseUrl: string): string {
@@ -320,14 +322,6 @@ function routeUrlPresetKey(kind: RouteUrlPresetKind, baseUrl: string): string {
 
 function normalizeRouteUrl(value: string): string {
   return value.trim().replace(/\/+$/g, "");
-}
-
-function stableHash(value: string): string {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-  return hash.toString(36);
 }
 
 function directApiKeyConfigured(value: string): boolean {

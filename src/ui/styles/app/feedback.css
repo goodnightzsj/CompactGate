@@ -6,7 +6,7 @@
 .empty-state {
   padding: 48px 24px;
   text-align: center;
-  color: var(--muted);
+  color: var(--ink);
   border: 2px dashed var(--hairline);
   border-radius: var(--radius-md);
   background: var(--surface);

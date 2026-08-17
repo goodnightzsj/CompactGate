@@ -3,7 +3,6 @@ import type {
   CompactGateConfig,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
-  RouteKind,
   RoutePreviewResponse
 } from "../shared/types.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
@@ -122,16 +121,6 @@ export function compactionImplementation(
     return "responses_compact_endpoint";
   }
   return mode === "remote_v2" ? "responses_compaction_v2" : "local";
-}
-
-/** Compatibility wrapper for callers that only need the legacy route kind. */
-export function routeForPath(pathname: string, body?: unknown): RouteKind {
-  return classifyOpenAiRequest(pathname, body).route;
-}
-
-/** Compatibility wrapper for the former body-aware predicate. */
-export function isBodyAwareCompactRequest(pathname: string, body?: unknown): boolean {
-  return pathname === "/v1/responses" && classifyOpenAiRequest(pathname, body).route === "compact";
 }
 
 export function isV1Path(pathname: string): boolean {

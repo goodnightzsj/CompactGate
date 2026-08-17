@@ -11,13 +11,11 @@ export type ProviderStateErrorCode =
   | "previous_response_not_found";
 
 export interface ProviderStateAnalysis {
-  parseable: boolean;
   reasoningItemCount: number;
   encryptedReasoningItemCount: number;
   invalidEncryptedReasoningItemCount: number;
   compactionItemCount: number;
   previousResponseIdPresent: boolean;
-  promptCacheKeyPresent: boolean;
   hasProviderOwnedState: boolean;
 }
 
@@ -43,7 +41,6 @@ export interface CompileProviderStateOptions {
 export interface CompiledProviderStateAttempt {
   body: Buffer;
   bodyHash: string;
-  changed: boolean;
   fidelity: ProviderStateFidelity;
   metrics: ProviderStateMetrics;
 }
@@ -81,18 +78,13 @@ export function analyzeProviderState(body: Buffer): ProviderStateAnalysis {
   const previousResponseIdPresent = Boolean(
     parsed && (Object.hasOwn(parsed, "previous_response_id") || Object.hasOwn(parsed, "previousResponseId"))
   );
-  const promptCacheKeyPresent = Boolean(
-    parsed && (Object.hasOwn(parsed, "prompt_cache_key") || Object.hasOwn(parsed, "promptCacheKey"))
-  );
 
   return {
-    parseable: parsed !== null,
     reasoningItemCount,
     encryptedReasoningItemCount,
     invalidEncryptedReasoningItemCount,
     compactionItemCount,
     previousResponseIdPresent,
-    promptCacheKeyPresent,
     hasProviderOwnedState:
       reasoningItemCount > 0 || compactionItemCount > 0 || previousResponseIdPresent
   };
@@ -166,7 +158,6 @@ export function compileProviderStateAttempt(
   return {
     body,
     bodyHash: hashProviderStateBody(body),
-    changed: true,
     fidelity,
     metrics
   };
@@ -473,7 +464,6 @@ function unchangedResult(
   return {
     body: canonicalBody,
     bodyHash: hashProviderStateBody(canonicalBody),
-    changed: false,
     fidelity,
     metrics
   };

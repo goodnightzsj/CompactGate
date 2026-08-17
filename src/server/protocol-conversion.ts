@@ -8,16 +8,6 @@ export class ProtocolConversionError extends Error {
   }
 }
 
-export interface AnthropicRequestConversion {
-  body: Buffer;
-  stream: boolean;
-}
-
-export interface OpenAiRequestConversion {
-  body: Buffer;
-  stream: boolean;
-}
-
 const COMPACT_GATE_STATE_PREFIX = "cg1_";
 const MAX_COMPACT_GATE_STATE_BYTES = 1024 * 1024;
 const ANTHROPIC_COMPACTION_TRIGGER_TOKENS = 50_000;
@@ -47,7 +37,7 @@ export function decodeCompactGateState(value: unknown): Record<string, unknown> 
   }
 }
 
-export function responsesRequestToAnthropic(rawBody: Buffer): AnthropicRequestConversion {
+export function responsesRequestToAnthropic(rawBody: Buffer): Buffer {
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
@@ -55,7 +45,7 @@ export function responsesRequestToAnthropic(rawBody: Buffer): AnthropicRequestCo
   return responsesRecordToAnthropic(body, hasCompactionTrigger(body.input));
 }
 
-export function responsesCompactRequestToAnthropic(rawBody: Buffer): AnthropicRequestConversion {
+export function responsesCompactRequestToAnthropic(rawBody: Buffer): Buffer {
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Compact request body must be a JSON object.", 400);
@@ -66,7 +56,7 @@ export function responsesCompactRequestToAnthropic(rawBody: Buffer): AnthropicRe
 function responsesRecordToAnthropic(
   body: Record<string, unknown>,
   compaction: boolean
-): AnthropicRequestConversion {
+): Buffer {
   if (typeof body.model !== "string" || body.model.trim().length === 0) {
     throw new ProtocolConversionError("Responses request requires a string model.", 400);
   }
@@ -124,10 +114,7 @@ function responsesRecordToAnthropic(
     };
   }
 
-  return {
-    body: Buffer.from(JSON.stringify(translated)),
-    stream: body.stream === true
-  };
+  return Buffer.from(JSON.stringify(translated));
 }
 
 export function encodeCompactGateCompactionSummary(summary: string): string {
@@ -260,7 +247,7 @@ export function anthropicMessageToResponsesCompaction(rawBody: Buffer, status: n
 export function anthropicRequestToResponses(
   rawBody: Buffer,
   options: { countTokens?: boolean; includeCompaction?: boolean } = {}
-): OpenAiRequestConversion {
+): Buffer {
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Anthropic request body must be a JSON object.", 400);
@@ -321,13 +308,10 @@ export function anthropicRequestToResponses(
     }
   }
 
-  return {
-    body: Buffer.from(JSON.stringify(translated)),
-    stream: !countTokens && body.stream === true
-  };
+  return Buffer.from(JSON.stringify(translated));
 }
 
-export function responsesRequestToChat(rawBody: Buffer): OpenAiRequestConversion {
+export function responsesRequestToChat(rawBody: Buffer): Buffer {
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
@@ -383,13 +367,10 @@ export function responsesRequestToChat(rawBody: Buffer): OpenAiRequestConversion
     translated.stream_options = { include_usage: true };
   }
 
-  return {
-    body: Buffer.from(JSON.stringify(translated)),
-    stream: body.stream === true
-  };
+  return Buffer.from(JSON.stringify(translated));
 }
 
-export function responsesRemoteV2CompactionToChat(rawBody: Buffer): OpenAiRequestConversion {
+export function responsesRemoteV2CompactionToChat(rawBody: Buffer): Buffer {
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
@@ -417,7 +398,7 @@ export function responsesRemoteV2CompactionToChat(rawBody: Buffer): OpenAiReques
 export function anthropicRequestToChat(
   rawBody: Buffer,
   options: { countTokens?: boolean } = {}
-): OpenAiRequestConversion {
+): Buffer {
   if (options.countTokens === true) {
     throw new ProtocolConversionError(
       "OpenAI Chat upstream does not provide an Anthropic count_tokens equivalent.",
@@ -430,7 +411,7 @@ export function anthropicRequestToChat(
   }
   rejectUnsupportedAnthropicChatFields(body);
   const responses = anthropicRequestToResponses(rawBody);
-  return responsesRequestToChat(responses.body);
+  return responsesRequestToChat(responses);
 }
 
 export function chatCompletionToResponses(rawBody: Buffer, status: number): Buffer {
@@ -1312,7 +1293,12 @@ function openAiOutputItemToAnthropic(value: unknown): Array<Record<string, unkno
       type: "tool_use",
       id: value.call_id,
       name: value.name,
-      input: parseOpenAiToolArguments(value.arguments)
+      input: parseToolArguments(
+        value.arguments,
+        502,
+        "OpenAI function call arguments were not valid JSON.",
+        "OpenAI function call arguments were not a JSON object."
+      )
     }];
   }
   if (value.type === "reasoning") {
@@ -1342,24 +1328,6 @@ export function openAiReasoningToAnthropic(
   return summary
     ? { type: "thinking", thinking: summary, signature: state }
     : { type: "redacted_thinking", data: state };
-}
-
-function parseOpenAiToolArguments(value: unknown): Record<string, unknown> {
-  if (isRecord(value)) {
-    return value;
-  }
-  if (typeof value !== "string" || value.length === 0) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (isRecord(parsed)) {
-      return parsed;
-    }
-  } catch {
-    throw new ProtocolConversionError("OpenAI function call arguments were not valid JSON.", 502);
-  }
-  throw new ProtocolConversionError("OpenAI function call arguments were not a JSON object.", 502);
 }
 
 function anthropicMessageId(value: unknown): string {
@@ -1416,7 +1384,7 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
         type: "tool_use",
         id: item.call_id,
         name: item.name,
-        input: parseToolArguments(item.arguments)
+        input: parseToolArguments(item.arguments, 400, "Function call arguments must be a JSON object.")
       }]);
     } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
       pushAnthropicMessage(messages, "user", [{
@@ -1579,7 +1547,18 @@ function responsesThinkingToAnthropic(value: unknown): Record<string, unknown> |
   return { type: "enabled", budget_tokens: budgetByEffort[effort] ?? 4096 };
 }
 
-function parseToolArguments(value: unknown): Record<string, unknown> {
+/**
+ * Parses a tool-call `arguments` payload into an object. Callers supply the
+ * status and messages because the two directions report differently: the
+ * OpenAI->Anthropic path distinguishes "not valid JSON" from "not an object"
+ * as 502s, while the request path reports one 400 for both.
+ */
+function parseToolArguments(
+  value: unknown,
+  status: number,
+  invalidJsonMessage: string,
+  notObjectMessage = invalidJsonMessage
+): Record<string, unknown> {
   if (isRecord(value)) {
     return value;
   }
@@ -1592,9 +1571,9 @@ function parseToolArguments(value: unknown): Record<string, unknown> {
       return parsed;
     }
   } catch {
-    throw new ProtocolConversionError("Function call arguments must be a JSON object.", 400);
+    throw new ProtocolConversionError(invalidJsonMessage, status);
   }
-  throw new ProtocolConversionError("Function call arguments must be a JSON object.", 400);
+  throw new ProtocolConversionError(notObjectMessage, status);
 }
 
 function toolOutputText(value: unknown): string {

@@ -2,6 +2,8 @@ import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
   ConfigProfileScope,
+  SavedClaudeProfileConfig,
+  SavedCodexProfileConfig,
   SavedConfigProfile,
   SavedConfigProfileConfig,
   SavedConfigProfileScopeState,
@@ -11,19 +13,118 @@ import {
   cloneProfile,
   cloneProfileConfig,
   cloneProfileScope,
-  cloneRuntimeConfig
-} from "./config-clone.js";
+  cloneRuntimeConfig,
+  isRecord,
+  readChild,
+  readString
+} from "./config-internals.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
-import {
-  extractScopedProfileConfig,
-  mergeProfileScopes,
-  shouldPersistProfileNormalization
-} from "./config-profile-scope-merge.js";
 import { cloneRouteUrlPreset } from "./config-route-presets.js";
 import {
   mergeRuntimeConfig,
   validateRuntimeConfig
 } from "./config-runtime.js";
+
+export function extractScopedProfileConfig(
+  runtime: CompactGateRuntimeConfig,
+  scope: ConfigProfileScope
+): SavedCodexProfileConfig | SavedClaudeProfileConfig {
+  if (scope === "codex") {
+    return {
+      primary: { ...runtime.primary },
+      compact: { ...runtime.compact }
+    };
+  }
+
+  return {
+    claude: {
+      primary: { ...runtime.claude.primary },
+      compact: { ...runtime.claude.compact },
+      model_map: { ...runtime.claude.model_map },
+      scene_map: structuredClone(runtime.claude.scene_map),
+      long_context_bytes: runtime.claude.long_context_bytes
+    }
+  };
+}
+
+export function mergeProfileScopes(
+  base: CompactGateConfig,
+  patchRecord: Record<string, unknown>
+): SavedConfigProfileScopes {
+  const baseScopes = base.profile_scopes;
+  const patchScopes = readChild(patchRecord.profile_scopes);
+
+  return {
+    codex: mergeProfileScopeState("codex", baseScopes?.codex, readChild(patchScopes.codex)),
+    claude: mergeProfileScopeState("claude", baseScopes?.claude, readChild(patchScopes.claude))
+  };
+}
+
+function mergeProfileScopeState(
+  scope: ConfigProfileScope,
+  baseState: SavedConfigProfileScopeState | undefined,
+  patchState: Record<string, unknown>
+): SavedConfigProfileScopeState {
+  const baseProfiles = baseState?.profiles ?? [];
+  return {
+    profiles: Array.isArray(patchState.profiles)
+      ? mergeProfiles(scope, baseProfiles, patchState.profiles)
+      : baseProfiles.map(cloneProfile),
+    active_profile_id: readActiveProfileId(
+      patchState.active_profile_id,
+      baseState?.active_profile_id ?? null
+    )
+  };
+}
+
+function mergeProfiles(
+  scope: ConfigProfileScope,
+  baseProfiles: SavedConfigProfile[],
+  value: unknown
+): SavedConfigProfile[] {
+  if (!Array.isArray(value)) {
+    return baseProfiles.map(cloneProfile);
+  }
+
+  return value
+    .map((item) => readProfile(item, scope))
+    .filter((item): item is SavedConfigProfile => item !== null);
+}
+
+function readProfile(
+  value: unknown,
+  scope: ConfigProfileScope
+): SavedConfigProfile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = readString(value.id, "");
+  const name = readString(value.name, "");
+  if (!id || !name) {
+    return null;
+  }
+
+  const config = extractScopedProfileConfig(
+    mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config)),
+    scope
+  );
+  return {
+    id,
+    name,
+    created_at: readString(value.created_at, new Date(0).toISOString()),
+    updated_at: readString(value.updated_at, new Date(0).toISOString()),
+    config
+  };
+}
+
+function readActiveProfileId(value: unknown, fallback: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  return typeof value === "string" ? value.trim() || null : fallback;
+}
 
 export function mergeRuntimeForProfileScope(
   current: CompactGateRuntimeConfig,
@@ -46,26 +147,10 @@ export function mergeRuntimeForProfileScope(
       primary: { ...profileRuntime.claude.primary },
       compact: { ...profileRuntime.claude.compact },
       model_map: { ...profileRuntime.claude.model_map },
-      scene_map: JSON.parse(JSON.stringify(profileRuntime.claude.scene_map)),
+      scene_map: structuredClone(profileRuntime.claude.scene_map),
       long_context_bytes: profileRuntime.claude.long_context_bytes
     }
   };
-}
-
-export function createScopedProfileConfig(
-  current: CompactGateRuntimeConfig,
-  patch: unknown,
-  scope: ConfigProfileScope
-): SavedConfigProfileConfig {
-  return extractScopedProfileConfig(mergeRuntimeConfig(current, patch), scope);
-}
-
-export function updateScopedProfileConfig(
-  current: SavedConfigProfileConfig,
-  patch: unknown,
-  scope: ConfigProfileScope
-): SavedConfigProfileConfig {
-  return extractScopedProfileConfig(mergeRuntimeConfig(profileConfigToRuntime(current), patch), scope);
 }
 
 export function profileConfigToRuntime(config: SavedConfigProfileConfig): CompactGateRuntimeConfig {
@@ -75,8 +160,6 @@ export function profileConfigToRuntime(config: SavedConfigProfileConfig): Compac
 export function validateProfileConfig(config: SavedConfigProfileConfig, scope: ConfigProfileScope): void {
   validateRuntimeConfig(profileConfigToRuntime(extractScopedProfileConfig(profileConfigToRuntime(config), scope)));
 }
-
-export { extractScopedProfileConfig, mergeProfileScopes, shouldPersistProfileNormalization };
 
 export function getProfileScopeState(
   config: CompactGateConfig,
@@ -103,7 +186,6 @@ export function withProfileScope(
 
   return {
     ...cloneRuntimeConfig(config),
-    profiles: undefined,
     active_profile_id: nextScopes.codex?.active_profile_id ?? null,
     profile_scopes: nextScopes,
     route_url_presets: (config.route_url_presets ?? []).map(cloneRouteUrlPreset)

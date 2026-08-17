@@ -6,6 +6,7 @@ import {
   type ImportCandidate,
   type ImportState
 } from "./config-import-summary.js";
+import { isRecord } from "../../shared/records.js";
 
 export function useConfigImportWorkflow({
   onImportConfig
@@ -82,9 +83,6 @@ export function useConfigImportWorkflow({
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function validateImportCandidateShape(config: Record<string, unknown>): void {
   const knownTopLevelKeys = [

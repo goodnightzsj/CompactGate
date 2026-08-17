@@ -2,7 +2,8 @@ import http, {
   type IncomingMessage,
   type ServerResponse
 } from "node:http";
-import { handleApi } from "./api-routes.js";
+import { handleConfigApi } from "./api-config-routes.js";
+import { handleRuntimeApi } from "./api-runtime-routes.js";
 import {
   isAnthropicProxyPath,
   proxyClaudeRequest
@@ -109,17 +110,18 @@ async function routeRequest(
     const url = parseRequestUrl(req.url);
 
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(
-        req,
-        res,
-        url,
-        configStore,
-        logger,
-        captureWriter,
-        studioEvents,
-        primaryFailover,
-        codexVersionMonitor
-      );
+      const handled =
+        await handleConfigApi(
+          req, res, url, configStore, logger, captureWriter, studioEvents,
+          codexVersionMonitor, primaryFailover
+        ) ||
+        await handleRuntimeApi(
+          req, res, url, configStore, logger, captureWriter, studioEvents,
+          primaryFailover, codexVersionMonitor
+        );
+      if (!handled) {
+        sendJson(res, 404, { error: "API endpoint not found." });
+      }
       return;
     }
 

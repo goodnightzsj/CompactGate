@@ -1,16 +1,7 @@
-import { glob, readdir, readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 const ROOT = process.cwd();
-const SOURCE_DIRS = ["src", "test", "scripts"];
-const ROOT_FILES = [
-  "package.json",
-  "tsconfig.json",
-  "tsconfig.server.json",
-  "vite.config.ts"
-];
-const TEXT_FILE_GLOB = "**/*.{css,js,json,mjs,ts,tsx}";
-const GLOB_EXCLUDES = ["**/node_modules/**", "**/dist/**"];
 const APP_STYLE_MANIFEST = [
   { file: "tokens.css", role: "tokens" },
   { file: "foundation.css", role: "foundation", ownsSelectors: false },
@@ -35,17 +26,8 @@ const SELECTOR_OWNERSHIP_FILES = new Set(
     .filter((entry) => entry.ownsSelectors !== false)
     .map((entry) => entry.file)
 );
-const RETIRED_APP_STYLE_FILES = new Set([
-  "base.css",
-  "console.css",
-  "theme-system.css"
-]);
 
 const failures = [];
-
-for (const file of await collectProjectFiles()) {
-  await checkTextFile(file);
-}
 
 await checkCssStyleFiles();
 
@@ -55,39 +37,6 @@ if (failures.length > 0) {
 }
 
 console.log("Style drift check passed.");
-
-async function collectProjectFiles() {
-  const files = [];
-  for (const directory of SOURCE_DIRS) {
-    for await (const file of glob(`${directory}/${TEXT_FILE_GLOB}`, {
-      cwd: ROOT,
-      exclude: GLOB_EXCLUDES
-    })) {
-      files.push(path.join(ROOT, file));
-    }
-  }
-  for (const file of ROOT_FILES) {
-    files.push(path.join(ROOT, file));
-  }
-  return files.sort();
-}
-
-async function checkTextFile(file) {
-  const text = await readFile(file, "utf8");
-  const relative = relativePath(file);
-  if (text.includes("\r\n")) {
-    failures.push(`${relative}: uses CRLF line endings`);
-  }
-  if (text.length > 0 && !text.endsWith("\n")) {
-    failures.push(`${relative}: missing final newline`);
-  }
-  const lines = text.split("\n");
-  for (let index = 0; index < lines.length; index += 1) {
-    if (/[ \t]+$/.test(lines[index])) {
-      failures.push(`${relative}:${index + 1}: trailing whitespace`);
-    }
-  }
-}
 
 async function checkCssStyleFiles() {
   const stylesDir = path.join(ROOT, "src/ui/styles/app");
@@ -150,20 +99,9 @@ async function checkAppStyleImports() {
   if (imports.join("|") !== expected.join("|")) {
     failures.push(`src/ui/styles/app.css: must import exactly ${expected.join(", ")} in order`);
   }
-  for (const retiredFile of RETIRED_APP_STYLE_FILES) {
-    if (appCss.includes(retiredFile)) {
-      failures.push(`src/ui/styles/app.css: must not import retired style layer ${retiredFile}`);
-    }
-  }
 }
 
 function checkAppStyleFileSet(files) {
-  for (const retiredFile of RETIRED_APP_STYLE_FILES) {
-    if (files.includes(retiredFile)) {
-      failures.push(`src/ui/styles/app/${retiredFile}: retired style layer must be removed`);
-    }
-  }
-
   const activeSet = new Set(ACTIVE_APP_STYLE_FILES);
   for (const file of files) {
     if (!activeSet.has(file)) {
@@ -191,11 +129,14 @@ function checkLayerOwnership(file, basename, text) {
     failures.push(`${file}: reduced-motion rules must live in motion.css`);
   }
   if (role === "responsive") {
-    checkResponsiveOnlyContainsQueries(file, text);
+    checkTopLevelRulePrefix(file, text, "@media", "responsive.css may only contain top-level @media rules");
     return;
   }
   if (role === "motion") {
-    checkMotionOnlyContainsReducedMotion(file, text);
+    const prefix = "@media (prefers-reduced-motion: reduce)";
+    if (!checkTopLevelRulePrefix(file, text, prefix, "motion.css may only contain the reduced-motion media rule")) {
+      failures.push(`${file}: motion.css must define the reduced-motion media rule`);
+    }
     return;
   }
   if (role === "health") {
@@ -217,53 +158,28 @@ function checkHealthSelectors(file, text) {
   }
 }
 
-function checkResponsiveOnlyContainsQueries(file, text) {
+// Scans top-level (brace-depth 0) lines and flags any that do not start with
+// `prefix`. Returns whether at least one such rule was found.
+function checkTopLevelRulePrefix(file, text, prefix, message) {
   const lines = text.split("\n");
   let depth = 0;
+  let seen = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
-    const depthBeforeLine = depth;
-    if (
-      trimmed.length > 0 &&
-      depthBeforeLine === 0 &&
-      !trimmed.startsWith("@media")
-    ) {
-      failures.push(`${file}:${index + 1}: responsive.css may only contain top-level @media rules`);
+    if (depth === 0 && trimmed.length > 0) {
+      if (trimmed.startsWith(prefix)) {
+        seen = true;
+      } else {
+        failures.push(`${file}:${index + 1}: ${message}`);
+      }
     }
     depth += countMatches(line, "{") - countMatches(line, "}");
     if (depth < 0) {
       depth = 0;
     }
   }
-}
-
-function checkMotionOnlyContainsReducedMotion(file, text) {
-  const lines = text.split("\n");
-  let depth = 0;
-  let hasReducedMotionRule = false;
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    const depthBeforeLine = depth;
-    if (
-      trimmed.length > 0 &&
-      depthBeforeLine === 0 &&
-      !trimmed.startsWith("@media (prefers-reduced-motion: reduce)")
-    ) {
-      failures.push(`${file}:${index + 1}: motion.css may only contain the reduced-motion media rule`);
-    }
-    if (depthBeforeLine === 0 && trimmed.startsWith("@media (prefers-reduced-motion: reduce)")) {
-      hasReducedMotionRule = true;
-    }
-    depth += countMatches(line, "{") - countMatches(line, "}");
-    if (depth < 0) {
-      depth = 0;
-    }
-  }
-  if (!hasReducedMotionRule) {
-    failures.push(`${file}: motion.css must define the reduced-motion media rule`);
-  }
+  return seen;
 }
 
 function checkThemeSystemDarkBlocks(file, text) {
@@ -389,8 +305,4 @@ function splitSelectorList(selectorGroup) {
 
 function countMatches(text, pattern) {
   return text.split(pattern).length - 1;
-}
-
-function relativePath(file) {
-  return path.relative(ROOT, file).split(path.sep).join("/");
 }

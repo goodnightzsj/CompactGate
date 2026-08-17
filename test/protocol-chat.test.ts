@@ -29,8 +29,7 @@ describe("OpenAI Chat upstream conversion", () => {
         { type: "compaction_trigger" }
       ]
     })));
-    const request = JSON.parse(converted.body.toString("utf8"));
-    expect(converted.stream).toBe(false);
+    const request = JSON.parse(converted.toString("utf8"));
     expect(request.stream).toBeUndefined();
     expect(request.messages.at(-1)).toMatchObject({
       role: "user",
@@ -81,9 +80,8 @@ describe("OpenAI Chat upstream conversion", () => {
         { type: "function_call_output", call_id: "call_1", output: "sunny" }
       ]
     })));
-    const body = JSON.parse(converted.body.toString("utf8"));
+    const body = JSON.parse(converted.toString("utf8"));
 
-    expect(converted.stream).toBe(true);
     expect(body).toMatchObject({
       model: "gpt-5.5-chat",
       max_completion_tokens: 2048,
@@ -135,7 +133,7 @@ describe("OpenAI Chat upstream conversion", () => {
         { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "sunny" }] }
       ]
     })));
-    expect(JSON.parse(converted.body.toString("utf8"))).toMatchObject({
+    expect(JSON.parse(converted.toString("utf8"))).toMatchObject({
       model: "gpt-5.5-chat",
       max_completion_tokens: 900,
       messages: [

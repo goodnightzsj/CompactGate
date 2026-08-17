@@ -1,3 +1,4 @@
+import { strictEqual } from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -174,14 +175,14 @@ async function validateRuntime(baseUrl, copiedProfile) {
   const checks = [];
 
   const health = await expectJson(`${baseUrl}/api/health`);
-  assertEqual(health.status, "ok", "health.status");
-  assertEqual(health.listen, new URL(baseUrl).host, "health.listen");
+  strictEqual(health.status, "ok", "health.status");
+  strictEqual(health.listen, new URL(baseUrl).host, "health.listen");
   checks.push("health");
 
   const publicConfig = await expectJson(`${baseUrl}/api/config`);
-  assertEqual(publicConfig.config_path, tempConfigPath, "config.config_path");
-  assertEqual(publicConfig.listen, new URL(baseUrl).host, "config.listen");
-  assertEqual(publicConfig.profile_scopes?.codex?.active_profile_id, copiedProfile.id, "codex.active_profile_id");
+  strictEqual(publicConfig.config_path, tempConfigPath, "config.config_path");
+  strictEqual(publicConfig.listen, new URL(baseUrl).host, "config.listen");
+  strictEqual(publicConfig.profile_scopes?.codex?.active_profile_id, copiedProfile.id, "codex.active_profile_id");
   if (!publicConfig.profile_scopes?.codex?.profiles?.some((profile) => profile.id === copiedProfile.id)) {
     throw new Error("Copied ice profile is missing from public config.");
   }
@@ -205,7 +206,7 @@ async function validateRuntime(baseUrl, copiedProfile) {
     path: "/v1/responses/compact",
     body: { model: "gpt-5.5", stream: true }
   });
-  assertEqual(compactPreview.route, "compact", "compact preview route");
+  strictEqual(compactPreview.route, "compact", "compact preview route");
   checks.push("compact-route-preview");
 
   const primaryPreview = await postJson(`${baseUrl}/api/test-route`, {
@@ -213,11 +214,11 @@ async function validateRuntime(baseUrl, copiedProfile) {
     path: "/v1/responses",
     body: { model: "gpt-5.5", stream: true }
   });
-  assertEqual(primaryPreview.route, "primary", "primary preview route");
+  strictEqual(primaryPreview.route, "primary", "primary preview route");
   checks.push("primary-route-preview");
 
   const snapshot = await readFirstSseEvent(`${baseUrl}/api/events`);
-  assertEqual(snapshot.event, "snapshot", "first SSE event");
+  strictEqual(snapshot.event, "snapshot", "first SSE event");
   checks.push("studio-events");
 
   return checks;
@@ -255,16 +256,14 @@ async function postJson(url, body) {
 }
 
 async function readFirstSseEvent(url) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+  const response = await fetch(url, { signal: AbortSignal.timeout(2500) });
+  if (!response.ok || !response.body) {
+    throw new Error(`${url} returned HTTP ${response.status}.`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
   try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok || !response.body) {
-      throw new Error(`${url} returned HTTP ${response.status}.`);
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     while (!buffer.includes("\n\n")) {
       const { done, value } = await reader.read();
       if (done) {
@@ -272,12 +271,10 @@ async function readFirstSseEvent(url) {
       }
       buffer += decoder.decode(value, { stream: true });
     }
-    await reader.cancel();
-    return parseSseFrame(buffer.split(/\r?\n\r?\n/)[0] ?? "");
   } finally {
-    clearTimeout(timeout);
-    controller.abort();
+    await reader.cancel();
   }
+  return parseSseFrame(buffer.split(/\r?\n\r?\n/)[0] ?? "");
 }
 
 function parseSseFrame(frame) {
@@ -300,22 +297,7 @@ function parseSseFrame(frame) {
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: options.signal ?? controller.signal
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function assertEqual(actual, expected, label) {
-  if (actual !== expected) {
-    throw new Error(`${label} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`);
-  }
+  return fetch(url, { signal: AbortSignal.timeout(timeoutMs), ...options });
 }
 
 function findFreePort() {

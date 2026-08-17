@@ -41,7 +41,6 @@ import { extractResponseModelFromText } from "./response-model.js";
 
 export interface RequestLoggerOptions {
   maxDatabaseBytes?: number;
-  maxPersistedEntries?: number;
   deferStoragePrune?: boolean;
 }
 
@@ -54,6 +53,28 @@ const PROVIDER_STATE_BINDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_PROVIDER_STATE_BINDINGS = 8_192;
 const MAX_PROVIDER_STATE_RECOVERY_EVIDENCE = 8_192;
 
+/**
+ * Rows whose response_model_source is derivable as 'target_fallback'.
+ * Deliberately kept as one fragment reused by both the SET and the WHERE: the
+ * WHERE's `NOT (...)` form is NOT the same as `response_model_source <> CASE`,
+ * because `stream_outcome IS NULL AND request_type = 'stream'` makes this
+ * expression SQL NULL, so `NOT (NULL)` is falsy and those rows are left alone.
+ */
+const RESPONSE_MODEL_TARGET_FALLBACK_SQL = `status >= 200 AND status < 300
+  AND error_summary IS NULL
+  AND (
+    stream_outcome = 'success' OR
+    (stream_outcome IS NULL AND request_type <> 'stream')
+  )
+  AND target_model IS NOT NULL`;
+
+const RESPONSE_MODEL_SOURCE_CASE_SQL = `CASE
+  WHEN response_model IS NOT NULL THEN 'upstream'
+  WHEN ${RESPONSE_MODEL_TARGET_FALLBACK_SQL}
+  THEN 'target_fallback'
+  ELSE 'unavailable'
+END`;
+
 export function resolveLogDatabasePath(configPath: string): string {
   const configBaseName = path.basename(configPath, path.extname(configPath));
   return path.resolve(path.dirname(configPath), `${configBaseName}-logs.sqlite`);
@@ -63,8 +84,6 @@ export class RequestLogger {
   private readonly db: DatabaseSync;
 
   private readonly databasePath: string;
-
-  private readonly maxPersistedEntries: number | null;
 
   private maxDatabaseBytes: number | null;
 
@@ -92,7 +111,6 @@ export class RequestLogger {
     const resolvedPath = path.resolve(databasePath);
     mkdirSync(path.dirname(resolvedPath), { recursive: true });
     this.databasePath = resolvedPath;
-    this.maxPersistedEntries = normalizeMaxPersistedEntries(options.maxPersistedEntries);
     this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
     this.deferStoragePrune = options.deferStoragePrune === true;
     this.db = new DatabaseSync(resolvedPath);
@@ -106,7 +124,6 @@ export class RequestLogger {
     this.reconcileInterruptedCaptures();
     this.backfillResponseModels();
     this.backfillResponseModelSources();
-    this.prunePersistedEntries();
     if (this.deferStoragePrune) {
       this.checkDatabaseSize();
     } else {
@@ -412,7 +429,6 @@ export class RequestLogger {
           WHERE id = last_insert_rowid()
         `).run(JSON.stringify(entry.provider_state_portability));
       }
-      this.prunePersistedEntries();
       this.requestStoragePrune();
       this.checkDatabaseSize();
     } catch (error) {
@@ -742,41 +758,16 @@ export class RequestLogger {
         .prepare(
           `
             UPDATE request_logs
-            SET response_model_source = CASE
-              WHEN response_model IS NOT NULL THEN 'upstream'
-              WHEN status >= 200 AND status < 300
-                AND error_summary IS NULL
-                AND (
-                  stream_outcome = 'success' OR
-                  (stream_outcome IS NULL AND request_type <> 'stream')
-                )
-                AND target_model IS NOT NULL
-              THEN 'target_fallback'
-              ELSE 'unavailable'
-            END
+            SET response_model_source = ${RESPONSE_MODEL_SOURCE_CASE_SQL}
             WHERE (response_model IS NOT NULL AND response_model_source <> 'upstream')
               OR (
                 response_model IS NULL
-                AND status >= 200 AND status < 300
-                AND error_summary IS NULL
-                AND (
-                  stream_outcome = 'success' OR
-                  (stream_outcome IS NULL AND request_type <> 'stream')
-                )
-                AND target_model IS NOT NULL
+                AND ${RESPONSE_MODEL_TARGET_FALLBACK_SQL}
                 AND response_model_source <> 'target_fallback'
               )
               OR (
                 response_model IS NULL
-                AND NOT (
-                  status >= 200 AND status < 300
-                  AND error_summary IS NULL
-                  AND (
-                    stream_outcome = 'success' OR
-                    (stream_outcome IS NULL AND request_type <> 'stream')
-                  )
-                  AND target_model IS NOT NULL
-                )
+                AND NOT (${RESPONSE_MODEL_TARGET_FALLBACK_SQL})
                 AND response_model_source <> 'unavailable'
               )
           `
@@ -911,26 +902,6 @@ export class RequestLogger {
         )
         .get(...where.params)
     );
-  }
-
-  private prunePersistedEntries(): void {
-    if (this.maxPersistedEntries === null) {
-      return;
-    }
-
-    this.db
-      .prepare(
-        `
-          DELETE FROM request_logs
-          WHERE id <= COALESCE((
-            SELECT id
-            FROM request_logs
-            ORDER BY id DESC
-            LIMIT 1 OFFSET ?
-          ), 0)
-        `
-      )
-      .run(this.maxPersistedEntries);
   }
 
   private prunePersistedStorage(): void {
@@ -1146,15 +1117,6 @@ function normalizeMaxDatabaseBytes(value: number | undefined): number | null {
   }
 
   if (!Number.isFinite(value)) {
-    return null;
-  }
-
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : null;
-}
-
-function normalizeMaxPersistedEntries(value: number | undefined): number | null {
-  if (value === undefined || !Number.isFinite(value)) {
     return null;
   }
 

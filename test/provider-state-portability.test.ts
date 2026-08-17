@@ -58,7 +58,6 @@ describe("provider state portability", () => {
       encryptedReasoningFieldsRemoved: 2,
       providerItemIdsRemoved: 2
     });
-    expect(result.changed).toBe(true);
   });
 
   it("returns the original Buffer when CPA finds nothing to clean", () => {
@@ -70,7 +69,6 @@ describe("provider state portability", () => {
     const result = compileProviderStateAttempt(canonicalBody, { strategy: "cpa" });
 
     expect(result.body).toBe(canonicalBody);
-    expect(result.changed).toBe(false);
     expect(result.bodyHash).toBe(hashProviderStateBody(canonicalBody));
   });
 
@@ -227,7 +225,6 @@ describe("provider state portability", () => {
       input: "continue"
     });
     expect(recovery.metrics.previousResponseIdsRemoved).toBe(1);
-    expect(recovery.changed).toBe(true);
   });
 
   it("reports provider-owned state without retaining its values", () => {
@@ -242,13 +239,11 @@ describe("provider state portability", () => {
     })));
 
     expect(analysis).toEqual({
-      parseable: true,
       reasoningItemCount: 2,
       encryptedReasoningItemCount: 2,
       invalidEncryptedReasoningItemCount: 1,
       compactionItemCount: 1,
       previousResponseIdPresent: true,
-      promptCacheKeyPresent: true,
       hasProviderOwnedState: true
     });
     expect(JSON.stringify(analysis)).not.toContain("secret");
@@ -283,8 +278,7 @@ describe("provider state portability", () => {
       encryptedReasoningItemCount: 59,
       invalidEncryptedReasoningItemCount: 15,
       compactionItemCount: 1,
-      previousResponseIdPresent: false,
-      promptCacheKeyPresent: true
+      previousResponseIdPresent: false
     });
     expect(result.metrics).toMatchObject({
       reasoningItemsRemoved: 59,

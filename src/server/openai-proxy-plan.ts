@@ -117,7 +117,7 @@ export function buildPrimaryOpenAiProxyPlan({
   const chatCompactionFallback = synthesizeRemoteV2Compaction &&
     upstreamProtocol === "openai_chat";
   const upstreamBody = chatCompactionFallback
-    ? responsesRemoteV2CompactionToChat(modelRewrite.body).body
+    ? responsesRemoteV2CompactionToChat(modelRewrite.body)
     : translateOpenAiRequest(bridgeResult.body, upstreamProtocol);
   const upstreamPath = upstreamProtocol === "anthropic_messages"
     ? "/v1/messages"
@@ -235,9 +235,9 @@ function translateOpenAiRequest(body: Buffer, protocol: UpstreamProtocol): Buffe
     return body;
   }
   if (protocol === "anthropic_messages") {
-    return responsesRequestToAnthropic(body).body;
+    return responsesRequestToAnthropic(body);
   }
-  return responsesRequestToChat(body).body;
+  return responsesRequestToChat(body);
 }
 
 function translateCompactOpenAiRequest(
@@ -250,8 +250,8 @@ function translateCompactOpenAiRequest(
   }
   if (protocol === "anthropic_messages") {
     return nativeCompaction
-      ? responsesCompactRequestToAnthropic(body).body
-      : responsesRequestToAnthropic(body).body;
+      ? responsesCompactRequestToAnthropic(body)
+      : responsesRequestToAnthropic(body);
   }
   throw new ProtocolConversionError("OpenAI Chat upstream cannot handle Responses compaction requests.");
 }

@@ -1,16 +1,20 @@
 import { type Dispatch, type FormEvent, type SetStateAction, useState } from "react";
 import type {
+  CompactGateConfig,
   HealthResponse,
   PublicConfig
 } from "../../shared/types.js";
 import {
+  applyDraftToConfigExport,
+  formFromConfig,
   formToPatch
 } from "../config/config-form-state.js";
 import type { ConfigFormState, SaveState } from "../config/types.js";
 import { api, errorSummary } from "../shared/api.js";
-import { createConfigPortableActions } from "./configPortableActions.js";
-import { useConfigProfileActions } from "./useConfigProfileActions.js";
+import { createConfigProfileCollectionActions } from "./configProfileCollectionActions.js";
+import { createConfigProfilePersistenceActions } from "./configProfilePersistenceActions.js";
 import { useRoutePreviewAction } from "./useRoutePreviewAction.js";
+import { useScopedProfileControls } from "./useScopedProfileControls.js";
 
 export function useConfigActions({
   config,
@@ -36,25 +40,78 @@ export function useConfigActions({
   const routePreview = useRoutePreviewAction();
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const profileActions = useConfigProfileActions({
+  const {
+    claudeProfileError,
+    claudeProfileName,
+    claudeProfileState,
+    profileDeleteCandidate,
+    profileError,
+    profileName,
+    profileState,
+    scopedProfileAccessors,
+    selectedClaudeProfileId,
+    selectedProfileId,
+    setClaudeProfileName,
+    setProfileDeleteCandidate,
+    setProfileName
+  } = useScopedProfileControls(config);
+  const persistenceActions = createConfigProfilePersistenceActions({
     config,
     form,
     setConfig,
     setForm,
     setHealth,
     setSaveError,
-    setSaveState
+    setSaveState,
+    scopedProfileAccessors
   });
-  const { exportConfig, importConfig } = createConfigPortableActions({
+  const collectionActions = createConfigProfileCollectionActions({
     config,
-    form,
+    profileDeleteCandidate,
     setConfig,
-    setForm,
-    setHealth,
-    setPageError,
-    setSaveError,
-    setSaveState
+    setProfileDeleteCandidate,
+    scopedProfileAccessors
   });
+
+  async function exportConfig() {
+    if (!config) {
+      return;
+    }
+
+    try {
+      const savedConfig = await api<CompactGateConfig>("/api/config/export");
+      const payload = applyDraftToConfigExport(savedConfig, form);
+      const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+        type: "application/json"
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "compactgate.json";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setPageError(errorSummary(error));
+    }
+  }
+
+  async function importConfig(payload: unknown) {
+    const nextConfig = await api<PublicConfig>("/api/config/import", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    const nextHealth = await api<HealthResponse>("/api/health", {
+      method: "GET"
+    });
+
+    setConfig(nextConfig);
+    setHealth(nextHealth);
+    setForm(formFromConfig(nextConfig));
+    setSaveError(null);
+    setSaveState("saved");
+    setPageError(null);
+    window.setTimeout(() => setSaveState("idle"), 1600);
+  }
 
   async function saveConfig(event: FormEvent) {
     event.preventDefault();
@@ -97,14 +154,27 @@ export function useConfigActions({
   }
 
   return {
-    ...profileActions,
+    ...persistenceActions,
+    ...collectionActions,
+    ...routePreview,
+    claudeProfileError,
+    claudeProfileName,
+    claudeProfileState,
     exportConfig,
     importConfig,
-    ...routePreview,
+    profileDeleteCandidate,
+    profileError,
+    profileName,
+    profileState,
     restoreLinkedMode,
     saveConfig,
     saveError,
     saveState,
+    selectedClaudeProfileId,
+    selectedProfileId,
+    setClaudeProfileName,
+    setProfileDeleteCandidate,
+    setProfileName,
     unlockCompactModel
   };
 }

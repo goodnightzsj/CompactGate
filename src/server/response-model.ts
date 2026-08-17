@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { ResponseModelSource } from "../shared/types.js";
 import { decodeResponseText } from "./usage-utils.js";
+import { isRecord } from "../shared/records.js";
 
 export function extractResponseModelFromBodies(
   upstreamResponseBody: Buffer,
@@ -113,8 +114,4 @@ function readModel(value: unknown): string | null {
 
   const text = value.trim();
   return text.length > 0 ? text : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

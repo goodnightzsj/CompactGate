@@ -60,8 +60,6 @@ interface ChatStreamToolCall {
 }
 
 export function createAnthropicToResponsesStream(): Transform {
-  let pending = "";
-  const decoder = new StringDecoder("utf8");
   let responseId = `resp_${randomUUID()}`;
   let model: string | null = null;
   let inputTokens = 0;
@@ -69,64 +67,25 @@ export function createAnthropicToResponsesStream(): Transform {
   let nextOutputIndex = 0;
   let completed = false;
   let stopReason: string | null = null;
-  let sequenceNumber = 0;
+  const emit = createSequencedEmitter();
   const blocks = new Map<number, StreamBlock>();
   const outputItems: unknown[] = [];
 
-  return new Transform({
-    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      pending += decoder.write(chunk);
-      try {
-        flushFrames(false, this);
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
-    },
-    flush(callback: TransformCallback) {
-      try {
-        pending += decoder.end();
-        flushFrames(true, this);
-        if (!completed) {
-          emit(this, "response.failed", {
-            type: "response.failed",
-            response: responseEnvelope("failed", {
-              error: { message: "Anthropic stream closed before message_stop.", type: "upstream_stream_incomplete" }
-            })
-          });
-        }
-        callback();
-      } catch (error) {
-        callback(error as Error);
+  return createSseTransform({
+    onData: convertFrame,
+    onFlush(transform) {
+      if (!completed) {
+        emit(transform, "response.failed", {
+          type: "response.failed",
+          response: responseEnvelope("failed", {
+            error: { message: "Anthropic stream closed before message_stop.", type: "upstream_stream_incomplete" }
+          })
+        });
       }
     }
   });
 
-  function flushFrames(final: boolean, transform: Transform): void {
-    while (true) {
-      const match = pending.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
-      }
-      const frame = pending.slice(0, match.index);
-      pending = pending.slice(match.index + match[0].length);
-      convertFrame(frame, transform);
-    }
-    if (final && pending.trim()) {
-      convertFrame(pending, transform);
-      pending = "";
-    }
-  }
-
-  function convertFrame(frame: string, transform: Transform): void {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
-    if (!data) {
-      return;
-    }
+  function convertFrame(data: string, transform: Transform): void {
     const event = JSON.parse(data) as unknown;
     if (!isRecord(event) || typeof event.type !== "string") {
       return;
@@ -426,21 +385,13 @@ export function createAnthropicToResponsesStream(): Transform {
       ...extra
     };
   }
-
-  function emit(transform: Transform, event: string, payload: unknown): void {
-    const body = isRecord(payload) ? { ...payload, sequence_number: sequenceNumber++ } : payload;
-    transform.push(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
-  }
 }
 
 export function createAnthropicToResponsesResponseTransform(
   status: number,
   headers: IncomingHttpHeaders
 ): UpstreamResponseTransform {
-  const contentEncoding = headerText(headers["content-encoding"]).trim().toLowerCase();
-  if (contentEncoding && contentEncoding !== "identity") {
-    throw new Error(`Translated upstream returned unsupported content-encoding: ${contentEncoding}.`);
-  }
+  ensureIdentityEncoding(headers);
   const responseHeaders = translatedHeaders(headers);
   const contentType = headerText(headers["content-type"]).toLowerCase();
   if (contentType.includes("text/event-stream")) {
@@ -451,31 +402,14 @@ export function createAnthropicToResponsesResponseTransform(
       streamProtocol: "openai"
     };
   }
-
-  const chunks: Buffer[] = [];
-  return {
-    stream: new Transform({
-      transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-        chunks.push(Buffer.from(chunk));
-        callback();
-      },
-      flush(callback: TransformCallback) {
-        try {
-          this.push(anthropicMessageToResponses(Buffer.concat(chunks), status));
-          callback();
-        } catch (error) {
-          callback(error as Error);
-        }
-      }
-    }),
+  return bufferedJsonTransform(
     responseHeaders,
-    streamProtocol: "openai"
-  };
+    (body) => anthropicMessageToResponses(body, status),
+    "openai"
+  );
 }
 
 export function createAnthropicToResponsesCompactionStream(): Transform {
-  let pending = "";
-  const decoder = new StringDecoder("utf8");
   let responseId = `resp_${randomUUID()}`;
   let model: string | null = null;
   let inputTokens = 0;
@@ -483,66 +417,27 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
   let summary: string | null = null;
   let outputItem: Record<string, unknown> | null = null;
   let completed = false;
-  let sequenceNumber = 0;
+  const emit = createSequencedEmitter();
 
-  return new Transform({
-    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      pending += decoder.write(chunk);
-      try {
-        flushFrames(false, this);
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
-    },
-    flush(callback: TransformCallback) {
-      try {
-        pending += decoder.end();
-        flushFrames(true, this);
-        if (!completed) {
-          completed = true;
-          emit(this, "response.failed", {
-            type: "response.failed",
-            response: responseEnvelope("failed", {
-              error: {
-                message: "Anthropic compaction stream closed before message_stop.",
-                type: "upstream_stream_incomplete"
-              }
-            })
-          });
-        }
-        callback();
-      } catch (error) {
-        callback(error as Error);
+  return createSseTransform({
+    onData: convertFrame,
+    onFlush(transform) {
+      if (!completed) {
+        completed = true;
+        emit(transform, "response.failed", {
+          type: "response.failed",
+          response: responseEnvelope("failed", {
+            error: {
+              message: "Anthropic compaction stream closed before message_stop.",
+              type: "upstream_stream_incomplete"
+            }
+          })
+        });
       }
     }
   });
 
-  function flushFrames(final: boolean, transform: Transform): void {
-    while (true) {
-      const match = pending.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
-      }
-      const frame = pending.slice(0, match.index);
-      pending = pending.slice(match.index + match[0].length);
-      convertFrame(frame, transform);
-    }
-    if (final && pending.trim()) {
-      convertFrame(pending, transform);
-      pending = "";
-    }
-  }
-
-  function convertFrame(frame: string, transform: Transform): void {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
-    if (!data) {
-      return;
-    }
+  function convertFrame(data: string, transform: Transform): void {
     const event = JSON.parse(data) as unknown;
     if (!isRecord(event) || typeof event.type !== "string") {
       return;
@@ -659,21 +554,13 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
       ...extra
     };
   }
-
-  function emit(transform: Transform, event: string, payload: unknown): void {
-    const body = isRecord(payload) ? { ...payload, sequence_number: sequenceNumber++ } : payload;
-    transform.push(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
-  }
 }
 
 export function createAnthropicToResponsesCompactionResponseTransform(
   status: number,
   headers: IncomingHttpHeaders
 ): UpstreamResponseTransform {
-  const contentEncoding = headerText(headers["content-encoding"]).trim().toLowerCase();
-  if (contentEncoding && contentEncoding !== "identity") {
-    throw new Error(`Translated upstream returned unsupported content-encoding: ${contentEncoding}.`);
-  }
+  ensureIdentityEncoding(headers);
   const responseHeaders = translatedHeaders(headers);
   const contentType = headerText(headers["content-type"]).toLowerCase();
   if (contentType.includes("text/event-stream")) {
@@ -684,31 +571,14 @@ export function createAnthropicToResponsesCompactionResponseTransform(
       streamProtocol: "openai"
     };
   }
-
-  const chunks: Buffer[] = [];
-  return {
-    stream: new Transform({
-      transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-        chunks.push(Buffer.from(chunk));
-        callback();
-      },
-      flush(callback: TransformCallback) {
-        try {
-          this.push(anthropicMessageToResponsesCompaction(Buffer.concat(chunks), status));
-          callback();
-        } catch (error) {
-          callback(error as Error);
-        }
-      }
-    }),
+  return bufferedJsonTransform(
     responseHeaders,
-    streamProtocol: "openai"
-  };
+    (body) => anthropicMessageToResponsesCompaction(body, status),
+    "openai"
+  );
 }
 
 export function createResponsesToAnthropicStream(): Transform {
-  let pending = "";
-  const decoder = new StringDecoder("utf8");
   const messageId = `msg_${randomUUID()}`;
   let model: string | null = null;
   let outputTokens = 0;
@@ -718,60 +588,24 @@ export function createResponsesToAnthropicStream(): Transform {
   let sawToolUse = false;
   const blocks = new Map<string, AnthropicStreamBlock>();
 
-  return new Transform({
-    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      pending += decoder.write(chunk);
-      try {
-        flushFrames(false, this);
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
-    },
-    flush(callback: TransformCallback) {
-      try {
-        pending += decoder.end();
-        flushFrames(true, this);
-        if (!completed) {
-          completed = true;
-          emit(this, "error", {
-            type: "error",
-            error: {
-              type: "api_error",
-              message: "OpenAI stream closed before a terminal response event."
-            }
-          });
-        }
-        callback();
-      } catch (error) {
-        callback(error as Error);
+  return createSseTransform({
+    onData: convertFrame,
+    onFlush(transform) {
+      if (!completed) {
+        completed = true;
+        emit(transform, "error", {
+          type: "error",
+          error: {
+            type: "api_error",
+            message: "OpenAI stream closed before a terminal response event."
+          }
+        });
       }
     }
   });
 
-  function flushFrames(final: boolean, transform: Transform): void {
-    while (true) {
-      const match = pending.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
-      }
-      const frame = pending.slice(0, match.index);
-      pending = pending.slice(match.index + match[0].length);
-      convertFrame(frame, transform);
-    }
-    if (final && pending.trim()) {
-      convertFrame(pending, transform);
-      pending = "";
-    }
-  }
-
-  function convertFrame(frame: string, transform: Transform): void {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
-    if (!data || data === "[DONE]") {
+  function convertFrame(data: string, transform: Transform): void {
+    if (data === "[DONE]") {
       return;
     }
     const event = JSON.parse(data) as unknown;
@@ -1167,8 +1001,6 @@ export function createOpenAiInputTokensToAnthropicResponseTransform(
 }
 
 export function createChatToResponsesStream(): Transform {
-  let pending = "";
-  const decoder = new StringDecoder("utf8");
   let responseId = `resp_${randomUUID()}`;
   let model: string | null = null;
   let createdAt = Math.floor(Date.now() / 1000);
@@ -1181,62 +1013,23 @@ export function createChatToResponsesStream(): Transform {
   let textOutputIndex: number | null = null;
   let finishReason: string | null = null;
   let usage: Record<string, unknown> | null = null;
-  let sequenceNumber = 0;
+  const emit = createSequencedEmitter();
   const toolCalls = new Map<number, ChatStreamToolCall>();
 
-  return new Transform({
-    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
-      pending += decoder.write(chunk);
-      try {
-        flushFrames(false, this);
-        callback();
-      } catch (error) {
-        callback(error as Error);
-      }
-    },
-    flush(callback: TransformCallback) {
-      try {
-        pending += decoder.end();
-        flushFrames(true, this);
-        if (!completed) {
-          if (finishReason !== null) {
-            finish(this);
-          } else {
-            fail(this, "OpenAI Chat stream closed before a finish reason or [DONE] marker.");
-          }
+  return createSseTransform({
+    onData: convertFrame,
+    onFlush(transform) {
+      if (!completed) {
+        if (finishReason !== null) {
+          finish(transform);
+        } else {
+          fail(transform, "OpenAI Chat stream closed before a finish reason or [DONE] marker.");
         }
-        callback();
-      } catch (error) {
-        callback(error as Error);
       }
     }
   });
 
-  function flushFrames(final: boolean, transform: Transform): void {
-    while (true) {
-      const match = pending.match(/\r?\n\r?\n/);
-      if (!match || match.index === undefined) {
-        break;
-      }
-      const frame = pending.slice(0, match.index);
-      pending = pending.slice(match.index + match[0].length);
-      convertFrame(frame, transform);
-    }
-    if (final && pending.trim()) {
-      convertFrame(pending, transform);
-      pending = "";
-    }
-  }
-
-  function convertFrame(frame: string, transform: Transform): void {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n");
-    if (!data) {
-      return;
-    }
+  function convertFrame(data: string, transform: Transform): void {
     if (data === "[DONE]") {
       finish(transform);
       return;
@@ -1510,11 +1303,6 @@ export function createChatToResponsesStream(): Transform {
       ...extra
     };
   }
-
-  function emit(transform: Transform, event: string, payload: unknown): void {
-    const body = isRecord(payload) ? { ...payload, sequence_number: sequenceNumber++ } : payload;
-    transform.push(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
-  }
 }
 
 export function createChatToResponsesResponseTransform(
@@ -1600,6 +1388,79 @@ export function createChatToAnthropicResponseTransform(
     (body) => chatCompletionToAnthropic(body, status),
     "anthropic"
   );
+}
+
+/**
+ * Shared SSE reframing shell: decodes chunks, splits on blank-line frame
+ * boundaries, joins each frame's `data:` lines, and hands non-empty payloads to
+ * `onData`. `onFlush` runs after the final frame so converters can emit their
+ * own stream-closed-early terminal event.
+ */
+function createSseTransform(options: {
+  onData: (data: string, transform: Transform) => void;
+  onFlush: (transform: Transform) => void;
+}): Transform {
+  let pending = "";
+  const decoder = new StringDecoder("utf8");
+
+  const convertFrame = (frame: string, transform: Transform): void => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) {
+      return;
+    }
+    options.onData(data, transform);
+  };
+
+  const flushFrames = (final: boolean, transform: Transform): void => {
+    while (true) {
+      const match = pending.match(/\r?\n\r?\n/);
+      if (!match || match.index === undefined) {
+        break;
+      }
+      const frame = pending.slice(0, match.index);
+      pending = pending.slice(match.index + match[0].length);
+      convertFrame(frame, transform);
+    }
+    if (final && pending.trim()) {
+      convertFrame(pending, transform);
+      pending = "";
+    }
+  };
+
+  return new Transform({
+    transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+      pending += decoder.write(chunk);
+      try {
+        flushFrames(false, this);
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    },
+    flush(callback: TransformCallback) {
+      try {
+        pending += decoder.end();
+        flushFrames(true, this);
+        options.onFlush(this);
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    }
+  });
+}
+
+/** Responses-protocol emitter: stamps a monotonic `sequence_number` per event. */
+function createSequencedEmitter(): (transform: Transform, event: string, payload: unknown) => void {
+  let sequenceNumber = 0;
+  return (transform, event, payload) => {
+    const body = isRecord(payload) ? { ...payload, sequence_number: sequenceNumber++ } : payload;
+    transform.push(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
+  };
 }
 
 function bufferedJsonTransform(

@@ -5,6 +5,7 @@ import type {
   PrimaryRouteResult
 } from "./primary-failover-types.js";
 import { hasTokenUsage } from "./usage.js";
+import { sseDataFrames } from "./sse-frames.js";
 
 const RATE_LIMIT_FALLBACK_MS = 60 * 1000;
 const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
@@ -141,17 +142,7 @@ function parseRetryAfterMs(headers: IncomingHttpHeaders | undefined, now: number
 }
 
 function readSseResponseId(text: string): string | null {
-  const frames = text.split(/\r?\n\r?\n/);
-  for (const frame of frames) {
-    const data = frame
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice("data:".length).trim())
-      .join("\n");
-    if (!data || data === "[DONE]") {
-      continue;
-    }
-
+  for (const data of sseDataFrames(text)) {
     const responseId = readJsonResponseId(data);
     if (responseId) {
       return responseId;

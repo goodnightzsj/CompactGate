@@ -28,23 +28,56 @@
   }
 }
 
-@media (min-width: 761px) and (max-width: 1180px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
+/* Shared by both narrow layouts: the sidebar leaves its vertical rail and the
+   three top-level page grids collapse to one column. The two blocks below keep
+   only the row-vs-column delta. */
+@media (max-width: 1180px) {
   .sidebar {
     position: sticky;
     top: 0;
     width: 100%;
     height: auto;
     min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .sidebar-nav-item {
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    box-shadow: none;
+  }
+
+  .sidebar-nav-item.is-active {
+    border-radius: var(--radius-sm);
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+
+  .sidebar-footer .sidebar-health {
+    display: none;
+  }
+
+  .profile-item-handle {
+    display: none;
+  }
+
+  .dashboard-grid,
+  .health-grid,
+  .routes-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1180px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
     flex-direction: row;
     align-items: center;
     gap: 10px;
     padding: 8px 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border-default);
     overflow-x: auto;
   }
 
@@ -62,14 +95,6 @@
 
   .sidebar-nav-item {
     min-width: 104px;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    box-shadow: none;
-  }
-
-  .sidebar-nav-item.is-active {
-    border-radius: var(--radius-sm);
-    box-shadow: inset 0 -3px 0 var(--accent);
   }
 
   .sidebar-footer {
@@ -83,30 +108,8 @@
     flex-shrink: 0;
   }
 
-  .sidebar-footer .sidebar-health {
-    display: none;
-  }
-
   .sidebar-footer .theme-switch {
     width: 150px;
-  }
-
-  .dashboard-grid,
-  .health-grid,
-  .routes-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .logging-mode-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .profile-item {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .profile-item-handle {
-    display: none;
   }
 
   .profile-item-actions {
@@ -226,16 +229,9 @@
   }
 
   .sidebar {
-    position: sticky;
-    top: 0;
-    width: 100%;
-    height: auto;
-    min-height: 0;
     flex-direction: column;
     align-items: stretch;
     padding: 8px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border-default);
     overflow: visible;
   }
 
@@ -259,18 +255,10 @@
     height: auto;
     min-height: 44px;
     min-width: 0;
-    justify-content: center;
     gap: 2px;
     padding: 8px 5px;
-    border-radius: var(--radius-sm);
     font-size: 0.66rem;
     text-align: center;
-    box-shadow: none;
-  }
-
-  .sidebar-nav-item.is-active {
-    border-radius: var(--radius-sm);
-    box-shadow: inset 0 -3px 0 var(--accent);
   }
 
   .sidebar-nav-icon {
@@ -282,11 +270,7 @@
     display: grid;
     gap: 8px;
     padding: 8px 2px 0;
-    border-top: 1px solid var(--border-default);
-  }
-
-  .sidebar-footer .sidebar-health {
-    display: none;
+    border-top: 1px solid var(--hairline);
   }
 
   .sidebar-footer .theme-switch {
@@ -320,9 +304,6 @@
     min-height: 44px;
   }
 
-  .dashboard-grid,
-  .health-grid,
-  .routes-layout,
   .config-row,
   .logging-storage-intro,
   .logging-mode-grid,
@@ -480,14 +461,15 @@
     padding: 10px;
   }
 
-  .profile-item-handle {
-    display: none;
+  .profile-item-main {
+    grid-column: 1;
   }
 
   .profile-item-actions {
     display: grid;
     gap: 6px;
     width: 100%;
+    grid-column: 1 / -1;
   }
 
   .profile-secondary-actions,
@@ -529,6 +511,14 @@
     justify-content: center;
   }
 
+  .model-kind-cell {
+    justify-content: flex-start;
+  }
+
+  .model-role-cell small {
+    white-space: normal;
+  }
+
   .log-load-more {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -562,9 +552,9 @@
 
   .log-row {
     margin-bottom: 10px;
-    border: 1px solid var(--border-default);
+    border: 1px solid var(--hairline);
     border-radius: var(--radius-md);
-    background: var(--bg-surface);
+    background: var(--surface);
     overflow: hidden;
   }
 
@@ -711,21 +701,6 @@
   }
 
   .profile-scope-grid .profile-item-actions,
-  .profile-item-actions {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 760px) {
-  .profile-item {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .profile-item-main {
-    grid-column: 1;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .profile-item-actions {
     grid-column: 1 / -1;
   }

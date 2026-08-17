@@ -4,7 +4,7 @@ import type {
   SavedConfigProfile,
   UpstreamConfig
 } from "../shared/types.js";
-import { cloneConfig } from "./config-clone.js";
+import { cloneConfig } from "./config-internals.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { isRecord } from "./http-utils.js";
 import type { PrimaryCandidate } from "./primary-failover-types.js";

@@ -5,15 +5,24 @@ import {
   buildUpstreamUrl,
   classifyOpenAiRequest,
   hasRemoteV2CompactionState,
-  isBodyAwareCompactRequest,
   previewRoute,
-  routeForPath,
   rewriteCompactBody,
   rewritePrimaryBody
 } from "../src/server/routing.js";
+import { ROUTE_META } from "../src/shared/route-meta.js";
 import type { CompactGateConfig } from "../src/shared/types.js";
 
 describe("routing helpers", () => {
+  it("retains operator summaries for every route", () => {
+    expect(Object.fromEntries(
+      Object.entries(ROUTE_META).map(([route, meta]) => [route, meta.summary])
+    )).toEqual({
+      primary: "OpenAI/Codex 主上游",
+      compact: "OpenAI/Codex Compact",
+      claude: "Anthropic Claude"
+    });
+  });
+
   it.each([
     ["gpt-5.5", "gpt-5.5-openai-compact"],
     ["gpt-5.4", "gpt-5.4-openai-compact"]
@@ -252,9 +261,6 @@ describe("routing helpers", () => {
       compactionMode: "remote_v2",
       detectionSource: "input"
     });
-    expect(routeForPath("/v1/responses", Buffer.from(JSON.stringify(body)))).toBe("compact");
-    expect(isBodyAwareCompactRequest("/v1/responses", Buffer.from(JSON.stringify(body)))).toBe(true);
-
     const preview = previewRoute("POST", "/v1/responses", body, DEFAULT_CONFIG);
     expect(preview.route).toBe("compact");
     expect(preview.compaction_mode).toBe("remote_v2");

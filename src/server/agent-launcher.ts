@@ -102,31 +102,18 @@ export function parseAgentCommand(argv: readonly string[]): ParsedAgentCommand {
       args.push(...argv.slice(index + 1));
       break;
     }
-    if (value === "--url" || value === "--profile") {
-      const next = argv[index + 1];
+    const match = /^--(url|profile)(?:=(.*))?$/.exec(value);
+    if (match) {
+      const next = match[2] ?? argv[index + 1];
       if (!next) {
-        throw new Error(`${value} requires a value.`);
+        throw new Error(`--${match[1]} requires a value.`);
       }
-      if (value === "--url") {
+      if (match[1] === "url") {
         serverUrl = next;
       } else {
         profileId = next;
       }
-      index += 2;
-      continue;
-    }
-    if (value.startsWith("--url=") || value.startsWith("--profile=")) {
-      const separator = value.indexOf("=");
-      const next = value.slice(separator + 1);
-      if (!next) {
-        throw new Error(`${value.slice(0, separator)} requires a value.`);
-      }
-      if (value.startsWith("--url=")) {
-        serverUrl = next;
-      } else {
-        profileId = next;
-      }
-      index += 1;
+      index += match[2] === undefined ? 2 : 1;
       continue;
     }
     args.push(...argv.slice(index));

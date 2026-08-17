@@ -39,126 +39,82 @@ export interface ProfileNameSyncResult {
 }
 
 export function useScopedProfileControls(config: PublicConfig | null) {
-  const [profileName, setProfileName] = useState("");
-  const [selectedProfileId, setSelectedProfileId] = useState("");
-  const [profileState, setProfileState] = useState<ProfileActionState>("idle");
-  const [claudeProfileName, setClaudeProfileName] = useState("");
-  const [selectedClaudeProfileId, setSelectedClaudeProfileId] = useState("");
-  const [claudeProfileState, setClaudeProfileState] = useState<ProfileActionState>("idle");
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [claudeProfileError, setClaudeProfileError] = useState<string | null>(null);
+  const codex = useScopedProfileState(config, "codex");
+  const claude = useScopedProfileState(config, "claude");
   const [profileDeleteCandidate, setProfileDeleteCandidate] = useState<ProfileDeleteCandidate | null>(null);
-  const profileNameSyncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
-  const claudeProfileNameSyncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
-
-  useEffect(() => {
-    if (!config) {
-      return;
-    }
-
-    const scope = profileScopeState(config, "codex");
-    const next = nextProfileNameSyncState({
-      profiles: scope.profiles,
-      activeProfileId: scope.active_profile_id,
-      selectedId: selectedProfileId,
-      name: profileName,
-      sourceProfileId: profileNameSyncRef.current.sourceProfileId,
-      dirty: profileNameSyncRef.current.dirty
-    });
-    profileNameSyncRef.current = {
-      sourceProfileId: next.sourceProfileId,
-      dirty: next.dirty
-    };
-    if (next.selectedId !== selectedProfileId) {
-      setSelectedProfileId(next.selectedId);
-    }
-    if (next.name !== profileName) {
-      setProfileName(next.name);
-    }
-  }, [config, profileName, selectedProfileId]);
-
-  useEffect(() => {
-    if (!config) {
-      return;
-    }
-
-    const scope = profileScopeState(config, "claude");
-    const next = nextProfileNameSyncState({
-      profiles: scope.profiles,
-      activeProfileId: scope.active_profile_id,
-      selectedId: selectedClaudeProfileId,
-      name: claudeProfileName,
-      sourceProfileId: claudeProfileNameSyncRef.current.sourceProfileId,
-      dirty: claudeProfileNameSyncRef.current.dirty
-    });
-    claudeProfileNameSyncRef.current = {
-      sourceProfileId: next.sourceProfileId,
-      dirty: next.dirty
-    };
-    if (next.selectedId !== selectedClaudeProfileId) {
-      setSelectedClaudeProfileId(next.selectedId);
-    }
-    if (next.name !== claudeProfileName) {
-      setClaudeProfileName(next.name);
-    }
-  }, [claudeProfileName, config, selectedClaudeProfileId]);
-
-  function setProfileNameDraft(name: string): void {
-    profileNameSyncRef.current.dirty = true;
-    setProfileName(name);
-  }
-
-  function setClaudeProfileNameDraft(name: string): void {
-    claudeProfileNameSyncRef.current.dirty = true;
-    setClaudeProfileName(name);
-  }
-
-  function setSyncedProfileName(name: string): void {
-    profileNameSyncRef.current = { sourceProfileId: null, dirty: false };
-    setProfileName(name);
-  }
-
-  function setSyncedClaudeProfileName(name: string): void {
-    claudeProfileNameSyncRef.current = { sourceProfileId: null, dirty: false };
-    setClaudeProfileName(name);
-  }
-
-  function scopedProfileAccessors(scope: ConfigProfileScope): ScopedProfileAccessors {
-    return scope === "codex"
-      ? {
-          name: profileName,
-          selectedId: selectedProfileId,
-          setName: setSyncedProfileName,
-          setSelectedId: setSelectedProfileId,
-          state: profileState,
-          setState: setProfileState,
-          setError: setProfileError
-        }
-      : {
-          name: claudeProfileName,
-          selectedId: selectedClaudeProfileId,
-          setName: setSyncedClaudeProfileName,
-          setSelectedId: setSelectedClaudeProfileId,
-          state: claudeProfileState,
-          setState: setClaudeProfileState,
-          setError: setClaudeProfileError
-        };
-  }
 
   return {
-    claudeProfileError,
-    claudeProfileName,
-    claudeProfileState,
+    claudeProfileError: claude.error,
+    claudeProfileName: claude.name,
+    claudeProfileState: claude.state,
     profileDeleteCandidate,
-    profileError,
-    profileName,
-    profileState,
-    scopedProfileAccessors,
-    selectedClaudeProfileId,
-    selectedProfileId,
-    setClaudeProfileName: setClaudeProfileNameDraft,
+    profileError: codex.error,
+    profileName: codex.name,
+    profileState: codex.state,
+    scopedProfileAccessors: (scope: ConfigProfileScope): ScopedProfileAccessors =>
+      scope === "codex" ? codex.accessors : claude.accessors,
+    selectedClaudeProfileId: claude.selectedId,
+    selectedProfileId: codex.selectedId,
+    setClaudeProfileName: claude.setDraftName,
     setProfileDeleteCandidate,
-    setProfileName: setProfileNameDraft
+    setProfileName: codex.setDraftName
+  };
+}
+
+function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfileScope) {
+  const [name, setName] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [state, setState] = useState<ProfileActionState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const syncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
+
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+
+    const scopeState = profileScopeState(config, scope);
+    const next = nextProfileNameSyncState({
+      profiles: scopeState.profiles,
+      activeProfileId: scopeState.active_profile_id,
+      selectedId,
+      name,
+      sourceProfileId: syncRef.current.sourceProfileId,
+      dirty: syncRef.current.dirty
+    });
+    syncRef.current = {
+      sourceProfileId: next.sourceProfileId,
+      dirty: next.dirty
+    };
+    if (next.selectedId !== selectedId) {
+      setSelectedId(next.selectedId);
+    }
+    if (next.name !== name) {
+      setName(next.name);
+    }
+  }, [config, name, scope, selectedId]);
+
+  return {
+    error,
+    name,
+    selectedId,
+    state,
+    setDraftName(nextName: string): void {
+      syncRef.current.dirty = true;
+      setName(nextName);
+    },
+    accessors: {
+      name,
+      selectedId,
+      state,
+      setName(nextName: string): void {
+        syncRef.current = { sourceProfileId: null, dirty: false };
+        setName(nextName);
+      },
+      setSelectedId,
+      setState,
+      setError
+    } satisfies ScopedProfileAccessors
   };
 }
 

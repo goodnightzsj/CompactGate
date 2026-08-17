@@ -10,11 +10,7 @@ export function rememberMapEntry<Value>(map: Map<string, Value>, key: string, en
 }
 
 export function enforceMaxEntries<Value>(map: Map<string, Value>, maxEntries: number): void {
-  while (map.size > maxEntries) {
-    const oldestKey = map.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      return;
-    }
-    map.delete(oldestKey);
+  while (map.size > Math.max(0, maxEntries)) {
+    map.delete(map.keys().next().value as string);
   }
 }

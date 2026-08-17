@@ -346,12 +346,6 @@ export function RetainedRange({ stats }: { stats: LogStatsSnapshot }) {
   );
 }
 
-export function successRate(stats: LogStatsSnapshot): string {
-  return stats.summary.requests === 0
-    ? "-"
-    : `${((stats.summary.normal_requests / stats.summary.requests) * 100).toFixed(1)}%`;
-}
-
 export function cacheRate(stats: LogStatsSnapshot): string {
   return cacheHitRate(stats.summary.input_tokens, stats.summary.cache_read_tokens);
 }

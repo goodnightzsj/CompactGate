@@ -155,8 +155,8 @@
   padding: 12px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--paper-warm);
-  color: var(--muted);
+  background: var(--surface);
+  color: var(--ink);
 }
 
 .profile-empty-card strong {
@@ -996,16 +996,14 @@
   font-weight: 800;
 }
 
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 120;
-  display: grid;
-  place-items: center;
-  padding: 16px;
+/* Native <dialog> supplies top layer, centering and padding; only the scrim is ours.
+   ::backdrop inherits custom properties only in newer engines, so each var()
+   carries the light-theme literal as a fallback — otherwise the whole
+   declaration would drop out and the scrim would vanish entirely. */
+.confirm-panel::backdrop {
   background:
-    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--amber) 20%, transparent), transparent 30%),
-    color-mix(in srgb, var(--ink) 62%, transparent);
+    radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--amber, #b85c0e) 20%, transparent), transparent 30%),
+    color-mix(in srgb, var(--ink, #1a1c1e) 62%, transparent);
   backdrop-filter: blur(12px);
 }
 
@@ -1018,6 +1016,8 @@
   border: 1px solid color-mix(in srgb, var(--brick) 34%, var(--hairline));
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
+  /* UA sets dialog { color: CanvasText }; the old portal inherited from <body>. */
+  color: var(--ink);
   box-shadow: 0 28px 70px rgba(24, 35, 49, 0.32);
 }
 
@@ -1202,6 +1202,10 @@
   border-radius: var(--radius-md);
   background: var(--surface-raised);
   box-shadow: var(--shadow-lg);
+}
+
+.custom-select-menu.is-compact {
+  border-color: var(--hairline);
 }
 
 .custom-select-option {
@@ -1433,7 +1437,7 @@
   min-height: 28px;
   align-items: center;
   padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--jade) 24%, var(--hairline));
+  border: 1px solid color-mix(in srgb, var(--jade) 28%, var(--hairline));
   border-radius: 999px;
   background: var(--jade-soft);
   color: var(--jade);

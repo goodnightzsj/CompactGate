@@ -15,6 +15,7 @@ import {
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
 } from "../src/server/primary-failover.js";
+import type { PrimaryRouteRequestContext } from "../src/server/primary-failover.js";
 import type {
   CompactGateConfig,
   PrimaryReasoningEffort,
@@ -72,7 +73,7 @@ describe("PrimaryFailoverState", () => {
     });
   });
 
-  it("releases its reservation when local bridge validation rejects the plan", () => {
+  it("rejects plans whose split compaction state cannot be bridged locally", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
@@ -105,9 +106,6 @@ describe("PrimaryFailoverState", () => {
       compactionBridge: bridge,
       primaryFailover: state
     })).toThrow(UnresolvedCompactionStateError);
-
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a"))
-      .toMatchObject({ inFlight: 0 });
   });
 
   it("resets empty-stream failure counts after a successful primary stream", () => {
@@ -120,12 +118,12 @@ describe("PrimaryFailoverState", () => {
     recordRequests(state, config, 10, 200, "OpenAI stream closed before response.completed.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
-    state.recordResult(state.select(config, { model: "gpt-5.5" }), 200, null);
+    state.recordResult(selectAndReserve(state, config, { model: "gpt-5.5" }), 200, null);
     recordRequests(state, config, 10, 200, "OpenAI stream closed before response.completed.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(state, config, { model: "gpt-5.5" }),
       200,
       "OpenAI stream closed before response.completed."
     );
@@ -149,15 +147,12 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(state, config, { model: "gpt-5.5" }),
       403,
       "Upstream returned HTTP 403: insufficient balance."
     );
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
-      quarantineUntil: expect.any(Number)
-    });
 
     recordRequests(
       state,
@@ -169,7 +164,7 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
 
     state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(state, config, { model: "gpt-5.5" }),
       401,
       "Upstream returned HTTP 401: invalid token."
     );
@@ -218,9 +213,6 @@ describe("PrimaryFailoverState", () => {
     ]);
 
     expect(state.preview(rotatedConfig, { model: "gpt-5.5" }).profileId).toBe("codex-a");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
-      quarantineUntil: 0
-    });
   });
 
   it("resets primary health when a profile reasoning effort changes", () => {
@@ -240,8 +232,6 @@ describe("PrimaryFailoverState", () => {
     );
     const before = state.preview(config, { model: "gpt-5.5" });
     expect(before.profileId).toBe("codex-b");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")?.modelCooldowns)
-      .toHaveLength(1);
 
     const updatedConfig = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "low"),
@@ -251,29 +241,34 @@ describe("PrimaryFailoverState", () => {
     const after = state.preview(updatedConfig, { model: "gpt-5.5" });
     expect(after.profileId).toBe("codex-a");
     expect(after.generation).toBe(before.generation + 1);
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")?.modelCooldowns)
-      .toEqual([]);
   });
 
-  it("does not let an old generation completion decrement current in-flight work", () => {
+  it("ignores completions recorded against a stale primary generation", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "xhigh")
     ]);
     const state = new PrimaryFailoverState({ random: () => 0 });
-    const oldSelection = state.select(config, { model: "gpt-5.5" });
+    const oldSelection = selectAndReserve(state, config, { model: "gpt-5.5" });
     const updatedConfig = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a", "low")
     ]);
-    const currentSelection = state.select(updatedConfig, { model: "gpt-5.5" });
+    const currentSelection = selectAndReserve(state, updatedConfig, { model: "gpt-5.5" });
 
     expect(currentSelection.generation).toBe(oldSelection.generation + 1);
-    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(1);
 
-    state.recordResult(oldSelection, 200);
+    state.recordResult(oldSelection, {
+      status: 200,
+      errorSummary: null,
+      responseId: "resp-stale"
+    });
+    expect(state.boundProfileId({ previousResponseId: "resp-stale" })).toBeNull();
 
-    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(1);
-    state.recordResult(currentSelection, 200);
-    expect(state.getHealthSnapshot()[0]?.inFlight).toBe(0);
+    state.recordResult(currentSelection, {
+      status: 200,
+      errorSummary: null,
+      responseId: "resp-current"
+    });
+    expect(state.boundProfileId({ previousResponseId: "resp-current" })).toBe("codex-a");
   });
 
   it("preserves primary health when only the active profile rotates", () => {
@@ -290,8 +285,8 @@ describe("PrimaryFailoverState", () => {
       401,
       "Upstream returned HTTP 401: invalid token."
     );
-    const quarantineUntil = state.getHealthSnapshot()
-      .find((entry) => entry.profileId === "codex-a")?.quarantineUntil;
+    const quarantined = state.preview(config, { model: "gpt-5.5" });
+    expect(quarantined.profileId).toBe("codex-b");
 
     const rotatedConfig = cloneConfig(config);
     if (!rotatedConfig.profile_scopes?.codex) {
@@ -299,10 +294,9 @@ describe("PrimaryFailoverState", () => {
     }
     rotatedConfig.profile_scopes.codex.active_profile_id = "codex-b";
 
-    expect(state.preview(rotatedConfig, { model: "gpt-5.5" }).profileId).toBe("codex-b");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
-      quarantineUntil
-    });
+    const rotated = state.preview(rotatedConfig, { model: "gpt-5.5" });
+    expect(rotated.profileId).toBe("codex-b");
+    expect(rotated.generation).toBe(quarantined.generation);
   });
 
   it("starts from the active profile and then falls forward through saved order", () => {
@@ -334,7 +328,7 @@ describe("PrimaryFailoverState", () => {
 
     for (let index = 0; index < 10; index += 1) {
       clock.state.recordResult(
-        clock.state.select(config, { model: "gpt-5.5" }),
+        selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
         {
           status: 429,
           errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
@@ -360,7 +354,7 @@ describe("PrimaryFailoverState", () => {
 
     for (let index = 0; index < 10; index += 1) {
       clock.state.recordResult(
-        clock.state.select(config, { model: "gpt-5.5" }),
+        selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
         {
           status: 429,
           errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
@@ -371,7 +365,7 @@ describe("PrimaryFailoverState", () => {
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     clock.state.recordResult(
-      clock.state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
       {
         status: 429,
         errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
@@ -402,7 +396,7 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-missing" }).profileId).toBe("codex-a");
 
     state.recordResult(
-      state.select(config, { model: "gpt-missing" }),
+      selectAndReserve(state, config, { model: "gpt-missing" }),
       404,
       "Upstream returned HTTP 404: model gpt-missing not found."
     );
@@ -419,17 +413,12 @@ describe("PrimaryFailoverState", () => {
     const { state } = createState();
 
     state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(state, config, { model: "gpt-5.5" }),
       400,
       "Upstream returned HTTP 400: input is required."
     );
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-a")).toMatchObject({
-      cooldownUntil: 0,
-      quarantineUntil: 0,
-      transientFailures: 0
-    });
   });
 
   it("keeps session traffic sticky while the profile remains healthy", () => {
@@ -441,7 +430,7 @@ describe("PrimaryFailoverState", () => {
 
     recordRateLimitFailures(clock.state, config);
 
-    const selection = clock.state.select(config, {
+    const selection = selectAndReserve(clock.state, config, {
       model: "gpt-5.5",
       sessionKey: "session-one"
     });
@@ -465,7 +454,7 @@ describe("PrimaryFailoverState", () => {
 
     recordRateLimitFailures(clock.state, config);
 
-    const selection = clock.state.select(config, { model: "gpt-5.5" });
+    const selection = selectAndReserve(clock.state, config, { model: "gpt-5.5" });
     expect(selection.profileId).toBe("codex-b");
     clock.state.recordResult(selection, {
       status: 200,
@@ -491,7 +480,7 @@ describe("PrimaryFailoverState", () => {
 
     recordRateLimitFailures(clock.state, config);
 
-    const selection = clock.state.select(config, { model: "gpt-5.5" });
+    const selection = selectAndReserve(clock.state, config, { model: "gpt-5.5" });
     expect(selection.profileId).toBe("codex-b");
     clock.state.recordResult(selection, {
       status: 200,
@@ -524,7 +513,7 @@ describe("PrimaryFailoverState", () => {
 
     recordRateLimitFailures(clock.state, config);
 
-    const selection = clock.state.select(config, compactionContext);
+    const selection = selectAndReserve(clock.state, config, compactionContext);
     expect(selection.profileId).toBe("codex-b");
     clock.state.recordResult(selection, 200, null);
     clock.advance(2_100);
@@ -543,7 +532,7 @@ describe("PrimaryFailoverState", () => {
     recordRateLimitFailures(clock.state, config);
 
     for (const sessionKey of ["session-0", "session-1", "session-2"]) {
-      const selection = clock.state.select(config, { model: "gpt-5.5", sessionKey });
+      const selection = selectAndReserve(clock.state, config, { model: "gpt-5.5", sessionKey });
       expect(selection.profileId).toBe("codex-b");
       clock.state.recordResult(selection, 200, null);
     }
@@ -560,7 +549,7 @@ describe("PrimaryFailoverState", () => {
     recordRateLimitFailures(continuationClock.state, config);
 
     for (const responseId of ["resp-0", "resp-1", "resp-2"]) {
-      const selection = continuationClock.state.select(config, { model: "gpt-5.5" });
+      const selection = selectAndReserve(continuationClock.state, config, { model: "gpt-5.5" });
       expect(selection.profileId).toBe("codex-b");
       continuationClock.state.recordResult(selection, {
         status: 200,
@@ -587,7 +576,7 @@ describe("PrimaryFailoverState", () => {
     recordRateLimitFailures(compactionClock.state, config);
 
     for (const compactionStateKey of ["sha256:state-0", "sha256:state-1", "sha256:state-2"]) {
-      const selection = compactionClock.state.select(config, { model: "gpt-5.5", compactionStateKey });
+      const selection = selectAndReserve(compactionClock.state, config, { model: "gpt-5.5", compactionStateKey });
       expect(selection.profileId).toBe("codex-b");
       compactionClock.state.recordResult(selection, 200, null);
     }
@@ -624,7 +613,7 @@ describe("PrimaryFailoverState", () => {
 
     for (const model of ["missing-0", "missing-1", "missing-2"]) {
       for (let index = 0; index < 11; index += 1) {
-        const selection = state.select(config, { model });
+        const selection = selectAndReserve(state, config, { model });
         expect(selection.profileId).toBe("codex-b");
         state.recordResult(
           selection,
@@ -637,11 +626,6 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "missing-0" }).profileId).toBe("codex-b");
     expect(state.preview(config, { model: "missing-1" }).profileId).toBe("codex-a");
     expect(state.preview(config, { model: "missing-2" }).profileId).toBe("codex-a");
-    expect(state.getHealthSnapshot().find((entry) => entry.profileId === "codex-b")?.modelCooldowns)
-      .toEqual([
-        expect.objectContaining({ model: "missing-1" }),
-        expect.objectContaining({ model: "missing-2" })
-      ]);
   });
 });
 
@@ -773,6 +757,16 @@ describe("primaryRouteRequestContextFromBody", () => {
   });
 });
 
+function selectAndReserve(
+  state: PrimaryFailoverState,
+  config: CompactGateConfig,
+  context: PrimaryRouteRequestContext
+) {
+  const selection = state.preview(config, context);
+  state.reserveSelection(selection, config.primary_failover.auto_schedule);
+  return selection;
+}
+
 function createState(
   startNow = 0,
   options: { maxStickyEntries?: number; maxModelCooldownEntries?: number } = {}
@@ -801,7 +795,7 @@ function recordRequests(
   errorSummary: string | null
 ): void {
   for (let index = 0; index < count; index += 1) {
-    state.recordResult(state.select(config, { model: "gpt-5.5" }), status, errorSummary);
+    state.recordResult(selectAndReserve(state, config, { model: "gpt-5.5" }), status, errorSummary);
   }
 }
 
@@ -814,7 +808,7 @@ function recordModelRequests(
   errorSummary: string | null
 ): void {
   for (let index = 0; index < count; index += 1) {
-    state.recordResult(state.select(config, { model }), status, errorSummary);
+    state.recordResult(selectAndReserve(state, config, { model }), status, errorSummary);
   }
 }
 
@@ -825,7 +819,7 @@ function recordRateLimitFailures(
 ): void {
   for (let index = 0; index < count; index += 1) {
     state.recordResult(
-      state.select(config, { model: "gpt-5.5" }),
+      selectAndReserve(state, config, { model: "gpt-5.5" }),
       {
         status: 429,
         errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",

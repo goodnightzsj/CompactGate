@@ -23,24 +23,24 @@
   gap: 0;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--app-blue) 8%, transparent), transparent 48%),
-    var(--app-surface);
-  box-shadow: var(--app-shadow-soft);
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
+    var(--surface);
+  box-shadow: var(--shadow-md);
 }
 
 .health-hero.tone-good {
-  border-color: color-mix(in srgb, var(--accent-green) 30%, var(--app-line));
+  border-color: color-mix(in srgb, var(--forest) 30%, var(--hairline));
 }
 
 .health-hero.tone-warn {
-  border-color: color-mix(in srgb, var(--accent-amber) 38%, var(--app-line));
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--hairline));
 }
 
 .health-hero.tone-bad {
-  border-color: color-mix(in srgb, var(--accent-red) 38%, var(--app-line));
+  border-color: color-mix(in srgb, var(--brick) 38%, var(--hairline));
 }
 
 .health-status-board {
@@ -49,11 +49,11 @@
   gap: 7px;
   min-width: 0;
   padding: 18px 20px;
-  border-right: 1px solid var(--app-line);
+  border-right: 1px solid var(--hairline);
 }
 
 .health-status-board strong {
-  color: var(--app-text);
+  color: var(--ink);
   font-family: var(--font-display);
   font-size: 1.7rem;
   font-weight: 760;
@@ -64,7 +64,7 @@
 .health-mini-card small,
 .health-entry-card small,
 .health-card-status small {
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.45;
 }
@@ -76,9 +76,9 @@
   align-items: center;
   gap: 7px;
   padding: 0 9px;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-radius: 999px;
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.68rem;
   font-weight: 850;
 }
@@ -92,21 +92,21 @@
 }
 
 .health-state-badge.is-good {
-  border-color: color-mix(in srgb, var(--accent-green) 36%, var(--app-line));
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--forest) 36%, var(--hairline));
+  background: var(--forest-soft);
+  color: var(--forest);
 }
 
 .health-state-badge.is-warn {
-  border-color: color-mix(in srgb, var(--accent-amber) 42%, var(--app-line));
-  background: var(--accent-amber-soft);
-  color: var(--accent-amber);
+  border-color: color-mix(in srgb, var(--amber) 42%, var(--hairline));
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .health-state-badge.is-bad {
-  border-color: color-mix(in srgb, var(--accent-red) 42%, var(--app-line));
-  background: var(--accent-red-soft);
-  color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--brick) 42%, var(--hairline));
+  background: var(--brick-soft);
+  color: var(--brick);
 }
 
 .health-hero-readout {
@@ -121,7 +121,7 @@
   gap: 4px;
   min-width: 0;
   padding: 16px 18px;
-  border-left: 1px solid var(--app-line);
+  border-left: 1px solid var(--hairline);
 }
 
 .health-mini-card:first-child {
@@ -131,7 +131,7 @@
 .health-mini-card span,
 .health-entry-card span,
 .health-kv span {
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.68rem;
   font-weight: 850;
   letter-spacing: 0.08em;
@@ -139,7 +139,7 @@
 }
 
 .health-mini-card strong {
-  color: var(--app-text);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 1rem;
   font-weight: 780;
@@ -158,19 +158,19 @@
   gap: 5px;
   min-width: 0;
   padding: 14px 16px;
-  border: 1px solid var(--app-line);
-  border-left: 3px solid var(--app-blue);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
-  background: var(--app-surface);
-  box-shadow: var(--app-shadow-soft);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
 }
 
 .health-entry-card.is-claude {
-  border-left-color: var(--app-teal);
+  border-left-color: var(--jade);
 }
 
 .health-entry-card code {
-  color: var(--app-text);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.84rem;
   font-weight: 760;
@@ -184,7 +184,7 @@
 }
 
 .health-card {
-  --route-accent: var(--app-blue);
+  --route-accent: var(--accent);
   position: relative;
   display: grid;
   align-content: start;
@@ -192,28 +192,28 @@
   min-width: 0;
   padding: 16px;
   overflow: hidden;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-top: 3px solid var(--route-accent);
   border-radius: var(--radius-md);
-  background: var(--app-surface);
-  color: var(--app-text);
-  box-shadow: var(--app-shadow-soft);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-md);
 }
 
 .health-card.route-compact {
-  --route-accent: var(--app-amber);
+  --route-accent: var(--amber);
 }
 
 .health-card.route-claude {
-  --route-accent: var(--app-teal);
+  --route-accent: var(--jade);
 }
 
 .health-card.tone-warn {
-  border-color: color-mix(in srgb, var(--accent-amber) 38%, var(--app-line));
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--hairline));
 }
 
 .health-card.tone-bad {
-  border-color: color-mix(in srgb, var(--accent-red) 38%, var(--app-line));
+  border-color: color-mix(in srgb, var(--brick) 38%, var(--hairline));
 }
 
 .health-card-head {
@@ -225,7 +225,7 @@
 
 .health-card-head h2 {
   margin: 4px 0 0;
-  color: var(--app-text);
+  color: var(--ink);
   font-family: var(--font-display);
   font-size: 1.16rem;
   line-height: 1.1;
@@ -233,7 +233,7 @@
 
 .health-card-head .eyebrow {
   margin: 0;
-  color: var(--app-muted);
+  color: var(--muted);
   line-height: 1.35;
   white-space: normal;
 }
@@ -246,11 +246,11 @@
   min-width: 0;
   padding: 10px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--route-accent) 8%, var(--app-surface-raised));
+  background: color-mix(in srgb, var(--route-accent) 8%, var(--surface-raised));
 }
 
 .health-card-status strong {
-  color: var(--app-text);
+  color: var(--ink);
   font-size: 0.88rem;
 }
 
@@ -265,19 +265,19 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--app-muted);
+  background: var(--muted);
 }
 
 .health-card-led.is-good {
-  background: var(--accent-green);
+  background: var(--forest);
 }
 
 .health-card-led.is-warn {
-  background: var(--accent-amber);
+  background: var(--amber);
 }
 
 .health-card-led.is-bad {
-  background: var(--accent-red);
+  background: var(--brick);
 }
 
 .health-kv-grid {
@@ -291,12 +291,12 @@
   gap: 2px;
   min-width: 0;
   padding: 8px 0;
-  border-bottom: 1px solid var(--app-line);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .health-kv strong {
   min-width: 0;
-  color: var(--app-text);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.42;
@@ -316,13 +316,13 @@
 }
 
 .health-flag.is-good {
-  background: var(--accent-green-soft);
-  color: var(--accent-green);
+  background: var(--forest-soft);
+  color: var(--forest);
 }
 
 .health-flag.is-warn {
-  background: var(--accent-amber-soft);
-  color: var(--accent-amber);
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .health-led {
@@ -346,10 +346,10 @@
 .health-json-panel {
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
-  background: var(--app-surface);
-  box-shadow: var(--app-shadow-soft);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
 }
 
 .health-checklist {
@@ -365,15 +365,15 @@
   align-items: start;
   padding: 10px;
   border-radius: var(--radius-sm);
-  background: var(--app-surface-soft);
+  background: var(--paper-warm);
 }
 
 .health-check-row.is-warn {
-  background: var(--accent-amber-soft);
+  background: var(--amber-soft);
 }
 
 .health-check-row.is-bad {
-  background: var(--accent-red-soft);
+  background: var(--brick-soft);
 }
 
 .health-check-row span {
@@ -381,15 +381,15 @@
   width: 30px;
   height: 30px;
   place-items: center;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.68rem;
 }
 
 .health-check-row p {
   margin: 4px 0 0;
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.8rem;
   line-height: 1.5;
 }
@@ -413,7 +413,7 @@
 }
 
 .health-json-panel summary small {
-  color: var(--app-muted);
+  color: var(--muted);
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -421,17 +421,17 @@
 }
 
 .health-json-panel summary strong {
-  color: var(--app-text);
+  color: var(--ink);
   font-size: 0.9rem;
 }
 
 .health-json-panel summary:focus-visible {
-  outline: 2px solid var(--app-blue);
+  outline: 2px solid var(--accent);
   outline-offset: 4px;
 }
 
 .health-json-action {
-  color: var(--app-blue);
+  color: var(--accent);
   font-size: 0.72rem;
   font-weight: 800;
 }
@@ -451,10 +451,10 @@
   margin: 14px 0 0;
   overflow: auto;
   padding: 12px;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--app-surface-soft);
-  color: var(--app-text);
+  background: var(--paper-warm);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.55;
@@ -475,7 +475,7 @@
 
   .health-status-board {
     border-right: 0;
-    border-bottom: 1px solid var(--app-line);
+    border-bottom: 1px solid var(--hairline);
   }
 }
 
@@ -498,7 +498,7 @@
   }
 
   .health-mini-card {
-    border-top: 1px solid var(--app-line);
+    border-top: 1px solid var(--hairline);
     border-left: 0;
   }
 

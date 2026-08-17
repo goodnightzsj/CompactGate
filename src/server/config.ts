@@ -4,11 +4,8 @@ import type {
   PublicConfig,
   RouteUrlPreset
 } from "../shared/types.js";
-import {
-  cloneConfig
-} from "./config-clone.js";
+import { cloneConfig, ConfigError, isRecord } from "./config-internals.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
-import { ConfigError } from "./config-error.js";
 import {
   deleteConfigBackup,
   listConfigBackups,
@@ -29,7 +26,6 @@ import {
   getProfileScopeState,
   mergeProfileScopes,
   profileConfigToRuntime,
-  shouldPersistProfileNormalization,
   syncActiveProfilesFromRuntime,
   validateProfileConfig
 } from "./config-profile-scope.js";
@@ -41,14 +37,13 @@ import {
   routeUrlEntriesFromRuntime,
   withRecordedRouteUrlPresets
 } from "./config-route-presets.js";
-import { isRecord } from "./config-readers.js";
 import {
   mergeRuntimeConfig,
   validateBaseUrl,
   validateRuntimeConfig
 } from "./config-runtime.js";
 
-export { ConfigError } from "./config-error.js";
+export { ConfigError } from "./config-internals.js";
 export { DEFAULT_CONFIG } from "./config-defaults.js";
 export { parseListenAddress } from "./config-runtime.js";
 
@@ -68,20 +63,10 @@ export class ConfigStore {
 
   static async load(configPath: string): Promise<ConfigStore> {
     const loaded = await readConfigFile(configPath);
-    let config = DEFAULT_CONFIG;
-    let shouldPersistNormalizedProfiles = false;
-
-    if (!loaded.missing) {
-      config = mergeConfig(DEFAULT_CONFIG, loaded.value);
-      shouldPersistNormalizedProfiles = shouldPersistProfileNormalization(loaded.value);
-    }
+    const config = loaded.missing ? DEFAULT_CONFIG : mergeConfig(DEFAULT_CONFIG, loaded.value);
 
     validateConfig(config);
-    const store = new ConfigStore(loaded.resolvedPath, config);
-    if (shouldPersistNormalizedProfiles) {
-      await store.persist(config);
-    }
-    return store;
+    return new ConfigStore(loaded.resolvedPath, config);
   }
 
   get(): CompactGateConfig {
@@ -101,7 +86,6 @@ export class ConfigStore {
       const merged = mergeConfig(this.current, applyRouteUrlCredentialPresetBindings(this.current, patch));
       return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
         ...merged,
-        profiles: undefined,
         active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
       }), routeUrlEntriesFromRuntime(merged));
     });
@@ -116,7 +100,6 @@ export class ConfigStore {
       const merged = mergeConfig(DEFAULT_CONFIG, value);
       return {
         ...merged,
-        profiles: undefined,
         active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
       };
     });
@@ -305,7 +288,6 @@ function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig
 
   return {
     ...runtime,
-    profiles: undefined,
     active_profile_id: profileScopes.codex?.active_profile_id ?? null,
     profile_scopes: profileScopes,
     route_url_presets: mergeRouteUrlPresets(base.route_url_presets, patchRecord.route_url_presets)

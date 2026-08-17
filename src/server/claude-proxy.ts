@@ -22,8 +22,9 @@ import {
 import type { RequestLogger } from "./logger.js";
 import {
   applyOpenAiProxyUpstreamResult,
+  applyUpstreamFailureToTransaction,
   createOpenAiProxyTransactionState,
-  finalizeOpenAiProxyTransaction
+  finalizeFromTransaction
 } from "./openai-proxy-transaction.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
 import {
@@ -98,7 +99,7 @@ export async function proxyClaudeRequest(
       const conversion = upstreamProtocol === "openai_chat"
         ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
         : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });
-      transaction.upstreamBody = conversion.body;
+      transaction.upstreamBody = conversion;
       upstream = buildUpstreamUrl(
         config.claude.primary.base_url,
         upstreamProtocol === "openai_chat"
@@ -197,21 +198,7 @@ export async function proxyClaudeRequest(
     }
   } catch (error) {
     if (error instanceof UpstreamRequestError) {
-      transaction.upstreamStatus = error.details.status;
-      transaction.responseBody = error.details.responseBody;
-      transaction.responseHeaders = error.details.responseHeaders;
-      transaction.firstTokenMs = error.details.firstTokenMs;
-      transaction.streamTerminalEvent = error.details.streamSummary?.terminalEvent ?? null;
-      transaction.clientDisconnectPhase = error.details.clientDisconnectPhase;
-      transaction.streamOversizedEventCount = error.details.streamSummary?.oversizedEventCount ?? 0;
-      transaction.responseBodyTruncated = error.details.responseBodyTruncated;
-      transaction.responseModel = error.details.streamSummary?.responseModel ?? transaction.responseModel;
-      transaction.usage = error.details.streamSummary?.usage ?? transaction.usage;
-      transaction.streamOutcome = error.details.kind === "client_cancel"
-        ? error.details.clientDisconnectPhase === "after_terminal"
-          ? "client_cancel_after_terminal"
-          : "client_cancel"
-        : error.details.kind;
+      applyUpstreamFailureToTransaction(transaction, error.details);
     }
     transaction.status = error instanceof ProtocolConversionError
       ? error.status
@@ -226,7 +213,7 @@ export async function proxyClaudeRequest(
     }
   } finally {
     const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");
-    await finalizeOpenAiProxyTransaction({
+    await finalizeFromTransaction(transaction, {
       logger,
       captureWriter,
       studioEvents,
@@ -235,40 +222,15 @@ export async function proxyClaudeRequest(
       compactionDetectionSource: null,
       req,
       url: logUrl,
-      status: transaction.status,
-      upstreamStatus: transaction.upstreamStatus,
-      streamTerminalEvent: transaction.streamTerminalEvent,
-      clientDisconnectPhase: transaction.clientDisconnectPhase,
-      streamOutcome: transaction.streamOutcome,
-      streamOversizedEventCount: transaction.streamOversizedEventCount,
-      upstreamResponseTruncated: transaction.responseBodyTruncated,
       startedAt,
       startedAtIso,
-      requestMetadata: transaction.requestMetadata,
-      requestType: transaction.requestType,
       upstream,
       requestId,
-      sourceModel: transaction.sourceModel,
-      targetModel: transaction.targetModel,
       responseModel: transaction.responseModel,
-      firstTokenMs: transaction.firstTokenMs,
-      usage: transaction.usage,
-      errorSummary: transaction.errorSummary,
-      compactBridgeReplacements: transaction.compactBridgeReplacements,
-      rawBody: transaction.rawBody,
-      requestHeaders: transaction.requestHeaders,
       upstreamBody: transaction.upstreamBody.byteLength > 0
         ? transaction.upstreamBody
         : transaction.rawBody,
-      responseBody: transaction.responseBody,
-      responseHeaders: transaction.responseHeaders,
-      clientResponseBody: transaction.clientResponseBody,
-      clientResponseHeaders: transaction.clientResponseHeaders,
-      persistBody: config.logging.persist_body,
-      compactResponseNormalized: transaction.compactResponseNormalized,
-      compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
-      sensitiveHeaderNames: transaction.sensitiveHeaderNames
+      persistBody: config.logging.persist_body
     });
   }
 }

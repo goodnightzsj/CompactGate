@@ -39,17 +39,6 @@ export interface PrimaryRouteResult {
   usage?: TokenUsageMetrics;
 }
 
-export interface PrimaryProfileHealthSnapshot {
-  profileId: string;
-  inFlight: number;
-  transientFailures: number;
-  emptyStreamFailures: number;
-  cooldownUntil: number;
-  quarantineUntil: number;
-  rateLimitUntil: number;
-  modelCooldowns: Array<{ model: string; until: number; reason: string }>;
-}
-
 export interface PrimaryCandidate {
   id: string;
   name: string;

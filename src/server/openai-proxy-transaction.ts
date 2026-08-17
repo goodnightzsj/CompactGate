@@ -172,6 +172,121 @@ export function applyOpenAiProxyUpstreamResult(
   state.firstTokenMs = result.firstTokenMs;
 }
 
+/**
+ * The upstream-failure fields this module copies onto transaction state.
+ * Structurally satisfied by `UpstreamRequestError.details`, but spelled out here
+ * because this module sits below upstream-client.ts and must not import it (see
+ * test/architecture-boundaries.test.ts).
+ */
+export interface UpstreamFailureTransactionDetails {
+  status: number | null;
+  responseBody: Buffer;
+  responseBodyTruncated: boolean;
+  responseHeaders: IncomingHttpHeaders;
+  firstTokenMs: number | null;
+  streamSummary: OpenAiStreamSummary | null;
+  clientDisconnectPhase: ClientDisconnectPhase;
+  kind: StreamOutcome;
+}
+
+/** Copies upstream failure details onto transaction state. */
+export function applyUpstreamFailureToTransaction(
+  state: OpenAiProxyTransactionState,
+  details: UpstreamFailureTransactionDetails
+): void {
+  state.upstreamStatus = details.status;
+  state.responseBody = details.responseBody;
+  state.responseHeaders = details.responseHeaders;
+  state.firstTokenMs = details.firstTokenMs;
+  state.streamTerminalEvent = details.streamSummary?.terminalEvent ?? null;
+  state.clientDisconnectPhase = details.clientDisconnectPhase;
+  state.streamOversizedEventCount = details.streamSummary?.oversizedEventCount ?? 0;
+  state.responseBodyTruncated = details.responseBodyTruncated;
+  state.responseModel = details.streamSummary?.responseModel ?? state.responseModel;
+  state.usage = details.streamSummary?.usage ?? state.usage;
+  state.streamOutcome = details.kind === "client_cancel"
+    ? details.clientDisconnectPhase === "after_terminal"
+      ? "client_cancel_after_terminal"
+      : "client_cancel"
+    : details.kind;
+}
+
+/** Input fields `finalizeFromTransaction` derives from transaction state. */
+type TransactionDerivedField =
+  | "status"
+  | "upstreamStatus"
+  | "streamTerminalEvent"
+  | "clientDisconnectPhase"
+  | "streamOutcome"
+  | "streamOversizedEventCount"
+  | "upstreamResponseTruncated"
+  | "requestMetadata"
+  | "requestType"
+  | "sourceModel"
+  | "targetModel"
+  | "firstTokenMs"
+  | "usage"
+  | "errorSummary"
+  | "compactBridgeReplacements"
+  | "rawBody"
+  | "requestHeaders"
+  | "upstreamBody"
+  | "responseBody"
+  | "responseHeaders"
+  | "clientResponseBody"
+  | "clientResponseHeaders"
+  | "compactResponseNormalized"
+  | "compactResponseNormalizeReason"
+  | "compactResponseSyntheticSource"
+  | "sensitiveHeaderNames";
+
+export type FinalizeFromTransactionInput =
+  Omit<OpenAiProxyTransactionInput, TransactionDerivedField>
+  & Partial<OpenAiProxyTransactionInput>;
+
+/**
+ * Finalizes a proxy transaction, projecting the shared transaction-state fields
+ * onto the log/capture input. Anything passed in `overrides` wins, so callers
+ * only spell out their per-route fields (route, compaction mode, url, ...) plus
+ * any state field that needs a different value. Note `responseModel` and
+ * `providerStatePortability` are deliberately NOT derived here: callers that
+ * omit them must keep logging `undefined`.
+ */
+export function finalizeFromTransaction(
+  transaction: OpenAiProxyTransactionState,
+  overrides: FinalizeFromTransactionInput
+): Promise<void> {
+  return finalizeOpenAiProxyTransaction({
+    status: transaction.status,
+    upstreamStatus: transaction.upstreamStatus,
+    streamTerminalEvent: transaction.streamTerminalEvent,
+    clientDisconnectPhase: transaction.clientDisconnectPhase,
+    streamOutcome: transaction.streamOutcome,
+    streamOversizedEventCount: transaction.streamOversizedEventCount,
+    upstreamResponseTruncated: transaction.responseBodyTruncated,
+    requestMetadata: transaction.requestMetadata,
+    requestType: transaction.requestType,
+    sourceModel: transaction.sourceModel,
+    targetModel: transaction.targetModel,
+    firstTokenMs: transaction.firstTokenMs,
+    usage: transaction.usage,
+    errorSummary: transaction.errorSummary,
+    compactBridgeReplacements: transaction.compactBridgeReplacements,
+    rawBody: transaction.rawBody,
+    requestHeaders: transaction.requestHeaders,
+    upstreamBody: transaction.upstreamBody,
+    responseBody: transaction.responseBody,
+    responseHeaders: transaction.responseHeaders,
+    clientResponseBody: transaction.clientResponseBody,
+    clientResponseHeaders: transaction.clientResponseHeaders,
+    compactResponseNormalized: transaction.compactResponseNormalized,
+    compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
+    compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+    sensitiveHeaderNames: transaction.sensitiveHeaderNames,
+    ...overrides
+  });
+}
+
 export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransactionInput): Promise<void> {
   const completedAtIso = new Date().toISOString();
   const captureEnabled = input.captureWriter.isEnabled();

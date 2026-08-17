@@ -5,6 +5,7 @@ import type {
   CompactResponseSyntheticSource
 } from "../shared/types.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { enforceMaxEntries, rememberMapEntry } from "./primary-failover-limits.js";
 import { decodeCompactGateCompactionSummary } from "./protocol-conversion.js";
 
 export interface PrimaryBridgeResult {
@@ -281,21 +282,6 @@ export class CompactionBridgeStore {
         this.compactResponsesByKey.delete(key);
       }
     }
-  }
-}
-
-function rememberMapEntry<Value>(map: Map<string, Value>, key: string, value: Value): void {
-  map.delete(key);
-  map.set(key, value);
-}
-
-function enforceMaxEntries<Value>(map: Map<string, Value>, maxEntries: number): void {
-  while (map.size > maxEntries) {
-    const oldestKey = map.keys().next().value as string | undefined;
-    if (!oldestKey) {
-      return;
-    }
-    map.delete(oldestKey);
   }
 }
 
