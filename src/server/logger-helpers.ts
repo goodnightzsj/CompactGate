@@ -2,6 +2,7 @@ import { routeProvider } from "../shared/route-meta.js";
 import type {
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
+  CompactionDiagnostics,
   ClientDisconnectPhase,
   LogStatusKind,
   ProviderLogCounts,
@@ -173,6 +174,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     compact_response_synthetic_source: readCompactResponseSyntheticSource(
       row.compact_response_synthetic_source
     ),
+    compaction_diagnostics: readCompactionDiagnostics(row.compaction_diagnostics),
     source_model: readNullableString(row.source_model),
     target_model: readNullableString(row.target_model),
     response_model: responseModel,
@@ -247,6 +249,34 @@ function readStreamOutcome(value: unknown): StreamOutcome | null {
 
 function readResponseModelSource(value: unknown): ResponseModelSource {
   return value === "upstream" || value === "target_fallback" ? value : "unavailable";
+}
+
+function readCompactionDiagnostics(value: unknown): CompactionDiagnostics | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<CompactionDiagnostics>;
+    const requestItemCount = parsed.request_item_count;
+    const requestTriggerCount = parsed.request_trigger_count;
+    const responseItemCount = parsed.response_item_count;
+    if (
+      (typeof parsed.implementation === "string" || parsed.implementation === null) &&
+      typeof requestItemCount === "number" && Number.isInteger(requestItemCount) &&
+      typeof requestTriggerCount === "number" && Number.isInteger(requestTriggerCount) &&
+      typeof responseItemCount === "number" && Number.isInteger(responseItemCount)
+    ) {
+      return {
+        implementation: parsed.implementation ?? null,
+        request_item_count: Math.max(0, requestItemCount),
+        request_trigger_count: Math.max(0, requestTriggerCount),
+        response_item_count: Math.max(0, responseItemCount)
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 export function normalizeRoute(value: unknown): RouteKind {

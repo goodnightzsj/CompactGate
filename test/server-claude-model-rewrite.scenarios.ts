@@ -236,6 +236,7 @@ function buildMappedClaudeConfig(baseUrl: string): CompactGateConfig {
   return {
     ...DEFAULT_CONFIG,
     claude: {
+      ...DEFAULT_CONFIG.claude,
       primary: {
         ...DEFAULT_CONFIG.claude.primary,
         base_url: baseUrl,

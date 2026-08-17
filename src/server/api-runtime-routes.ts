@@ -27,6 +27,8 @@ import {
 } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import { resolveRequestScopedProfile } from "./request-profile.js";
+import { probeCompactCapability } from "./compact-capability-probe.js";
 
 export async function handleRuntimeApi(
   req: IncomingMessage,
@@ -39,6 +41,27 @@ export async function handleRuntimeApi(
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor
 ): Promise<boolean> {
+  if (req.method === "POST" && url.pathname === "/api/compact/capability-probe") {
+    const body = await readJsonBody(req);
+    if (!isRecord(body)) {
+      throw new ConfigError("compact capability probe body must be a JSON object.");
+    }
+    const baseConfig = configStore.get();
+    const requestProfile = resolveRequestScopedProfile(
+      baseConfig,
+      "codex",
+      req.headers,
+      req.socket.remoteAddress
+    );
+    sendJson(res, 200, await probeCompactCapability({
+      req,
+      res,
+      config: requestProfile?.config ?? baseConfig,
+      model: body.model
+    }));
+    return true;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/test-route") {
     const body = await readJsonBody(req);
 
@@ -55,13 +78,19 @@ export async function handleRuntimeApi(
             Object.entries(body.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string")
           )
         : undefined;
-      let previewConfig = config;
+      const requestProfile = resolveRequestScopedProfile(
+        config,
+        isClaudeIngressPath(parsedUrl.pathname) ? "claude" : "codex",
+        previewHeaders ?? {},
+        req.socket.remoteAddress
+      );
+      let previewConfig = requestProfile?.config ?? config;
       if (!isClaudeIngressPath(parsedUrl.pathname)) {
         const classification = classifyOpenAiRequest(parsedUrl.pathname, body.body, previewHeaders);
         const usesPrimaryPlan = classification.route === "primary" ||
           classification.compactionMode === "remote_v2" ||
           (classification.route === "compact" && config.compact.upstream_mode === "primary");
-        if (usesPrimaryPlan) {
+        if (usesPrimaryPlan && !requestProfile) {
           previewConfig = primaryFailover.preview(
             config,
             primaryRouteRequestContextFromBody(
@@ -72,7 +101,15 @@ export async function handleRuntimeApi(
           ).config;
         }
       }
-      sendJson(res, 200, previewRoute(method, body.path, body.body, previewConfig, previewHeaders));
+      sendJson(res, 200, {
+        ...previewRoute(method, body.path, body.body, previewConfig, previewHeaders),
+        ...(requestProfile
+          ? {
+              profile_id: requestProfile.profileId,
+              profile_source: requestProfile.source
+            }
+          : {})
+      });
     } catch (error) {
       if (error instanceof TypeError) {
         throw new ConfigError("test-route path must be a valid URL or path.");

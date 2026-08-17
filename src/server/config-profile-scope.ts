@@ -45,7 +45,9 @@ export function mergeRuntimeForProfileScope(
     claude: {
       primary: { ...profileRuntime.claude.primary },
       compact: { ...profileRuntime.claude.compact },
-      model_map: { ...profileRuntime.claude.model_map }
+      model_map: { ...profileRuntime.claude.model_map },
+      scene_map: JSON.parse(JSON.stringify(profileRuntime.claude.scene_map)),
+      long_context_bytes: profileRuntime.claude.long_context_bytes
     }
   };
 }

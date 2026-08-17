@@ -1,5 +1,7 @@
+import { validateHeaderName, validateHeaderValue } from "node:http";
 import type {
   ClaudeModelMap,
+  ClaudeSceneMap,
   CompactGateRuntimeConfig,
   CompactModelMode,
   CompactUpstreamMode,
@@ -8,9 +10,10 @@ import type {
   UpstreamConfig,
   UpstreamProtocol
 } from "../shared/types.js";
-import { CLAUDE_MODEL_MAP_ROLES } from "./config-defaults.js";
+import { CLAUDE_MODEL_MAP_ROLES, CLAUDE_SCENES } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
 import { isValidBaseUrl } from "./config-url.js";
+import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 import {
   isRecord,
   readBoolean,
@@ -21,6 +24,27 @@ import {
 } from "./config-readers.js";
 
 const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
+const MAX_EXTRA_HEADERS = 64;
+const MAX_EXTRA_HEADER_BYTES = 16 * 1024;
+const FORBIDDEN_EXTRA_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "x-api-key",
+  "api-key",
+  "anthropic-api-key",
+  "x-anthropic-api-key",
+  "cookie",
+  "set-cookie",
+  "host",
+  "content-length",
+  "connection",
+  "keep-alive",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+]);
 
 export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   parseListenAddress(config.listen);
@@ -36,12 +60,36 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   validateEnvName(config.compact.api_key_env, "compact.api_key_env");
   validateEnvName(config.claude.primary.api_key_env, "claude.primary.api_key_env");
   validateEnvName(config.claude.compact.api_key_env, "claude.compact.api_key_env");
+  validateExtraHeaders(config.primary.extra_headers, "primary.extra_headers");
+  validateExtraHeaders(config.compact.extra_headers, "compact.extra_headers");
+  validateExtraHeaders(config.claude.primary.extra_headers, "claude.primary.extra_headers");
+  validateExtraHeaders(config.claude.compact.extra_headers, "claude.compact.extra_headers");
+  validateProxyUrl(config.primary.proxy_url, config.primary.base_url, "primary.proxy_url");
+  validateProxyUrl(config.compact.proxy_url, config.compact.base_url, "compact.proxy_url");
+  validateProxyUrl(
+    config.claude.primary.proxy_url,
+    config.claude.primary.base_url,
+    "claude.primary.proxy_url"
+  );
+  validateProxyUrl(
+    config.claude.compact.proxy_url,
+    config.claude.compact.base_url,
+    "claude.compact.proxy_url"
+  );
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validatePrimaryReasoningEffort(config.primary.reasoning_effort);
   validateStateDomainId(config.primary.state_domain_id);
   validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
   validateClaudeModelMap(config.claude.model_map);
+  validateClaudeSceneMap(config.claude.scene_map);
+  if (
+    !Number.isInteger(config.claude.long_context_bytes) ||
+    config.claude.long_context_bytes < 0 ||
+    config.claude.long_context_bytes > 100 * 1024 * 1024
+  ) {
+    throw new ConfigError("claude.long_context_bytes must be between 0 and 104857600.");
+  }
   validateUpstreamMode(config.compact.upstream_mode);
   validateUpstreamMode(config.claude.compact.upstream_mode);
   validateModelMode(config.compact.model_mode);
@@ -126,10 +174,7 @@ export function mergeRuntimeConfig(
     listen: readString(patchRecord.listen, base.listen),
     primary: mergePrimaryConfig(base.primary, readChild(patchRecord.primary)),
     compact: {
-      base_url: readString(compactPatch.base_url, base.compact.base_url),
-      api_key: readString(compactPatch.api_key, base.compact.api_key),
-      api_key_env: readString(compactPatch.api_key_env, base.compact.api_key_env),
-      upstream_protocol: readUpstreamProtocol(compactPatch.upstream_protocol, base.compact.upstream_protocol),
+      ...mergeUpstreamConfig(base.compact, compactPatch),
       upstream_mode: readString(
         compactPatch.upstream_mode,
         base.compact.upstream_mode
@@ -231,6 +276,46 @@ function validateEnvName(value: string, field: string): void {
   }
 }
 
+function validateExtraHeaders(value: Record<string, string>, field: string): void {
+  const entries = Object.entries(value);
+  if (entries.length > MAX_EXTRA_HEADERS) {
+    throw new ConfigError(`${field} must contain at most ${MAX_EXTRA_HEADERS} headers.`);
+  }
+
+  let totalBytes = 0;
+  for (const [name, headerValue] of entries) {
+    const lowerName = name.toLowerCase();
+    if (FORBIDDEN_EXTRA_HEADERS.has(lowerName)) {
+      throw new ConfigError(`${field}.${name} cannot override a protected header.`);
+    }
+    try {
+      validateHeaderName(name);
+      validateHeaderValue(name, headerValue);
+    } catch {
+      throw new ConfigError(`${field}.${name} must be a valid HTTP header.`);
+    }
+    totalBytes += Buffer.byteLength(name) + Buffer.byteLength(headerValue);
+  }
+
+  if (totalBytes > MAX_EXTRA_HEADER_BYTES) {
+    throw new ConfigError(`${field} must be ${MAX_EXTRA_HEADER_BYTES} bytes or fewer.`);
+  }
+}
+
+function validateProxyUrl(value: string, baseUrl: string, field: string): void {
+  if (value.trim().length === 0) {
+    return;
+  }
+  if (new URL(baseUrl).protocol !== "https:") {
+    throw new ConfigError(`${field} requires an https upstream URL.`);
+  }
+  try {
+    parseHttpConnectProxyUrl(value);
+  } catch (error) {
+    throw new ConfigError(`${field}: ${error instanceof Error ? error.message : "Invalid proxy URL."}`);
+  }
+}
+
 function validateModelMode(value: string): asserts value is CompactModelMode {
   if (value !== "linked" && value !== "custom") {
     throw new ConfigError("compact.model_mode must be linked or custom.");
@@ -254,6 +339,22 @@ function validateOptionalModelName(value: string, field: string): void {
 function validateClaudeModelMap(modelMap: ClaudeModelMap): void {
   for (const role of CLAUDE_MODEL_MAP_ROLES) {
     validateOptionalModelName(modelMap[role] ?? "", `claude.model_map.${role}`);
+  }
+}
+
+function validateClaudeSceneMap(sceneMap: ClaudeSceneMap): void {
+  for (const scene of CLAUDE_SCENES) {
+    const target = sceneMap[scene];
+    if (
+      target.profile_id.length > 256 ||
+      target.profile_id.trim() !== target.profile_id ||
+      /[\u0000-\u001f\u007f]/.test(target.profile_id)
+    ) {
+      throw new ConfigError(
+        `claude.scene_map.${scene}.profile_id must be at most 256 printable characters without surrounding whitespace.`
+      );
+    }
+    validateOptionalModelName(target.model, `claude.scene_map.${scene}.model`);
   }
 }
 
@@ -281,9 +382,36 @@ function mergeUpstreamConfig(
     base_url: readString(patch.base_url, base.base_url),
     api_key: readString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
+    extra_headers: readExtraHeaders(patch.extra_headers, base.extra_headers),
+    proxy_url: readString(patch.proxy_url, base.proxy_url),
     upstream_protocol: readUpstreamProtocol(patch.upstream_protocol, base.upstream_protocol),
     model_override: readString(patch.model_override, base.model_override ?? "")
   };
+}
+
+function readExtraHeaders(
+  value: unknown,
+  fallback: Record<string, string>
+): Record<string, string> {
+  if (value === undefined) {
+    return { ...fallback };
+  }
+  if (!isRecord(value)) {
+    throw new ConfigError("extra_headers must be a JSON object containing string values.");
+  }
+
+  const next: Record<string, string> = {};
+  for (const [name, headerValue] of Object.entries(value)) {
+    if (typeof headerValue !== "string") {
+      throw new ConfigError("extra_headers must be a JSON object containing string values.");
+    }
+    const lowerName = name.toLowerCase();
+    if (Object.hasOwn(next, lowerName)) {
+      throw new ConfigError(`extra_headers contains a duplicate header: ${name}.`);
+    }
+    next[lowerName] = headerValue;
+  }
+  return next;
 }
 
 function mergePrimaryConfig(
@@ -307,7 +435,10 @@ function mergeClaudeConfig(
   const primaryPatch = readChild(patch.primary);
   const compactPatch = readChild(patch.compact);
   const modelMapPatch = readChild(patch.model_map);
+  const sceneMapPatch = readChild(patch.scene_map);
   const hasModelMapPatch = Object.keys(modelMapPatch).length > 0;
+  const sceneMap = mergeClaudeSceneMap(base.scene_map, sceneMapPatch);
+  const longContextBytes = readNumber(patch.long_context_bytes, base.long_context_bytes);
 
   if (Object.keys(primaryPatch).length > 0 || Object.keys(compactPatch).length > 0) {
     const modelMap = mergeClaudeModelMap(base.model_map, modelMapPatch);
@@ -320,11 +451,19 @@ function mergeClaudeConfig(
         model_override: modelMap.default
       },
       compact: mergeClaudeCompactConfig(base.compact, compactPatch),
-      model_map: modelMap
+      model_map: modelMap,
+      scene_map: sceneMap,
+      long_context_bytes: longContextBytes
     };
   }
 
-  if (Object.hasOwn(patch, "base_url") || Object.hasOwn(patch, "api_key") || Object.hasOwn(patch, "api_key_env")) {
+  if (
+    Object.hasOwn(patch, "base_url") ||
+    Object.hasOwn(patch, "api_key") ||
+    Object.hasOwn(patch, "api_key_env") ||
+    Object.hasOwn(patch, "extra_headers") ||
+    Object.hasOwn(patch, "proxy_url")
+  ) {
     const legacy = mergeUpstreamConfig(base.primary, patch);
     const modelMap = mergeClaudeModelMap(base.model_map, modelMapPatch);
     return {
@@ -337,7 +476,9 @@ function mergeClaudeConfig(
         upstream_mode: base.compact.upstream_mode,
         model_override: base.compact.model_override
       },
-      model_map: modelMap
+      model_map: modelMap,
+      scene_map: sceneMap,
+      long_context_bytes: longContextBytes
     };
   }
 
@@ -349,7 +490,9 @@ function mergeClaudeConfig(
         model_override: modelMap.default
       },
       compact: { ...base.compact },
-      model_map: modelMap
+      model_map: modelMap,
+      scene_map: sceneMap,
+      long_context_bytes: longContextBytes
     };
   }
 
@@ -359,7 +502,9 @@ function mergeClaudeConfig(
       model_override: base.model_map.default
     },
     compact: { ...base.compact },
-    model_map: { ...base.model_map }
+    model_map: { ...base.model_map },
+    scene_map: sceneMap,
+    long_context_bytes: longContextBytes
   };
 }
 
@@ -370,6 +515,18 @@ function mergeClaudeModelMap(base: ClaudeModelMap, patch: Record<string, unknown
     next[role] = readString(patch[role], next[role]);
   }
 
+  return next;
+}
+
+function mergeClaudeSceneMap(base: ClaudeSceneMap, patch: Record<string, unknown>): ClaudeSceneMap {
+  const next = { ...base };
+  for (const scene of CLAUDE_SCENES) {
+    const target = readChild(patch[scene]);
+    next[scene] = {
+      profile_id: readString(target.profile_id, base[scene].profile_id),
+      model: readString(target.model, base[scene].model)
+    };
+  }
   return next;
 }
 

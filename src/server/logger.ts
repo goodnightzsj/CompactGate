@@ -309,6 +309,7 @@ export class RequestLogger {
               compact_response_normalized,
               compact_response_normalize_reason,
               compact_response_synthetic_source,
+              compaction_diagnostics,
               source_model,
               target_model,
               response_model,
@@ -341,6 +342,7 @@ export class RequestLogger {
             ) VALUES (
               ?, ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
+              ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
               ?, ?, ?, ?, ?,
@@ -372,6 +374,7 @@ export class RequestLogger {
           entry.compact_response_normalized ? 1 : 0,
           entry.compact_response_normalize_reason,
           entry.compact_response_synthetic_source,
+          entry.compaction_diagnostics ? JSON.stringify(entry.compaction_diagnostics) : null,
           entry.source_model,
           entry.target_model,
           entry.response_model,

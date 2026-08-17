@@ -199,7 +199,9 @@ export function applyDraftToConfigExport(
         upstream_mode: form.claudeCompactUpstreamMode,
         model_override: form.claudeCompactModelOverride
       },
-      model_map: claudeModelMap
+      model_map: claudeModelMap,
+      scene_map: JSON.parse(JSON.stringify(config.claude.scene_map)),
+      long_context_bytes: config.claude.long_context_bytes
     },
     timeouts: { ...config.timeouts },
     logging: {

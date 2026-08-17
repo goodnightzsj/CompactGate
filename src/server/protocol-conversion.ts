@@ -389,6 +389,31 @@ export function responsesRequestToChat(rawBody: Buffer): OpenAiRequestConversion
   };
 }
 
+export function responsesRemoteV2CompactionToChat(rawBody: Buffer): OpenAiRequestConversion {
+  const body = parseJsonRecord(rawBody);
+  if (!body) {
+    throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
+  }
+  const input = Array.isArray(body.input) ? body.input : [];
+  const retained = input.filter((item) => !isRecord(item) || item.type !== "compaction_trigger");
+  retained.push({
+    type: "message",
+    role: "user",
+    content: [{
+      type: "input_text",
+      text: "Create a concise summary of the conversation so far. Respond with summary text only."
+    }]
+  });
+  const rewritten: Record<string, unknown> = {
+    ...body,
+    input: retained,
+    stream: false
+  };
+  delete rewritten.previous_response_id;
+  delete rewritten.previousResponseId;
+  return responsesRequestToChat(Buffer.from(JSON.stringify(rewritten)));
+}
+
 export function anthropicRequestToChat(
   rawBody: Buffer,
   options: { countTokens?: boolean } = {}
@@ -479,6 +504,30 @@ export function chatCompletionToResponses(rawBody: Buffer, status: number): Buff
     response.usage = usage;
   }
   return Buffer.from(JSON.stringify(response));
+}
+
+export function chatCompletionToResponsesCompaction(rawBody: Buffer, status: number): Buffer {
+  const response = parseJsonRecord(chatCompletionToResponses(rawBody, status));
+  if (!response || status >= 400 || response.status !== "completed") {
+    return Buffer.from(JSON.stringify(response ?? { error: "Chat compaction response was invalid." }));
+  }
+  const summary = typeof response.output_text === "string" ? response.output_text.trim() : "";
+  if (!summary) {
+    throw new ProtocolConversionError("OpenAI Chat compaction response did not include summary text.", 502);
+  }
+  const compacted: Record<string, unknown> = {
+    id: typeof response.id === "string" ? response.id : `resp_${randomUUID()}`,
+    object: "response.compaction",
+    created_at: typeof response.created_at === "number" ? response.created_at : Math.floor(Date.now() / 1000),
+    status: "completed",
+    model: response.model,
+    output: [{
+      type: "compaction",
+      encrypted_content: encodeCompactGateCompactionSummary(summary)
+    }],
+    usage: response.usage ?? null
+  };
+  return Buffer.from(JSON.stringify(compacted));
 }
 
 export function chatCompletionToAnthropic(rawBody: Buffer, status: number): Buffer {

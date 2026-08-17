@@ -29,6 +29,7 @@ export interface BufferedUpstreamOptions {
   timeoutMs: number;
   timeoutMessage: string;
   requestHeaders: Record<string, string>;
+  proxyUrl?: string;
   body: Buffer;
   extraResponseHeaders: Record<string, string>;
   writeResponse?: boolean;
@@ -93,6 +94,8 @@ const DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR =
 
 export interface OpenAiUpstreamOptions extends BufferedUpstreamOptions {
   retryEmptyStreamError?: boolean;
+  retryHttpStatuses?: readonly number[];
+  maxHttpStatusRetries?: number;
 }
 
 export function sendBufferedUpstreamRequest(
@@ -219,7 +222,7 @@ export function sendBufferedUpstreamRequest(
       headers,
       timeout: options.timeoutMs
     };
-    const agent = resolveUpstreamAgent(options.upstream);
+    const agent = resolveUpstreamAgent(options.upstream, options.proxyUrl);
     if (agent) {
       requestOptions.agent = agent;
     }
@@ -230,9 +233,19 @@ export function sendBufferedUpstreamRequest(
       (response) => {
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
+        const shouldDeferHttpError = options.deferHttpErrors === true && status >= 400;
+        const shouldDeferRetryableResponse =
+          options.deferRetryableStreamErrors === true && status >= 500;
+        const shouldDeferResponse = shouldDeferHttpError || shouldDeferRetryableResponse;
+        const shouldWriteResponse = options.writeResponse !== false && !shouldDeferResponse;
+        const maxBufferedResponseBytes = shouldDeferHttpError
+          ? normalizeMaxBufferedResponseBytes(options.maxDeferredHttpErrorBytes)
+          : options.writeResponse === false || shouldWriteResponse || shouldDeferRetryableResponse
+            ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes)
+            : Number.POSITIVE_INFINITY;
         let responseTransform: UpstreamResponseTransform | null = null;
         try {
-          responseTransform = options.writeResponse !== false
+          responseTransform = shouldWriteResponse
             ? options.responseTransform?.(status, response.headers) ?? null
             : null;
         } catch (error) {
@@ -290,16 +303,6 @@ export function sendBufferedUpstreamRequest(
           responseResolutionStarted: false
         };
         activeResponse = responseState;
-        const shouldDeferHttpError = options.deferHttpErrors === true && status >= 400;
-        const shouldDeferRetryableResponse =
-          options.deferRetryableStreamErrors === true && status >= 500;
-        const shouldDeferResponse = shouldDeferHttpError || shouldDeferRetryableResponse;
-        const shouldWriteResponse = options.writeResponse !== false && !shouldDeferResponse;
-        const maxBufferedResponseBytes = shouldDeferHttpError
-          ? normalizeMaxBufferedResponseBytes(options.maxDeferredHttpErrorBytes)
-          : shouldWriteResponse || shouldDeferRetryableResponse
-            ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes)
-            : Number.POSITIVE_INFINITY;
         if (shouldWriteResponse) {
           copyResponseHeaders(responseTransform?.responseHeaders ?? response.headers, options.res);
           for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
@@ -320,7 +323,7 @@ export function sendBufferedUpstreamRequest(
             responseState.responseBodyTruncated = true;
           }
           streamObserver?.observe(chunk);
-          if (shouldDeferResponse && responseState.responseBodyTruncated) {
+          if ((shouldDeferResponse || options.writeResponse === false) && responseState.responseBodyTruncated) {
             beginResolveUpstreamResponse();
             upstreamReq?.destroy();
             response.destroy();
@@ -441,6 +444,30 @@ interface ActiveUpstreamResponse {
 export async function sendOpenAiUpstreamRequest(
   options: OpenAiUpstreamOptions
 ): Promise<BufferedUpstreamResult> {
+  const retryStatuses = new Set(options.retryHttpStatuses ?? []);
+  const maxStatusRetries = Math.max(0, Math.floor(options.maxHttpStatusRetries ?? 0));
+  if (retryStatuses.size > 0 && maxStatusRetries > 0) {
+    for (let retry = 0; retry < maxStatusRetries; retry += 1) {
+      const result = await sendBufferedUpstreamRequest({
+        ...options,
+        deferRetryableStreamErrors: true
+      });
+      if (retryStatuses.has(result.status) && !result.responseBodyTruncated) {
+        continue;
+      }
+
+      const finalResult = result.responseBodyTruncated
+        ? buildDeferredBufferLimitResult(result)
+        : result;
+      if (result.status >= 500) {
+        writeBufferedUpstreamResult(options.res, finalResult, options.extraResponseHeaders);
+      }
+      return finalResult;
+    }
+
+    return sendBufferedUpstreamRequest(options);
+  }
+
   if (options.retryEmptyStreamError !== true) {
     const result = await sendBufferedUpstreamRequest(options);
     return options.deferHttpErrors === true && result.status >= 400 && result.responseBodyTruncated

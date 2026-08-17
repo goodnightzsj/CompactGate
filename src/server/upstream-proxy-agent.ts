@@ -3,6 +3,7 @@ import { Agent as HttpsAgent } from "node:https";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
+import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
 let cachedHttpsProxyAgentKey: string | null = null;
 let cachedHttpsProxyAgent: HttpsAgent | null = null;
@@ -16,12 +17,18 @@ interface ConnectResponseHeaderRead {
   remainingBuffers: Buffer[];
 }
 
-export function resolveUpstreamAgent(upstream: URL): HttpAgent | HttpsAgent | undefined {
+export function resolveUpstreamAgent(
+  upstream: URL,
+  explicitProxyUrl = ""
+): HttpAgent | HttpsAgent | undefined {
   if (upstream.protocol !== "https:") {
+    if (explicitProxyUrl.trim().length > 0) {
+      throw new Error("Explicit proxy configuration requires an HTTPS upstream.");
+    }
     return undefined;
   }
 
-  const proxy = resolveHttpsProxy(upstream);
+  const proxy = resolveHttpsProxy(upstream, explicitProxyUrl);
   if (!proxy) {
     return undefined;
   }
@@ -197,7 +204,12 @@ function appendConnectResponseHeaderBytes(previous: Buffer, chunk: Buffer): Conn
   };
 }
 
-function resolveHttpsProxy(upstream: URL): URL | null {
+function resolveHttpsProxy(upstream: URL, explicitProxyUrl: string): URL | null {
+  const explicit = explicitProxyUrl.trim();
+  if (explicit) {
+    return parseHttpConnectProxyUrl(explicit);
+  }
+
   const configured =
     process.env.HTTPS_PROXY?.trim() ||
     process.env.https_proxy?.trim() ||
@@ -207,8 +219,13 @@ function resolveHttpsProxy(upstream: URL): URL | null {
     return null;
   }
 
-  const proxy = URL.parse(configured);
-  return proxy?.protocol === "http:" ? proxy : null;
+  try {
+    return parseHttpConnectProxyUrl(configured);
+  } catch (error) {
+    throw new Error(
+      `HTTPS proxy environment is invalid: ${error instanceof Error ? error.message : "Invalid proxy URL."}`
+    );
+  }
 }
 
 function hostMatchesNoProxy(upstream: URL): boolean {

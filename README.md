@@ -40,10 +40,10 @@ CompactGate 会按规则转发：
 普通 /v1/* 请求                                      -> primary 主上游
 /v1/responses/compact                               -> compact 策略
 /v1/responses + request_kind: "compaction"          -> compact 策略
-/v1/responses + input[].type: "compaction_trigger"  -> primary Responses 策略（逻辑记录为 remote_v2）
+/v1/responses + input[].type: "compaction_trigger"  -> primary 上游策略（逻辑记录为 remote_v2）
 ```
 
-新版 Codex 的上下文压缩有三种线上的请求形态：专用 `/responses/compact` 的 Remote V1、带 `compaction_trigger` 且仍走普通 `/responses` 的 Remote V2，以及由 `x-codex-turn-metadata` 标记为 `request_kind: "compaction"` 的本地摘要压缩。CompactGate 会识别三种形态；Remote V2 复用 primary 模型、凭据和 Responses 上游，不要求上游提供 compact 模型。没有这些精确信号的普通请求仍走 primary。
+新版 Codex 的上下文压缩有三种线上的请求形态：专用 `/responses/compact` 的 Remote V1、带 `compaction_trigger` 且仍走普通 `/responses` 的 Remote V2，以及由 `x-codex-turn-metadata` 标记为 `request_kind: "compaction"` 的本地摘要压缩。CompactGate 会识别三种形态；Remote V2 复用 primary 模型、凭据和协议，不要求上游提供 compact 模型。Responses 上游原生转发，Anthropic Messages 转成原生 compaction，Chat 上游转成普通摘要请求并返回 CompactGate 签名状态。没有这些精确信号的普通请求仍走 primary。
 
 Remote V1 与 Remote V2 不是同一路径换了名字：
 
@@ -51,9 +51,9 @@ Remote V1 与 Remote V2 不是同一路径换了名字：
 |---|---|---|
 | 请求入口 | `/v1/responses/compact` | `/v1/responses` |
 | 真实触发信号 | 专用 compact 路径 | `input[].type: "compaction_trigger"` 或 `responses_compaction_v2` 元数据 |
-| 实际上游 | `split` 时走独立 `compact.base_url` | 始终复用 Primary Responses 上游 |
+| 实际上游 | `split` 时走独立 `compact.base_url` | 始终复用 Primary 上游与协议 |
 | 模型策略 | 可改写为 compact 模型 | 保留 Primary 模型和 reasoning 策略 |
-| 状态处理 | 支持响应归一化、桥接和短期去重 | 保留 provider-owned 状态，不进入 V1 bridge |
+| 状态处理 | 支持响应归一化、桥接和短期去重 | Responses 保留 provider state；Messages/Chat 使用签名 `cg1_` 可移植摘要 |
 | 日志 | `route=compact`、`compaction_mode=remote_v1` | `route=compact`、`compaction_mode=remote_v2` |
 
 OpenAI Codex 官方 [`0.140.0` 发布说明](https://github.com/openai/codex/releases/tag/rust-v0.140.0)把 Remote Compaction V2 改为默认启用，因此 CompactGate 把 `0.140.0` 记作“V2 默认起点”，而不是“V1 被删除”的硬切换点。账号灰度、配置、桌面内置 CLI 和二开版本仍可能改变实际行为，所以 Studio 按“实际请求 > 历史观测 > 本机版本基线”的顺序展示协议；所有兼容路径始终保留。
@@ -119,6 +119,17 @@ http://127.0.0.1:7865/
 
 ## Codex 怎么接入
 
+构建后可以直接用一次性启动器，不修改 `~/.codex/config.toml`：
+
+```bash
+node dist/server/cli.js agent codex -- --model gpt-5.5
+node dist/server/cli.js agent codex --profile PROFILE_ID -- --model gpt-5.5
+```
+
+通过 npm link 或包管理器安装 bin 后，可将 `node dist/server/cli.js` 换成
+`compactgate`。`--url` 可覆盖默认的 `http://127.0.0.1:7865`，`--` 后的参数
+原样传给 Codex。
+
 把 Codex 的 OpenAI 兼容 `base_url` 指向 CompactGate：
 
 ```toml
@@ -140,6 +151,20 @@ wire_api = "responses"
 ```
 
 这两项不要随便改，尤其是 `name` 必须保持 `"OpenAI"`，否则 Codex 可能不会启用预期的 Responses 和远程压缩能力。不同 Codex 版本不一定都调用 `/v1/responses/compact`，也可能使用上面另外两种压缩请求形态。
+
+## Claude Code 怎么接入
+
+同一个启动器通过进程内 `--settings` 指向 CompactGate，不写
+`~/.claude/settings.json`：
+
+```bash
+node dist/server/cli.js agent claude
+node dist/server/cli.js agent claude --profile PROFILE_ID -- --model sonnet
+```
+
+启动器把 `ANTHROPIC_BASE_URL` 设为 `http://127.0.0.1:7865/anthropic`；指定
+profile 时，再通过 `ANTHROPIC_CUSTOM_HEADERS` 注入请求级
+`x-compactgate-profile`。`--url` 与 `--` 的语义和 Codex 启动器一致。
 
 ## 配置文件怎么理解
 
@@ -248,7 +273,7 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 compact 请求走的上游。
 
-CompactGate 只在以下精确信号出现时标记为压缩流量：路径是 `/v1/responses/compact`（`remote_v1`）；`/v1/responses` 的 Codex turn metadata 中 `request_kind` 是 `compaction`（`local`，实现为 `responses_compaction_v2` 时为 `remote_v2`）；或者 input 中存在 `type: "compaction_trigger"`（`remote_v2`）。body 中的 `client_metadata` 优先于兼容请求头。压缩成功后的普通 `/v1/responses` 后续 turn 即使携带 `type: "compaction"` 和 V2 beta 标记，也保持普通 `primary` 日志，只跳过 V1 bridge并保留状态。它不会根据提示词、模型名或 token 数猜测请求用途。Remote V2 的真实压缩动作仍使用 Primary 上游。
+CompactGate 只在以下精确信号出现时标记为压缩流量：路径是 `/v1/responses/compact`（`remote_v1`）；`/v1/responses` 的 Codex turn metadata 中 `request_kind` 是 `compaction`（`local`，实现为 `responses_compaction_v2` 时为 `remote_v2`）；或者 input 中存在 `type: "compaction_trigger"`（`remote_v2`）。body 中的 `client_metadata` 优先于兼容请求头。压缩成功后的普通 `/v1/responses` 后续 turn 即使携带 `type: "compaction"` 和 V2 beta 标记，也保持普通 `primary` 日志；Responses provider state 原样保留，CompactGate 签名状态可还原为摘要消息。它不会根据提示词、模型名或 token 数猜测请求用途。Remote V2 的真实压缩动作仍使用 Primary 上游。
 
 ### `compact.upstream_mode`
 
@@ -257,7 +282,7 @@ CompactGate 只在以下精确信号出现时标记为压缩流量：路径是 `
 - `split`：local/Remote V1 compact 请求走 `compact.base_url`
 - `primary`：local/Remote V1 compact 请求也走 `primary.base_url`
 
-Remote V2 始终走 primary Responses 上游，不受此项切换，也不会改写为 compact 模型。
+Remote V2 始终走 primary 上游，不受此项切换，也不会改写为 compact 模型。
 
 ### `compact.model_mode`
 
@@ -298,6 +323,33 @@ gpt-5.5-openai-compact
 my-compact-model
 ```
 
+### 上游扩展头与显式代理
+
+`primary`、`compact`、`claude.primary`、`claude.compact` 都支持：
+
+```json
+{
+  "extra_headers": {
+    "x-provider-feature": "enabled"
+  },
+  "proxy_url": "http://user:pass@127.0.0.1:8080"
+}
+```
+
+`extra_headers` 会随 profile 保存，但禁止认证、Cookie、长度和 hop-by-hop 头；
+值不会从 `GET /api/config` 返回，抓包也按配置头名动态脱敏。`proxy_url` 仅接受
+HTTP CONNECT 代理，显式配置优先于环境代理且非法值直接失败，不会静默直连。
+
+### Claude 场景路由
+
+`claude.scene_map` 可为 `long_context`、`background`、`web_search`、`thinking`、
+`image` 和 `default` 指定 `profile_id` 与可选 `model`。`long_context_bytes` 使用
+UTF-8 文本字节数判断，图片 base64 不计入。优先级固定为：显式请求 profile、
+长上下文、后台任务、Web 搜索、思考、图片、默认。
+
+Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单次精确选择；
+仅 loopback 客户端可用，转发前会删除，并且不会修改 active profile、健康度或粘性。
+
 ## Studio 页面能做什么
 
 打开 `http://127.0.0.1:7865/` 后，你可以直接：
@@ -331,7 +383,7 @@ my-compact-model
 - 可选的实际上游请求体
 - 可选的上游响应体
 
-元数据始终持久化到本地 SQLite。只有 `logging.persist_body = true` 时正文才进入 SQLite；推荐保持关闭并通过有界抓包目录按需诊断。Studio 日志列表不返回正文或本机抓包路径，展开详情后也只有点击“查看抓包”才会加载原始内容。
+元数据始终持久化到本地 SQLite。只有 `logging.persist_body = true` 时正文才进入 SQLite；推荐保持关闭并通过有界抓包目录按需诊断。Studio 日志列表不返回正文或本机抓包路径，展开详情后也只有点击“查看抓包”才会加载原始内容。抓包查看器会对“客户端请求 → 上游请求”和“上游响应 → 客户端响应”做最多 200 项的结构化 JSON 对比；正文截断或不是 JSON 时明确标为不可比较。压缩日志还保存实现名、请求 compaction/trigger 数和响应 compaction 数，便于定位协议漂移。
 
 ## 日志和本地数据库
 
@@ -375,6 +427,14 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 这是本地可移植备份，会保留配置中直填的 API Key；`GET /api/config` 才是用于页面展示的脱敏配置。
 
+每次配置持久化前还会在同目录创建 `0600` 版本备份并保留最近 10 份：
+
+- `GET /api/config/backups`：列出备份元数据
+- `POST /api/config/backups/restore`：传 `{"backup_id":"...","confirm":true}` 恢复
+- `DELETE /api/config/backups`：传相同确认结构删除
+
+恢复前会先校验 JSON 和完整配置合同；失败不会改变内存或当前配置文件。
+
 ### `PATCH /api/config`
 
 热更新配置并写回磁盘，不需要重启。
@@ -382,6 +442,12 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 ### `POST /api/test-route`
 
 预览一条请求最终会怎么路由、怎么改模型。
+
+### `POST /api/compact/capability-probe`
+
+传 `{"model":"MODEL"}` 对当前 compact 路径执行一次真实、30 秒上限、512 KiB
+响应上限的原生压缩探测。探测不会写日志、bridge、去重、profile 健康或故障转移
+状态；Chat 上游直接返回不支持，网络/上游错误通过 `supported=false` 返回。
 
 ### `GET /api/logs/recent`
 
@@ -446,7 +512,7 @@ npm run build
 
 ### 1. Codex 没有调用 `/v1/responses/compact`，压缩还能分流吗
 
-可以。新版 Codex 还可能把压缩请求发到普通 `/v1/responses`：本地压缩由 `x-codex-turn-metadata` 中的 `request_kind: "compaction"` 标识，Remote V2 由 `input[].type: "compaction_trigger"` 标识。CompactGate 会把它们记录为 `compact` 逻辑流量，但 Remote V2 实际复用 primary 上游，不走 `/responses/compact`，也不需要 compact 模型。
+可以。新版 Codex 还可能把压缩请求发到普通 `/v1/responses`：本地压缩由 `x-codex-turn-metadata` 中的 `request_kind: "compaction"` 标识，Remote V2 由 `input[].type: "compaction_trigger"` 标识。CompactGate 会把它们记录为 `compact` 逻辑流量，但 Remote V2 实际复用 primary 上游与协议，不走 `/responses/compact`，也不需要 compact 模型。
 
 如果日志仍显示为 `primary`，再检查 Codex 配置里是不是：
 

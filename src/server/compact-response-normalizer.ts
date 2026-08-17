@@ -85,6 +85,17 @@ export function normalizeCompactResponse({
   };
 }
 
+export function countCompactResponseItems(
+  responseBody: Buffer,
+  responseHeaders: IncomingHttpHeaders
+): number {
+  const parsed = parseJsonRecord(responseBody);
+  if (parsed) {
+    return Array.isArray(parsed.output) ? parsed.output.filter(isCompactionItem).length : 0;
+  }
+  return extractRawCompactResponse(responseBody, responseHeaders).outputItems.filter(isCompactionItem).length;
+}
+
 function unchangedCompactResponse(
   body: Buffer,
   headers: IncomingHttpHeaders

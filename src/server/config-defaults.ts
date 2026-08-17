@@ -1,6 +1,8 @@
 import type {
   ClaudeModelMap,
   ClaudeModelMapRole,
+  ClaudeSceneMap,
+  ClaudeScene,
   CompactGateConfig
 } from "../shared/types.js";
 
@@ -11,6 +13,15 @@ export const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
   "haiku",
   "reasoning",
   "subagent"
+];
+
+export const CLAUDE_SCENES: ClaudeScene[] = [
+  "default",
+  "long_context",
+  "background",
+  "web_search",
+  "thinking",
+  "image"
 ];
 
 export function emptyClaudeModelMap(): ClaudeModelMap {
@@ -24,12 +35,21 @@ export function emptyClaudeModelMap(): ClaudeModelMap {
   };
 }
 
+export function emptyClaudeSceneMap(): ClaudeSceneMap {
+  return Object.fromEntries(CLAUDE_SCENES.map((scene) => [scene, {
+    profile_id: "",
+    model: ""
+  }])) as ClaudeSceneMap;
+}
+
 export const DEFAULT_CONFIG: CompactGateConfig = {
   listen: "127.0.0.1:7865",
   primary: {
     base_url: "https://primary.example/v1",
     api_key: "",
     api_key_env: "",
+    extra_headers: {},
+    proxy_url: "",
     upstream_protocol: "openai_responses",
     model_override: "",
     reasoning_effort: "",
@@ -39,6 +59,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     base_url: "https://compact.example/v1",
     api_key: "",
     api_key_env: "",
+    extra_headers: {},
+    proxy_url: "",
     upstream_protocol: "openai_responses",
     upstream_mode: "split",
     model_mode: "linked",
@@ -50,6 +72,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       base_url: "https://api.anthropic.com",
       api_key: "",
       api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      extra_headers: {},
+      proxy_url: "",
       upstream_protocol: "anthropic_messages",
       model_override: ""
     },
@@ -57,11 +81,15 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       base_url: "https://api.anthropic.com",
       api_key: "",
       api_key_env: "ANTHROPIC_AUTH_TOKEN",
+      extra_headers: {},
+      proxy_url: "",
       upstream_protocol: "anthropic_messages",
       upstream_mode: "primary",
       model_override: ""
     },
-    model_map: emptyClaudeModelMap()
+    model_map: emptyClaudeModelMap(),
+    scene_map: emptyClaudeSceneMap(),
+    long_context_bytes: 0
   },
   timeouts: {
     primary_ms: 120_000,

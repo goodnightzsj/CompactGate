@@ -1,13 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestLogger } from "../src/server/logger.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   while (cleanup.length > 0) {
     await cleanup.pop()?.();
   }
@@ -148,6 +149,82 @@ describe("RequestLogger stats", () => {
       expect(stats.overview?.today.summary.requests).toBe(3);
       expect(stats.overview?.retained.summary.requests).toBe(4);
       expect(stats.overview?.retained.summary.total_tokens).toBe(185);
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("anchors rolling metrics to generated time instead of the selected range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-07T12:00:00.000Z"));
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-rolling-stats-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"));
+
+    try {
+      logger.add(logEntry({
+        time: "2026-08-07T11:55:00.000Z",
+        request_id: "five-minute-boundary",
+        duration_ms: 500,
+        first_token_ms: 50,
+        total_tokens: 50
+      }));
+      logger.add(logEntry({
+        time: "2026-08-07T11:58:00.000Z",
+        request_id: "five-minute-middle",
+        duration_ms: 300,
+        first_token_ms: 30,
+        total_tokens: 100
+      }));
+      logger.add(logEntry({
+        time: "2026-08-07T11:59:00.000Z",
+        request_id: "one-minute-boundary",
+        duration_ms: 200,
+        first_token_ms: 20,
+        total_tokens: 150
+      }));
+      logger.add(logEntry({
+        time: "2026-08-07T11:59:30.000Z",
+        request_id: "one-minute-middle",
+        duration_ms: 100,
+        first_token_ms: 10,
+        total_tokens: 200
+      }));
+      logger.add(logEntry({
+        time: "2026-08-07T12:00:00.000Z",
+        request_id: "rolling-exclusive-boundary",
+        total_tokens: 500
+      }));
+
+      const recentRange = logger.stats({
+        from: "2026-08-07T11:58:00.000Z",
+        to: "2026-08-07T12:00:00.000Z",
+        includeOverview: true
+      });
+      const historicalRange = logger.stats({
+        from: "2026-08-07T00:00:00.000Z",
+        to: "2026-08-07T01:00:00.000Z",
+        includeOverview: true
+      });
+
+      expect(recentRange.generated_at).toBe("2026-08-07T12:00:00.000Z");
+      expect(recentRange.summary.requests).toBe(3);
+      expect(historicalRange.summary.requests).toBe(0);
+      expect(recentRange.overview?.recent).toEqual(historicalRange.overview?.recent);
+      expect(recentRange.overview?.recent.one_minute).toMatchObject({
+        requests: 2,
+        total_tokens: 350
+      });
+      expect(recentRange.overview?.recent.five_minutes).toMatchObject({
+        requests: 4,
+        total_tokens: 500,
+        average_rpm: 0.8,
+        average_tpm: 100,
+        duration_p50_ms: 200,
+        duration_p95_ms: 500,
+        first_token_p50_ms: 20,
+        first_token_p95_ms: 50
+      });
     } finally {
       logger.close();
     }

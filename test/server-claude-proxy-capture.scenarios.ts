@@ -60,7 +60,8 @@ describe("CompactGate Claude routing", () => {
     const app = await startApp(undefined, undefined, {
       claude: {
         base_url: claude.url,
-        api_key: "saved-claude-token"
+        api_key: "saved-claude-token",
+        extra_headers: { "x-capture-secret": "configured-capture-secret" }
       }
     });
 
@@ -86,6 +87,7 @@ describe("CompactGate Claude routing", () => {
     expect(captured.current.headers.authorization).toBe("Bearer saved-claude-token");
     expect(captured.current.headers["x-api-key"]).toBe("saved-claude-token");
     expect(captured.current.headers["anthropic-api-key"]).toBe("saved-claude-token");
+    expect(captured.current.headers["x-capture-secret"]).toBe("configured-capture-secret");
     expect(captured.current.body).toContain("capture claude");
 
     const entry = await waitForLogEntry(app.url, (e) => e.route === "claude");
@@ -121,9 +123,11 @@ describe("CompactGate Claude routing", () => {
     expect(captures[0].upstream_request.headers.authorization).toBe("[redacted]");
     expect(captures[0].upstream_request.headers["x-api-key"]).toBe("[redacted]");
     expect(captures[0].upstream_request.headers["anthropic-api-key"]).toBe("[redacted]");
+    expect(captures[0].upstream_request.headers["x-capture-secret"]).toBe("[redacted]");
     expect(captures[0].incoming_request.headers.authorization).toBe("[redacted]");
     expect(JSON.stringify(captures[0])).not.toContain("saved-claude-token");
     expect(JSON.stringify(captures[0])).not.toContain("client-token");
+    expect(JSON.stringify(captures[0])).not.toContain("configured-capture-secret");
   });
 
   it("records complete Brotli Anthropic streams without changing the client response", async () => {

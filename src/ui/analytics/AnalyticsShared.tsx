@@ -10,7 +10,13 @@ import type { AnalyticsTrendPoint } from "./analytics-data.js";
 export function AnalyticsMetricGrid({
   items
 }: {
-  items: Array<{ label: string; value: string; meta: string; tone?: string; exactValue?: string }>;
+  items: Array<{
+    label: string;
+    value: string;
+    meta: ReactNode;
+    tone?: string;
+    exactValue?: string;
+  }>;
 }) {
   return (
     <div className="analytics-metric-grid">

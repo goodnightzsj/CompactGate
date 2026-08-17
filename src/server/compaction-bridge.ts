@@ -42,6 +42,7 @@ export interface CompactResponseDedupeInput {
   body: Buffer;
   method?: string;
   requestHeaders?: Record<string, string>;
+  proxyUrl?: string;
 }
 
 export interface CachedCompactResponse {
@@ -313,6 +314,7 @@ function compactDedupeKey(input: CompactResponseDedupeInput): string {
     input.upstream.toString(),
     sha256(input.authorization ?? ""),
     sha256(JSON.stringify(canonicalDedupeHeaders(input.requestHeaders ?? {}))),
+    sha256(input.proxyUrl ?? ""),
     sha256(input.body)
   ]);
 }

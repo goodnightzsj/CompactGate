@@ -14,6 +14,83 @@ import { listen, trackServer } from "./helpers/server-test-lifecycle.js";
 import { startUpstream } from "./helpers/server-test-utils.js";
 
 describe("sendBufferedUpstreamRequest", () => {
+  it("retries only configured HTTP statuses before forwarding the terminal response", async () => {
+    let attempts = 0;
+    const upstream = await startUpstream((_req, res) => {
+      attempts += 1;
+      if (attempts < 4) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "retry" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    const proxy = http.createServer(async (req, res) => {
+      await sendOpenAiUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        retryHttpStatuses: [502, 503, 504],
+        maxHttpStatusRetries: 3
+      });
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(attempts).toBe(4);
+  });
+
+  it("does not retry an unlisted 500 response", async () => {
+    let attempts = 0;
+    const upstream = await startUpstream((_req, res) => {
+      attempts += 1;
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "do not retry" }));
+    });
+
+    const proxy = http.createServer(async (req, res) => {
+      await sendOpenAiUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 1_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        retryHttpStatuses: [502, 503, 504],
+        maxHttpStatusRetries: 3
+      });
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "do not retry" });
+    expect(attempts).toBe(1);
+  });
+
   it("bounds the internal response buffer without truncating the client response", async () => {
     const upstreamBody = "0123456789abcdef";
     const upstream = await startUpstream((_req, res) => {

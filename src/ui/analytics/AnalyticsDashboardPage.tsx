@@ -11,7 +11,7 @@ import {
   AnalyticsPanel,
   AnalyticsSegmented,
   AnalyticsTrendChart,
-  cacheRate,
+  cacheHitRate,
   durationPair,
   RetainedRange
 } from "./AnalyticsShared.js";
@@ -60,6 +60,8 @@ export function AnalyticsDashboardPage() {
     [stats.data]
   );
   const rangeLabel = PRESETS.find((item) => item.value === displayedPreset)?.label ?? "所选范围";
+  const oneMinute = stats.data?.overview?.recent.one_minute;
+  const fiveMinutes = stats.data?.overview?.recent.five_minutes;
 
   function selectPreset(next: AnalyticsPreset) {
     setPreset(next);
@@ -79,7 +81,7 @@ export function AnalyticsDashboardPage() {
           <h2>流量与响应概况</h2>
         </div>
         <div className="analytics-header-actions">
-          <div className="analytics-segmented" aria-label="统计范围">
+          <div className="analytics-segmented" aria-label="历史统计范围">
             {PRESETS.map((item) => (
               <button
                 type="button"
@@ -120,31 +122,47 @@ export function AnalyticsDashboardPage() {
                 tone: "is-token"
               },
               {
-                label: "缓存命中",
-                value: cacheRate(stats.data),
-                meta: `${formatCompactMetricNumber(stats.data.summary.cache_read_tokens)} 读取`,
+                label: "近 5 分钟缓存命中",
+                value: cacheHitRate(
+                  fiveMinutes?.input_tokens ?? 0,
+                  fiveMinutes?.cache_read_tokens ?? 0
+                ),
+                meta: `${formatCompactMetricNumber(fiveMinutes?.cache_read_tokens ?? 0)} 读取`,
                 tone: "is-cache"
               },
               {
-                label: "平均速率",
-                value: `${stats.data.summary.average_rpm.toFixed(2)} RPM`,
-                meta: `${formatCompactMetricNumber(Math.round(stats.data.summary.average_tpm))} TPM`
+                label: "近 5 分钟 RPM",
+                value: `${(fiveMinutes?.average_rpm ?? 0).toFixed(2)} RPM`,
+                meta: (
+                  <>
+                    <span>
+                      近 5 分钟 {formatCompactMetricNumber(Math.round(
+                        fiveMinutes?.average_tpm ?? 0
+                      ))} TPM
+                    </span>
+                    <span>
+                      近 1 分钟 {(oneMinute?.requests ?? 0).toFixed(2)} RPM
+                      {" · "}
+                      {formatCompactMetricNumber(oneMinute?.total_tokens ?? 0)} TPM
+                    </span>
+                  </>
+                )
               },
               {
-                label: "首 Token P50 / P95",
+                label: "近 5 分钟首 Token P50 / P95",
                 value: durationPair(
-                  stats.data.summary.first_token_p50_ms,
-                  stats.data.summary.first_token_p95_ms
+                  fiveMinutes?.first_token_p50_ms ?? null,
+                  fiveMinutes?.first_token_p95_ms ?? null
                 ),
-                meta: `平均 ${formatDurationMs(roundMetric(stats.data.summary.average_first_token_ms))}`
+                meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_first_token_ms ?? null))}`
               },
               {
-                label: "总耗时 P50 / P95",
+                label: "近 5 分钟总耗时 P50 / P95",
                 value: durationPair(
-                  stats.data.summary.duration_p50_ms,
-                  stats.data.summary.duration_p95_ms
+                  fiveMinutes?.duration_p50_ms ?? null,
+                  fiveMinutes?.duration_p95_ms ?? null
                 ),
-                meta: `平均 ${formatDurationMs(roundMetric(stats.data.summary.average_duration_ms))}`
+                meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_duration_ms ?? null))}`
               }
             ]} />
 

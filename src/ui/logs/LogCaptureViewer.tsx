@@ -6,6 +6,11 @@ import type {
   RequestLogEntry
 } from "../../shared/types.js";
 import {
+  captureRequestDiff,
+  captureResponseDiff,
+  type CaptureDiffResult
+} from "../../shared/capture-diff.js";
+import {
   CaptureRequestError,
   captureDownloadUrl,
   fetchCaptureRecord
@@ -16,6 +21,7 @@ type CaptureStage =
   | "upstream_request"
   | "upstream_response"
   | "client_response";
+type CaptureView = CaptureStage | "request_diff" | "response_diff";
 type ViewState = "idle" | "loading" | "loaded" | "pending" | "absent" | "purged" | "error";
 
 const STAGES: Array<{ id: CaptureStage; label: string }> = [
@@ -24,12 +30,16 @@ const STAGES: Array<{ id: CaptureStage; label: string }> = [
   { id: "upstream_response", label: "上游响应" },
   { id: "client_response", label: "客户端响应" }
 ];
+const COMPARISONS: Array<{ id: CaptureView; label: string }> = [
+  { id: "request_diff", label: "请求 Diff" },
+  { id: "response_diff", label: "响应 Diff" }
+];
 
 export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
   const panelId = useId();
   const [viewState, setViewState] = useState<ViewState>("idle");
   const [capture, setCapture] = useState<CaptureRecord | null>(null);
-  const [activeStage, setActiveStage] = useState<CaptureStage>("incoming_request");
+  const [activeStage, setActiveStage] = useState<CaptureView>("incoming_request");
   const [error, setError] = useState<string | null>(null);
   const effectiveStatus = capture
     ? "present"
@@ -112,6 +122,19 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
                   {stage.label}
                 </button>
               ))}
+              {COMPARISONS.map((comparison) => (
+                <button
+                  key={comparison.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeStage === comparison.id}
+                  aria-controls={`${panelId}-payload`}
+                  className={activeStage === comparison.id ? "is-active" : ""}
+                  onClick={() => setActiveStage(comparison.id)}
+                >
+                  {comparison.label}
+                </button>
+              ))}
             </div>
             <a
               className="ghost-button log-capture-download"
@@ -121,11 +144,22 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
               下载 JSON
             </a>
           </div>
-          <CapturePayloadPanel
-            id={`${panelId}-payload`}
-            stage={activeStage}
-            payload={payloadForStage(capture, activeStage)}
-          />
+          {activeStage === "request_diff" || activeStage === "response_diff"
+            ? (
+                <CaptureDiffPanel
+                  id={`${panelId}-payload`}
+                  diff={activeStage === "request_diff"
+                    ? captureRequestDiff(capture)
+                    : captureResponseDiff(capture)}
+                />
+              )
+            : (
+                <CapturePayloadPanel
+                  id={`${panelId}-payload`}
+                  stage={activeStage}
+                  payload={payloadForStage(capture, activeStage)}
+                />
+              )}
         </div>
       )}
     </section>
@@ -235,6 +269,69 @@ function CapturePayloadPanel({
   );
 }
 
+export function CaptureDiffPanel({
+  id,
+  diff
+}: {
+  id: string;
+  diff: CaptureDiffResult;
+}) {
+  if (!diff.available) {
+    return (
+      <div id={id} role="tabpanel" className="log-capture-payload is-empty">
+        {diff.reason === "truncated"
+          ? "正文已截断，无法生成可靠的结构化 Diff。"
+          : "正文不是有效 JSON，无法生成结构化 Diff。"}
+      </div>
+    );
+  }
+
+  if (diff.equivalent) {
+    return (
+      <div id={id} role="tabpanel" className="log-capture-payload is-empty is-equivalent">
+        {diff.reason === "transparent"
+          ? "客户端响应为透明转发，与上游响应等价。"
+          : "未发现结构差异。"}
+      </div>
+    );
+  }
+
+  return (
+    <div id={id} role="tabpanel" className="log-capture-diff">
+      <div className="log-capture-payload-meta">
+        <span>{diff.entries.length} 项差异</span>
+        {diff.truncated && <span className="is-warn">已达到 Diff 上限</span>}
+      </div>
+      <div className="log-capture-diff-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">JSON Path</th>
+              <th scope="col">变化</th>
+              <th scope="col">之前</th>
+              <th scope="col">之后</th>
+            </tr>
+          </thead>
+          <tbody>
+            {diff.entries.map((entry, index) => (
+              <tr key={`${entry.path}-${entry.kind}-${index}`}>
+                <td><code>{entry.path}</code></td>
+                <td>
+                  <span className={`log-capture-diff-kind is-${entry.kind}`}>
+                    {diffKindLabel(entry.kind)}
+                  </span>
+                </td>
+                <td><pre>{entry.before ?? "-"}</pre></td>
+                <td><pre>{entry.after ?? "-"}</pre></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function payloadForStage(
   capture: CaptureRecord,
   stage: CaptureStage
@@ -253,6 +350,12 @@ function bodyStatusLabel(status: RequestLogEntry["body_status"]): string {
   if (status === "present") return "有正文";
   if (status === "purged") return "已清理";
   return "仅元数据";
+}
+
+function diffKindLabel(kind: "added" | "removed" | "changed"): string {
+  if (kind === "added") return "新增";
+  if (kind === "removed") return "移除";
+  return "变更";
 }
 
 function formatBytes(value: number): string {

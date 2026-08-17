@@ -985,6 +985,12 @@
   font-size: 0.72rem;
 }
 
+.log-capture-payload.is-equivalent {
+  border-color: color-mix(in srgb, var(--jade) 32%, var(--hairline));
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+
 .log-capture-payload-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1050,6 +1056,96 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.log-capture-diff {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.log-capture-diff-scroll {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.log-capture-diff table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.7rem;
+}
+
+.log-capture-diff th,
+.log-capture-diff td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+.log-capture-diff th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--paper-warm);
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.log-capture-diff tr:last-child td {
+  border-bottom: 0;
+}
+
+.log-capture-diff th:nth-child(1) {
+  width: 28%;
+}
+
+.log-capture-diff th:nth-child(2) {
+  width: 80px;
+}
+
+.log-capture-diff code,
+.log-capture-diff pre {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.log-capture-diff-kind {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--paper-lift);
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.log-capture-diff-kind.is-added {
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+
+.log-capture-diff-kind.is-removed {
+  background: var(--brick-soft);
+  color: var(--brick);
+}
+
+.log-capture-diff-kind.is-changed {
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .log-mobile-card {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  setEnv,
   startApp,
+  startConnectProxy,
+  startHttpsClaudeUpstream,
   startUpstream
 } from "./helpers/server-test-utils.js";
 
@@ -9,6 +12,7 @@ describe("CompactGate OpenAI model list", () => {
     const primary = await startUpstream((req, res) => {
       expect(req.url).toBe("/v1/models");
       expect(req.headers.authorization).toBe("Bearer primary-models-token");
+      expect(req.headers["x-model-list-secret"]).toBe("primary-model-secret");
       const body = JSON.stringify({
         data: [
           { id: "gpt-compatible-z" },
@@ -23,7 +27,10 @@ describe("CompactGate OpenAI model list", () => {
       res.end(body);
     });
     const app = await startApp(primary.url, undefined, {
-      primary: { api_key: "primary-models-token" }
+      primary: {
+        api_key: "primary-models-token",
+        extra_headers: { "x-model-list-secret": "primary-model-secret" }
+      }
     });
 
     const response = await fetch(`${app.url}/api/openai/models`);
@@ -39,6 +46,35 @@ describe("CompactGate OpenAI model list", () => {
       upstream_host: new URL(primary.url).host,
       error: null
     });
+  });
+
+  it("uses the active Primary explicit proxy for model discovery", async () => {
+    setEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+    setEnv("HTTPS_PROXY", "not-a-valid-proxy-url");
+    setEnv("NO_PROXY", "*");
+    const upstream = await startHttpsClaudeUpstream((req, res) => {
+      expect(req.url).toBe("/v1/models");
+      const body = JSON.stringify({ data: [{ id: "proxied-model" }] });
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body))
+      });
+      res.end(body);
+    });
+    const proxy = await startConnectProxy();
+    const app = await startApp(undefined, undefined, {
+      primary: {
+        base_url: `${upstream.url}/v1`,
+        proxy_url: proxy.url
+      }
+    });
+
+    const response = await fetch(`${app.url}/api/openai/models`);
+    const payload = await response.json() as { models: string[] };
+
+    expect(response.status).toBe(200);
+    expect(payload.models).toEqual(["proxied-model"]);
+    expect(proxy.connectTargets).toContain(new URL(upstream.url).host);
   });
 
   it("returns a displayable error when the Primary model endpoint rejects authentication", async () => {

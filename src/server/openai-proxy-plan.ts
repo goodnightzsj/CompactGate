@@ -25,6 +25,7 @@ import {
 } from "./routing.js";
 import {
   responsesRequestToChat,
+  responsesRemoteV2CompactionToChat,
   responsesCompactRequestToAnthropic,
   responsesRequestToAnthropic,
   ProtocolConversionError
@@ -45,6 +46,9 @@ export interface OpenAiProxyPlan {
   compactBridgeScope: CompactionBridgeScope | null;
   primarySelection: PrimaryRouteSelection | null;
   upstreamProtocol: UpstreamProtocol;
+  sensitiveHeaderNames: string[];
+  proxyUrl: string;
+  compactionFallback: "chat_synthesis" | null;
 }
 
 export function buildPrimaryOpenAiProxyPlan({
@@ -55,7 +59,10 @@ export function buildPrimaryOpenAiProxyPlan({
   endpoint,
   compactionBridge,
   primaryFailover,
-  preserveRemoteV2State = false
+  preserveRemoteV2State = false,
+  primarySelectionOverride,
+  reservePrimarySelection = true,
+  synthesizeRemoteV2Compaction = false
 }: {
   config: CompactGateConfig;
   url: URL;
@@ -65,8 +72,11 @@ export function buildPrimaryOpenAiProxyPlan({
   compactionBridge: CompactionBridgeStore;
   primaryFailover: PrimaryFailoverState;
   preserveRemoteV2State?: boolean;
+  primarySelectionOverride?: PrimaryRouteSelection;
+  reservePrimarySelection?: boolean;
+  synthesizeRemoteV2Compaction?: boolean;
 }): OpenAiProxyPlan {
-  const primarySelection = primaryFailover.preview(
+  const primarySelection = primarySelectionOverride ?? primaryFailover.preview(
     config,
     primaryRouteRequestContextFromBody(rawBody, headers, endpoint)
   );
@@ -104,7 +114,11 @@ export function buildPrimaryOpenAiProxyPlan({
     throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
   }
 
-  const upstreamBody = translateOpenAiRequest(bridgeResult.body, upstreamProtocol);
+  const chatCompactionFallback = synthesizeRemoteV2Compaction &&
+    upstreamProtocol === "openai_chat";
+  const upstreamBody = chatCompactionFallback
+    ? responsesRemoteV2CompactionToChat(modelRewrite.body).body
+    : translateOpenAiRequest(bridgeResult.body, upstreamProtocol);
   const upstreamPath = upstreamProtocol === "anthropic_messages"
     ? "/v1/messages"
     : upstreamProtocol === "openai_chat"
@@ -114,6 +128,7 @@ export function buildPrimaryOpenAiProxyPlan({
   const plan = withRequestHeaders(
     headers,
     resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "",
+    selectedPrimaryConfig.primary.extra_headers,
     rawBody,
     {
       route: "primary",
@@ -128,10 +143,14 @@ export function buildPrimaryOpenAiProxyPlan({
       compactBridgeReplacements: bridgeResult.replacedCompactionCount,
       compactBridgeScope,
       primarySelection,
-      upstreamProtocol
+      upstreamProtocol,
+      proxyUrl: selectedPrimaryConfig.primary.proxy_url,
+      compactionFallback: chatCompactionFallback ? "chat_synthesis" : null
     }
   );
-  primaryFailover.reserveSelection(primarySelection, config.primary_failover.auto_schedule);
+  if (reservePrimarySelection) {
+    primaryFailover.reserveSelection(primarySelection, config.primary_failover.auto_schedule);
+  }
   return plan;
 }
 
@@ -155,7 +174,8 @@ export function buildCompactOpenAiProxyPlan({
   const upstreamBody = translateCompactOpenAiRequest(rewrite.body, upstreamProtocol, nativeCompaction);
   const upstreamPath = upstreamProtocol === "anthropic_messages" ? "/v1/messages" : url.pathname;
   const credential = resolveRouteCredential("compact", config);
-  const plan = withRequestHeaders(headers, credential.apiKey, rawBody, {
+  const upstreamConfig = config.compact.upstream_mode === "split" ? config.compact : config.primary;
+  const plan = withRequestHeaders(headers, credential.apiKey, upstreamConfig.extra_headers, rawBody, {
     route: "compact",
     upstream: upstreamProtocol === "anthropic_messages"
       ? buildClaudeUpstreamUrl(compactUpstreamBaseUrl(config), upstreamPath, url.search)
@@ -172,7 +192,9 @@ export function buildCompactOpenAiProxyPlan({
       targetModel: rewrite.targetModel
     },
     primarySelection: null,
-    upstreamProtocol
+    upstreamProtocol,
+    proxyUrl: upstreamConfig.proxy_url,
+    compactionFallback: null
   });
   if (config.compact.upstream_mode === "split" && !credential.apiKeyConfigured) {
     delete plan.requestHeaders.authorization;
@@ -183,25 +205,28 @@ export function buildCompactOpenAiProxyPlan({
 function withRequestHeaders(
   headers: IncomingHttpHeaders,
   apiKey: string | null,
+  extraHeaders: Record<string, string>,
   rawBody: Buffer,
-  plan: Omit<OpenAiProxyPlan, "requestHeaders">
+  plan: Omit<OpenAiProxyPlan, "requestHeaders" | "sensitiveHeaderNames">
 ): OpenAiProxyPlan {
   const requestHeaders = plan.upstreamProtocol === "anthropic_messages"
     ? buildAnthropicRequestHeaders(
         headers,
         apiKey,
+        extraHeaders,
         parseJsonRecord(plan.upstreamBody)?.context_management !== undefined
       )
     : plan.upstreamProtocol === "openai_chat"
-      ? buildOpenAiChatRequestHeaders(headers, apiKey)
-      : buildUpstreamHeaders(headers, apiKey);
+      ? buildOpenAiChatRequestHeaders(headers, apiKey, extraHeaders)
+      : buildUpstreamHeaders(headers, apiKey, extraHeaders);
   if (plan.upstreamBody !== rawBody) {
     delete requestHeaders["content-encoding"];
   }
 
   return {
     ...plan,
-    requestHeaders
+    requestHeaders,
+    sensitiveHeaderNames: Object.keys(extraHeaders)
   };
 }
 
@@ -234,9 +259,10 @@ function translateCompactOpenAiRequest(
 function buildAnthropicRequestHeaders(
   headers: IncomingHttpHeaders,
   apiKey: string | null,
+  extraHeaders: Record<string, string>,
   compaction: boolean
 ): Record<string, string> {
-  const next = buildAnthropicUpstreamHeaders(headers, apiKey);
+  const next = buildAnthropicUpstreamHeaders(headers, apiKey, extraHeaders);
   next["anthropic-version"] ||= "2023-06-01";
   next["accept-encoding"] = "identity";
   if (compaction) {
@@ -252,9 +278,10 @@ function buildAnthropicRequestHeaders(
 
 function buildOpenAiChatRequestHeaders(
   headers: IncomingHttpHeaders,
-  apiKey: string | null
+  apiKey: string | null,
+  extraHeaders: Record<string, string>
 ): Record<string, string> {
-  const next = buildUpstreamHeaders(headers, apiKey);
+  const next = buildUpstreamHeaders(headers, apiKey, extraHeaders);
   next["accept-encoding"] = "identity";
   for (const name of Object.keys(next)) {
     if (name.startsWith("x-codex-")) {

@@ -49,6 +49,26 @@ export async function handleConfigApi(
     return true;
   }
 
+  if (req.method === "GET" && url.pathname === "/api/config/backups") {
+    sendJson(res, 200, { backups: await configStore.listBackups() });
+    return true;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/config/backups/restore") {
+    const body = requireBackupConfirmation(await readJsonBody(req), "restore");
+    await configStore.restoreBackup(body.backup_id);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
+    sendJson(res, 200, configStore.toPublicConfig());
+    return true;
+  }
+
+  if (req.method === "DELETE" && url.pathname === "/api/config/backups") {
+    const body = requireBackupConfirmation(await readJsonBody(req), "delete");
+    await configStore.deleteBackup(body.backup_id);
+    sendJson(res, 200, { deleted: true });
+    return true;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/config/import") {
     const importedConfig = await readJsonBody(req);
     await configStore.importConfig(importedConfig);
@@ -203,4 +223,20 @@ function readProfileScope(body: Record<string, unknown>, url: URL): ConfigProfil
     throw new ConfigError("config profile scope must be codex or claude.");
   }
   return value;
+}
+
+function requireBackupConfirmation(
+  body: unknown,
+  operation: "restore" | "delete"
+): { backup_id: string } {
+  if (
+    !isRecord(body) ||
+    typeof body.backup_id !== "string" ||
+    body.backup_id.length === 0 ||
+    body.confirm !== true
+  ) {
+    throw new ConfigError(`config backup ${operation} requires backup_id and confirm=true.`);
+  }
+
+  return { backup_id: body.backup_id };
 }

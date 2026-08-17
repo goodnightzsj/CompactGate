@@ -134,6 +134,16 @@ describe("DebugCaptureWriter header redaction", () => {
       "content-type": "application/json"
     });
   });
+
+  it("redacts configured extra header names", () => {
+    expect(serializeHeaders({
+      "x-tenant-secret": "configured-secret",
+      "x-visible": "plain"
+    }, ["X-Tenant-Secret"])).toEqual({
+      "x-tenant-secret": "[redacted]",
+      "x-visible": "plain"
+    });
+  });
 });
 
 describe("DebugCaptureWriter safe reads", () => {

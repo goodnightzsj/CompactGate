@@ -2,6 +2,9 @@
   "name": "compactgate",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "compactgate": "dist/server/cli.js"
+  },
   "type": "module",
   "description": "Local OpenAI-compatible reverse proxy with compact request routing and model rewriting.",
   "scripts": {

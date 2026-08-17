@@ -7,6 +7,7 @@ import {
   buildClaudeUpstreamUrl,
   resolveClaudeCredential,
   resolveClaudeMappedModel,
+  resolveClaudeRequestRouting,
   rewriteClaudeModelBody
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
@@ -64,12 +65,14 @@ export async function proxyClaudeRequest(
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
-  const config = configStore.get();
+  const baseConfig = configStore.get();
+  let config = baseConfig;
   const route: RouteKind = "claude";
   const requestId = randomUUID();
   const strippedUpstreamPath = url.pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
   const upstreamPath = strippedUpstreamPath || "/";
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
+  let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
   try {
@@ -77,7 +80,17 @@ export async function proxyClaudeRequest(
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
-    transaction.targetModel = resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ?? transaction.sourceModel;
+    routing = resolveClaudeRequestRouting(
+      baseConfig,
+      transaction.rawBody,
+      transaction.sourceModel,
+      req.headers,
+      req.socket.remoteAddress
+    );
+    config = routing.config;
+    transaction.targetModel = routing.sceneModel ??
+      resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ??
+      transaction.sourceModel;
     transaction.upstreamBody = rewriteClaudeModelBody(transaction.rawBody, transaction.targetModel ?? "");
     const upstreamProtocol = config.claude.primary.upstream_protocol;
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
@@ -96,16 +109,37 @@ export async function proxyClaudeRequest(
         url.search
       );
       const auth = resolveClaudeCredential(config);
-      transaction.requestHeaders = buildOpenAiRequestHeaders(req.headers, auth.apiKey);
+      transaction.requestHeaders = buildOpenAiRequestHeaders(
+        req.headers,
+        auth.apiKey,
+        config.claude.primary.extra_headers
+      );
     } else {
       upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
       const auth = resolveClaudeCredential(config);
-      transaction.requestHeaders = buildAnthropicUpstreamHeaders(req.headers, auth.apiKey);
+      transaction.requestHeaders = buildAnthropicUpstreamHeaders(
+        req.headers,
+        auth.apiKey,
+        config.claude.primary.extra_headers
+      );
     }
+    transaction.sensitiveHeaderNames = Object.keys(config.claude.primary.extra_headers);
     if (transaction.upstreamBody !== transaction.rawBody) {
       delete transaction.requestHeaders["content-encoding"];
     }
 
+    const routeHeaders = {
+      "x-compactgate-route": route,
+      "x-compactgate-claude-route": "primary",
+      "x-compactgate-claude-scene": routing.scene,
+      ...(routing.profileId
+        ? {
+            "x-compactgate-profile": routing.profileId,
+            "x-compactgate-profile-source": routing.profileSource
+          }
+        : {}),
+      "x-compactgate-request-id": requestId
+    };
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,
@@ -114,12 +148,9 @@ export async function proxyClaudeRequest(
       timeoutMs: config.timeouts.claude_ms,
       timeoutMessage: "Claude upstream request timed out.",
       requestHeaders: transaction.requestHeaders,
+      proxyUrl: config.claude.primary.proxy_url,
       body: transaction.upstreamBody,
-      extraResponseHeaders: {
-        "x-compactgate-route": route,
-        "x-compactgate-claude-route": "primary",
-        "x-compactgate-request-id": requestId
-      },
+      extraResponseHeaders: routeHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       streamProtocol: upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       writeResponse: true,
@@ -135,9 +166,9 @@ export async function proxyClaudeRequest(
 
     if (!res.headersSent) {
       copyResponseHeaders(completedResult.clientResponseHeaders ?? completedResult.responseHeaders, res);
-      res.setHeader("x-compactgate-route", route);
-      res.setHeader("x-compactgate-claude-route", "primary");
-      res.setHeader("x-compactgate-request-id", requestId);
+      for (const [name, value] of Object.entries(routeHeaders)) {
+        res.setHeader(name, value);
+      }
       res.writeHead(completedResult.status);
       res.end(completedResult.clientResponseBody ?? completedResult.responseBody);
     }
@@ -236,7 +267,8 @@ export async function proxyClaudeRequest(
       persistBody: config.logging.persist_body,
       compactResponseNormalized: transaction.compactResponseNormalized,
       compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+      sensitiveHeaderNames: transaction.sensitiveHeaderNames
     });
   }
 }
@@ -247,9 +279,10 @@ export function isAnthropicProxyPath(pathname: string): boolean {
 
 function buildOpenAiRequestHeaders(
   headers: IncomingMessage["headers"],
-  apiKey: string | null
+  apiKey: string | null,
+  extraHeaders: Record<string, string>
 ): Record<string, string> {
-  const next = buildUpstreamHeaders(headers, apiKey);
+  const next = buildUpstreamHeaders(headers, apiKey, extraHeaders);
   next["accept-encoding"] = "identity";
   for (const name of Object.keys(next)) {
     if (

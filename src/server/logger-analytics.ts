@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
   LogStatsMetric,
-  LogStatsSnapshot
+  LogStatsSnapshot,
+  LogStatsSummary
 } from "../shared/types.js";
 import {
   LOG_STANDALONE_ERROR_SQL,
@@ -109,13 +110,7 @@ const METRIC_SQL = `
 
 export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogStatsSnapshot {
   const params = [options.from, options.to];
-  const summaryRow = db.prepare(`${ANALYTICS_ROWS_SQL} SELECT ${METRIC_SQL} FROM analytics_rows`).get(
-    ...params
-  ) as Record<string, unknown>;
-  const duration = readPercentiles(db, "duration_ms", options);
-  const firstToken = readPercentiles(db, "first_token_ms", options);
-  const summaryMetric = readMetric(summaryRow);
-  const rangeMinutes = Math.max(1, (Date.parse(options.to) - Date.parse(options.from)) / 60_000);
+  const generatedAt = new Date().toISOString();
   const retained = db.prepare(
     "SELECT MIN(time) AS oldest_at, MAX(time) AS newest_at FROM request_logs"
   ).get() as Record<string, unknown>;
@@ -179,21 +174,13 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
   `).all(...params) as Array<Record<string, unknown>>;
 
   return {
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt,
     range: options,
     retained_range: {
       oldest_at: readString(retained.oldest_at),
       newest_at: readString(retained.newest_at)
     },
-    summary: {
-      ...summaryMetric,
-      duration_p50_ms: duration.p50,
-      duration_p95_ms: duration.p95,
-      first_token_p50_ms: firstToken.p50,
-      first_token_p95_ms: firstToken.p95,
-      average_rpm: summaryMetric.requests / rangeMinutes,
-      average_tpm: summaryMetric.total_tokens / rangeMinutes
-    },
+    summary: readSummary(db, options),
     trend: trend.map((row) => ({
       bucket_start: String(row.bucket_start),
       ...readMetric(row)
@@ -227,15 +214,31 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       response_model: readString(row.response_model),
       requests: readNumber(row.requests)
     })),
-    overview: options.includeOverview ? readOverview(db, options.to) : null
+    overview: options.includeOverview ? readOverview(db, options.to, generatedAt) : null
   };
 }
 
-function readOverview(db: DatabaseSync, to: string): NonNullable<LogStatsSnapshot["overview"]> {
+function readOverview(
+  db: DatabaseSync,
+  to: string,
+  generatedAt: string
+): NonNullable<LogStatsSnapshot["overview"]> {
   const end = new Date(to);
   const today = new Date(end);
   today.setHours(0, 0, 0, 0);
+  const generatedAtMs = Date.parse(generatedAt);
   return {
+    recent: {
+      one_minute: readSummaryMetric(
+        db,
+        new Date(generatedAtMs - 60_000).toISOString(),
+        generatedAt
+      ),
+      five_minutes: readSummary(db, {
+        from: new Date(generatedAtMs - 5 * 60_000).toISOString(),
+        to: generatedAt
+      })
+    },
     today: {
       from: today.toISOString(),
       to,
@@ -248,6 +251,22 @@ function readOverview(db: DatabaseSync, to: string): NonNullable<LogStatsSnapsho
         "9999-12-31T23:59:59.999Z"
       )
     }
+  };
+}
+
+function readSummary(db: DatabaseSync, options: LogStatsOptions): LogStatsSummary {
+  const summaryMetric = readSummaryMetric(db, options.from, options.to);
+  const duration = readPercentiles(db, "duration_ms", options);
+  const firstToken = readPercentiles(db, "first_token_ms", options);
+  const rangeMinutes = Math.max(1, (Date.parse(options.to) - Date.parse(options.from)) / 60_000);
+  return {
+    ...summaryMetric,
+    duration_p50_ms: duration.p50,
+    duration_p95_ms: duration.p95,
+    first_token_p50_ms: firstToken.p50,
+    first_token_p95_ms: firstToken.p95,
+    average_rpm: summaryMetric.requests / rangeMinutes,
+    average_tpm: summaryMetric.total_tokens / rangeMinutes
   };
 }
 

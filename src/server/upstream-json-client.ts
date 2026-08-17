@@ -6,6 +6,7 @@ import { normalizeMaxJsonResponseBytes } from "./upstream-response-buffer.js";
 
 export interface RequestJsonOptions {
   maxResponseBytes?: number;
+  proxyUrl?: string;
 }
 
 export function requestJson(
@@ -20,7 +21,7 @@ export function requestJson(
     headers,
     timeout: timeoutMs
   };
-  const agent = resolveUpstreamAgent(upstream);
+  const agent = resolveUpstreamAgent(upstream, options.proxyUrl);
   if (agent) {
     requestOptions.agent = agent;
   }

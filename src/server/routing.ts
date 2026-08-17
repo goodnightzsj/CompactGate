@@ -9,7 +9,8 @@ import type {
 import { isRecord, parseJsonRecord } from "./http-utils.js";
 import {
   buildClaudeUpstreamUrl,
-  resolveClaudeMappedModel
+  resolveClaudeMappedModel,
+  resolveClaudeRequestRouting
 } from "./claude-models.js";
 import { resolveUpstreamPath } from "./upstream-url.js";
 
@@ -98,6 +99,29 @@ export function hasRemoteV2CompactionState(
   return values.some((value) =>
     typeof value === "string" && value.split(/[\s,]+/).some((feature) => feature === "remote_compaction_v2")
   );
+}
+
+export function compactionImplementation(
+  mode: OpenAiCompactionMode,
+  body: unknown,
+  headers: IncomingHttpHeaders = {}
+): string {
+  const parsed = parseJsonBody(body);
+  const bodyImplementation = metadataCompactionImplementation(parsed?.client_metadata, true);
+  if (bodyImplementation) {
+    return bodyImplementation;
+  }
+  const headerImplementation = metadataCompactionImplementation(
+    readHeaderValue(headers, CODEX_TURN_METADATA_KEY),
+    false
+  );
+  if (headerImplementation) {
+    return headerImplementation;
+  }
+  if (mode === "remote_v1") {
+    return "responses_compact_endpoint";
+  }
+  return mode === "remote_v2" ? "responses_compaction_v2" : "local";
 }
 
 /** Compatibility wrapper for callers that only need the legacy route kind. */
@@ -233,7 +257,7 @@ export function previewRoute(
 ): RoutePreviewResponse {
   const parsedUrl = new URL(path, "http://compactgate.local");
   if (isClaudeIngressPath(parsedUrl.pathname)) {
-    return previewClaudeRoute(method, path, parsedUrl, body, config);
+    return previewClaudeRoute(method, path, parsedUrl, body, config, headers);
   }
   const classification = classifyOpenAiRequest(parsedUrl.pathname, body, headers);
   const usesPrimaryPlan = classification.route === "primary" || classification.compactionMode === "remote_v2";
@@ -304,11 +328,22 @@ function previewClaudeRoute(
   path: string,
   parsedUrl: URL,
   body: unknown,
-  config: CompactGateConfig
+  config: CompactGateConfig,
+  headers?: IncomingHttpHeaders
 ): RoutePreviewResponse {
   const requestPath = parsedUrl.pathname.slice(ANTHROPIC_PROXY_PREFIX.length) || "/";
   const countTokens = requestPath === "/v1/messages/count_tokens" || requestPath === "/messages/count_tokens";
-  const upstreamConfig = config.claude.primary;
+  const rawBody = previewBodyToBuffer(body);
+  const parsedBody = parseJsonBody(body);
+  const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
+  const routing = resolveClaudeRequestRouting(
+    config,
+    rawBody,
+    sourceModel,
+    headers ?? {},
+    "127.0.0.1"
+  );
+  const upstreamConfig = routing.config.claude.primary;
   const upstreamPath = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? requestPath
     : upstreamConfig.upstream_protocol === "openai_chat"
@@ -319,10 +354,9 @@ function previewClaudeRoute(
   const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? buildClaudeUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search)
     : buildUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search);
-  const rawBody = previewBodyToBuffer(body);
-  const parsedBody = parseJsonBody(body);
-  const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
-  const targetModel = resolveClaudeMappedModel(sourceModel, config, rawBody) ?? sourceModel;
+  const targetModel = routing.sceneModel ??
+    resolveClaudeMappedModel(sourceModel, routing.config, rawBody) ??
+    sourceModel;
   return {
     route: "claude",
     compaction_mode: null,
@@ -337,7 +371,11 @@ function previewClaudeRoute(
     source_model: sourceModel,
     target_model: targetModel,
     body_rewritten: Boolean(sourceModel && targetModel && sourceModel !== targetModel),
-    stream_removed: false
+    stream_removed: false,
+    profile_id: routing.profileId,
+    profile_source: routing.profileSource,
+    claude_scene: routing.scene,
+    scene_text_bytes: routing.textBytes
   };
 }
 
@@ -409,6 +447,22 @@ function metadataCompactionMode(metadataContainer: unknown, nested: boolean): Me
   return isRecord(metadata.compaction) && metadata.compaction.implementation === "responses_compaction_v2"
     ? "remote_v2"
     : "local";
+}
+
+function metadataCompactionImplementation(
+  metadataContainer: unknown,
+  nested: boolean
+): string | null {
+  const rawMetadata = nested && isRecord(metadataContainer)
+    ? metadataContainer[CODEX_TURN_METADATA_KEY]
+    : metadataContainer;
+  const metadata = parseCodexTurnMetadata(rawMetadata);
+  const implementation = isRecord(metadata?.compaction)
+    ? metadata.compaction.implementation
+    : null;
+  return typeof implementation === "string" && implementation.trim().length > 0
+    ? implementation.trim()
+    : null;
 }
 
 function parseCodexTurnMetadata(value: unknown): Record<string, unknown> | null {

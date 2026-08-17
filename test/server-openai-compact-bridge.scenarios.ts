@@ -1144,6 +1144,67 @@ describe("CompactGate OpenAI routing", () => {
     expect(compactRequests).toHaveLength(2);
   });
 
+  it("retries Remote V1 compact 503 responses three times before success", async () => {
+    const compactRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
+      writeJsonResponse(res, { ok: true });
+    });
+    const compact = await startCapturedOpenAiUpstream(compactRequests, (_req, res) => {
+      if (compactRequests.length < 4) {
+        writeJsonResponse(res, { error: "temporary compact failure" }, 503);
+        return;
+      }
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [{ type: "compaction", encrypted_content: "RETRIED_COMPACT_STATE" }]
+      });
+    });
+    const app = await startApp(primary.url, compact.url, {
+      compact: { upstream_mode: "split" }
+    });
+
+    const response = await postJson(app.url, "/v1/responses/compact", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger" }]
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [{ encrypted_content: "RETRIED_COMPACT_STATE" }]
+    });
+    expect(compactRequests).toHaveLength(4);
+  });
+
+  it("retries Remote V2 compact classifications on the primary route", async () => {
+    const primaryRequests: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
+      if (primaryRequests.length < 3) {
+        writeJsonResponse(res, { error: "remote v2 unavailable" }, 502);
+        return;
+      }
+      writeJsonResponse(res, {
+        object: "response.compaction",
+        output: [{ type: "compaction", encrypted_content: "REMOTE_V2_STATE" }]
+      });
+    });
+    const app = await startApp(primary.url, "http://127.0.0.1:1/v1");
+    const metadata = JSON.stringify({
+      request_kind: "compaction",
+      compaction: { implementation: "responses_compaction_v2" }
+    });
+
+    const response = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction_trigger" }]
+    }, { "x-codex-turn-metadata": metadata });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [{ encrypted_content: "REMOTE_V2_STATE" }]
+    });
+    expect(primaryRequests).toHaveLength(3);
+  });
+
   it("bridges locally normalized compact responses into primary requests", async () => {
     const summaryText = [
       "- Local synthetic compact summary.",

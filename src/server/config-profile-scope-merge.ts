@@ -28,7 +28,9 @@ export function extractScopedProfileConfig(
     claude: {
       primary: { ...runtime.claude.primary },
       compact: { ...runtime.claude.compact },
-      model_map: { ...runtime.claude.model_map }
+      model_map: { ...runtime.claude.model_map },
+      scene_map: JSON.parse(JSON.stringify(runtime.claude.scene_map)),
+      long_context_bytes: runtime.claude.long_context_bytes
     }
   };
 }

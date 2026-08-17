@@ -299,6 +299,7 @@ function isCaptureRecord(value: unknown): value is CaptureRecord {
     typeof value.compact_response_normalized === "boolean" &&
     isNullableString(value.compact_response_normalize_reason) &&
     isNullableString(value.compact_response_synthetic_source) &&
+    (value.compaction_diagnostics === undefined || isCompactionDiagnostics(value.compaction_diagnostics)) &&
     isCapturePayload(value.incoming_request) &&
     isCapturePayload(value.upstream_request) &&
     isCaptureResponsePayload(value.upstream_response) &&
@@ -345,21 +346,35 @@ function isNullableString(value: unknown): boolean {
   return value === null || typeof value === "string";
 }
 
+function isCompactionDiagnostics(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return value === null;
+  }
+  return (
+    (typeof value.implementation === "string" || value.implementation === null) &&
+    Number.isInteger(value.request_item_count) &&
+    Number.isInteger(value.request_trigger_count) &&
+    Number.isInteger(value.response_item_count)
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function serializeHeaders(
-  headers: IncomingHttpHeaders | Record<string, string | string[]>
+  headers: IncomingHttpHeaders | Record<string, string | string[]>,
+  additionalSensitiveNames: readonly string[] = []
 ): Record<string, string | string[]> {
   const next: Record<string, string | string[]> = {};
+  const additionalSensitive = new Set(additionalSensitiveNames.map((name) => name.toLowerCase()));
 
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) {
       continue;
     }
 
-    if (isSensitiveHeader(name)) {
+    if (isSensitiveHeader(name) || additionalSensitive.has(name.toLowerCase())) {
       next[name] = "[redacted]";
       continue;
     }

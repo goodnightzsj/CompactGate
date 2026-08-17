@@ -25,11 +25,16 @@ import {
   primaryRouteRequestContextFromBody,
   type PrimaryRouteSelection
 } from "./primary-failover.js";
+import { normalizeRequestContext } from "./primary-failover-context.js";
 import { readResponseId } from "./primary-failover-result.js";
 import {
   buildCompactOpenAiProxyPlan,
   buildPrimaryOpenAiProxyPlan
 } from "./openai-proxy-plan.js";
+import {
+  resolveRequestScopedProfile,
+  type RequestScopedProfile
+} from "./request-profile.js";
 import {
   applyOpenAiProxyUpstreamResult,
   createOpenAiProxyTransactionState,
@@ -64,6 +69,7 @@ import { ProtocolConversionError } from "./protocol-conversion.js";
 import {
   createAnthropicToResponsesCompactionResponseTransform,
   createAnthropicToResponsesResponseTransform,
+  createChatToResponsesCompactionResponseTransform,
   createChatToResponsesResponseTransform
 } from "./protocol-stream.js";
 import {
@@ -106,7 +112,14 @@ export async function proxyOpenAiRequest(
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
-  const config = configStore.get();
+  const baseConfig = configStore.get();
+  const requestProfile = resolveRequestScopedProfile(
+    baseConfig,
+    "codex",
+    req.headers,
+    req.socket.remoteAddress
+  );
+  const config = requestProfile?.config ?? baseConfig;
   const classification = classifyOpenAiRequest(url.pathname);
   const requestId = randomUUID();
 
@@ -126,7 +139,8 @@ export async function proxyOpenAiRequest(
       requestId,
       startedAtIso,
       startedAt,
-      classification
+      classification,
+      requestProfile
     );
     return;
   }
@@ -145,7 +159,8 @@ export async function proxyOpenAiRequest(
     codexVersionMonitor,
     requestId,
     startedAtIso,
-    startedAt
+    startedAt,
+    requestProfile
   );
 }
 
@@ -163,7 +178,8 @@ async function proxyPrimaryRequest(
   codexVersionMonitor: CodexVersionMonitor,
   requestId: string,
   startedAtIso: string,
-  startedAt: number
+  startedAt: number,
+  requestProfile: RequestScopedProfile | null
 ): Promise<void> {
   let route: RouteKind = "primary";
   let classification: OpenAiRequestClassification = {
@@ -200,6 +216,7 @@ async function proxyPrimaryRequest(
         startedAtIso,
         startedAt,
         classification,
+        requestProfile,
         {
           rawBody: transaction.rawBody,
           requestMetadata: transaction.requestMetadata
@@ -213,7 +230,19 @@ async function proxyPrimaryRequest(
       req.headers,
       transaction.requestMetadata.endpoint
     );
-    const inMemorySourceProfileId = primaryFailover.boundProfileId(primaryRequestContext);
+    const inMemorySourceProfileId = requestProfile
+      ? null
+      : primaryFailover.boundProfileId(primaryRequestContext);
+    const primarySelectionOverride: PrimaryRouteSelection | undefined = requestProfile
+      ? {
+          config,
+          profileId: requestProfile.profileId,
+          profileName: requestProfile.profileName,
+          generation: 0,
+          healthVersion: 0,
+          context: normalizeRequestContext(primaryRequestContext)
+        }
+      : undefined;
 
     const plan = buildPrimaryOpenAiProxyPlan({
       config,
@@ -223,19 +252,25 @@ async function proxyPrimaryRequest(
       endpoint: transaction.requestMetadata.endpoint,
       compactionBridge,
       primaryFailover,
-      preserveRemoteV2State: hasRemoteV2CompactionState(url.pathname, transaction.rawBody, req.headers)
+      preserveRemoteV2State: hasRemoteV2CompactionState(url.pathname, transaction.rawBody, req.headers),
+      primarySelectionOverride,
+      reservePrimarySelection: !requestProfile,
+      synthesizeRemoteV2Compaction: classification.route === "compact" &&
+        classification.compactionMode === "remote_v2"
     });
     route = classification.route;
     upstream = plan.upstream;
     primarySelection = plan.primarySelection;
-    await syncScheduledPrimaryProfile({
-      config,
-      configStore,
-      logger,
-      primarySelection,
-      studioEvents,
-      codexVersionMonitor
-    });
+    if (!requestProfile) {
+      await syncScheduledPrimaryProfile({
+        config,
+        configStore,
+        logger,
+        primarySelection,
+        studioEvents,
+        codexVersionMonitor
+      });
+    }
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
@@ -246,11 +281,13 @@ async function proxyPrimaryRequest(
       ).reasoningEffort;
     }
     transaction.requestHeaders = plan.requestHeaders;
+    transaction.sensitiveHeaderNames = plan.sensitiveHeaderNames;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 
     const extraResponseHeaders = {
       "x-compactgate-route": route,
       ...compactionResponseHeaders(classification),
+      ...requestProfileResponseHeaders(requestProfile),
       "x-compactgate-request-id": requestId
     };
     const bindingIdentityHashes = providerStateBindingIdentityHashes(primaryRequestContext);
@@ -280,6 +317,7 @@ async function proxyPrimaryRequest(
           timeoutMs: plan.timeoutMs,
           timeoutMessage: plan.timeoutMessage,
           requestHeaders: transaction.requestHeaders,
+          proxyUrl: plan.proxyUrl,
           canonicalBody: transaction.upstreamBody,
           extraResponseHeaders,
           targetStateDomain,
@@ -327,15 +365,26 @@ async function proxyPrimaryRequest(
       timeoutMs: plan.timeoutMs,
       timeoutMessage: plan.timeoutMessage,
       requestHeaders: transaction.requestHeaders,
+      proxyUrl: plan.proxyUrl,
       body: transaction.upstreamBody,
       extraResponseHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
-      retryEmptyStreamError: plan.upstreamProtocol === "openai_responses" && transaction.requestType === "stream",
+      retryEmptyStreamError: classification.route !== "compact" &&
+        plan.upstreamProtocol === "openai_responses" &&
+        transaction.requestType === "stream",
+      retryHttpStatuses: classification.route === "compact" ? [502, 503, 504] : undefined,
+      maxHttpStatusRetries: classification.route === "compact" ? 3 : 0,
       streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       responseTransform: plan.upstreamProtocol === "anthropic_messages"
         ? classification.compactionMode === "remote_v2"
           ? createAnthropicToResponsesCompactionResponseTransform
           : createAnthropicToResponsesResponseTransform
+        : plan.compactionFallback === "chat_synthesis"
+          ? (status, headers) => createChatToResponsesCompactionResponseTransform(
+              status,
+              headers,
+              transaction.requestType === "stream"
+            )
         : plan.upstreamProtocol === "openai_chat"
           ? createChatToResponsesResponseTransform
           : undefined
@@ -427,7 +476,7 @@ async function proxyPrimaryRequest(
       return;
     }
 
-    if (primarySelection) {
+    if (primarySelection && !requestProfile) {
       primaryFailover.recordResult(primarySelection, {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
@@ -478,7 +527,8 @@ async function proxyPrimaryRequest(
       persistBody: config.logging.persist_body,
       compactResponseNormalized: transaction.compactResponseNormalized,
       compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+      sensitiveHeaderNames: transaction.sensitiveHeaderNames
     });
   }
 }
@@ -491,6 +541,7 @@ async function sendRecoveringPrimaryRequest(input: {
   timeoutMs: number;
   timeoutMessage: string;
   requestHeaders: Record<string, string>;
+  proxyUrl: string;
   canonicalBody: Buffer;
   extraResponseHeaders: Record<string, string>;
   targetStateDomain: string;
@@ -522,6 +573,7 @@ async function sendRecoveringPrimaryRequest(input: {
         strategy === "cross_domain" ||
           (strategy === "error_400" && priorStrategy === "cross_domain")
       ),
+      proxyUrl: input.proxyUrl,
       body,
       extraResponseHeaders: input.extraResponseHeaders,
       deferHttpErrors: true,
@@ -646,6 +698,7 @@ async function proxyCompactRequest(
   startedAtIso: string,
   startedAt: number,
   classification: Extract<OpenAiRequestClassification, { route: "compact" }>,
+  requestProfile: RequestScopedProfile | null,
   prepared?: {
     rawBody: Buffer;
     requestMetadata: RequestMetadata;
@@ -661,7 +714,7 @@ async function proxyCompactRequest(
     transaction.rawBody = prepared?.rawBody ?? await readRawBody(req);
     transaction.requestMetadata = prepared?.requestMetadata ?? extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
-    const selectedPrimary = config.compact.upstream_mode === "primary"
+    const selectedPrimary = !requestProfile && config.compact.upstream_mode === "primary"
       ? primaryFailover.preview(
           config,
           primaryRouteRequestContextFromBody(
@@ -695,6 +748,7 @@ async function proxyCompactRequest(
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
     transaction.requestHeaders = plan.requestHeaders;
+    transaction.sensitiveHeaderNames = plan.sensitiveHeaderNames;
     transaction.compactBridgeReplacements = plan.compactBridgeReplacements;
 
     const dedupeInput = {
@@ -702,6 +756,7 @@ async function proxyCompactRequest(
       upstream: plan.upstream,
       authorization: transaction.requestHeaders.authorization ?? null,
       requestHeaders: transaction.requestHeaders,
+      proxyUrl: plan.proxyUrl,
       body: transaction.upstreamBody
     };
     const canDedupeCompactResponse = classification.compactionMode === "remote_v1" &&
@@ -720,6 +775,7 @@ async function proxyCompactRequest(
         {
           "x-compactgate-route": route,
           ...compactionResponseHeaders(classification),
+          ...requestProfileResponseHeaders(requestProfile),
           "x-compactgate-model": transaction.targetModel ?? "",
           "x-compactgate-request-id": requestId
         }
@@ -740,19 +796,29 @@ async function proxyCompactRequest(
       timeoutMs: plan.timeoutMs,
       timeoutMessage: plan.timeoutMessage,
       requestHeaders: transaction.requestHeaders,
+      proxyUrl: plan.proxyUrl,
       body: transaction.upstreamBody,
       extraResponseHeaders: {
         "x-compactgate-route": route,
         ...compactionResponseHeaders(classification),
+        ...requestProfileResponseHeaders(requestProfile),
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      retryHttpStatuses: [502, 503, 504],
+      maxHttpStatusRetries: 3,
       streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       responseTransform: plan.upstreamProtocol === "anthropic_messages"
         ? classification.compactionMode === "remote_v1"
           ? createAnthropicToResponsesCompactionResponseTransform
           : createAnthropicToResponsesResponseTransform
+        : plan.compactionFallback === "chat_synthesis"
+          ? (status, headers) => createChatToResponsesCompactionResponseTransform(
+              status,
+              headers,
+              transaction.requestType === "stream"
+            )
         : plan.upstreamProtocol === "openai_chat"
           ? createChatToResponsesResponseTransform
           : undefined
@@ -855,7 +921,7 @@ async function proxyCompactRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
-    if (primarySelection) {
+    if (primarySelection && !requestProfile) {
       primaryFailover.recordResult(primarySelection, {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
@@ -904,7 +970,8 @@ async function proxyCompactRequest(
       persistBody: config.logging.persist_body,
       compactResponseNormalized: transaction.compactResponseNormalized,
       compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
-      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource
+      compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+      sensitiveHeaderNames: transaction.sensitiveHeaderNames
     });
   }
 }
@@ -914,6 +981,17 @@ function compactionResponseHeaders(
 ): Record<string, string> {
   return classification.route === "compact"
     ? { "x-compactgate-compaction-mode": classification.compactionMode }
+    : {};
+}
+
+function requestProfileResponseHeaders(
+  requestProfile: RequestScopedProfile | null
+): Record<string, string> {
+  return requestProfile
+    ? {
+        "x-compactgate-profile": requestProfile.profileId,
+        "x-compactgate-profile-source": requestProfile.source
+      }
     : {};
 }
 

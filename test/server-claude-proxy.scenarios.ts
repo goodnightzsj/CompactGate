@@ -52,11 +52,11 @@ describe("CompactGate Claude routing", () => {
 
   it("uses an HTTP CONNECT proxy for HTTPS Claude upstream requests", async () => {
     setEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
-    setEnv("HTTPS_PROXY", "");
+    setEnv("HTTPS_PROXY", "not-a-valid-proxy-url");
     setEnv("https_proxy", "");
     setEnv("HTTP_PROXY", "");
     setEnv("http_proxy", "");
-    setEnv("NO_PROXY", "");
+    setEnv("NO_PROXY", "*");
     setEnv("no_proxy", "");
 
     const captured: { current: CapturedRequest | null } = { current: null };
@@ -77,7 +77,8 @@ describe("CompactGate Claude routing", () => {
     const app = await startApp(undefined, undefined, {
       claude: {
         base_url: claude.url,
-        api_key: "saved-claude-token"
+        api_key: "saved-claude-token",
+        proxy_url: proxy.url
       }
     });
 

@@ -9,6 +9,7 @@ import {
   anthropicUsageToResponses,
   chatCompletionToAnthropic,
   chatCompletionToResponses,
+  chatCompletionToResponsesCompaction,
   chatUsageToResponses,
   encodeCompactGateCompactionSummary,
   encodeCompactGateState,
@@ -20,7 +21,7 @@ import {
   openAiUsageToAnthropic,
   ProtocolConversionError
 } from "./protocol-conversion.js";
-import { isRecord } from "./http-utils.js";
+import { isRecord, parseJsonRecord } from "./http-utils.js";
 import type { UpstreamResponseTransform } from "./upstream-client.js";
 
 interface StreamBlock {
@@ -576,7 +577,7 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
       typeof event.delta.content === "string" &&
       event.delta.content.trim()
     ) {
-      summary = event.delta.content;
+      summary = (summary ?? "") + event.delta.content;
       return;
     }
 
@@ -1536,6 +1537,44 @@ export function createChatToResponsesResponseTransform(
     (body) => chatCompletionToResponses(body, status),
     "openai"
   );
+}
+
+export function createChatToResponsesCompactionResponseTransform(
+  status: number,
+  headers: IncomingHttpHeaders,
+  stream: boolean
+): UpstreamResponseTransform {
+  ensureIdentityEncoding(headers);
+  const responseHeaders = translatedHeaders(headers);
+  responseHeaders["content-type"] = stream
+    ? "text/event-stream; charset=utf-8"
+    : "application/json; charset=utf-8";
+  return bufferedJsonTransform(
+    responseHeaders,
+    (body) => {
+      const compacted = chatCompletionToResponsesCompaction(body, status);
+      return stream ? compactionJsonToSse(compacted) : compacted;
+    },
+    "openai"
+  );
+}
+
+function compactionJsonToSse(body: Buffer): Buffer {
+  const response = parseJsonRecord(body);
+  if (!response || !Array.isArray(response.output)) {
+    return body;
+  }
+  const outputItem = response.output[0];
+  const responseId = typeof response.id === "string" ? response.id : `resp_${randomUUID()}`;
+  const created = [
+    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+    { type: "response.output_item.done", output_index: 0, item: outputItem },
+    { type: "response.completed", response }
+  ];
+  return Buffer.from(created.map((event) => {
+    const payload = { ...event, sequence_number: created.indexOf(event) };
+    return `event: ${payload.type}\ndata: ${JSON.stringify({ ...payload, id: responseId })}\n\n`;
+  }).join(""));
 }
 
 export function createChatToAnthropicResponseTransform(

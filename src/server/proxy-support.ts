@@ -4,6 +4,7 @@ import type { RequestLogger } from "./logger.js";
 import type {
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
+  CompactionDiagnostics,
   ClientDisconnectPhase,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
@@ -78,6 +79,7 @@ export function addLog(
     compactResponseNormalized: boolean;
     compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
     compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
+    compactionDiagnostics?: CompactionDiagnostics | null;
     capturePath: string | null;
     captureStatus: RequestLogEntry["capture_status"];
   }
@@ -117,6 +119,7 @@ export function addLog(
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,
     compact_response_synthetic_source: input.compactResponseSyntheticSource,
+    compaction_diagnostics: input.compactionDiagnostics ?? null,
     source_model: input.sourceModel,
     target_model: input.targetModel,
     response_model: responseModel,

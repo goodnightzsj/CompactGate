@@ -12,7 +12,8 @@ export async function fetchOpenAiModels(config: CompactGateConfig): Promise<Open
   const credential = resolveRouteCredential("primary", config);
   return fetchUpstreamModels({
     baseUrl: config.primary.base_url,
-    headers: buildUpstreamHeaders({}, credential.apiKey),
+    headers: buildUpstreamHeaders({}, credential.apiKey, config.primary.extra_headers),
+    proxyUrl: config.primary.proxy_url,
     timeoutMs: config.timeouts.primary_ms
   });
 }

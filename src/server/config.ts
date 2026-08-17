@@ -10,8 +10,12 @@ import {
 import { DEFAULT_CONFIG } from "./config-defaults.js";
 import { ConfigError } from "./config-error.js";
 import {
+  deleteConfigBackup,
+  listConfigBackups,
+  readConfigBackup,
   readConfigFile,
-  writeConfigFile
+  writeConfigFile,
+  type ConfigBackupMetadata
 } from "./config-file-repository.js";
 import {
   applyProfile as applyConfigProfile,
@@ -24,6 +28,7 @@ import {
 import {
   getProfileScopeState,
   mergeProfileScopes,
+  profileConfigToRuntime,
   shouldPersistProfileNormalization,
   syncActiveProfilesFromRuntime,
   validateProfileConfig
@@ -164,6 +169,33 @@ export class ConfigStore {
     return this.mutate(() => applyConfigProfile(this.current, scope, profileId));
   }
 
+  async listBackups(): Promise<ConfigBackupMetadata[]> {
+    await this.mutationQueue;
+    return listConfigBackups(this.configPath);
+  }
+
+  async restoreBackup(backupId: string): Promise<CompactGateConfig> {
+    return this.queue(async () => {
+      let value: unknown;
+      try {
+        value = await readConfigBackup(this.configPath, backupId);
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new ConfigError("Config backup must contain valid JSON.");
+        }
+        throw error;
+      }
+
+      const next = mergeConfig(DEFAULT_CONFIG, value);
+      validateConfig(next);
+      return this.persist(next);
+    });
+  }
+
+  async deleteBackup(backupId: string): Promise<void> {
+    return this.queue(() => deleteConfigBackup(this.configPath, backupId));
+  }
+
   toPublicConfig(): PublicConfig {
     return buildPublicConfig({
       config: this.get(),
@@ -173,11 +205,15 @@ export class ConfigStore {
   }
 
   private async mutate(buildNext: () => CompactGateConfig): Promise<CompactGateConfig> {
-    const mutation = this.mutationQueue.catch(() => undefined).then(async () => {
+    return this.queue(async () => {
       const next = buildNext();
       validateConfig(next);
       return this.persist(next);
     });
+  }
+
+  private queue<T>(operation: () => Promise<T>): Promise<T> {
+    const mutation = this.mutationQueue.catch(() => undefined).then(operation);
     this.mutationQueue = mutation.then(() => undefined, () => undefined);
     return mutation;
   }
@@ -213,6 +249,33 @@ export function validateConfig(config: CompactGateConfig): void {
 
     if (state.active_profile_id && !state.profiles.some((profile) => profile.id === state.active_profile_id)) {
       throw new ConfigError(`${scope}.active_profile_id must reference an existing profile.`);
+    }
+  }
+
+  validateClaudeSceneProfileReferences(config);
+}
+
+function validateClaudeSceneProfileReferences(config: CompactGateConfig): void {
+  const state = getProfileScopeState(config, "claude");
+  const profileIds = new Set(state.profiles.map((profile) => profile.id));
+  validateSceneReferences(config.claude.scene_map, profileIds, "claude.scene_map");
+  for (const profile of state.profiles) {
+    validateSceneReferences(
+      profileConfigToRuntime(profile.config).claude.scene_map,
+      profileIds,
+      `profile_scopes.claude.${profile.id}.scene_map`
+    );
+  }
+}
+
+function validateSceneReferences(
+  sceneMap: CompactGateConfig["claude"]["scene_map"],
+  profileIds: Set<string>,
+  field: string
+): void {
+  for (const [scene, target] of Object.entries(sceneMap)) {
+    if (target.profile_id && !profileIds.has(target.profile_id)) {
+      throw new ConfigError(`${field}.${scene}.profile_id must reference an existing Claude profile.`);
     }
   }
 }

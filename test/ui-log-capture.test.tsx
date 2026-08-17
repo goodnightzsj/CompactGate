@@ -6,7 +6,10 @@ import {
   captureDownloadUrl,
   fetchCaptureRecord
 } from "../src/ui/logs/capture-client.js";
-import { LogCaptureViewer } from "../src/ui/logs/LogCaptureViewer.js";
+import {
+  CaptureDiffPanel,
+  LogCaptureViewer
+} from "../src/ui/logs/LogCaptureViewer.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -56,6 +59,55 @@ describe("LogCaptureViewer", () => {
 
     expect(markup).toContain(expectedText);
     expect(markup).toContain("SQLite 仅元数据");
+  });
+
+  it("renders bounded structural diff states", () => {
+    const equivalent = renderToStaticMarkup(
+      <CaptureDiffPanel
+        id="equivalent"
+        diff={{
+          available: true,
+          equivalent: true,
+          reason: "transparent",
+          entries: [],
+          truncated: false
+        }}
+      />
+    );
+    const unavailable = renderToStaticMarkup(
+      <CaptureDiffPanel
+        id="unavailable"
+        diff={{
+          available: false,
+          equivalent: false,
+          reason: "truncated",
+          entries: [],
+          truncated: false
+        }}
+      />
+    );
+    const changed = renderToStaticMarkup(
+      <CaptureDiffPanel
+        id="changed"
+        diff={{
+          available: true,
+          equivalent: false,
+          reason: "diff_limit",
+          entries: [{
+            path: "$.model",
+            kind: "changed",
+            before: "\"old\"",
+            after: "\"new\""
+          }],
+          truncated: true
+        }}
+      />
+    );
+
+    expect(equivalent).toContain("透明转发");
+    expect(unavailable).toContain("正文已截断");
+    expect(changed).toContain("$.model");
+    expect(changed).toContain("已达到 Diff 上限");
   });
 });
 

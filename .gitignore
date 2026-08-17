@@ -7,6 +7,7 @@ coverage/
 
 # Local runtime config and secrets
 compactgate.json
+/compactgate.json.backup.*.json
 /compactgate.codex-profiles-backup.*.json
 .env
 .env.*

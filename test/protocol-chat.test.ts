@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   anthropicRequestToChat,
   chatCompletionToAnthropic,
+  chatCompletionToResponsesCompaction,
   chatCompletionToResponses,
+  decodeCompactGateCompactionSummary,
+  responsesRemoteV2CompactionToChat,
   responsesRequestToChat
 } from "../src/server/protocol-conversion.js";
 import {
@@ -17,6 +20,36 @@ import {
 import { postClaudeMessage } from "./server-claude-core-helpers.js";
 
 describe("OpenAI Chat upstream conversion", () => {
+  it("turns a Remote V2 trigger into an ordinary summary prompt and signs the response", () => {
+    const converted = responsesRemoteV2CompactionToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5-chat",
+      stream: true,
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "context" }] },
+        { type: "compaction_trigger" }
+      ]
+    })));
+    const request = JSON.parse(converted.body.toString("utf8"));
+    expect(converted.stream).toBe(false);
+    expect(request.stream).toBeUndefined();
+    expect(request.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("summary text only")
+    });
+
+    const response = chatCompletionToResponsesCompaction(Buffer.from(JSON.stringify({
+      id: "chat-compaction",
+      model: "gpt-5.5-chat",
+      choices: [{
+        message: { role: "assistant", content: "signed summary" },
+        finish_reason: "stop"
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 }
+    })), 200);
+    const body = JSON.parse(response.toString("utf8"));
+    expect(body.object).toBe("response.compaction");
+    expect(decodeCompactGateCompactionSummary(body.output[0].encrypted_content)).toBe("signed summary");
+  });
   it("maps supported Responses input and function tools to Chat", () => {
     const converted = responsesRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
@@ -344,6 +377,70 @@ describe("OpenAI Chat upstream conversion", () => {
       max_completion_tokens: 100,
       messages: [{ role: "user", content: "hello" }]
     });
+  });
+
+  it("synthesizes Chat Remote V2 compaction and accepts only CompactGate state on follow-up", async () => {
+    const captures: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(captures, async (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chat-compaction-proxy",
+        model: "gpt-5.5-chat",
+        choices: [{
+          message: { role: "assistant", content: "Chat portable summary." },
+          finish_reason: "stop"
+        }],
+        usage: { prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 }
+      }));
+    });
+    const app = await startApp(upstream.url, undefined, {
+      primary: {
+        upstream_protocol: "openai_chat",
+        api_key: "chat-primary-secret",
+        model_override: "gpt-5.5-chat"
+      }
+    });
+    const metadata = JSON.stringify({
+      request_kind: "compaction",
+      compaction: { implementation: "responses_compaction_v2" }
+    });
+
+    const trigger = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      stream: true,
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "context" }] },
+        { type: "compaction_trigger" }
+      ]
+    }, { "x-codex-turn-metadata": metadata });
+    expect(trigger.status).toBe(200);
+    expect(trigger.headers.get("content-type")).toContain("text/event-stream");
+    const triggerText = await trigger.text();
+    expect(triggerText).toContain("response.output_item.done");
+    const state = triggerText.match(/"encrypted_content":"(cg1_[^"]+)"/)?.[1];
+    expect(state).toMatch(/^cg1_/);
+    expect(JSON.parse(captures[0].body).messages.at(-1).content).toContain("summary text only");
+
+    const followUp = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [
+        { type: "compaction", encrypted_content: state },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] }
+      ]
+    });
+    expect(followUp.status).toBe(200);
+    expect(await followUp.json()).toMatchObject({ output_text: "Chat portable summary." });
+    expect(captures).toHaveLength(2);
+
+    const opaque = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5",
+      input: [{ type: "compaction", encrypted_content: "provider-owned" }]
+    });
+    expect(opaque.status).toBe(422);
+    expect(await opaque.json()).toMatchObject({
+      error: expect.stringContaining("opaque compaction state")
+    });
+    expect(captures).toHaveLength(2);
   });
 
   it("streams Chat output to Anthropic before the upstream closes", async () => {

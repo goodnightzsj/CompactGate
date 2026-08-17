@@ -15,16 +15,22 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade"
 ]);
+const INTERNAL_REQUEST_HEADERS = new Set(["x-compactgate-profile"]);
 
 export function buildUpstreamHeaders(
   headers: IncomingHttpHeaders,
-  apiKey: string | null
+  apiKey: string | null,
+  extraHeaders: Record<string, string> = {}
 ): Record<string, string> {
   const next: Record<string, string> = {};
 
   for (const [name, value] of Object.entries(headers)) {
     const lowerName = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lowerName) || lowerName === "host") {
+    if (
+      HOP_BY_HOP_HEADERS.has(lowerName) ||
+      INTERNAL_REQUEST_HEADERS.has(lowerName) ||
+      lowerName === "host"
+    ) {
       continue;
     }
 
@@ -34,6 +40,8 @@ export function buildUpstreamHeaders(
       next[lowerName] = value.join(", ");
     }
   }
+
+  Object.assign(next, extraHeaders);
 
   if (apiKey) {
     next.authorization = `Bearer ${apiKey}`;

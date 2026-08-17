@@ -19,6 +19,8 @@ describe("log stats API", () => {
     expect(stats.by_host).toEqual([]);
     expect(stats.overview?.today.summary.requests).toBe(0);
     expect(stats.overview?.retained.summary.requests).toBe(0);
+    expect(stats.overview?.recent.one_minute.requests).toBe(0);
+    expect(stats.overview?.recent.five_minutes.average_rpm).toBe(0);
     expect(stats.range.from < stats.range.to).toBe(true);
 
     const invalid = await fetch(`${app.url}/api/logs/stats?from=not-a-date`);

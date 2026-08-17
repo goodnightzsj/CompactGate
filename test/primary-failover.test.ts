@@ -7,6 +7,10 @@ import {
 } from "../src/server/compaction-bridge.js";
 import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
 import {
+  candidateSignature,
+  codexPrimaryCandidates
+} from "../src/server/primary-failover-candidates.js";
+import {
   classifyPrimaryRouteResult,
   PrimaryFailoverState,
   primaryRouteRequestContextFromBody
@@ -19,6 +23,24 @@ import type {
 import { compactUpstreamBaseUrl, deriveCompactModel } from "../src/server/routing.js";
 
 describe("PrimaryFailoverState", () => {
+  it("changes candidate signatures when protocol or transport settings change", () => {
+    const base = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "https://api.example.test/v1")
+    ]);
+    const changed = cloneConfig(base);
+    const profile = changed.profile_scopes?.codex?.profiles?.[0];
+    if (!profile || !("primary" in profile.config)) {
+      throw new Error("Expected Codex profile primary config.");
+    }
+    profile.config.primary.upstream_protocol = "openai_chat";
+    profile.config.primary.extra_headers = { "x-route": "changed" };
+    profile.config.primary.proxy_url = "http://127.0.0.1:8080";
+
+    expect(candidateSignature(codexPrimaryCandidates(changed))).not.toBe(
+      candidateSignature(codexPrimaryCandidates(base))
+    );
+  });
+
   it("applies the selected Codex profile reasoning effort to Responses plans", () => {
     const config = configWithCodexProfiles([
       codexProfile(

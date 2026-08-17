@@ -3,7 +3,8 @@ import type {
   ConfigProfileScope,
   PublicConfig,
   PublicConfigProfile,
-  SavedConfigProfile
+  SavedConfigProfile,
+  UpstreamConfig
 } from "../shared/types.js";
 import {
   getProfileScopeState,
@@ -34,6 +35,7 @@ export function buildPublicConfig({
       base_url: config.primary.base_url,
       api_key_env: config.primary.api_key_env,
       host: safeHost(config.primary.base_url),
+      ...publicTransport(config.primary),
       upstream_protocol: config.primary.upstream_protocol,
       stored_api_key: directApiKeyConfigured(config.primary.api_key),
       api_key_configured: primaryCredential.apiKeyConfigured,
@@ -48,6 +50,7 @@ export function buildPublicConfig({
       base_url: config.compact.base_url,
       api_key_env: config.compact.api_key_env,
       host: safeHost(config.compact.base_url),
+      ...publicTransport(config.compact),
       upstream_protocol: config.compact.upstream_protocol,
       stored_api_key: directApiKeyConfigured(config.compact.api_key),
       api_key_configured: compactCredential.apiKeyConfigured,
@@ -64,6 +67,7 @@ export function buildPublicConfig({
         base_url: config.claude.primary.base_url,
         api_key_env: config.claude.primary.api_key_env,
         host: safeHost(config.claude.primary.base_url),
+        ...publicTransport(config.claude.primary),
         upstream_protocol: config.claude.primary.upstream_protocol,
         stored_api_key: directApiKeyConfigured(config.claude.primary.api_key),
         api_key_configured: claudePrimaryCredential.apiKeyConfigured,
@@ -76,6 +80,7 @@ export function buildPublicConfig({
         base_url: config.claude.compact.base_url,
         api_key_env: config.claude.compact.api_key_env,
         host: safeHost(config.claude.compact.base_url),
+        ...publicTransport(config.claude.compact),
         upstream_protocol: config.claude.compact.upstream_protocol,
         stored_api_key: directApiKeyConfigured(config.claude.compact.api_key),
         api_key_configured: claudeCompactCredential.apiKeyConfigured,
@@ -85,7 +90,9 @@ export function buildPublicConfig({
         upstream_mode: config.claude.compact.upstream_mode,
         model_override: config.claude.compact.model_override
       },
-      model_map: { ...config.claude.model_map }
+      model_map: { ...config.claude.model_map },
+      scene_map: JSON.parse(JSON.stringify(config.claude.scene_map)),
+      long_context_bytes: config.claude.long_context_bytes
     },
     listen: config.listen,
     timeouts: config.timeouts,
@@ -154,4 +161,19 @@ function toPublicProfile(
 
 function directApiKeyConfigured(value: string): boolean {
   return value.trim().length > 0;
+}
+
+function publicTransport(upstream: UpstreamConfig): {
+  extra_header_names: string[];
+  proxy_configured: boolean;
+  proxy_host: string | null;
+  proxy_authenticated: boolean;
+} {
+  const proxy = URL.parse(upstream.proxy_url);
+  return {
+    extra_header_names: Object.keys(upstream.extra_headers).sort(),
+    proxy_configured: upstream.proxy_url.trim().length > 0,
+    proxy_host: proxy?.host ?? null,
+    proxy_authenticated: Boolean(proxy && (proxy.username || proxy.password))
+  };
 }

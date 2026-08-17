@@ -27,13 +27,26 @@ export type CompactResponseNormalizeReason =
   | "missing_compaction_output";
 export type CompactResponseSyntheticSource = "upstream_response" | "request_input";
 
+export interface CompactionDiagnostics {
+  implementation: string | null;
+  request_item_count: number;
+  request_trigger_count: number;
+  response_item_count: number;
+}
+
 export type PrimaryReasoningEffort = "" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type PrimaryStatePortabilityMode = "off" | "recover_on_error";
 export type CompactModelMode = "linked" | "custom";
 export type CompactUpstreamMode = "split" | "primary";
 export type ClaudeModelMapRole = "default" | "opus" | "sonnet" | "haiku" | "reasoning" | "subagent";
+export type ClaudeScene = "default" | "long_context" | "background" | "web_search" | "thinking" | "image";
 
 export type ClaudeModelMap = Record<ClaudeModelMapRole, string>;
+export interface ClaudeSceneTarget {
+  profile_id: string;
+  model: string;
+}
+export type ClaudeSceneMap = Record<ClaudeScene, ClaudeSceneTarget>;
 
 export interface CodexClientInfo {
   name: string;
@@ -64,6 +77,8 @@ export interface UpstreamConfig {
   base_url: string;
   api_key: string;
   api_key_env: string;
+  extra_headers: Record<string, string>;
+  proxy_url: string;
   upstream_protocol: UpstreamProtocol;
   model_override?: string;
 }
@@ -93,6 +108,8 @@ export interface ClaudeConfig {
   primary: ClaudePrimaryConfig;
   compact: ClaudeCompactConfig;
   model_map: ClaudeModelMap;
+  scene_map: ClaudeSceneMap;
+  long_context_bytes: number;
 }
 
 export interface TimeoutConfig {
@@ -231,6 +248,10 @@ export interface PublicCredentialState {
 export interface PublicUpstreamConfig extends PublicCredentialState {
   base_url: string;
   host: string;
+  extra_header_names: string[];
+  proxy_configured: boolean;
+  proxy_host: string | null;
+  proxy_authenticated: boolean;
   upstream_protocol: UpstreamProtocol;
   model_override: string;
 }
@@ -238,6 +259,10 @@ export interface PublicUpstreamConfig extends PublicCredentialState {
 export interface PublicCompactConfig extends PublicCredentialState {
   base_url: string;
   host: string;
+  extra_header_names: string[];
+  proxy_configured: boolean;
+  proxy_host: string | null;
+  proxy_authenticated: boolean;
   upstream_protocol: UpstreamProtocol;
   upstream_mode: CompactUpstreamMode;
   model_mode: CompactModelMode;
@@ -249,6 +274,8 @@ export interface PublicClaudeConfig {
   primary: PublicUpstreamConfig & { model_override: string };
   compact: PublicUpstreamConfig & { upstream_mode: CompactUpstreamMode; model_override: string };
   model_map: ClaudeModelMap;
+  scene_map: ClaudeSceneMap;
+  long_context_bytes: number;
 }
 
 export interface PublicConfigProfileScopeState {
@@ -297,6 +324,10 @@ export interface RoutePreviewResponse {
   target_model: string | null;
   body_rewritten: boolean;
   stream_removed: boolean;
+  profile_id?: string | null;
+  profile_source?: "explicit" | "scene" | "active";
+  claude_scene?: ClaudeScene;
+  scene_text_bytes?: number;
 }
 
 export interface RequestLogEntry {
@@ -319,6 +350,7 @@ export interface RequestLogEntry {
   compact_response_normalized: boolean;
   compact_response_normalize_reason: CompactResponseNormalizeReason | null;
   compact_response_synthetic_source: CompactResponseSyntheticSource | null;
+  compaction_diagnostics?: CompactionDiagnostics | null;
   source_model: string | null;
   target_model: string | null;
   response_model: string | null;
@@ -423,6 +455,7 @@ export interface CaptureRecord {
   compact_response_normalized: boolean;
   compact_response_normalize_reason: CompactResponseNormalizeReason | null;
   compact_response_synthetic_source: CompactResponseSyntheticSource | null;
+  compaction_diagnostics?: CompactionDiagnostics | null;
   incoming_request: CapturePayload;
   upstream_request: CapturePayload;
   upstream_response: CaptureResponsePayload;
@@ -526,6 +559,10 @@ export interface LogStatsSnapshot {
     requests: number;
   }>;
   overview: {
+    recent: {
+      one_minute: LogStatsMetric;
+      five_minutes: LogStatsSummary;
+    };
     today: {
       from: string;
       to: string;

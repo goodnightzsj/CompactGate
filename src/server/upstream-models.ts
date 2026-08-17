@@ -17,6 +17,7 @@ export type UpstreamModelsResponse = {
 type FetchUpstreamModelsOptions = {
   baseUrl: string;
   headers: Record<string, string>;
+  proxyUrl?: string;
   timeoutMs: number;
 };
 
@@ -35,6 +36,7 @@ const COMPATIBILITY_PATH_SUFFIXES = [
 export async function fetchUpstreamModels({
   baseUrl,
   headers,
+  proxyUrl,
   timeoutMs
 }: FetchUpstreamModelsOptions): Promise<UpstreamModelsResponse> {
   const upstreams = buildModelListUrls(baseUrl);
@@ -42,7 +44,7 @@ export async function fetchUpstreamModels({
 
   for (const upstream of upstreams) {
     try {
-      const body = await requestJson(upstream, headers, timeoutMs);
+      const body = await requestJson(upstream, headers, timeoutMs, { proxyUrl });
       return {
         models: extractModelIds(body),
         upstream_host: upstream.host,

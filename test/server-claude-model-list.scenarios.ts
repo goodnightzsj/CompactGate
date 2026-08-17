@@ -14,6 +14,7 @@ describe("CompactGate Claude routing", () => {
     const claude = await startClaudeUpstream((req, res) => {
       expect(req.url).toBe("/v1/models");
       expect(req.headers["anthropic-api-key"]).toBe("models-token");
+      expect(req.headers["x-model-list-secret"]).toBe("claude-model-secret");
       writeJsonResponse(res, {
         data: [
           { id: "claude-sonnet-4-6" },
@@ -26,7 +27,8 @@ describe("CompactGate Claude routing", () => {
       claude: {
         primary: {
           base_url: claude.url,
-          api_key: "models-token"
+          api_key: "models-token",
+          extra_headers: { "x-model-list-secret": "claude-model-secret" }
         }
       }
     });

@@ -101,7 +101,12 @@ describe("cross-protocol compaction", () => {
       event("content_block_delta", {
         type: "content_block_delta",
         index: 0,
-        delta: { type: "compaction_delta", content: "Streamed summary." }
+        delta: { type: "compaction_delta", content: "Streamed " }
+      }),
+      event("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content: "summary." }
       }),
       event("content_block_stop", { type: "content_block_stop", index: 0 }),
       event("message_delta", {
@@ -128,6 +133,9 @@ describe("cross-protocol compaction", () => {
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "response.output_item.done", item: expect.objectContaining({ type: "compaction" }) })
     ]));
+    const state = events.find((item) => item.type === "response.output_item.done")
+      ?.item as { encrypted_content?: string } | undefined;
+    expect(decodeCompactGateCompactionSummary(state?.encrypted_content)).toBe("Streamed summary.");
     expect(completed[0]).toMatchObject({
       response: {
         id: "msg_compact_stream",

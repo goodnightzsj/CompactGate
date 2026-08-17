@@ -320,6 +320,8 @@ describe("ConfigStore", () => {
       base_url: "http://127.0.0.1:9010",
       api_key: "legacy-claude-key",
       api_key_env: "LEGACY_CLAUDE_KEY",
+      extra_headers: {},
+      proxy_url: "",
       upstream_protocol: "anthropic_messages",
       model_override: ""
     });
@@ -336,6 +338,87 @@ describe("ConfigStore", () => {
     expect(publicConfig.claude.primary.stored_api_key).toBe(true);
     expect(publicConfig.claude.compact.stored_api_key).toBe(true);
     expect(JSON.stringify(publicConfig)).not.toContain("legacy-claude-key");
+  });
+
+  it("validates, persists, and redacts configured upstream headers", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    await store.patch({
+      primary: {
+        extra_headers: {
+          "X-Tenant-Secret": "s3cr3t-value",
+          "x-feature-mode": "strict"
+        }
+      }
+    });
+
+    expect(store.get().primary.extra_headers).toEqual({
+      "x-tenant-secret": "s3cr3t-value",
+      "x-feature-mode": "strict"
+    });
+    expect(store.toPublicConfig().primary.extra_header_names).toEqual([
+      "x-feature-mode",
+      "x-tenant-secret"
+    ]);
+    expect(JSON.stringify(store.toPublicConfig())).not.toContain("s3cr3t-value");
+    expect(store.get().route_url_presets?.find((preset) => preset.kind === "codex_primary"))
+      .not.toHaveProperty("extra_headers");
+
+    const saved = await store.saveProfile("codex", "Transport headers", {
+      primary: { extra_headers: { "x-profile-secret": "profile-value" } }
+    });
+    const profile = saved.profile_scopes?.codex?.profiles?.find(
+      (candidate) => candidate.name === "Transport headers"
+    );
+    expect(profile?.config).toMatchObject({
+      primary: {
+        extra_headers: { "x-profile-secret": "profile-value" }
+      }
+    });
+    expect(JSON.stringify(store.toPublicConfig())).not.toContain("profile-value");
+
+    await expect(store.patch({
+      primary: { extra_headers: { Authorization: "Bearer bypass" } }
+    })).rejects.toThrow("cannot override a protected header");
+    await expect(store.patch({
+      primary: { extra_headers: { "x-unsafe": "line-one\r\nline-two" } }
+    })).rejects.toThrow("must be a valid HTTP header");
+    await expect(store.patch({
+      primary: { extra_headers: { "x-valid": 42 } }
+    })).rejects.toThrow("extra_headers must be a JSON object containing string values");
+  });
+
+  it("validates explicit HTTP CONNECT proxy configuration without exposing credentials", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    await store.patch({
+      primary: {
+        base_url: "https://api.example.test/v1",
+        proxy_url: "http://proxy-user:proxy-pass@127.0.0.1:8080"
+      }
+    });
+
+    expect(store.get().primary.proxy_url).toContain("proxy-user:proxy-pass");
+    expect(store.toPublicConfig().primary).toMatchObject({
+      proxy_configured: true,
+      proxy_host: "127.0.0.1:8080",
+      proxy_authenticated: true
+    });
+    expect(JSON.stringify(store.toPublicConfig())).not.toContain("proxy-pass");
+    expect(store.get().route_url_presets?.find((preset) => preset.kind === "codex_primary"))
+      .not.toHaveProperty("proxy_url");
+
+    await expect(store.patch({
+      primary: { proxy_url: "https://127.0.0.1:8080" }
+    })).rejects.toThrow("must be an http URL without a path, query, or fragment");
+    await expect(store.patch({
+      primary: {
+        base_url: "http://127.0.0.1:9000/v1",
+        proxy_url: "http://127.0.0.1:8080"
+      }
+    })).rejects.toThrow("requires an https upstream URL");
   });
 
   it("syncs Claude primary model override with the default model map slot", async () => {

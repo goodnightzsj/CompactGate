@@ -41,12 +41,21 @@ export function candidateSignature(candidates: PrimaryCandidate[]): string {
     candidate.id,
     candidate.config.primary.base_url,
     candidate.config.primary.api_key_env,
+    candidate.config.primary.upstream_protocol,
     candidate.config.primary.model_override ?? "",
     candidate.config.primary.reasoning_effort,
     candidate.config.primary.state_domain_id,
+    primaryTransportSignature(candidate.config.primary),
     primaryCredentialSignature(candidate.config)
   ].join("|"));
   return candidateParts.join("::");
+}
+
+function primaryTransportSignature(primary: CompactGateConfig["primary"]): string {
+  return createHash("sha256").update(JSON.stringify({
+    extra_headers: Object.entries(primary.extra_headers).sort(([left], [right]) => left.localeCompare(right)),
+    proxy_url: primary.proxy_url
+  })).digest("hex");
 }
 
 function primaryCredentialSignature(config: CompactGateConfig): string {

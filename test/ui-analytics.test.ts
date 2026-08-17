@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
@@ -14,12 +14,16 @@ import {
   rangeForPreset,
   usageCsv
 } from "../src/ui/analytics/analytics-data.js";
+import * as analyticsData from "../src/ui/analytics/analytics-data.js";
 import {
   AnalyticsTokenBreakdownChart,
   cacheHitRate
 } from "../src/ui/analytics/AnalyticsShared.js";
+import { AnalyticsDashboardPage } from "../src/ui/analytics/AnalyticsDashboardPage.js";
 import { DateRangePicker } from "../src/ui/analytics/DateRangePicker.js";
 import { formatCompactMetricNumber } from "../src/ui/shared/format.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("analytics data helpers", () => {
   it("formats analytics-scale values without changing precise formatters", () => {
@@ -80,6 +84,58 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("缓存率");
     expect(markup).toContain("输入 1,000");
     expect(markup).toContain("缓存率 50.0%");
+  });
+
+  it("renders rolling operational metrics independently from range averages", () => {
+    const stats = snapshot([]);
+    stats.summary.average_rpm = 99;
+    stats.summary.average_tpm = 999_999;
+    stats.overview = {
+      recent: {
+        one_minute: metric({ requests: 3, total_tokens: 21_200 }),
+        five_minutes: {
+          ...metric({
+            input_tokens: 100,
+            cache_read_tokens: 50,
+            total_tokens: 92_000,
+            average_duration_ms: 220,
+            average_first_token_ms: 40
+          }),
+          duration_p50_ms: 200,
+          duration_p95_ms: 500,
+          first_token_p50_ms: 30,
+          first_token_p95_ms: 80,
+          average_rpm: 2.4,
+          average_tpm: 18_400
+        }
+      },
+      today: {
+        from: "2026-08-07T00:00:00.000Z",
+        to: stats.generated_at,
+        summary: metric()
+      },
+      retained: { summary: metric() }
+    };
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({
+      data: stats,
+      error: null,
+      loading: false,
+      refresh: vi.fn()
+    });
+
+    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage));
+
+    expect(markup).toContain("aria-label=\"历史统计范围\"");
+    expect(markup).toContain("近 5 分钟 RPM");
+    expect(markup).toContain("2.40 RPM");
+    expect(markup).toContain("近 5 分钟 18.4K TPM");
+    expect(markup).toContain("近 1 分钟 3.00 RPM");
+    expect(markup).toContain("21.2K TPM");
+    expect(markup).toContain("近 5 分钟缓存命中");
+    expect(markup).toContain("50.0%");
+    expect(markup).toContain("近 5 分钟首 Token P50 / P95");
+    expect(markup).toContain("近 5 分钟总耗时 P50 / P95");
+    expect(markup).not.toContain("99.00 RPM");
   });
 
   it("treats date inputs as inclusive local calendar days with a 31-day limit", () => {
