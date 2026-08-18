@@ -10,7 +10,7 @@ describe("applyHostQuirks", () => {
       targetModel: "claude-opus-5",
       headers
     });
-    expect(applied).toEqual(["anyrouter-opus-context-1m"]);
+    expect(applied).toEqual(["anyrouter-context-1m"]);
     expect(headers["anthropic-beta"]).toBe("context-1m-2025-08-07");
   });
 
@@ -20,14 +20,16 @@ describe("applyHostQuirks", () => {
     expect(headers["anthropic-beta"]).toBe("compact-2026-01-12,context-1m-2025-08-07");
   });
 
-  it("leaves other hosts and non-opus targets untouched", () => {
+  it("leaves other hosts untouched", () => {
     const other: Record<string, string> = {};
     applyHostQuirks({ host: "agentrouter.org", sourceModel: null, targetModel: "claude-opus-5", headers: other });
     expect(other["anthropic-beta"]).toBeUndefined();
+  });
 
-    const nonOpus: Record<string, string> = {};
-    applyHostQuirks({ host: "anyrouter.top", sourceModel: null, targetModel: "glm-5.2", headers: nonOpus });
-    expect(nonOpus["anthropic-beta"]).toBeUndefined();
+  it("adds the beta for non-opus targets too", () => {
+    const headers: Record<string, string> = {};
+    applyHostQuirks({ host: "anyrouter.top", sourceModel: null, targetModel: "claude-sonnet-4-5", headers });
+    expect(headers["anthropic-beta"]).toBe("context-1m-2025-08-07");
   });
 
   it("drops the codex responses-lite hint on muyuan", () => {

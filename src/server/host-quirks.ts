@@ -25,13 +25,13 @@ const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 
 export const HOST_QUIRKS: HostQuirk[] = [
   {
-    // anyrouter serves Opus only on the 1m context tier and rejects requests
+    // anyrouter serves every model on the 1m context tier and rejects requests
     // that omit the beta with HTTP 400 "1m 上下文已经全量可用，请启用 1m 上下文后重试".
-    // Claude Code sends the beta on main-session turns but not on background
-    // (haiku) turns, which CompactGate may remap onto an Opus target.
-    id: "anyrouter-opus-context-1m",
-    matches: ({ host, targetModel }) =>
-      hostMatchesSuffix(host, "anyrouter.top") && (targetModel ?? "").toLowerCase().includes("opus"),
+    // Verified by A/B probe: the same sonnet request 400s without the beta and
+    // gets past that check with it. Claude Code only sends the beta on
+    // main-session turns, so background and subagent turns need it added.
+    id: "anyrouter-context-1m",
+    matches: ({ host }) => hostMatchesSuffix(host, "anyrouter.top"),
     apply: ({ headers }) => {
       headers["anthropic-beta"] = appendHeaderToken(headers["anthropic-beta"], ANTHROPIC_CONTEXT_1M_BETA);
     }
