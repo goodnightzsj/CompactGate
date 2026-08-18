@@ -166,11 +166,17 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
 
   const mappings = db.prepare(`
     ${ANALYTICS_ROWS_SQL}
-    SELECT source_model, target_model, response_model, COUNT(*) AS requests
+    SELECT
+      upstream_host AS host,
+      source_model,
+      target_model,
+      response_model,
+      COUNT(*) AS requests,
+      COALESCE(SUM(is_error), 0) AS error_requests
     FROM analytics_rows
-    GROUP BY source_model, target_model, response_model
-    ORDER BY requests DESC, source_model, target_model, response_model
-    LIMIT 12
+    GROUP BY upstream_host, source_model, target_model, response_model
+    ORDER BY requests DESC, host, source_model, target_model, response_model
+    LIMIT 20
   `).all(...params) as Array<Record<string, unknown>>;
 
   return {
@@ -209,10 +215,12 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       total_tokens: readNumber(row.total_tokens)
     })),
     model_mappings: mappings.map((row) => ({
+      host: readString(row.host) ?? "未知 Host",
       source_model: readString(row.source_model),
       target_model: readString(row.target_model),
       response_model: readString(row.response_model),
-      requests: readNumber(row.requests)
+      requests: readNumber(row.requests),
+      error_requests: readNumber(row.error_requests)
     })),
     overview: options.includeOverview ? readOverview(db, options.to, generatedAt) : null
   };

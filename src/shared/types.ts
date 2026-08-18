@@ -553,10 +553,12 @@ export interface LogStatsSnapshot {
     total_tokens: number;
   }>;
   model_mappings: Array<{
+    host: string;
     source_model: string | null;
     target_model: string | null;
     response_model: string | null;
     requests: number;
+    error_requests: number;
   }>;
   overview: {
     recent: {

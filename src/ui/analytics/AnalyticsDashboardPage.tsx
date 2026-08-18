@@ -231,7 +231,7 @@ export function AnalyticsDashboardPage() {
               </AnalyticsPanel>
             </div>
 
-            <AnalyticsPanel title="模型路径" meta="请求模型 → 上游模型 → 响应模型">
+            <AnalyticsPanel title="模型路径" meta="Host · 请求模型 → 上游模型 → 响应模型">
               {stats.data.model_mappings.length === 0 ? (
                 <div className="analytics-inline-empty">暂无模型映射数据</div>
               ) : (
@@ -239,19 +239,25 @@ export function AnalyticsDashboardPage() {
                   <table className="analytics-table">
                     <thead>
                       <tr>
+                        <th scope="col">Host</th>
                         <th scope="col">请求模型</th>
                         <th scope="col">上游模型</th>
                         <th scope="col">响应模型</th>
                         <th scope="col">请求</th>
+                        <th scope="col">错误</th>
                       </tr>
                     </thead>
                     <tbody>
                       {stats.data.model_mappings.map((row, index) => (
-                        <tr key={`${row.source_model}-${row.target_model}-${row.response_model}-${index}`}>
+                        <tr key={`${row.host}-${row.source_model}-${row.target_model}-${row.response_model}-${index}`}>
+                          <td><code>{row.host}</code></td>
                           <td><code>{row.source_model ?? "-"}</code></td>
                           <td><code>{row.target_model ?? "-"}</code></td>
                           <td><code>{row.response_model ?? "-"}</code></td>
                           <td>{formatMetricNumber(row.requests)}</td>
+                          <td className={row.error_requests > 0 ? "is-error" : undefined}>
+                            {formatMetricNumber(row.error_requests)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
