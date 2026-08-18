@@ -557,9 +557,7 @@ export interface LogStatsSnapshot {
     source_model: string | null;
     target_model: string | null;
     response_model: string | null;
-    requests: number;
-    error_requests: number;
-  }>;
+  } & LogStatsMetric>;
   overview: {
     recent: {
       one_minute: LogStatsMetric;

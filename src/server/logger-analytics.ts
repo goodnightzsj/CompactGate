@@ -171,8 +171,7 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       source_model,
       target_model,
       response_model,
-      COUNT(*) AS requests,
-      COALESCE(SUM(is_error), 0) AS error_requests
+      ${METRIC_SQL}
     FROM analytics_rows
     GROUP BY upstream_host, source_model, target_model, response_model
     ORDER BY requests DESC, host, source_model, target_model, response_model
@@ -219,8 +218,7 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       source_model: readString(row.source_model),
       target_model: readString(row.target_model),
       response_model: readString(row.response_model),
-      requests: readNumber(row.requests),
-      error_requests: readNumber(row.error_requests)
+      ...readMetric(row)
     })),
     overview: options.includeOverview ? readOverview(db, options.to, generatedAt) : null
   };

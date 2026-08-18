@@ -245,6 +245,8 @@ export function AnalyticsDashboardPage() {
                         <th scope="col">响应模型</th>
                         <th scope="col">请求</th>
                         <th scope="col">错误</th>
+                        <th scope="col">缓存命中率</th>
+                        <th scope="col">总 Token</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -258,6 +260,8 @@ export function AnalyticsDashboardPage() {
                           <td className={row.error_requests > 0 ? "is-error" : undefined}>
                             {formatMetricNumber(row.error_requests)}
                           </td>
+                          <td>{cacheHitRate(row.input_tokens, row.cache_read_tokens)}</td>
+                          <td>{formatMetricNumber(row.total_tokens)}</td>
                         </tr>
                       ))}
                     </tbody>
