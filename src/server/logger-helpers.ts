@@ -381,18 +381,13 @@ function readCompactionDetectionSource(
 }
 
 function readEndpoint(value: unknown, pathValue: string): string {
-  if (typeof value === "string" && value.length > 0) {
-    return value;
+  // Show the endpoint as the client sent it, /v1 prefix included. The stored
+  // endpoint column keeps its stripped form because request-shape checks in
+  // usage-request.ts compare against it.
+  const pathname = pathValue.split("?")[0] ?? "";
+  if (pathname.length > 0) {
+    return pathname;
   }
 
-  const pathname = pathValue.split("?")[0] ?? "/";
-  if (pathname === "/v1") {
-    return "/";
-  }
-
-  if (pathname.startsWith("/v1/")) {
-    return pathname.slice(3);
-  }
-
-  return pathname || "/";
+  return typeof value === "string" && value.length > 0 ? value : "/";
 }

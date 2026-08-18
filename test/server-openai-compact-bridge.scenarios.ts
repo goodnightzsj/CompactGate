@@ -596,14 +596,14 @@ describe("CompactGate OpenAI routing", () => {
       route: "primary",
       compaction_mode: null,
       compaction_detection_source: null,
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       upstream_host: new URL(primary.url).host
     });
     expect(page.logs[1]).toMatchObject({
       route: "compact",
       compaction_mode: "remote_v1",
       compaction_detection_source: "path",
-      endpoint: "/responses/compact",
+      endpoint: "/v1/responses/compact",
       upstream_host: new URL(compact.url).host
     });
   });
@@ -681,7 +681,7 @@ describe("CompactGate OpenAI routing", () => {
     const page = await fetchLogPage(app.url);
     expect(page.logs[0]).toMatchObject({
       route: "compact",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       upstream_host: new URL(compact.url).host,
       request_type: "stream",
       compact_response_normalized: false,
@@ -801,8 +801,8 @@ describe("CompactGate OpenAI routing", () => {
 
     const page = await fetchLogPage(app.url);
     expect(page.logs.slice(0, 2).map((entry) => [entry.route, entry.endpoint])).toEqual([
-      ["primary", "/responses"],
-      ["compact", "/responses"]
+      ["primary", "/v1/responses"],
+      ["compact", "/v1/responses"]
     ]);
     expect(page.logs[0]).toMatchObject({
       route: "primary",

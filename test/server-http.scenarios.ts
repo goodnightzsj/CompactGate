@@ -488,7 +488,7 @@ describe("CompactGate HTTP basics", () => {
       route: "primary",
       method: "POST",
       path: "/v1/responses",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       request_type: "http",
       reasoning_effort: null,
       request_summary: null,
@@ -560,7 +560,7 @@ describe("CompactGate HTTP basics", () => {
       route: "primary",
       method: "POST",
       path: "/v1/responses",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       request_type: "http",
       reasoning_effort: null,
       request_summary: null,
@@ -763,7 +763,7 @@ describe("CompactGate HTTP basics", () => {
 
     expect(log).toMatchObject({
       route: "primary",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       status: 502,
       error_summary: "Client disconnected before request body completed."
     });

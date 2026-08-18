@@ -635,7 +635,7 @@ describe("CompactGate logs and capture", () => {
     expect(entry).toMatchObject({
       route: "compact",
       path: "/v1/responses/compact",
-      endpoint: "/responses/compact",
+      endpoint: "/v1/responses/compact",
       request_type: "http",
       incoming_request_body: null,
       upstream_request_body: null,

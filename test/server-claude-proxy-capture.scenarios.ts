@@ -93,7 +93,7 @@ describe("CompactGate Claude routing", () => {
     const entry = await waitForLogEntry(app.url, (e) => e.route === "claude");
     expect(entry).toMatchObject({
       route: "claude",
-      endpoint: "/messages",
+      endpoint: "/v1/messages",
       request_type: "stream",
       status: 200,
       upstream_status: 200,

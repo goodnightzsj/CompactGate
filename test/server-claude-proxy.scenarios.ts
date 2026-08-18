@@ -280,7 +280,7 @@ describe("CompactGate Claude routing", () => {
     expect(entry).toMatchObject({
       route: "claude",
       status: 502,
-      endpoint: "/messages",
+      endpoint: "/v1/messages",
       source_model: "claude-opus-4-8",
       target_model: "claude-opus-4-8",
       error_summary: "Client disconnected before upstream response completed."

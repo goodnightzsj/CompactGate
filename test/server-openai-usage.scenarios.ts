@@ -44,7 +44,7 @@ describe("CompactGate OpenAI routing", () => {
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       route: "compact",
-      endpoint: "/responses/compact",
+      endpoint: "/v1/responses/compact",
       request_type: "http",
       reasoning_effort: "xhigh",
       input_tokens: 35213,
@@ -224,7 +224,7 @@ describe("CompactGate OpenAI routing", () => {
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       route: "primary",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       request_type: "stream",
       reasoning_effort: "high",
       input_tokens: 12,
@@ -268,7 +268,7 @@ describe("CompactGate OpenAI routing", () => {
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       route: "primary",
-      endpoint: "/responses",
+      endpoint: "/v1/responses",
       reasoning_effort: "xhigh"
     });
   });
@@ -530,7 +530,7 @@ describe("CompactGate OpenAI routing", () => {
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       route: "compact",
-      endpoint: "/responses/compact",
+      endpoint: "/v1/responses/compact",
       request_type: "stream",
       upstream_host: new URL(compact.url).host,
       source_model: "gpt-5.5",
