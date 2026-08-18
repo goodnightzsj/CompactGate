@@ -281,3 +281,11 @@ export function looksLikeZstd(buffer: Buffer): boolean {
     buffer[2] === 0x2f &&
     buffer[3] === 0xfd;
 }
+
+export function appendHeaderToken(value: string | undefined, token: string): string {
+  const tokens = (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  if (!tokens.includes(token)) {
+    tokens.push(token);
+  }
+  return tokens.join(",");
+}

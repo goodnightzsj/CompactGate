@@ -11,6 +11,7 @@ import {
   rewriteClaudeModelBody
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
+import { applyHostQuirks, resolveHostShortCircuit } from "./host-quirks.js";
 import {
   buildUpstreamHeaders,
   copyResponseHeaders,
@@ -124,6 +125,12 @@ export async function proxyClaudeRequest(
         config.claude.primary.extra_headers
       );
     }
+    applyHostQuirks({
+      host: upstream.hostname,
+      sourceModel: transaction.sourceModel,
+      targetModel: transaction.targetModel,
+      headers: transaction.requestHeaders
+    });
     transaction.sensitiveHeaderNames = Object.keys(config.claude.primary.extra_headers);
     if (transaction.upstreamBody !== transaction.rawBody) {
       delete transaction.requestHeaders["content-encoding"];
@@ -141,6 +148,27 @@ export async function proxyClaudeRequest(
         : {}),
       "x-compactgate-request-id": requestId
     };
+
+    const shortCircuit = resolveHostShortCircuit({
+      host: upstream.hostname,
+      upstreamPath,
+      rawBody: transaction.rawBody
+    });
+    if (shortCircuit) {
+      transaction.status = 200;
+      transaction.responseBody = shortCircuit.body;
+      transaction.responseHeaders = { "content-type": "application/json" };
+      transaction.streamOutcome = "success";
+      copyResponseHeaders(transaction.responseHeaders, res);
+      for (const [name, value] of Object.entries(routeHeaders)) {
+        res.setHeader(name, value);
+      }
+      res.setHeader("x-compactgate-short-circuit", shortCircuit.id);
+      res.writeHead(200);
+      res.end(shortCircuit.body);
+      return;
+    }
+
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,

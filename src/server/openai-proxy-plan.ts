@@ -6,7 +6,8 @@ import {
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
 import { resolveRouteCredential } from "./credentials.js";
-import { buildUpstreamHeaders, parseJsonRecord } from "./http-utils.js";
+import { appendHeaderToken, buildUpstreamHeaders, parseJsonRecord } from "./http-utils.js";
+import { applyHostQuirks } from "./host-quirks.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl
@@ -222,6 +223,12 @@ function withRequestHeaders(
   if (plan.upstreamBody !== rawBody) {
     delete requestHeaders["content-encoding"];
   }
+  applyHostQuirks({
+    host: plan.upstream.hostname,
+    sourceModel: plan.sourceModel,
+    targetModel: plan.targetModel,
+    headers: requestHeaders
+  });
 
   return {
     ...plan,
@@ -291,10 +298,4 @@ function buildOpenAiChatRequestHeaders(
   return next;
 }
 
-function appendHeaderToken(value: string | undefined, token: string): string {
-  const tokens = (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-  if (!tokens.includes(token)) {
-    tokens.push(token);
-  }
-  return tokens.join(",");
-}
+

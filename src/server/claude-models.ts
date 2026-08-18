@@ -231,11 +231,19 @@ export function hasClaudeImageInput(rawBody: Buffer): boolean {
 }
 
 function countClaudeTextBytes(value: unknown): number {
+  return measureClaudeText(value, (text) => Buffer.byteLength(text));
+}
+
+/**
+ * Walks the text-bearing parts of an Anthropic request body, skipping image
+ * payloads and structural keys, and sums whatever `measure` reports.
+ */
+export function measureClaudeText(value: unknown, measure: (text: string) => number): number {
   if (typeof value === "string") {
-    return Buffer.byteLength(value);
+    return measure(value);
   }
   if (Array.isArray(value)) {
-    return value.reduce((total, item) => total + countClaudeTextBytes(item), 0);
+    return value.reduce((total, item) => total + measureClaudeText(item, measure), 0);
   }
   if (!isRecord(value) || readTrimmedString(value.type)?.toLowerCase() === "image") {
     return 0;
@@ -245,7 +253,7 @@ function countClaudeTextBytes(value: unknown): number {
     (total, [key, item]) => total + (
       key === "data" || key === "type" || key === "role" || key === "media_type"
         ? 0
-        : countClaudeTextBytes(item)
+        : measureClaudeText(item, measure)
     ),
     0
   );
