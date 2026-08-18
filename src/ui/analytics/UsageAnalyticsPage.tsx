@@ -189,7 +189,7 @@ export function UsageAnalyticsPage() {
           <div className="analytics-breakdown-grid">
             <AnalyticsPanel title="响应模型" meta="Top 12">
               <div className="analytics-table-scroll">
-                <table className="analytics-table">
+                <table className="analytics-table analytics-model-table">
                   <thead>
                     <tr>
                       <th scope="col">模型</th>
