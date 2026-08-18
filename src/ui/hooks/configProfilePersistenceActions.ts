@@ -28,7 +28,11 @@ export function createConfigProfilePersistenceActions({
   setSaveState: Dispatch<SetStateAction<SaveState>>;
   scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
 }) {
-  async function saveConfigProfile(scope: ConfigProfileScope = "codex", nameOverride?: string): Promise<boolean> {
+  async function saveConfigProfile(
+    scope: ConfigProfileScope = "codex",
+    nameOverride?: string,
+    formOverride?: ConfigFormState
+  ): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
     const trimmedName = (nameOverride ?? accessors.name).trim();
     if (!trimmedName) {
@@ -46,7 +50,7 @@ export function createConfigProfilePersistenceActions({
         body: JSON.stringify({
           scope,
           name: trimmedName,
-          config: formToPatch(form)
+          config: formToPatch(formOverride ?? form)
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);

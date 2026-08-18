@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import { profileScopeState } from "./profile-utils.js";
 
@@ -9,15 +9,29 @@ function openAsModal(node: HTMLDialogElement | null): void {
 
 export function ConfigSaveAsNewProfileDialog({
   config,
+  initialName = "",
+  initialScope = "codex",
   onCancel,
-  onConfirm
+  onConfirm,
+  scopeLocked = false,
+  submitLabel = "保存为新档案",
+  title = "另存为新档案",
+  description = "把当前表单草稿保存为一个新的配置档案。不会改动已有档案，也不会切换当前运行时。",
+  children
 }: {
   config: PublicConfig | null;
+  initialName?: string;
+  initialScope?: ConfigProfileScope;
   onCancel: () => void;
   onConfirm: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
+  scopeLocked?: boolean;
+  submitLabel?: string;
+  title?: string;
+  description?: string;
+  children?: ReactNode;
 }) {
-  const [scope, setScope] = useState<ConfigProfileScope>("codex");
-  const [name, setName] = useState("");
+  const [scope, setScope] = useState<ConfigProfileScope>(initialScope);
+  const [name, setName] = useState(initialName);
   const [submitting, setSubmitting] = useState(false);
   const trimmedName = name.trim();
   const existingNames = config
@@ -54,26 +68,31 @@ export function ConfigSaveAsNewProfileDialog({
       <span className="confirm-icon confirm-icon-neutral" aria-hidden="true">+</span>
       <div className="confirm-copy">
         <p className="eyebrow">Save As New Profile</p>
-        <h2 id="config-save-as-new-title">另存为新档案</h2>
-        <p id="config-save-as-new-desc">
-          把当前表单草稿保存为一个新的配置档案。不会改动已有档案，也不会切换当前运行时。
-        </p>
+        <h2 id="config-save-as-new-title">{title}</h2>
+        <p id="config-save-as-new-desc">{description}</p>
       </div>
-      <div className="scope-toggle-row" role="radiogroup" aria-label="档案作用域">
-        {(["codex", "claude"] as const).map((candidate) => (
-          <button
-            key={candidate}
-            className={`ghost-button${scope === candidate ? " is-active" : ""}`}
-            type="button"
-            role="radio"
-            aria-checked={scope === candidate}
-            disabled={submitting}
-            onClick={() => setScope(candidate)}
-          >
-            {candidate === "codex" ? "Codex 档案" : "Claude 档案"}
-          </button>
-        ))}
-      </div>
+      {scopeLocked ? (
+        <div className="scope-toggle-row" aria-label="目标档案作用域">
+          <span className="scope-locked-label">{scopeLabel} 档案</span>
+        </div>
+      ) : (
+        <div className="scope-toggle-row" role="radiogroup" aria-label="档案作用域">
+          {(["codex", "claude"] as const).map((candidate) => (
+            <button
+              key={candidate}
+              className={`ghost-button${scope === candidate ? " is-active" : ""}`}
+              type="button"
+              role="radio"
+              aria-checked={scope === candidate}
+              disabled={submitting}
+              onClick={() => setScope(candidate)}
+            >
+              {candidate === "codex" ? "Codex 档案" : "Claude 档案"}
+            </button>
+          ))}
+        </div>
+      )}
+      {children}
       <div className="confirm-overwrite-name">
         <span className="confirm-field-label">新档案名称</span>
         <input
@@ -95,7 +114,7 @@ export function ConfigSaveAsNewProfileDialog({
           disabled={submitting || !trimmedName || nameTaken}
           onClick={() => void handleConfirm()}
         >
-          {submitting ? "保存中..." : "保存为新档案"}
+          {submitting ? "保存中..." : submitLabel}
         </button>
       </div>
     </dialog>

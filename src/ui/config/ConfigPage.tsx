@@ -1,5 +1,6 @@
-import type * as React from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type {
+  ConfigProfileScope,
   PublicConfig
 } from "../../shared/types.js";
 import {
@@ -10,9 +11,16 @@ import { ConfigModelPanel } from "./ConfigModelPanel.js";
 import { ConfigPreviewPanel } from "./ConfigPreviewPanel.js";
 import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
 import { ConfigSaveBar } from "./ConfigSaveBar.js";
+import { ConfigSaveAsNewProfileDialog } from "./ConfigSaveAsNewProfileDialog.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
 import { copyProfileRoutesToOtherDraft } from "./config-form-state.js";
+import {
+  compactModeLabel,
+  nextUniqueProfileName,
+  profileScopeState,
+  upstreamProtocolLabel
+} from "./profile-utils.js";
 import type { ConfigFormState, ConfigTab } from "./types.js";
 import type { ConfigActions } from "../hooks/useConfigActions.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
@@ -33,9 +41,10 @@ export function ConfigPage({
   form: ConfigFormState;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
-  onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
+  onFormChange: Dispatch<SetStateAction<ConfigFormState>>;
   onConfigTabChange: (tab: ConfigTab) => void;
 }) {
+  const [crossScopeDraft, setCrossScopeDraft] = useState<CrossScopeProfileDraft | null>(null);
   const importWorkflow = useConfigImportWorkflow({
     onImportConfig: actions.importConfig
   });
@@ -92,9 +101,13 @@ export function ConfigPage({
                 onUpdateProfile={actions.updateSelectedProfile}
                 onReorderProfiles={actions.reorderProfiles}
                 onDuplicateProfile={actions.duplicateSelectedProfile}
-                onCopyProfileRoutes={(profile) => onFormChange((previous) =>
-                  copyProfileRoutesToOtherDraft(previous, profile)
-                )}
+                onCreateProfileForOtherScope={(profile) => {
+                  setCrossScopeDraft({
+                    sourceProfile: profile,
+                    targetScope: profile.scope === "codex" ? "claude" : "codex",
+                    form: copyProfileRoutesToOtherDraft(form, profile)
+                  });
+                }}
                 onDeleteProfile={actions.requestDeleteSelectedProfile}
               />
             )}
@@ -156,6 +169,96 @@ export function ConfigPage({
           onSaveProfileAsNew={actions.saveConfigProfile}
         />
       </div>
+
+      {crossScopeDraft && (
+        <CrossScopeProfileDialog
+          config={config}
+          draft={crossScopeDraft}
+          onCancel={() => setCrossScopeDraft(null)}
+          onConfirm={async (scope, name) => {
+            const ok = await actions.saveConfigProfile(scope, name, crossScopeDraft.form);
+            if (ok !== false) {
+              setCrossScopeDraft(null);
+              return true;
+            }
+            return false;
+          }}
+        />
+      )}
     </>
   );
+}
+
+type CrossScopeProfileDraft = {
+  sourceProfile: PublicConfig["profiles"][number];
+  targetScope: ConfigProfileScope;
+  form: ConfigFormState;
+};
+
+function CrossScopeProfileDialog({
+  config,
+  draft,
+  onCancel,
+  onConfirm
+}: {
+  config: PublicConfig | null;
+  draft: CrossScopeProfileDraft;
+  onCancel: () => void;
+  onConfirm: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
+}) {
+  const targetLabel = draft.targetScope === "codex" ? "Codex" : "Claude";
+  const existingNames = config
+    ? profileScopeState(config, draft.targetScope).profiles.map((profile) => profile.name)
+    : [];
+  const suggestedName = nextUniqueProfileName(draft.sourceProfile.name, existingNames);
+  const routes = crossScopeRoutePreview(draft);
+
+  return (
+    <ConfigSaveAsNewProfileDialog
+      config={config}
+      initialName={suggestedName}
+      initialScope={draft.targetScope}
+      scopeLocked
+      title={`创建为 ${targetLabel} 档案`}
+      description={`将「${draft.sourceProfile.name}」的路由映射到 ${targetLabel}。上游协议保持源值，以决定直通或协议转换；不复制源凭据，目标端专属设置及现有凭据保持不变。`}
+      submitLabel={`创建 ${targetLabel} 档案`}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      <div className="config-preview-result cross-scope-profile-preview" aria-label="待创建档案路由预览">
+        <div className="cross-scope-route">
+          <span>主路由</span>
+          <strong>{routes.primaryUrl || "未配置"}</strong>
+          <small>{upstreamProtocolLabel(routes.primaryProtocol)}</small>
+        </div>
+        <div className="cross-scope-route">
+          <span>压缩路由</span>
+          <strong>{routes.compactUrl || "未配置"}</strong>
+          <small>
+            {upstreamProtocolLabel(routes.compactProtocol)} · {compactModeLabel(routes.compactMode)}
+          </small>
+        </div>
+      </div>
+    </ConfigSaveAsNewProfileDialog>
+  );
+}
+
+function crossScopeRoutePreview(draft: CrossScopeProfileDraft) {
+  if (draft.targetScope === "codex") {
+    return {
+      primaryUrl: draft.form.codexPrimaryBaseUrl,
+      primaryProtocol: draft.form.codexPrimaryUpstreamProtocol,
+      compactUrl: draft.form.codexCompactBaseUrl,
+      compactProtocol: draft.form.codexCompactUpstreamProtocol,
+      compactMode: draft.form.upstreamMode
+    };
+  }
+
+  return {
+    primaryUrl: draft.form.claudePrimaryBaseUrl,
+    primaryProtocol: draft.form.claudePrimaryUpstreamProtocol,
+    compactUrl: draft.form.claudeCompactBaseUrl,
+    compactProtocol: draft.form.claudeCompactUpstreamProtocol,
+    compactMode: draft.form.claudeCompactUpstreamMode
+  };
 }

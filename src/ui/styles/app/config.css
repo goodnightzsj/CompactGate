@@ -1104,6 +1104,51 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 58%, var(--hairline));
 }
 
+.scope-locked-label {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--hairline));
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.cross-scope-profile-preview {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.cross-scope-route {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.cross-scope-route span,
+.cross-scope-route small {
+  color: var(--muted);
+}
+
+.cross-scope-route span {
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.cross-scope-route strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.cross-scope-route small {
+  font-size: 0.7rem;
+}
+
 .custom-select {
   position: relative;
   min-width: 0;

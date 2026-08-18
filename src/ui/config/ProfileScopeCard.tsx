@@ -32,7 +32,7 @@ export function ProfileScopeCard({
   onUpdateProfile,
   onReorderProfiles,
   onDuplicateProfile,
-  onCopyProfileRoutes,
+  onCreateProfileForOtherScope,
   onDeleteProfile
 }: {
   scope: ConfigProfileScope;
@@ -53,7 +53,7 @@ export function ProfileScopeCard({
   onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-  onCopyProfileRoutes: (profile: PublicConfig["profiles"][number]) => void;
+  onCreateProfileForOtherScope: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
 }) {
   const titleId = `${scope}-profile-card-title`;
@@ -319,10 +319,10 @@ export function ProfileScopeCard({
                         className="ghost-button"
                         type="button"
                         disabled={profileBusy}
-                        title={`仅复制 URL、协议和压缩模式到 ${destinationScopeLabel} 草稿；密钥保持不变。`}
-                        onClick={() => onCopyProfileRoutes(profile)}
+                        title={`用这组 URL、上游协议和压缩模式创建 ${destinationScopeLabel} 档案；目标端专属设置及凭据保持不变。`}
+                        onClick={() => onCreateProfileForOtherScope(profile)}
                       >
-                        复制路由到 {destinationScopeLabel} 草稿
+                        创建为 {destinationScopeLabel} 档案
                       </button>
                       <button
                         className="ghost-button"
