@@ -73,7 +73,7 @@ describe("resolveHostShortCircuit", () => {
       upstreamPath: "/v1/messages/count_tokens",
       rawBody: body
     });
-    expect(result?.id).toBe("agentrouter-local-count-tokens");
+    expect(result?.id).toBe("local-count-tokens");
     // 800 non-CJK characters at 3.5 chars/token.
     expect(JSON.parse(result!.body.toString()).input_tokens).toBe(229);
   });
@@ -117,9 +117,17 @@ describe("resolveHostShortCircuit", () => {
     })).toBeNull();
   });
 
-  it("leaves other hosts alone", () => {
+  it("also answers count_tokens locally for anyrouter", () => {
     expect(resolveHostShortCircuit({
       host: "anyrouter.top",
+      upstreamPath: "/v1/messages/count_tokens",
+      rawBody: body
+    })?.id).toBe("local-count-tokens");
+  });
+
+  it("leaves hosts that support the endpoint alone", () => {
+    expect(resolveHostShortCircuit({
+      host: "opencode.9962510.xyz",
       upstreamPath: "/v1/messages/count_tokens",
       rawBody: body
     })).toBeNull();

@@ -84,15 +84,19 @@ export interface HostShortCircuit {
   respond: (context: HostShortCircuitContext) => unknown;
 }
 
+// Relays that answer count_tokens with HTTP 404 "Invalid URL". Both were
+// observed in the request log; add a host here once its 404 is confirmed.
+const COUNT_TOKENS_UNSUPPORTED_HOSTS = ["agentrouter.org", "anyrouter.top"];
+
 export const HOST_SHORT_CIRCUITS: HostShortCircuit[] = [
   {
-    // agentrouter proxies /v1/messages only and answers count_tokens with
-    // HTTP 404 "Invalid URL (POST /v1/messages/count_tokens)". Claude Code
-    // uses that count for its context gauge and auto-compaction timing, so a
-    // local estimate keeps those working instead of failing outright.
-    id: "agentrouter-local-count-tokens",
+    // These relays proxy /v1/messages only. Claude Code uses the token count
+    // for its context gauge and auto-compaction timing, so a local estimate
+    // keeps those working instead of failing outright.
+    id: "local-count-tokens",
     matches: ({ host, upstreamPath }) =>
-      hostMatchesSuffix(host, "agentrouter.org") && isCountTokensPath(upstreamPath),
+      isCountTokensPath(upstreamPath) &&
+      COUNT_TOKENS_UNSUPPORTED_HOSTS.some((candidate) => hostMatchesSuffix(host, candidate)),
     respond: ({ rawBody }) => ({ input_tokens: estimateAnthropicInputTokens(rawBody) })
   }
 ];
