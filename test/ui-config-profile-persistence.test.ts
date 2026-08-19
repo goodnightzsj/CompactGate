@@ -76,6 +76,56 @@ describe("config profile persistence", () => {
       }
     });
   });
+
+  it("renames the selected profile through PATCH instead of creating a profile", async () => {
+    const renamedConfig = {
+      profile_scopes: {
+        codex: {
+          profiles: [{ id: "current", name: "1zzzcoding" }],
+          active_profile_id: null
+        },
+        claude: { profiles: [], active_profile_id: null }
+      }
+    } as unknown as PublicConfig;
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify(renamedConfig), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { setTimeout: vi.fn() });
+    const accessors = {
+      name: "1zzzcoding",
+      selectedId: "current",
+      state: "idle" as const,
+      setName: vi.fn(),
+      setSelectedId: vi.fn(),
+      setState: vi.fn(),
+      setError: vi.fn()
+    };
+    const actions = createConfigProfilePersistenceActions({
+      config: renamedConfig,
+      form: emptyForm(),
+      setConfig: vi.fn(),
+      setForm: vi.fn(),
+      setHealth: vi.fn(),
+      setSaveError: vi.fn(),
+      setSaveState: vi.fn(),
+      scopedProfileAccessors: () => accessors
+    });
+
+    await actions.updateSelectedProfile("codex");
+    const [url, request] = fetchMock.mock.calls[0] ?? [];
+    const payload = JSON.parse(String(request?.body));
+
+    expect(url).toBe("/api/config/profiles");
+    expect(request?.method).toBe("PATCH");
+    expect(payload).toMatchObject({
+      scope: "codex",
+      profile_id: "current",
+      name: "1zzzcoding"
+    });
+  });
 });
 
 function createdClaudeProfile(): PublicConfig {

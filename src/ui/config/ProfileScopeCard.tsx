@@ -69,31 +69,33 @@ export function ProfileScopeCard({
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const scopeLabel = scope === "codex" ? "Codex" : "Claude";
   const destinationScopeLabel = scope === "codex" ? "Claude" : "Codex";
-  const namedProfile = profiles.find((profile) => profile.name === profileName.trim()) ?? null;
-  const saveWillApply = Boolean(namedProfile && namedProfile.id === activeProfile?.id);
-  const saveTargetsSelected = Boolean(
-    namedProfile && (namedProfile.id === selectedProfile?.id || namedProfile.id === activeProfile?.id)
-  );
-  const saveButtonText = profileState === "saving"
+  const trimmedProfileName = profileName.trim();
+  const selectedNameChanged = Boolean(selectedProfile && trimmedProfileName !== selectedProfile.name);
+  const saveWillApply = Boolean(!createMode && selectedProfile?.id === activeProfile?.id);
+  const saveButtonText = profileState === "saving" || profileState === "updating"
     ? saveWillApply ? "正在保存并应用..." : "正在保存档案..."
     : createMode
       ? `保存当前 ${scopeLabel} 草稿为新档案`
-      : saveWillApply
-        ? `保存并应用当前 ${scopeLabel} 草稿`
-        : saveTargetsSelected
-          ? `保存到档案「${namedProfile?.name ?? ""}」`
-          : namedProfile
-            ? `覆盖档案「${namedProfile.name}」`
+      : selectedNameChanged
+        ? saveWillApply
+          ? `重命名并应用当前 ${scopeLabel} 档案`
+          : `重命名并保存 ${scopeLabel} 档案`
+        : saveWillApply
+          ? `保存并应用当前 ${scopeLabel} 草稿`
+          : selectedProfile
+            ? `保存到档案「${selectedProfile.name}」`
             : `保存当前 ${scopeLabel} 草稿为新档案`;
   const profileNameHint = createMode
     ? "正在新建档案，输入新名称后保存；不会自动切换当前运行时。"
-    : saveWillApply
-      ? "名称命中当前运行时档案，保存后会立即应用到运行时。"
-      : saveTargetsSelected
-        ? "名称命中当前选中的档案，保存后只覆盖该档案，不切换当前运行时。"
-        : namedProfile
-          ? "名称命中其他未选中的档案，保存会覆盖它——点击保存前会先确认。"
-          : "填写新名称会创建新档案，不会自动切换当前运行时。";
+    : selectedNameChanged
+      ? saveWillApply
+        ? "保存后会重命名当前档案，并立即应用当前草稿。"
+        : "保存后会重命名并更新选中的档案，不切换当前运行时。"
+      : saveWillApply
+        ? "保存后会更新当前运行时档案，并立即应用当前草稿。"
+        : selectedProfile
+          ? "保存后只更新当前选中的档案，不切换当前运行时。"
+          : "填写名称会创建新档案，不会自动切换当前运行时。";
   const profileBusy = isProfileActionBusy(profileState);
 
   function handleToggleCreateMode() {
@@ -113,7 +115,12 @@ export function ProfileScopeCard({
     const named = trimmedName
       ? profiles.find((profile) => profile.name === trimmedName) ?? null
       : null;
-    if (named && (createMode || (named.id !== selectedProfileId && named.id !== activeProfile?.id))) {
+    if (!createMode && selectedProfile) {
+      await onUpdateProfile(scope, selectedProfile.id);
+      return;
+    }
+
+    if (named) {
       setOverwriteCandidate({
         scope,
         profile: named,
@@ -192,12 +199,14 @@ export function ProfileScopeCard({
             title={
               createMode
                 ? "创建新档案；不会自动切换当前运行时。"
-                : saveWillApply
-                  ? "保存当前草稿到当前运行时档案，并立即更新运行时。"
-                  : saveTargetsSelected
-                    ? "保存当前草稿到选中的档案；不会切换当前运行时。"
-                    : namedProfile
-                      ? "名字命中其他未选中的档案，保存前会先确认是否覆盖。"
+                : selectedNameChanged
+                  ? saveWillApply
+                    ? "重命名当前档案，保存当前草稿并立即更新运行时。"
+                    : "重命名并更新选中的档案；不会切换当前运行时。"
+                  : saveWillApply
+                    ? "保存当前草稿到当前运行时档案，并立即更新运行时。"
+                    : selectedProfile
+                      ? "保存当前草稿到选中的档案；不会切换当前运行时。"
                       : "创建新档案；不会自动切换当前运行时。"
             }
             onClick={() => void handleSaveClick()}

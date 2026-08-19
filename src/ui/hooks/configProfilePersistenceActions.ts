@@ -140,6 +140,12 @@ export function createConfigProfilePersistenceActions({
     const scopeState = config ? profileScopeState(config, scope) : null;
     const currentProfile = scopeState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
     const trimmedName = targetProfileId === accessors.selectedId ? accessors.name.trim() : currentProfile?.name ?? "";
+    if (targetProfileId === accessors.selectedId && !trimmedName) {
+      accessors.setState("error");
+      accessors.setError("请先填写配置档案名称。");
+      return;
+    }
+
     accessors.setState("updating");
     accessors.setError(null);
 

@@ -1,4 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { ProfileScopeCard } from "../src/ui/config/ProfileScopeCard.js";
 import { nextDuplicateProfileName } from "../src/ui/hooks/configProfileCollectionActions.js";
 import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
 import { profileSummary } from "../src/ui/config/profile-utils.js";
@@ -83,6 +86,41 @@ describe("UI config profile actions", () => {
   it("includes saved upstream protocols in profile summaries", () => {
     expect(profileSummary(profile("Local split"))).toContain("主 OpenAI Responses");
     expect(profileSummary(profile("Local split"))).toContain("压缩 OpenAI Responses");
+  });
+
+  it("offers to rename the selected active profile instead of creating a new one", () => {
+    const current = profile("zzzcoding", "current");
+    const config = {
+      profile_scopes: {
+        codex: { profiles: [current], active_profile_id: current.id },
+        claude: { profiles: [], active_profile_id: null }
+      }
+    } as unknown as PublicConfig;
+    const markup = renderToStaticMarkup(createElement(ProfileScopeCard, {
+      scope: "codex",
+      title: "Codex 配置档案",
+      eyebrow: "Codex",
+      description: "",
+      emptyTitle: "",
+      emptyDescription: "",
+      config,
+      profileName: "1zzzcoding",
+      selectedProfileId: current.id,
+      profileState: "idle",
+      profileError: null,
+      onProfileNameChange: () => undefined,
+      onSelectedProfileChange: () => undefined,
+      onSaveProfile: () => Promise.resolve(true),
+      onApplyProfile: () => Promise.resolve(),
+      onUpdateProfile: () => Promise.resolve(),
+      onReorderProfiles: () => Promise.resolve(),
+      onDuplicateProfile: () => Promise.resolve(),
+      onCreateProfileForOtherScope: () => undefined,
+      onDeleteProfile: () => Promise.resolve()
+    }));
+
+    expect(markup).toContain("重命名并应用当前 Codex 档案");
+    expect(markup).not.toContain("保存当前 Codex 草稿为新档案");
   });
 });
 
