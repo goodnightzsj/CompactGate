@@ -24,6 +24,14 @@ import { resolveUpstreamPath } from "./upstream-url.js";
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
 
+/**
+ * Anthropic models that take effort-based thinking (`output_config.effort` with
+ * `thinking.type: "adaptive"`) instead of the older `thinking.budget_tokens`
+ * dial. Matches the family generation, so `sonnet-4-5` stays budget-based.
+ */
+const CLAUDE_EFFORT_THINKING_MODEL = /(?:opus|sonnet|haiku|fable)-5\b|opus-4-8\b/i;
+
+
 export interface ClaudeSceneDetection {
   scene: ClaudeScene;
   text_bytes: number;
@@ -92,16 +100,27 @@ export function resolveClaudeMappedModel(
     return MIMO_IMAGE_INPUT_MODEL;
   }
 
-  const role = classifyClaudeModelRole(sourceModel);
-  const roleTarget = role ? readTrimmedString(config.claude.model_map[role]) : null;
-  if (roleTarget) {
-    return roleTarget;
+  for (const role of classifyClaudeModelRoles(sourceModel)) {
+    const roleTarget = readTrimmedString(config.claude.model_map[role]);
+    if (roleTarget) {
+      return roleTarget;
+    }
   }
 
   return readTrimmedString(config.claude.model_map.default);
 }
 
-export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): Buffer {
+/**
+ * Rewrites the request model, and on a native Anthropic upstream also carries
+ * the client's thinking level across that rewrite. `alignThinking` must stay
+ * false when the body is headed for an OpenAI-protocol conversion, which does
+ * its own thinking translation and rejects `output_config`.
+ */
+export function rewriteClaudeModelBody(
+  rawBody: Buffer,
+  modelOverride: string,
+  alignThinking = false
+): Buffer {
   const model = readTrimmedString(modelOverride);
   if (!model) {
     return rawBody;
@@ -114,8 +133,121 @@ export function rewriteClaudeModelBody(rawBody: Buffer, modelOverride: string): 
 
   return Buffer.from(JSON.stringify({
     ...parsed,
+    ...(alignThinking ? alignClaudeThinkingToModel(parsed, model) : {}),
     model
   }));
+}
+
+/**
+ * Carries the thinking level the client asked for across a model rewrite, in
+ * whichever direction the rewrite crossed. A `thinking.budget_tokens` dial means
+ * nothing to an effort-based target model and an `output_config.effort` tier
+ * means nothing to a budget-based one, so translate between the two and leave a
+ * request that already speaks the target's dialect alone.
+ */
+function alignClaudeThinkingToModel(
+  parsed: Record<string, unknown>,
+  model: string
+): Record<string, unknown> {
+  if (!isRecord(parsed.thinking)) {
+    return {};
+  }
+
+  const type = readTrimmedString(parsed.thinking.type)?.toLowerCase();
+  if (type === "disabled") {
+    return {};
+  }
+
+  return CLAUDE_EFFORT_THINKING_MODEL.test(model)
+    ? budgetThinkingToEffort(parsed, parsed.thinking, type)
+    : effortThinkingToBudget(parsed, type);
+}
+
+function budgetThinkingToEffort(
+  parsed: Record<string, unknown>,
+  thinking: Record<string, unknown>,
+  type: string | undefined
+): Record<string, unknown> {
+  if (isRecord(parsed.output_config) || type !== "enabled") {
+    return {};
+  }
+
+  const budget = thinking.budget_tokens;
+  if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) {
+    return {};
+  }
+
+  return {
+    thinking: { type: "adaptive" },
+    output_config: { effort: claudeEffortForThinkingBudget(budget, parsed.max_tokens) }
+  };
+}
+
+/**
+ * The effort dialect carries no token count, so the budget a budget-based model
+ * needs is reconstructed from the tier's share of the output ceiling. Anthropic
+ * requires at least 1024 thinking tokens and a budget below `max_tokens`.
+ */
+function effortThinkingToBudget(
+  parsed: Record<string, unknown>,
+  type: string | undefined
+): Record<string, unknown> {
+  const effort = isRecord(parsed.output_config)
+    ? readTrimmedString(parsed.output_config.effort)?.toLowerCase()
+    : null;
+  if (type !== "adaptive" && !effort) {
+    return {};
+  }
+
+  const maxTokens = typeof parsed.max_tokens === "number" && Number.isFinite(parsed.max_tokens)
+    ? parsed.max_tokens
+    : 32000;
+  const budget = Math.max(1024, Math.min(
+    maxTokens - 1,
+    Math.round(maxTokens * claudeThinkingShareForEffort(effort))
+  ));
+
+  return {
+    thinking: { type: "enabled", budget_tokens: budget },
+    output_config: undefined
+  };
+}
+
+/**
+ * ponytail: the reserved budget share is the only level signal a budget-based
+ * client sends, so the tier is a ratio heuristic. Swap in a lookup table if the
+ * exact budget ladder each client uses becomes known.
+ */
+function claudeEffortForThinkingBudget(budget: number, maxTokens: unknown): string {
+  const ceiling = typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+    ? maxTokens
+    : budget;
+  const share = budget / ceiling;
+  if (share >= 0.75) {
+    return "max";
+  }
+  if (share >= 0.5) {
+    return "high";
+  }
+  if (share >= 0.25) {
+    return "medium";
+  }
+  return "low";
+}
+
+function claudeThinkingShareForEffort(effort: string | null | undefined): number {
+  switch (effort) {
+    case "minimal":
+      return 0.05;
+    case "low":
+      return 0.15;
+    case "medium":
+      return 0.375;
+    case "high":
+      return 0.625;
+    default:
+      return 1;
+  }
 }
 
 export function detectClaudeScene(
@@ -144,7 +276,7 @@ export function detectClaudeScene(
   ) {
     return { scene: "web_search", text_bytes: textBytes };
   }
-  if (parsed.thinking !== null && parsed.thinking !== undefined) {
+  if (isClaudeThinkingRequested(parsed.thinking)) {
     return { scene: "thinking", text_bytes: textBytes };
   }
   if (hasClaudeImageInput(rawBody)) {
@@ -158,6 +290,15 @@ export function resolveClaudeSceneTarget(
   config: CompactGateConfig
 ): ClaudeSceneTarget {
   return { ...config.claude.scene_map[scene] };
+}
+
+/**
+ * A `thinking` block only means thinking is on when it is not explicitly
+ * disabled, matching how the protocol converters read the same field. Clients
+ * that turn thinking off still send the block, so presence alone says nothing.
+ */
+function isClaudeThinkingRequested(value: unknown): boolean {
+  return isRecord(value) && readTrimmedString(value.type)?.toLowerCase() !== "disabled";
 }
 
 export function resolveClaudeRequestRouting(
@@ -275,35 +416,42 @@ function containsClaudeImageContent(value: unknown): boolean {
   return Object.hasOwn(value, "content") && containsClaudeImageContent(value.content);
 }
 
-function classifyClaudeModelRole(sourceModel: string | null): ClaudeModelMapRole | null {
+/**
+ * Returns every role a model id plausibly belongs to, most specific first. A
+ * relay id like `claude-3-7-sonnet-20250219-thinking` is both a reasoning model
+ * and a sonnet, so the caller can honour a configured `reasoning` mapping while
+ * still falling back to the family instead of straight to `default`.
+ */
+function classifyClaudeModelRoles(sourceModel: string | null): ClaudeModelMapRole[] {
   const normalized = sourceModel?.trim().toLowerCase();
   if (!normalized) {
-    return null;
+    return [];
   }
 
-  if (normalized === "subagent" || normalized.includes("subagent")) {
-    return "subagent";
+  const roles: ClaudeModelMapRole[] = [];
+  if (normalized.includes("subagent")) {
+    roles.push("subagent");
   }
 
-  if (normalized === "reasoning" || normalized.includes("reasoning") || normalized.includes("thinking")) {
-    return "reasoning";
+  if (normalized.includes("reasoning") || normalized.includes("thinking")) {
+    roles.push("reasoning");
   }
 
-  if (normalized === "haiku" || normalized.includes("haiku")) {
-    return "haiku";
+  if (normalized.includes("haiku")) {
+    roles.push("haiku");
   }
 
-  if (normalized === "sonnet" || normalized.includes("sonnet")) {
-    return "sonnet";
+  if (normalized.includes("sonnet")) {
+    roles.push("sonnet");
   }
 
-  if (normalized === "opus" || normalized === "opusplan" || normalized.includes("opus")) {
-    return "opus";
+  if (normalized === "opusplan" || normalized.includes("opus")) {
+    roles.push("opus");
   }
 
   if (normalized === "default" || normalized === "best") {
-    return "default";
+    roles.push("default");
   }
 
-  return null;
+  return roles;
 }

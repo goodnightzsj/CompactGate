@@ -429,3 +429,18 @@ describe("usage metadata extraction", () => {
     expect(metadata.requestSummary).toContain("effort minimal");
   });
 });
+
+describe("large compressed request bodies", () => {
+  it("keeps count_tokens summaries as detailed as the turn they measure", () => {
+    const request = Buffer.from(JSON.stringify({
+      model: "claude-opus-4-8",
+      system: "s",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 4000,
+      thinking: { type: "enabled", budget_tokens: 2000 }
+    }));
+
+    expect(extractRequestMetadata("/messages/count_tokens", request).requestSummary)
+      .toBe(extractRequestMetadata("/messages", request).requestSummary);
+  });
+});

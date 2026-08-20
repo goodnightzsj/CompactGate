@@ -93,10 +93,20 @@ export async function proxyClaudeRequest(
     transaction.targetModel = routing.sceneModel ??
       resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ??
       transaction.sourceModel;
-    transaction.upstreamBody = rewriteClaudeModelBody(transaction.rawBody, transaction.targetModel ?? "");
     const upstreamProtocol = config.claude.primary.upstream_protocol;
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
-    if (upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat") {
+    const openAiUpstream = upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat";
+    transaction.upstreamBody = rewriteClaudeModelBody(
+      transaction.rawBody,
+      transaction.targetModel ?? "",
+      !openAiUpstream && !countTokens
+    );
+    if (transaction.upstreamBody === transaction.rawBody) {
+      // The body was unreadable, so no mapping was applied; report what the
+      // upstream actually receives rather than the model we meant to send.
+      transaction.targetModel = transaction.sourceModel;
+    }
+    if (openAiUpstream) {
       const conversion = upstreamProtocol === "openai_chat"
         ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
         : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });

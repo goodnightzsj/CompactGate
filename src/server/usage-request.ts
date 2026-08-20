@@ -84,7 +84,7 @@ function extractRequestSummary(endpoint: string, parsed: Record<string, unknown>
     return null;
   }
 
-  if (endpoint === "/messages" || endpoint.endsWith("/messages")) {
+  if (endpoint === "/messages" || endpoint.endsWith("/messages") || endpoint.endsWith("/messages/count_tokens")) {
     return joinSummaryParts([
       countArray("messages", parsed.messages),
       describeSystem(parsed.system),
