@@ -470,8 +470,10 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
       isRecord(event.delta) &&
       event.delta.type === "compaction_delta" &&
       typeof event.delta.content === "string" &&
-      event.delta.content.trim()
+      event.delta.content.length > 0
     ) {
+      // Append verbatim: a delta carrying only whitespace still holds a word or
+      // paragraph boundary, and trimming it away glues the summary together.
       summary = (summary ?? "") + event.delta.content;
       return;
     }

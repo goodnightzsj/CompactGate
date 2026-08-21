@@ -18,11 +18,13 @@ import { safeHost } from "./config-internals.js";
 export function buildPublicConfig({
   config,
   configPath,
-  lastSavedAt
+  lastSavedAt,
+  revision
 }: {
   config: CompactGateConfig;
   configPath: string;
   lastSavedAt: string | null;
+  revision: string;
 }): PublicConfig {
   const codexProfileScope = publicProfileScope(config, "codex");
   const claudeProfileScope = publicProfileScope(config, "claude");
@@ -67,7 +69,8 @@ export function buildPublicConfig({
     },
     route_url_presets: (config.route_url_presets ?? []).map(publicRouteUrlPreset),
     config_path: configPath,
-    last_saved_at: lastSavedAt
+    last_saved_at: lastSavedAt,
+    revision
   };
 }
 

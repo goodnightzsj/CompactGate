@@ -146,6 +146,52 @@ describe("cross-protocol compaction", () => {
     });
   });
 
+  it("keeps whitespace-only compaction deltas so the summary is not glued together", async () => {
+    const transform = createAnthropicToResponsesCompactionStream();
+    const chunks: Buffer[] = [];
+    transform.on("data", (chunk: Buffer) => chunks.push(chunk));
+    // Streamed text is tokenized, so a lone space or blank line routinely
+    // arrives as its own delta. Dropping those destroys every word and
+    // paragraph boundary in the summary the next turns are built on.
+    const pieces = ["## Work done", "\n\n", "Fixed", " ", "the", " ", "parser", ".", "\n\n", "## Next", "\n", "- ", "ship", " ", "it"];
+    const source = [
+      event("message_start", {
+        type: "message_start",
+        message: { id: "msg_ws", model: "claude-opus-5", usage: { input_tokens: 8, output_tokens: 0 } }
+      }),
+      event("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "compaction", content: null }
+      }),
+      ...pieces.map((content) => event("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content }
+      })),
+      event("content_block_stop", { type: "content_block_stop", index: 0 }),
+      event("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "compaction" },
+        usage: { output_tokens: 12 }
+      }),
+      event("message_stop", { type: "message_stop" })
+    ].join("");
+
+    transform.end(source);
+    await new Promise<void>((resolve, reject) => {
+      transform.once("end", resolve);
+      transform.once("error", reject);
+    });
+
+    const events = parseEvents(Buffer.concat(chunks).toString("utf8"));
+    expect(events.filter((item) => item.type === "response.failed")).toHaveLength(0);
+    const state = events.find((item) => item.type === "response.output_item.done")
+      ?.item as { encrypted_content?: string } | undefined;
+    expect(decodeCompactGateCompactionSummary(state?.encrypted_content))
+      .toBe("## Work done\n\nFixed the parser.\n\n## Next\n- ship it");
+  });
+
   it("rewrites portable state after a fresh bridge instance without readable fallback", () => {
     const encoded = encodeCompactGateCompactionSummary("Portable summary survives restart.");
     const bridge = new CompactionBridgeStore();

@@ -122,7 +122,10 @@ export function useConfigActions({
     try {
       const nextConfig = await api<PublicConfig>("/api/config", {
         method: "PATCH",
-        body: JSON.stringify(formToPatch(form))
+        // Pin the snapshot this form was built from: another tab may have
+        // applied a different profile since, and the patch still carries this
+        // form's base_url while omitting the untouched api_key.
+        body: JSON.stringify({ ...formToPatch(form), revision: config?.revision })
       });
       const nextHealth = await api<HealthResponse>("/api/health", {
         method: "GET"

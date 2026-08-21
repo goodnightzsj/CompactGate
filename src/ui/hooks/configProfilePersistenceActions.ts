@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { ConfigProfileScope, HealthResponse, PublicConfig } from "../../shared/types.js";
 import {
-  formFromConfig,
+  formAfterScopedProfileChange,
   formToPatch
 } from "../config/config-form-state.js";
 import { profileScopeState } from "../config/profile-utils.js";
@@ -67,7 +67,9 @@ export function createConfigProfilePersistenceActions({
       setConfig(nextConfig);
       if (nextHealth) {
         setHealth(nextHealth);
-        setForm(formFromConfig(nextConfig));
+        // Only the saved scope round-tripped through the server; rebuilding the
+        // whole form here would revert untouched draft fields.
+        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(() => setSaveState("idle"), 1600);
@@ -112,7 +114,7 @@ export function createConfigProfilePersistenceActions({
 
       setConfig(nextConfig);
       setHealth(nextHealth);
-      setForm(formFromConfig(nextConfig));
+      setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
       accessors.setSelectedId(nextActiveProfileId);
       accessors.setName(nextScope.profiles.find((profile) => profile.id === nextActiveProfileId)?.name ?? "");
       setSaveError(null);
@@ -168,7 +170,7 @@ export function createConfigProfilePersistenceActions({
       setConfig(nextConfig);
       if (nextHealth) {
         setHealth(nextHealth);
-        setForm(formFromConfig(nextConfig));
+        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(() => setSaveState("idle"), 1600);

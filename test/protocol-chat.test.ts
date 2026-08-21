@@ -215,7 +215,9 @@ describe("OpenAI Chat upstream conversion", () => {
         { type: "text", text: "Calling weather." },
         { type: "tool_use", id: "call_1", name: "weather", input: { city: "Shanghai" } }
       ],
-      usage: { input_tokens: 12, output_tokens: 7, cache_read_input_tokens: 3 }
+      // OpenAI's input_tokens covers the whole prompt, so the 3 cached tokens
+      // come out of the fresh Anthropic input: 9 + 3 + 7 = the stated total 19.
+      usage: { input_tokens: 9, output_tokens: 7, cache_read_input_tokens: 3 }
     });
     expect(JSON.parse(chatCompletionToAnthropic(Buffer.from(JSON.stringify({
       error: { type: "invalid_request_error", message: "bad input" }

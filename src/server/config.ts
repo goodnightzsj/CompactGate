@@ -52,6 +52,17 @@ export class ConfigStore {
 
   private lastSavedAt: string | null = null;
 
+  /**
+   * Bumped on every successful mutation so a client can pin the snapshot its
+   * patch was built from. The boot half is seeded from the wall clock rather
+   * than a constant: after a restart the counter must not walk back through
+   * values a still-open Studio tab is holding, or a stale patch would look
+   * current again.
+   */
+  private readonly revisionBoot = Date.now().toString(36);
+
+  private revisionCounter = 0;
+
   private mutationQueue: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -73,6 +84,10 @@ export class ConfigStore {
     return cloneConfig(this.current);
   }
 
+  get revision(): string {
+    return `r${this.revisionBoot}-${this.revisionCounter}`;
+  }
+
   getConfigPath(): string {
     return this.configPath;
   }
@@ -83,6 +98,9 @@ export class ConfigStore {
     }
 
     return this.mutate(() => {
+      // Inside the mutation queue: checking before queueing would let two
+      // concurrent patches both pass against the same revision.
+      this.assertRevisionCurrent(patch.revision);
       const merged = mergeConfig(this.current, applyRouteUrlCredentialPresetBindings(this.current, patch));
       return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
         ...merged,
@@ -183,8 +201,25 @@ export class ConfigStore {
     return buildPublicConfig({
       config: this.get(),
       configPath: this.configPath,
-      lastSavedAt: this.lastSavedAt
+      lastSavedAt: this.lastSavedAt,
+      revision: this.revision
     });
+  }
+
+  private assertRevisionCurrent(revision: unknown): void {
+    if (revision === undefined || revision === null) {
+      return;
+    }
+
+    if (typeof revision !== "string") {
+      throw new ConfigError("Config patch revision must be a string.");
+    }
+
+    if (revision !== this.revision) {
+      throw new ConfigError(
+        "Config patch was built from a superseded revision. Reload the config and reapply the change."
+      );
+    }
   }
 
   private async mutate(buildNext: () => CompactGateConfig): Promise<CompactGateConfig> {
@@ -205,6 +240,7 @@ export class ConfigStore {
     const savedAt = await writeConfigFile(this.configPath, next);
     this.current = next;
     this.lastSavedAt = savedAt;
+    this.revisionCounter += 1;
     return this.get();
   }
 }

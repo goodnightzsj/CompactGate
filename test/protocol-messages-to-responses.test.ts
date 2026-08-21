@@ -167,7 +167,7 @@ describe("Anthropic Messages to OpenAI Responses conversion", () => {
       role: "assistant",
       model: "gpt-5.5",
       stop_reason: "tool_use",
-      usage: { input_tokens: 12, output_tokens: 7, cache_read_input_tokens: 3 }
+      usage: { input_tokens: 9, output_tokens: 7, cache_read_input_tokens: 3 }
     });
     expect(body.content).toEqual([
       expect.objectContaining({ type: "thinking", thinking: "Check weather." }),

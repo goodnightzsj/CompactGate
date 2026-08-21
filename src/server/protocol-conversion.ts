@@ -600,17 +600,24 @@ export function openAiErrorToAnthropic(
   };
 }
 
+/**
+ * OpenAI's `input_tokens` is the whole prompt, cache hits included; Anthropic's
+ * is only the fresh remainder, with the cache counters additive on top. Copying
+ * the field across and also emitting the cache counters would bill the cached
+ * tokens twice — in the logs, in the analytics, and in the client's own context
+ * display, since both proxies read usage back off the converted body.
+ */
 export function openAiUsageToAnthropic(value: unknown): Record<string, unknown> {
   const usage = isRecord(value) ? value : {};
-  const inputTokens = nonNegativeInteger(usage.input_tokens) ?? 0;
+  const promptTokens = nonNegativeInteger(usage.input_tokens) ?? 0;
   const outputTokens = nonNegativeInteger(usage.output_tokens) ?? 0;
-  const result: Record<string, unknown> = {
-    input_tokens: inputTokens,
-    output_tokens: outputTokens
-  };
   const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : null;
   const cachedTokens = nonNegativeInteger(inputDetails?.cached_tokens);
   const cacheWriteTokens = nonNegativeInteger(inputDetails?.cache_write_tokens);
+  const result: Record<string, unknown> = {
+    input_tokens: Math.max(0, promptTokens - (cachedTokens ?? 0) - (cacheWriteTokens ?? 0)),
+    output_tokens: outputTokens
+  };
   if (cachedTokens !== null) {
     result.cache_read_input_tokens = cachedTokens;
   }
@@ -648,20 +655,28 @@ export function anthropicErrorToOpenAi(
   };
 }
 
+/** Inverse of {@link openAiUsageToAnthropic}: fold the additive Anthropic cache
+ * counters back into the single OpenAI prompt total, and carry cache creation
+ * across instead of dropping it. */
 export function anthropicUsageToResponses(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) {
     return null;
   }
-  const inputTokens = nonNegativeInteger(value.input_tokens) ?? 0;
+  const freshTokens = nonNegativeInteger(value.input_tokens) ?? 0;
   const outputTokens = nonNegativeInteger(value.output_tokens) ?? 0;
   const cachedTokens = nonNegativeInteger(value.cache_read_input_tokens) ?? 0;
+  const cacheWriteTokens = nonNegativeInteger(value.cache_creation_input_tokens) ?? 0;
+  const promptTokens = freshTokens + cachedTokens + cacheWriteTokens;
   const usage: Record<string, unknown> = {
-    input_tokens: inputTokens,
+    input_tokens: promptTokens,
     output_tokens: outputTokens,
-    total_tokens: inputTokens + outputTokens
+    total_tokens: promptTokens + outputTokens
   };
-  if (cachedTokens > 0) {
-    usage.input_tokens_details = { cached_tokens: cachedTokens };
+  if (cachedTokens > 0 || cacheWriteTokens > 0) {
+    usage.input_tokens_details = {
+      cached_tokens: cachedTokens,
+      ...(cacheWriteTokens > 0 ? { cache_write_tokens: cacheWriteTokens } : {})
+    };
   }
   return usage;
 }

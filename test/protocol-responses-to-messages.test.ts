@@ -169,9 +169,11 @@ describe("Responses to Anthropic Messages conversion", () => {
       model: "claude-sonnet-4-5",
       output_text: "Calling weather.",
       usage: {
-        input_tokens: 12,
+        // Anthropic's cache_read is additive, so the OpenAI prompt total is
+        // 12 + 3 and the grand total 15 + 7.
+        input_tokens: 15,
         output_tokens: 7,
-        total_tokens: 19,
+        total_tokens: 22,
         input_tokens_details: { cached_tokens: 3 }
       }
     });

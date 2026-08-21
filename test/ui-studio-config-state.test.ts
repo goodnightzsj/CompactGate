@@ -85,6 +85,44 @@ describe("Studio config ownership", () => {
     expect(state.config?.primary.base_url).toBe("http://submitted.local/v1");
     expect(state.config && isFormDirty(state.config, state.form)).toBe(true);
   });
+
+  it("preserves a dirty draft when the bootstrap effect re-runs", async () => {
+    // Navigating to the health page and back re-runs useStudioBootstrap, which
+    // refetches /api/config and dispatches bootstrap a second time. That must
+    // not throw away edits the user has not saved yet.
+    const store = await loadStore();
+    const current = store.toPublicConfig();
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
+      type: "bootstrap",
+      config: current
+    });
+    state = reduceStudioConfigState(state, {
+      type: "set_form",
+      value: (form) => ({ ...form, codexPrimaryBaseUrl: "http://draft.local/v1" })
+    });
+    expect(state.config && isFormDirty(state.config, state.form)).toBe(true);
+
+    state = reduceStudioConfigState(state, { type: "bootstrap", config: current });
+
+    expect(state.form.codexPrimaryBaseUrl).toBe("http://draft.local/v1");
+    expect(state.config && isFormDirty(state.config, state.form)).toBe(true);
+  });
+
+  it("adopts the fetched config on a re-bootstrap when the form is clean", async () => {
+    const store = await loadStore();
+    const current = store.toPublicConfig();
+    const next = structuredClone(current);
+    next.primary.base_url = "http://127.0.0.1:9903/v1";
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
+      type: "bootstrap",
+      config: current
+    });
+
+    state = reduceStudioConfigState(state, { type: "bootstrap", config: next });
+
+    expect(state.config?.primary.base_url).toBe("http://127.0.0.1:9903/v1");
+    expect(state.form.codexPrimaryBaseUrl).toBe("http://127.0.0.1:9903/v1");
+  });
 });
 
 async function loadStore(): Promise<ConfigStore> {

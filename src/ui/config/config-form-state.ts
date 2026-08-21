@@ -1,5 +1,6 @@
 import type {
   CompactGateConfig,
+  ConfigProfileScope,
   PublicConfig,
   RouteUrlPresetKind,
   UpstreamConfig
@@ -9,6 +10,67 @@ import type { ConfigFormState } from "./types.js";
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * 1024 * 1024;
+
+/**
+ * The form fields a profile save for each scope actually persists, mirroring
+ * `extractScopedProfileConfig` on the server: `primary` + `compact` for codex,
+ * `claude` for claude. Everything outside the list — logging, failover, and the
+ * other scope's routes — is only ever written by `PATCH /api/config`.
+ */
+const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof ConfigFormState>> = {
+  codex: [
+    "codexPrimaryBaseUrl",
+    "codexPrimaryApiKey",
+    "clearCodexPrimaryApiKey",
+    "codexPrimaryCredentialPresetId",
+    "codexPrimaryUpstreamProtocol",
+    "primaryModelOverride",
+    "primaryReasoningEffort",
+    "primaryStateDomainId",
+    "codexCompactBaseUrl",
+    "codexCompactApiKey",
+    "clearCodexCompactApiKey",
+    "codexCompactCredentialPresetId",
+    "codexCompactUpstreamProtocol",
+    "upstreamMode",
+    "modelMode",
+    "modelTemplate",
+    "modelOverride"
+  ],
+  claude: [
+    "claudePrimaryBaseUrl",
+    "claudePrimaryApiKey",
+    "clearClaudePrimaryApiKey",
+    "claudePrimaryCredentialPresetId",
+    "claudePrimaryUpstreamProtocol",
+    "claudeModelMap",
+    "claudeCompactBaseUrl",
+    "claudeCompactApiKey",
+    "clearClaudeCompactApiKey",
+    "claudeCompactCredentialPresetId",
+    "claudeCompactUpstreamProtocol",
+    "claudeCompactModelOverride",
+    "claudeCompactUpstreamMode"
+  ]
+};
+
+/**
+ * Adopt the server's answer for the slice a profile save just persisted while
+ * leaving every other draft field alone. Rebuilding the whole form from the
+ * response would silently revert edits that save never carried.
+ */
+export function formAfterScopedProfileChange(
+  draft: ConfigFormState,
+  config: PublicConfig,
+  scope: ConfigProfileScope
+): ConfigFormState {
+  const saved = formFromConfig(config);
+  const next: Record<string, unknown> = { ...draft };
+  for (const field of SCOPED_PROFILE_FORM_FIELDS[scope]) {
+    next[field] = saved[field];
+  }
+  return next as ConfigFormState;
+}
 
 export function emptyForm(): ConfigFormState {
   return {

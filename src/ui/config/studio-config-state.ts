@@ -32,7 +32,17 @@ export function reduceStudioConfigState(
 ): StudioConfigState {
   switch (action.type) {
     case "bootstrap":
-      return replaceConfigAndForm(state, action.config);
+      // The bootstrap effect re-runs on every return from the health page, so
+      // this is not necessarily the first load: adopt the fetched config but
+      // keep an unsaved draft, exactly as remote_config does.
+      if (!state.config || !isFormDirty(state.config, state.form)) {
+        return replaceConfigAndForm(state, action.config);
+      }
+
+      return {
+        ...state,
+        config: action.config
+      };
     case "set_config":
       return {
         ...state,

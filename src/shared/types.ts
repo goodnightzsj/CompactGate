@@ -307,6 +307,12 @@ export interface PublicConfig {
   route_url_presets: PublicRouteUrlPreset[];
   config_path: string;
   last_saved_at: string | null;
+  /**
+   * Opaque token for the config revision this snapshot was built from. Echo it
+   * back as `revision` on `PATCH /api/config` to have the patch rejected
+   * instead of applied when another client has saved in the meantime.
+   */
+  revision: string;
 }
 
 export interface RoutePreviewResponse {
