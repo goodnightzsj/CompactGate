@@ -25,10 +25,9 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
   const inputTokens = readInputTokens(usage);
   const outputTokens = readOutputTokens(usage, reasoningTokens);
   const cacheReadInputTokens = readCacheReadInputTokens(usage);
-  const cacheCreationInputTokens = sumNullableNumberList([
-    readCacheCreationInputTokens(usage),
-    readAnthropicCacheCreationInputTokens(usage.cache_creation)
-  ]);
+  const cacheCreationInputTokens =
+    readCacheCreationInputTokens(usage) ??
+    readAnthropicCacheCreationInputTokens(usage.cache_creation);
   const additiveCachedInputTokens = sumNullableNumberList([
     cacheReadInputTokens,
     cacheCreationInputTokens
@@ -134,23 +133,28 @@ function readCacheReadInputTokens(usage: Record<string, unknown>): number | null
   ]);
 }
 
+/**
+ * The aggregate field is the total written to cache; the per-TTL fields are
+ * its breakdown, not additional tokens. Read the aggregate when it is there
+ * and only add the TTL buckets up when it is missing.
+ */
 function readCacheCreationInputTokens(usage: Record<string, unknown>): number | null {
+  const aggregate = readFirstNumber(usage, [
+    "cache_creation_input_tokens",
+    "cache_creation_tokens",
+    "cache_write_tokens",
+    "cacheCreationInputTokens",
+    "cacheCreationTokens",
+    "cacheWriteTokens",
+    "input_cache_creation_tokens"
+  ]);
+  if (aggregate !== null) {
+    return aggregate;
+  }
+
   return sumNullableNumberList([
-    readFirstNumber(usage, [
-      "cache_creation_input_tokens",
-      "cache_creation_tokens",
-      "cache_write_tokens",
-      "cacheCreationInputTokens",
-      "cacheCreationTokens",
-      "cacheWriteTokens",
-      "input_cache_creation_tokens"
-    ]),
-    readFirstNumber(usage, [
-      "cache_creation_5m_tokens",
-      "cache_creation_1h_tokens",
-      "cache_creation_5m_input_tokens",
-      "cache_creation_1h_input_tokens"
-    ])
+    readFirstNumber(usage, ["cache_creation_5m_tokens", "cache_creation_5m_input_tokens"]),
+    readFirstNumber(usage, ["cache_creation_1h_tokens", "cache_creation_1h_input_tokens"])
   ]);
 }
 

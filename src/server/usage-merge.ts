@@ -9,8 +9,8 @@ export function mergeUsage(
   }
 
   const inputTokens = mergeRequestScopedTokens(previous.inputTokens, next.inputTokens);
-  const outputTokens = next.outputTokens ?? previous.outputTokens;
-  const cachedOutputTokens = next.cachedOutputTokens ?? previous.cachedOutputTokens;
+  const outputTokens = mergeRequestScopedTokens(previous.outputTokens, next.outputTokens);
+  const cachedOutputTokens = mergeRequestScopedTokens(previous.cachedOutputTokens, next.cachedOutputTokens);
   const cacheReadInputTokens = mergeCacheReadInputTokens(previous, next);
   const cacheCreationInputTokens = mergeRequestScopedTokens(
     previous.cacheCreationInputTokens,
@@ -46,6 +46,12 @@ export function mergeUsage(
   };
 }
 
+/**
+ * Request-scoped counters are cumulative, so the newest frame wins — except
+ * when it reports zero. Some relays append a zero-filled `usage` object to
+ * every SSE frame, `message_stop` included, and taking that at face value
+ * wipes the totals the final `message_delta` just reported.
+ */
 function mergeRequestScopedTokens(previous: number | null, next: number | null): number | null {
   if (next === null) {
     return previous;

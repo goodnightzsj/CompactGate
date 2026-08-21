@@ -138,6 +138,75 @@ describe("usage metadata extraction", () => {
     });
   });
 
+  it("reads Anthropic cache creation once when the aggregate and its TTL breakdown are both present", () => {
+    const usage = extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        usage: {
+          input_tokens: 2,
+          output_tokens: 389,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 54_498,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 54_498,
+            ephemeral_1h_input_tokens: 0
+          }
+        }
+      })),
+      { "content-type": "application/json" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 2,
+      outputTokens: 389,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 54_498,
+      cachedInputTokens: 54_498,
+      additiveCachedInputTokens: true,
+      totalTokens: 54_889
+    });
+  });
+
+  it("keeps streamed totals when a relay pads every frame with zeroed usage", () => {
+    // agentrouter.org attaches usage to every SSE frame, message_stop included.
+    const zeroed = {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0
+    };
+    const frames = [
+      ["message_start", { type: "message_start", message: { usage: zeroed }, usage: zeroed }],
+      ["content_block_stop", { type: "content_block_stop", index: 0, usage: zeroed }],
+      ["message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: {
+          input_tokens: 2,
+          output_tokens: 389,
+          cache_read_input_tokens: 54_498,
+          cache_creation_input_tokens: 4_282
+        }
+      }],
+      ["message_stop", { type: "message_stop", usage: zeroed }]
+    ] as const;
+
+    const usage = extractResponseUsage(
+      Buffer.from(frames.map(([event, payload]) =>
+        `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`).join("")),
+      { "content-type": "text/event-stream" }
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 2,
+      outputTokens: 389,
+      cacheReadInputTokens: 54_498,
+      cacheCreationInputTokens: 4_282,
+      cachedInputTokens: 58_780,
+      additiveCachedInputTokens: true,
+      totalTokens: 59_171
+    });
+  });
+
   it("preserves streamed Claude input/cache split when later frames collapse cache input", () => {
     const start = JSON.stringify({
       type: "message_start",
