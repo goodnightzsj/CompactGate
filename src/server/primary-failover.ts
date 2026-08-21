@@ -130,6 +130,15 @@ export class PrimaryFailoverState {
           health.modelIncompatibleFailuresByModel.clear();
           health.cooldownUntil = 0;
           health.rateLimitUntil = 0;
+          // A success is direct proof the profile works again, which is exactly
+          // the evidence the long blocks should yield to. Without this, topping
+          // up a quota or an upstream fixing its model catalog leaves the
+          // profile shut out for the rest of the 30 minute / 12 hour window,
+          // because only a credential change resets health otherwise.
+          health.quarantineUntil = 0;
+          if (selection.context.model) {
+            health.modelCooldowns.delete(selection.context.model);
+          }
           health.version += 1;
         }
         this.stickiness.rememberResponse(selection, result, now);
@@ -314,14 +323,19 @@ export class PrimaryFailoverState {
     }
 
     const eligible = candidates.filter((candidate) => this.isEligible(candidate, context, now));
-    const pool = eligible.length > 0
-      ? eligible
-      : [...candidates].sort((left, right) => {
-          const leftUntil = this.health.blockedUntil(left.id, context.model, now);
-          const rightUntil = this.health.blockedUntil(right.id, context.model, now);
-          return leftUntil === rightUntil ? left.order - right.order : leftUntil - rightUntil;
-        });
-    const scored = pool
+    if (eligible.length === 0) {
+      // Nothing is usable, so the request has to land somewhere regardless.
+      // Health scoring is the wrong tie-break here — it would happily pick a
+      // profile quarantined for half an hour over one that recovers in a
+      // second. Take the soonest to unblock instead.
+      return [...candidates].sort((left, right) => {
+        const leftUntil = this.health.blockedUntil(left.id, context.model, now);
+        const rightUntil = this.health.blockedUntil(right.id, context.model, now);
+        return leftUntil === rightUntil ? left.order - right.order : leftUntil - rightUntil;
+      })[0] ?? candidates[0];
+    }
+
+    const scored = eligible
       .map((candidate) => ({
         candidate,
         score: this.scoreCandidate(candidate)

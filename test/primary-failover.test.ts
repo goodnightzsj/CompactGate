@@ -627,6 +627,64 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "missing-1" }).profileId).toBe("codex-a");
     expect(state.preview(config, { model: "missing-2" }).profileId).toBe("codex-a");
   });
+
+  it("prefers the profile that unblocks soonest when every candidate is blocked", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+
+    // A is quarantined for 30 minutes on a bad credential.
+    recordRequests(state, config, 11, 401, "Upstream returned HTTP 401: invalid token.");
+    // B is rate limited for one second.
+    recordRequests(state, config, 11, 429, "Upstream returned HTTP 429: slow down.");
+
+    // Both are ineligible now, so the fallback ordering decides. A's health score
+    // is higher (it is the active profile, order 0), but it stays blocked for
+    // half an hour while B recovers almost immediately.
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+  });
+
+  it("lifts a quarantine and a model cooldown once the profile succeeds again", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+
+    recordRequests(state, config, 11, 403, "Upstream returned HTTP 403: insufficient balance.");
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+
+    // The operator tops the account up and applies profile A, which forces one
+    // request onto it. That request succeeds, which is proof it works again.
+    state.forceNextProfileSelection("codex-a");
+    const forced = selectAndReserve(state, config, { model: "gpt-5.5" });
+    expect(forced.profileId).toBe("codex-a");
+    state.recordResult(forced, 200, null);
+
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
+  it("lifts only the succeeding model's cooldown, not every model's", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+
+    recordModelRequests(state, config, "gone-1", 11, 404, "Upstream returned HTTP 404: model gone-1 not found.");
+    recordModelRequests(state, config, "gone-2", 11, 404, "Upstream returned HTTP 404: model gone-2 not found.");
+    expect(state.preview(config, { model: "gone-1" }).profileId).toBe("codex-b");
+    expect(state.preview(config, { model: "gone-2" }).profileId).toBe("codex-b");
+
+    state.forceNextProfileSelection("codex-a");
+    const forced = selectAndReserve(state, config, { model: "gone-1" });
+    state.recordResult(forced, 200, null);
+
+    expect(state.preview(config, { model: "gone-1" }).profileId).toBe("codex-a");
+    expect(state.preview(config, { model: "gone-2" }).profileId).toBe("codex-b");
+  });
 });
 
 describe("primary route result classification", () => {

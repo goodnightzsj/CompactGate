@@ -140,6 +140,91 @@ describe("OpenAI Chat upstream conversion", () => {
     })))).toThrow(/cannot be translated to OpenAI Chat/);
   });
 
+  it("still produces compaction state when the summary hits the token ceiling", () => {
+    // finish_reason "length" makes chatCompletionToResponses report status
+    // "incomplete". Bailing out returned a plain Responses body that the caller
+    // then wrapped in compaction events and announced as completed, so the turn
+    // lost its summary with no error anywhere.
+    const converted = chatCompletionToResponsesCompaction(Buffer.from(JSON.stringify({
+      id: "chatcmpl_truncated",
+      model: "gpt-5.5-chat",
+      choices: [{
+        index: 0,
+        finish_reason: "length",
+        message: { role: "assistant", content: "Partial summary of the work so far" }
+      }]
+    })), 200);
+    const body = JSON.parse(converted.toString("utf8"));
+
+    expect(body.object).toBe("response.compaction");
+    expect(body.output).toHaveLength(1);
+    expect(body.output[0].type).toBe("compaction");
+    expect(decodeCompactGateCompactionSummary(body.output[0].encrypted_content))
+      .toBe("Partial summary of the work so far");
+  });
+
+  it("fails loudly when a truncated Chat compaction carries no text at all", () => {
+    expect(() => chatCompletionToResponsesCompaction(Buffer.from(JSON.stringify({
+      id: "chatcmpl_empty",
+      model: "gpt-5.5-chat",
+      choices: [{ index: 0, finish_reason: "length", message: { role: "assistant", content: "" } }]
+    })), 200)).toThrow(/did not include summary text/);
+  });
+
+  it("flattens Anthropic tool_result blocks into the Chat tool message text", () => {
+    // Claude Code always sends tool_result content as a block array, so this is
+    // the normal path: stringifying it handed the model raw JSON markup, and an
+    // image result inlined a base64 payload billed as text but never seen.
+    const chat = JSON.parse(anthropicRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5-chat",
+      max_tokens: 900,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "check" }] },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [{ type: "text", text: "line one\nline two" }]
+          }]
+        }
+      ]
+    }))).toString("utf8"));
+
+    expect(chat.messages.at(-1)).toEqual({
+      role: "tool",
+      tool_call_id: "toolu_1",
+      content: "line one\nline two"
+    });
+  });
+
+  it("names an image tool result instead of inlining its base64", () => {
+    const chat = JSON.parse(anthropicRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5-chat",
+      max_tokens: 900,
+      messages: [
+        { role: "user", content: [{ type: "text", text: "shot" }] },
+        { role: "assistant", content: [{ type: "tool_use", id: "toolu_2", name: "screenshot", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu_2",
+            content: [{
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: "AAAABBBBCCCC" }
+            }]
+          }]
+        }
+      ]
+    }))).toString("utf8"));
+
+    const toolMessage = chat.messages.at(-1) as { content: string };
+    expect(toolMessage.content).not.toContain("AAAABBBBCCCC");
+    expect(toolMessage.content).toBe("[image]");
+  });
+
   it("maps supported Anthropic Messages input to Chat and rejects stateful features", () => {
     const converted = anthropicRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",

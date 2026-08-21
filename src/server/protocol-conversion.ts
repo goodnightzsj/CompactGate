@@ -493,9 +493,13 @@ export function chatCompletionToResponses(rawBody: Buffer, status: number): Buff
 
 export function chatCompletionToResponsesCompaction(rawBody: Buffer, status: number): Buffer {
   const response = parseJsonRecord(chatCompletionToResponses(rawBody, status));
-  if (!response || status >= 400 || response.status !== "completed") {
+  if (!response || status >= 400) {
     return Buffer.from(JSON.stringify(response ?? { error: "Chat compaction response was invalid." }));
   }
+  // A truncated summary (finish_reason "length" reports status "incomplete") is
+  // still a summary, and the conversation's whole memory rides on it. Only the
+  // absence of text is a failure — and it must be a loud one, because the caller
+  // wraps whatever comes back in compaction events and announces completion.
   const summary = typeof response.output_text === "string" ? response.output_text.trim() : "";
   if (!summary) {
     throw new ProtocolConversionError("OpenAI Chat compaction response did not include summary text.", 502);
@@ -1616,11 +1620,38 @@ function parseToolArguments(
   throw new ProtocolConversionError(notObjectMessage, status);
 }
 
+/**
+ * A Chat `tool` message carries one string, but a Responses function_call_output
+ * (and the Anthropic tool_result it was converted from) carries content blocks.
+ * Stringifying the array handed the model raw JSON markup instead of the tool's
+ * output — the normal path, since Claude Code always sends block arrays.
+ */
 function toolOutputText(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
+  if (Array.isArray(value)) {
+    return value.map(toolOutputBlockText).join("\n");
+  }
   return JSON.stringify(value ?? null);
+}
+
+function toolOutputBlockText(block: unknown): string {
+  if (typeof block === "string") {
+    return block;
+  }
+  if (!isRecord(block)) {
+    return JSON.stringify(block ?? null);
+  }
+  if (typeof block.text === "string") {
+    return block.text;
+  }
+  // An image cannot travel in a Chat tool message. Name it rather than inlining
+  // base64 the model still cannot see but would be billed for as text.
+  if (typeof block.type === "string" && block.type.includes("image")) {
+    return "[image]";
+  }
+  return JSON.stringify(block);
 }
 
 function positiveInteger(value: unknown): number | null {

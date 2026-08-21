@@ -1355,6 +1355,12 @@ function compactionJsonToSse(body: Buffer): Buffer {
     return body;
   }
   const outputItem = response.output[0];
+  // Without an item to emit, JSON.stringify drops the key and the frame is a
+  // structurally invalid output_item.done. Pass the body through untouched so
+  // the caller sees a plain response instead of a fake compaction.
+  if (!isRecord(outputItem) || outputItem.type !== "compaction") {
+    return body;
+  }
   const responseId = typeof response.id === "string" ? response.id : `resp_${randomUUID()}`;
   const created = [
     { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
