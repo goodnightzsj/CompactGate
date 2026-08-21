@@ -337,6 +337,10 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
   if (body.parallel_tool_calls !== undefined) {
     translated.parallel_tool_calls = body.parallel_tool_calls === true;
   }
+  const reasoningEffort = chatReasoningEffort(body.reasoning);
+  if (reasoningEffort !== null) {
+    translated.reasoning_effort = reasoningEffort;
+  }
 
   const maxTokens = positiveInteger(body.max_output_tokens);
   if (maxTokens !== null) {
@@ -699,6 +703,24 @@ function responsesSystem(value: unknown): Array<Record<string, unknown>> {
   });
 }
 
+/**
+ * Chat has no `reasoning` object, but it does have a `reasoning_effort` scalar.
+ * `rewritePrimaryBody` injects `reasoning: {effort}` from `primary.reasoning_effort`
+ * on every /responses request, so an effort-only object has to translate rather
+ * than be refused — otherwise CompactGate rejects the request it just built.
+ * The value is passed through verbatim; the upstream owns which efforts it takes.
+ */
+function chatReasoningEffort(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "effort") {
+    return null;
+  }
+  return typeof value.effort === "string" && value.effort.length > 0 ? value.effort : null;
+}
+
 function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): void {
   for (const field of [
     "previous_response_id",
@@ -711,6 +733,9 @@ function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): vo
     "truncation",
     "include"
   ]) {
+    if (field === "reasoning" && chatReasoningEffort(body.reasoning) !== null) {
+      continue;
+    }
     if (Object.hasOwn(body, field)) {
       throw new ProtocolConversionError(`Responses ${field} cannot be translated to OpenAI Chat.`);
     }

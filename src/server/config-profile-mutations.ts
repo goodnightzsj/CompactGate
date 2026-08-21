@@ -147,6 +147,57 @@ export function duplicateProfile(
     });
 }
 
+/**
+ * Clear scene bindings that point at a profile being removed from the *stored
+ * snapshots* of the other Claude profiles. Each Claude profile freezes a copy of
+ * `claude.scene_map` and only the active one is refreshed from the runtime, so a
+ * reference left inside an inactive snapshot fails validation on every later
+ * mutation and makes the referenced profile permanently undeletable — with no UI
+ * to reach the snapshot and clear it.
+ *
+ * The live `claude.scene_map` is deliberately left alone: a binding there still
+ * blocks the delete, which is a guard the user can clear by unbinding the scene.
+ */
+function withoutStoredClaudeSceneReferences(
+  config: CompactGateConfig,
+  profileId: string
+): CompactGateConfig {
+  const scopeState = getProfileScopeState(config, "claude");
+  return withProfileScope(config, "claude", {
+    profiles: scopeState.profiles.map((profile) => {
+      const stored = profile.config as SavedConfigProfileConfig & {
+        claude?: { scene_map?: CompactGateConfig["claude"]["scene_map"] };
+      };
+      if (!isRecord(stored.claude) || !isRecord(stored.claude.scene_map)) {
+        return profile;
+      }
+      return {
+        ...profile,
+        config: {
+          ...stored,
+          claude: {
+            ...stored.claude,
+            scene_map: clearedSceneMap(stored.claude.scene_map, profileId)
+          }
+        } as SavedConfigProfileConfig
+      };
+    }),
+    active_profile_id: scopeState.active_profile_id
+  });
+}
+
+function clearedSceneMap(
+  sceneMap: CompactGateConfig["claude"]["scene_map"],
+  profileId: string
+): CompactGateConfig["claude"]["scene_map"] {
+  return Object.fromEntries(
+    Object.entries(sceneMap).map(([scene, target]) => [
+      scene,
+      target.profile_id === profileId ? { ...target, profile_id: "" } : target
+    ])
+  ) as CompactGateConfig["claude"]["scene_map"];
+}
+
 export function deleteProfile(
   current: CompactGateConfig,
   scope: ConfigProfileScope,
@@ -154,13 +205,16 @@ export function deleteProfile(
 ): CompactGateConfig {
     const { scopeState } = requireProfile(current, scope, profileId);
     const existingProfiles = scopeState.profiles ?? [];
-    return withProfileScope(current, scope, {
+    const withoutProfile = withProfileScope(current, scope, {
       profiles: existingProfiles.filter((item) => item.id !== profileId).map(cloneProfile),
       active_profile_id:
         scopeState.active_profile_id === profileId
           ? null
           : scopeState.active_profile_id ?? null
     });
+    return scope === "claude"
+      ? withoutStoredClaudeSceneReferences(withoutProfile, profileId)
+      : withoutProfile;
 }
 
 export function reorderProfiles(

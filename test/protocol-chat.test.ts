@@ -118,6 +118,28 @@ describe("OpenAI Chat upstream conversion", () => {
     ]);
   });
 
+  it("carries a configured reasoning effort into the Chat request instead of rejecting it", () => {
+    // rewritePrimaryBody injects `reasoning: {effort}` from primary.reasoning_effort
+    // for every /responses request, so rejecting the field outright made
+    // CompactGate fail its own request before reaching the upstream.
+    const body = JSON.parse(responsesRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: "hello",
+      reasoning: { effort: "high" }
+    }))).toString("utf8"));
+
+    expect(body).toMatchObject({ model: "gpt-5.5", reasoning_effort: "high" });
+    expect(body.reasoning).toBeUndefined();
+  });
+
+  it("still rejects a Responses reasoning object Chat cannot express", () => {
+    expect(() => responsesRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: "hello",
+      reasoning: { effort: "high", summary: "detailed" }
+    })))).toThrow(/cannot be translated to OpenAI Chat/);
+  });
+
   it("maps supported Anthropic Messages input to Chat and rejects stateful features", () => {
     const converted = anthropicRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
