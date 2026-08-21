@@ -168,7 +168,10 @@ export function LogsPage({
           label="上游 Host"
           value={hostFilter}
           options={[
-            { value: ALL_HOSTS_FILTER, label: "全部上游", count: allLogCount },
+            // The host rows come from the filtered host facet, so the "all"
+            // entry has to be their sum. allLogCount is the whole-database
+            // count and belongs in the stored-rows line, not here.
+            { value: ALL_HOSTS_FILTER, label: "全部上游", count: hostOptions.reduce((total, host) => total + host.total, 0) },
             ...hostOptions.map((host) => ({ value: host.host, label: host.host, count: host.total }))
           ]}
           onChange={onHostFilterChange}

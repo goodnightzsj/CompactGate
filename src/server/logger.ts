@@ -798,9 +798,12 @@ export class RequestLogger {
   }
 
   private routeCounts(options: Pick<LogPageOptions, "status" | "host" | "search">): Record<"all" | RouteKind, number> {
+    // Callers pass the whole LogPageOptions, so the counted dimension has to be
+    // dropped explicitly rather than relied on being absent from the Pick type.
+    const facet = { status: options.status, host: options.host };
     const where = options.search
-      ? buildWhereClause(options)
-      : buildFacetWhereClause({ status: options.status, host: options.host });
+      ? buildWhereClause({ ...facet, search: options.search })
+      : buildFacetWhereClause(facet);
     const rows = this.db
       .prepare(
         `
@@ -829,9 +832,10 @@ export class RequestLogger {
   }
 
   private statusCounts(options: Pick<LogPageOptions, "route" | "host" | "search">): StatusLogCounts {
+    const facet = { route: options.route, host: options.host };
     const where = options.search
-      ? buildWhereClause(options)
-      : buildFacetWhereClause({ route: options.route, host: options.host });
+      ? buildWhereClause({ ...facet, search: options.search })
+      : buildFacetWhereClause(facet);
     const statusColumn = options.search
       ? `CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END`
       : "log_status";
@@ -862,9 +866,10 @@ export class RequestLogger {
   }
 
   private hostCounts(options: Pick<LogPageOptions, "route" | "status" | "search">): HostLogCount[] {
+    const facet = { route: options.route, status: options.status };
     const where = options.search
-      ? buildWhereClause(options)
-      : buildFacetWhereClause({ route: options.route, status: options.status });
+      ? buildWhereClause({ ...facet, search: options.search })
+      : buildFacetWhereClause(facet);
     const rows = this.db
       .prepare(
         `

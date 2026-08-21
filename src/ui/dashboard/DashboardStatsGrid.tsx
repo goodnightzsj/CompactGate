@@ -3,6 +3,7 @@ import type {
   RouteKind
 } from "../../shared/types.js";
 import { upstreamHealthBadge } from "../health/health-status.js";
+import { pagePathForStudioPage } from "../routing.js";
 
 export function DashboardStatsGrid({
   health,
@@ -59,7 +60,7 @@ export function DashboardStatsGrid({
           <div className="dashboard-health-summary-meta">
             {allReady ? "全部上游可用" : `${totalRoutes - readyRoutes} 条路由需要关注`}
           </div>
-          <a className="dashboard-health-summary-link" href="/#health">查看详情 →</a>
+          <a className="dashboard-health-summary-link" href={pagePathForStudioPage("health")}>查看详情 →</a>
         </div>
       </div>
     </div>

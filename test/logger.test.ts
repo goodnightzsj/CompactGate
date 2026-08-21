@@ -1117,6 +1117,45 @@ describe("capture recovery", () => {
       reopenedLogger.close();
     }
   });
+  it("scopes each facet count to the other filters when a search keyword is active", async () => {
+    // Each facet count must exclude the dimension it is counting, otherwise the
+    // non-selected route/status/host chips read 0 and the user cannot navigate
+    // out of a searched view. The non-search branch does this via
+    // buildFacetWhereClause; the search branch used to re-apply everything.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-facets-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "compactgate-logs.sqlite"));
+    try {
+      logger.add({ ...logEntry(1), request_id: "needle-a", route: "compact", upstream_host: "compact.example" });
+      logger.add({ ...logEntry(2), request_id: "needle-b", route: "compact", upstream_host: "compact.example" });
+      logger.add({
+        ...logEntry(3),
+        request_id: "needle-c",
+        route: "primary",
+        upstream_host: "primary.example",
+        status: 500,
+        error_summary: "upstream failed"
+      });
+
+      const unfiltered = logger.page({ limit: 10, offset: 0, search: "needle" });
+      expect(unfiltered.counts).toMatchObject({ compact: 2, primary: 1 });
+
+      const byRoute = logger.page({ limit: 10, offset: 0, search: "needle", route: "compact" });
+      expect(byRoute.logs).toHaveLength(2);
+      expect(byRoute.counts).toMatchObject({ compact: 2, primary: 1 });
+
+      const byStatus = logger.page({ limit: 10, offset: 0, search: "needle", status: "error" });
+      expect(byStatus.logs).toHaveLength(1);
+      expect(byStatus.status_counts).toMatchObject({ normal: 2, error: 1 });
+
+      const byHost = logger.page({ limit: 10, offset: 0, search: "needle", host: "compact.example" });
+      expect(byHost.logs).toHaveLength(2);
+      expect(byHost.host_counts.map((entry) => entry.host).sort())
+        .toEqual(["compact.example", "primary.example"]);
+    } finally {
+      logger.close();
+    }
+  });
 });
 
 function databaseFootprintBytes(databasePath: string): number {

@@ -1,3 +1,5 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   configPathForTab,
@@ -7,6 +9,7 @@ import {
   pagePathForStudioPage,
   subscribePageChanges
 } from "../src/ui/routing.js";
+import { DashboardStatsGrid } from "../src/ui/dashboard/DashboardStatsGrid.js";
 import { planStudioNavigation } from "../src/ui/app/useStudioNavigation.js";
 import type { PageMode } from "../src/ui/app-types.js";
 import type { ConfigTab } from "../src/ui/config/types.js";
@@ -169,5 +172,19 @@ describe("UI routing helpers", () => {
     expect(removeEventListener).toHaveBeenCalledWith("popstate", expect.any(Function));
     expect(observed).toEqual(["routes", "config", "health"]);
     expect(observedTabs).toEqual(["profiles", "model", "profiles"]);
+  });
+
+  it("points the dashboard health link at a location the router resolves", () => {
+    // "/#health" is not a route the hash table accepts, so the old link left a
+    // junk fragment in the address bar and kept the user on the dashboard.
+    const markup = renderToStaticMarkup(createElement(DashboardStatsGrid, {
+      health: null,
+      listen: "127.0.0.1:7865",
+      logCounts: { all: 0, primary: 0, compact: 0, claude: 0 }
+    }));
+    const href = /class="dashboard-health-summary-link" href="([^"]+)"/.exec(markup)?.[1];
+
+    expect(href).toBe("/health");
+    expect(detectPageFromLocation({ pathname: href!, hash: "" })).toBe("health");
   });
 });

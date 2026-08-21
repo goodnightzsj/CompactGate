@@ -178,6 +178,43 @@ describe("LogsPage loaded rows", () => {
     expect(markup).toContain("显示 120 / 共 120 条");
     expect(markup.match(/class="log-row is-clickable/g)).toHaveLength(120);
   });
+  it("shows a host total that agrees with the hosts listed under it", () => {
+    // allLogCount is the whole-database row count, while the host rows come from
+    // the filtered host facet. Using it for "全部上游" made the dropdown claim
+    // more rows than the hosts beneath it add up to.
+    const markup = renderToStaticMarkup(
+      <LogsPage
+        logs={[]}
+        logCounts={{ all: 100, primary: 0, compact: 0, claude: 100 }}
+        providerCounts={{ all: 100, openai: 0, claude: 100 }}
+        statusCounts={{ all: 100, normal: 100, error: 0 }}
+        totalLogCount={100}
+        allLogCount={1000}
+        hostOptions={[
+          { host: "api.anthropic.com", total: 60, primary: 0, compact: 0, claude: 60 },
+          { host: "relay.example", total: 40, primary: 0, compact: 0, claude: 40 }
+        ]}
+        hasMoreLogs={false}
+        isLoadingLogs={false}
+        isLoadingMoreLogs={false}
+        routeFilter="claude"
+        statusFilter="all"
+        hostFilter={ALL_HOSTS_FILTER}
+        searchFilter=""
+        onRouteFilterChange={() => undefined}
+        onStatusFilterChange={() => undefined}
+        onHostFilterChange={() => undefined}
+        onSearchFilterChange={() => undefined}
+        onLoadMore={() => undefined}
+        error={null}
+      />
+    );
+    const hostSection = markup.slice(markup.indexOf("全部上游"));
+    const shownTotal = /全部上游[\s\S]{0,200}?>(\d+)</.exec(hostSection)?.[1];
+
+    expect(shownTotal).toBe("100");
+    expect(markup).toContain("已存储 1000 条");
+  });
 });
 
 function renderLogsPage(logs: RequestLogEntry[]): string {
