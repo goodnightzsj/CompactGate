@@ -3,6 +3,7 @@ import {
   anthropicUsageToResponses,
   openAiUsageToAnthropic
 } from "../src/server/protocol-conversion.js";
+import { extractResponseUsage } from "../src/server/usage.js";
 
 /**
  * The two conventions disagree on what `input_tokens` covers: OpenAI's is the
@@ -91,5 +92,24 @@ describe("usage conversion preserves the token total", () => {
       input_tokens: 12,
       output_tokens: 7
     });
+  });
+
+  it("counts each cache-creation TTL bucket once across both spellings", () => {
+    // ephemeral_5m_input_tokens and ephemeral5mInputTokens name the same bucket,
+    // so a payload carrying both spellings must not add them together.
+    expect(extractResponseUsage(
+      Buffer.from(JSON.stringify({
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          cache_creation: {
+            ephemeral_5m_input_tokens: 100,
+            ephemeral5mInputTokens: 100,
+            ephemeral_1h_input_tokens: 30
+          }
+        }
+      })),
+      { "content-type": "application/json" }
+    )).toMatchObject({ cacheCreationInputTokens: 130 });
   });
 });

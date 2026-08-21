@@ -19,7 +19,7 @@ import {
   fetchUpstreamModels,
   type UpstreamModelsResponse
 } from "./upstream-models.js";
-import { resolveUpstreamPath } from "./upstream-url.js";
+import { buildUpstreamUrlWithMode } from "./upstream-url.js";
 
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
@@ -81,10 +81,7 @@ export function buildAnthropicUpstreamHeaders(
 }
 
 export function buildClaudeUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
-  const base = new URL(baseUrl);
-  base.pathname = resolveUpstreamPath(base.pathname, requestPath, "append-request-path");
-  base.search = search;
-  return base;
+  return buildUpstreamUrlWithMode(baseUrl, requestPath, search, "append-request-path");
 }
 
 export function resolveClaudeCredential(config: CompactGateConfig) {

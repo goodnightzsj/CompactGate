@@ -158,16 +158,20 @@ function readCacheCreationInputTokens(usage: Record<string, unknown>): number | 
   ]);
 }
 
+/**
+ * Sum the per-TTL cache-creation buckets. The two spellings of each bucket are
+ * aliases, so first-match-wins within a bucket and only the distinct TTLs add
+ * up — matching {@link readCacheCreationInputTokens}, which learned the same
+ * lesson from double counting the aggregate against its own breakdown.
+ */
 function readAnthropicCacheCreationInputTokens(value: unknown): number | null {
   if (!isRecord(value)) {
     return null;
   }
 
   return sumNullableNumberList([
-    readNumber(value.ephemeral_5m_input_tokens),
-    readNumber(value.ephemeral_1h_input_tokens),
-    readNumber(value.ephemeral5mInputTokens),
-    readNumber(value.ephemeral1hInputTokens)
+    readNumber(value.ephemeral_5m_input_tokens) ?? readNumber(value.ephemeral5mInputTokens),
+    readNumber(value.ephemeral_1h_input_tokens) ?? readNumber(value.ephemeral1hInputTokens)
   ]);
 }
 

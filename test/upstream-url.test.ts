@@ -68,3 +68,22 @@ describe("versioned upstream URL construction", () => {
     ).toBe("https://claude.example/v1/messages?beta=true");
   });
 });
+
+describe("base_url query strings", () => {
+  it("preserves a query string carried by the configured base_url on both protocols", () => {
+    // validateBaseUrl only checks the scheme, so a base_url with a key or a
+    // version pin in its query string is legal config. The Claude builder used
+    // to overwrite the whole search string and drop it.
+    expect(buildUpstreamUrl("https://relay.test/v1?key=abc", "/v1/responses", "").toString())
+      .toBe("https://relay.test/v1/responses?key=abc");
+    expect(buildClaudeUpstreamUrl("https://relay.test/v1?key=abc", "/v1/messages", "").toString())
+      .toBe("https://relay.test/v1/messages?key=abc");
+    expect(buildClaudeUpstreamUrl("https://relay.test/v1?key=abc", "/v1/messages", "?beta=true").toString())
+      .toBe("https://relay.test/v1/messages?key=abc&beta=true");
+  });
+
+  it("lets the request's own parameters win over the base_url's", () => {
+    expect(buildClaudeUpstreamUrl("https://relay.test/v1?beta=false", "/v1/messages", "?beta=true").toString())
+      .toBe("https://relay.test/v1/messages?beta=true");
+  });
+});

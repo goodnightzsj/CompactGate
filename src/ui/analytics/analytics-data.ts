@@ -152,6 +152,12 @@ export function groupTrend(
   const grouped = new Map<string, AnalyticsTrendPoint>();
   for (const point of snapshot.trend) {
     const date = new Date(point.bucket_start);
+    // ponytail: buckets are whole UTC hours, so in a timezone whose offset is
+    // not a whole hour (UTC+5:30, +9:30) one bucket straddles local midnight and
+    // its whole count lands on the earlier day — up to 30 or 45 minutes of
+    // traffic in the wrong column of the daily view. Fixing it properly means
+    // bucketing server-side against the client's UTC offset; the summary tiles
+    // are unaffected because they come straight from the SQL instant range.
     const key = granularity === "hour" ? point.bucket_start : localDateKey(date);
     const current = grouped.get(key) ?? emptyTrendPoint(key, date, granularity);
     addMetric(current, point);

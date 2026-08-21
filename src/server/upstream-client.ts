@@ -459,6 +459,13 @@ export async function sendOpenAiUpstreamRequest(
       const finalResult = result.responseBodyTruncated
         ? buildDeferredBufferLimitResult(result)
         : result;
+      // ponytail: a deferred 5xx is written raw, so a non-retryable upstream
+      // error (Anthropic's 529, for one) reaches a Codex client in the
+      // upstream's own error shape while a retried 502 arrives translated.
+      // Routing it through options.responseTransform means driving a Duplex
+      // over an already-buffered body and needs a fallback for transforms that
+      // only handle success shapes — worth doing only alongside a test for the
+      // error path, since getting it wrong loses the error entirely.
       if (result.status >= 500) {
         writeBufferedUpstreamResult(options.res, finalResult, options.extraResponseHeaders);
       }

@@ -11,7 +11,7 @@ import {
   resolveClaudeMappedModel,
   resolveClaudeRequestRouting
 } from "./claude-models.js";
-import { resolveUpstreamPath } from "./upstream-url.js";
+import { buildUpstreamUrlWithMode } from "./upstream-url.js";
 
 const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
 const ANTHROPIC_PROXY_PREFIX = "/anthropic";
@@ -218,17 +218,7 @@ export function rewriteCompactBody(rawBody: Buffer, config: CompactGateConfig): 
 }
 
 export function buildUpstreamUrl(baseUrl: string, requestPath: string, search = ""): URL {
-  const base = new URL(baseUrl);
-  base.pathname = resolveUpstreamPath(base.pathname, requestPath, "replace-client-api-root");
-  const requestSearch = new URLSearchParams(search);
-  for (const name of new Set(requestSearch.keys())) {
-    base.searchParams.delete(name);
-    for (const value of requestSearch.getAll(name)) {
-      base.searchParams.append(name, value);
-    }
-  }
-
-  return base;
+  return buildUpstreamUrlWithMode(baseUrl, requestPath, search, "replace-client-api-root");
 }
 
 export function compactUpstreamBaseUrl(config: CompactGateConfig): string {

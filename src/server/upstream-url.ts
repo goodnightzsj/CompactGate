@@ -2,6 +2,31 @@ export type UpstreamPathMode = "replace-client-api-root" | "append-request-path"
 
 const CLIENT_API_ROOT = "/v1";
 
+/**
+ * Resolve one upstream URL from a configured base plus the client's path and
+ * query string. The request's parameters win per name, but any query string the
+ * base_url carries — a key or a version pin — is preserved, because validation
+ * accepts such a base_url and silently dropping it breaks the upstream call.
+ */
+export function buildUpstreamUrlWithMode(
+  baseUrl: string,
+  requestPath: string,
+  search: string,
+  mode: UpstreamPathMode
+): URL {
+  const base = new URL(baseUrl);
+  base.pathname = resolveUpstreamPath(base.pathname, requestPath, mode);
+  const requestSearch = new URLSearchParams(search);
+  for (const name of new Set(requestSearch.keys())) {
+    base.searchParams.delete(name);
+    for (const value of requestSearch.getAll(name)) {
+      base.searchParams.append(name, value);
+    }
+  }
+
+  return base;
+}
+
 export function resolveUpstreamPath(
   basePathname: string,
   requestPath: string,

@@ -49,7 +49,10 @@ export function normalizeCompactResponse({
   }
 
   const parsedResponse = parseJsonRecord(responseBody);
-  const reason = compactResponseNormalizeReason(parsedResponse);
+  const reason = compactResponseNormalizeReason(
+    parsedResponse,
+    (readHeaderString(responseHeaders["content-type"]) ?? "").toLowerCase().includes("text/event-stream")
+  );
   if (!reason) {
     return unchangedCompactResponse(responseBody, responseHeaders);
   }
@@ -110,10 +113,14 @@ function unchangedCompactResponse(
 }
 
 function compactResponseNormalizeReason(
-  parsed: Record<string, unknown> | null
+  parsed: Record<string, unknown> | null,
+  eventStream: boolean
 ): CompactResponseNormalizeReason | null {
   if (!parsed) {
-    return "malformed_json";
+    // Codex compact is streaming by design, and a stream is legitimately not a
+    // JSON object. Calling that malformed labelled every healthy streaming
+    // compact as broken in the log feed; it is the conversion case instead.
+    return eventStream ? "missing_compaction_output" : "malformed_json";
   }
 
   return Array.isArray(parsed.output) ? null : "missing_compaction_output";

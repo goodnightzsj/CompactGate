@@ -199,6 +199,12 @@ export function useLogFeed({
       const requestId = refreshRequestId + 1;
       refreshRequestId = requestId;
       try {
+        // ponytail: this replaces the loaded window with a single first page, so
+        // after "加载更早日志" an event-stream hiccup collapses the table back to
+        // one page and loses the scroll position. Asking for more rows cannot fix
+        // it — the API caps limit at logging.keep_recent — so a real fix has to
+        // merge the refreshed first page into the existing list instead of
+        // replacing it. The scroll handler re-loads, so it self-heals.
         const nextPage = await fetchLogPage({
           ...query,
           offset: 0

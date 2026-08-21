@@ -1678,7 +1678,9 @@ describe("CompactGate OpenAI routing", () => {
       route: "compact",
       request_type: "stream",
       compact_response_normalized: true,
-      compact_response_normalize_reason: "malformed_json",
+      // A stream is legitimately not a JSON object; it needs conversion,
+      // which is what missing_compaction_output means.
+      compact_response_normalize_reason: "missing_compaction_output",
       compact_response_synthetic_source: "upstream_response",
       input_tokens: 9,
       output_tokens: 4,
