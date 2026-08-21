@@ -14,7 +14,7 @@ export type CaptureReadResult =
   | { status: "found"; record: CaptureRecord; content: Buffer }
   | { status: "unavailable" };
 
-const DEFAULT_MAX_CAPTURE_BODY_BYTES = 1 * 1024 * 1024;
+const DEFAULT_MAX_CAPTURE_BODY_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_CAPTURE_DIR_BYTES = 20 * 1024 * 1024 * 1024;
 const CAPTURE_FILE_PREFIX = "compactgate-capture-";
 const MAX_CAPTURE_FILENAME_CHARS = 240;
