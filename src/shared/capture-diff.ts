@@ -83,7 +83,8 @@ function diffPayload(
 
 function parsePayload(payload: CapturePayload | CaptureResponsePayload): unknown | null {
   try {
-    return JSON.parse(payload.body.text) as unknown;
+    // Absent only on a capture read straight off disk; the API decodes it first.
+    return JSON.parse(payload.body.text ?? "") as unknown;
   } catch {
     return null;
   }

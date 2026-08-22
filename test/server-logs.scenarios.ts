@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { CaptureSerializedBody } from "../src/shared/types.js";
+import { decodeCaptureBody } from "../src/server/capture-body-decode.js";
 import { DebugCaptureWriter } from "../src/server/debug-capture.js";
 import { persistCapture } from "../src/server/proxy-support.js";
 import {
@@ -157,7 +159,7 @@ describe("CompactGate logs and capture", () => {
       response_model_source: "target_fallback",
       stream_oversized_event_count: 0
     });
-    expect(capture.upstream_response.body.text).toContain('"object":"response"');
+    expect(capturedText(capture.upstream_response)).toContain('"object":"response"');
     // 方案 B:无独立客户端响应体(透明转发),capture 的 client_response 为空。
     expect(capture.client_response).toBeNull();
   });
@@ -408,9 +410,9 @@ describe("CompactGate logs and capture", () => {
       target_model: "gpt-5.5",
       compact_bridge_replacements: 0
     });
-    expect(captures[0].incoming_request.body.text).toContain("capture me fully");
-    expect(captures[0].upstream_request.body.text).toContain("capture me fully");
-    expect(captures[0].upstream_response.body.text).toContain("PRIMARY_CAPTURE_REPLY");
+    expect(capturedText(captures[0].incoming_request)).toContain("capture me fully");
+    expect(capturedText(captures[0].upstream_request)).toContain("capture me fully");
+    expect(capturedText(captures[0].upstream_response)).toContain("PRIMARY_CAPTURE_REPLY");
     expect(captures[0].incoming_request.body.truncated).toBe(false);
     expect(captures[0].upstream_request.body.truncated).toBe(false);
     expect(captures[0].upstream_response.body.truncated).toBe(false);
@@ -529,8 +531,8 @@ describe("CompactGate logs and capture", () => {
     expect(capture.incoming_request.body.truncated).toBe(false);
     expect(capture.upstream_request.body.truncated).toBe(false);
     expect(capture.upstream_response.body.truncated).toBe(false);
-    expect(JSON.stringify(capture)).toContain("REQUEST_SHOULD_REMAIN_VISIBLE");
-    expect(JSON.stringify(capture)).toContain("RESPONSE_SHOULD_REMAIN_VISIBLE");
+    expect(capturedText(capture.incoming_request)).toContain("REQUEST_SHOULD_REMAIN_VISIBLE");
+    expect(capturedText(capture.upstream_response)).toContain("RESPONSE_SHOULD_REMAIN_VISIBLE");
   });
 
   it("persists all SQLite logs across restarts and pages the visible list", async () => {
@@ -651,3 +653,13 @@ describe("CompactGate logs and capture", () => {
     });
   });
 });
+
+/**
+ * Captures store base64 only, so read them back the way the API does. Decoding
+ * here also proves the stored bytes still round-trip.
+ */
+function capturedText(
+  payload: { body: CaptureSerializedBody; headers: Record<string, string | string[] | undefined> }
+): string {
+  return decodeCaptureBody(payload.body, payload.headers).text ?? "";
+}

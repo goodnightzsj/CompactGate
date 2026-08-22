@@ -7,6 +7,7 @@ import type {
   CaptureSerializedBody
 } from "../shared/types.js";
 import { isRecord } from "../shared/records.js";
+import { captureRecordWithDecodedBodies } from "./capture-body-decode.js";
 
 export type { CaptureRecord } from "../shared/types.js";
 
@@ -128,7 +129,7 @@ export class DebugCaptureWriter {
           status: "found",
           // Shape is trusted: this process wrote the file. The real gates are the
           // managed-filename pattern, O_NOFOLLOW, isFile(), and the request_id match.
-          record: parsed as unknown as CaptureRecord,
+          record: captureRecordWithDecodedBodies(parsed as unknown as CaptureRecord),
           content
         };
       } finally {
@@ -319,11 +320,14 @@ export function serializeBody(
   maxBodyBytes = DEFAULT_MAX_CAPTURE_BODY_BYTES
 ): CaptureSerializedBody {
   const capturedBody = buffer.subarray(0, Math.max(0, maxBodyBytes));
+  // base64 only. Storing the UTF-8 decode alongside it cost 1.0x the bytes for
+  // a plain body and 1.7x for a brotli one — where every invalid byte becomes a
+  // 3-byte replacement char, so the copy is bigger than the original and cannot
+  // be turned back into it. The API rehydrates readable text on the way out.
   return {
     byte_length: buffer.byteLength,
     captured_byte_length: capturedBody.byteLength,
     truncated: capturedBody.byteLength < buffer.byteLength,
-    text: capturedBody.toString("utf8"),
     base64: capturedBody.toString("base64")
   };
 }

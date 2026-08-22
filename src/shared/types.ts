@@ -429,7 +429,15 @@ export interface CaptureSerializedBody {
   byte_length: number;
   captured_byte_length: number;
   truncated: boolean;
-  text: string;
+  /**
+   * Only present on a capture served through the API, where the server decodes
+   * `base64` (decompressing it first when the section carried a
+   * `content-encoding`). It is deliberately absent on disk: for a compressed
+   * body the UTF-8 decode is both larger than the bytes it came from and
+   * irreversible, so `base64` is the only recoverable copy. Captures written
+   * before this change still carry it, which is why it stays optional.
+   */
+  text?: string;
   base64: string;
 }
 
