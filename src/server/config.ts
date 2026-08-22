@@ -98,15 +98,12 @@ export class ConfigStore {
     }
 
     return this.mutate(() => {
-      // Inside the mutation queue: checking before queueing would let two
-      // concurrent patches both pass against the same revision.
-      this.assertRevisionCurrent(patch.revision);
       const merged = mergeConfig(this.current, applyRouteUrlCredentialPresetBindings(this.current, patch));
       return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
         ...merged,
         active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
       }), routeUrlEntriesFromRuntime(merged));
-    });
+    }, patch.revision);
   }
 
   async importConfig(value: unknown): Promise<CompactGateConfig> {
@@ -126,10 +123,12 @@ export class ConfigStore {
   async saveProfile(
     scope: ConfigProfileScope,
     name: string,
-    patch: unknown
+    patch: unknown,
+    revision?: unknown
   ): Promise<CompactGateConfig> {
     return this.mutate(() =>
-      saveConfigProfile(this.current, scope, name, applyRouteUrlCredentialPresetBindings(this.current, patch))
+      saveConfigProfile(this.current, scope, name, applyRouteUrlCredentialPresetBindings(this.current, patch)),
+      revision
     );
   }
 
@@ -137,7 +136,8 @@ export class ConfigStore {
     scope: ConfigProfileScope,
     profileId: string,
     name: string | undefined,
-    patch: unknown
+    patch: unknown,
+    revision?: unknown
   ): Promise<CompactGateConfig> {
     return this.mutate(() =>
       updateConfigProfile(
@@ -146,7 +146,8 @@ export class ConfigStore {
         profileId,
         name,
         applyRouteUrlCredentialPresetBindings(this.current, patch)
-      )
+      ),
+      revision
     );
   }
 
@@ -222,8 +223,14 @@ export class ConfigStore {
     }
   }
 
-  private async mutate(buildNext: () => CompactGateConfig): Promise<CompactGateConfig> {
+  private async mutate(
+    buildNext: () => CompactGateConfig,
+    revision?: unknown
+  ): Promise<CompactGateConfig> {
     return this.queue(async () => {
+      // Inside the mutation queue: checking before queueing would let two
+      // concurrent writes both pass against the same revision.
+      this.assertRevisionCurrent(revision);
       const next = buildNext();
       validateConfig(next);
       return this.persist(next);
@@ -254,6 +261,7 @@ export function validateConfig(config: CompactGateConfig): void {
 
   for (const scope of ["codex", "claude"] as const) {
     const state = getProfileScopeState(config, scope);
+    const seenProfileIds = new Set<string>();
     for (const profile of state.profiles) {
       if (profile.id.trim().length === 0) {
         throw new ConfigError("profile.id is required.");
@@ -262,6 +270,15 @@ export function validateConfig(config: CompactGateConfig): void {
       if (profile.name.trim().length === 0) {
         throw new ConfigError("profile.name is required.");
       }
+
+      // Duplicates used to be accepted, after which `reorderProfiles` could
+      // never succeed again: it demands one entry per profile and rejects
+      // repeated ids, so no payload satisfied both. update/delete also hit both
+      // rows at once. Reject them at the only gate every mutation passes.
+      if (seenProfileIds.has(profile.id)) {
+        throw new ConfigError(`${scope} profile ids must be unique.`);
+      }
+      seenProfileIds.add(profile.id);
 
       validateProfileConfig(profile.config, scope);
     }

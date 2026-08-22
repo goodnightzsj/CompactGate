@@ -93,7 +93,12 @@ export async function handleConfigApi(
     }
 
     const profilePatch = Object.hasOwn(record, "config") ? record.config : {};
-    await configStore.saveProfile(readProfileScope(record, url), record.name, profilePatch);
+    await configStore.saveProfile(
+      readProfileScope(record, url),
+      record.name,
+      profilePatch,
+      record.revision
+    );
     broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
@@ -109,7 +114,8 @@ export async function handleConfigApi(
       readProfileScope(body, url),
       readProfileId(body, "update"),
       typeof body.name === "string" ? body.name : undefined,
-      profilePatch
+      profilePatch,
+      body.revision
     );
     broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());

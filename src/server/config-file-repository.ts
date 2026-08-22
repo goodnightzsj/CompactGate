@@ -71,16 +71,27 @@ export async function listConfigBackups(configPath: string): Promise<ConfigBacku
   const backups = await Promise.all(entries
     .filter((entry) => entry.isFile() && isConfigBackupId(resolvedPath, entry.name))
     .map(async (entry) => {
-      const stats = await fs.stat(path.join(directory, entry.name));
-      return {
-        id: entry.name,
-        created_at: stats.mtime.toISOString(),
-        size_bytes: stats.size,
-        mtimeMs: stats.mtimeMs
-      };
+      try {
+        const stats = await fs.stat(path.join(directory, entry.name));
+        return {
+          id: entry.name,
+          created_at: stats.mtime.toISOString(),
+          size_bytes: stats.size,
+          mtimeMs: stats.mtimeMs
+        };
+      } catch (error) {
+        // A concurrent prune can delete the 11th backup between the readdir and
+        // this stat. That is the ring working as intended, not a listing
+        // failure, so drop the row instead of failing the whole request.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
     }));
 
   return backups
+    .filter((backup): backup is NonNullable<typeof backup> => backup !== null)
     .sort((left, right) => right.mtimeMs - left.mtimeMs || right.id.localeCompare(left.id))
     .map(({ mtimeMs: _mtimeMs, ...metadata }) => metadata);
 }

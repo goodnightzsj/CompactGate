@@ -170,9 +170,16 @@ export function mergeRouteUrlPresets(
   patchValue: unknown
 ): RouteUrlPreset[] {
   const source = Array.isArray(patchValue) ? patchValue : baseValue ?? [];
+  // Only when the patch supplies the list: an omitted credential then means
+  // "unchanged", the same rule the rest of the merge layer follows. Reading it
+  // as the empty string wiped every stored key the patch did not restate — and
+  // the public config never returns them, so a client cannot restate them.
+  // `importConfig` merges against DEFAULT_CONFIG, so a real import still
+  // replaces the list outright.
+  const baseline = Array.isArray(patchValue) ? baseValue ?? [] : null;
   return normalizeRouteUrlPresets(
     source
-      .map(readRouteUrlPreset)
+      .map((value) => readRouteUrlPreset(value, baseline))
       .filter((preset): preset is RouteUrlPreset => preset !== null)
   );
 }
@@ -238,7 +245,10 @@ function applyCredentialPresetToRoutePatch(
   };
 }
 
-function readRouteUrlPreset(value: unknown): RouteUrlPreset | null {
+function readRouteUrlPreset(
+  value: unknown,
+  baseline: RouteUrlPreset[] | null
+): RouteUrlPreset | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -256,13 +266,26 @@ function readRouteUrlPreset(value: unknown): RouteUrlPreset | null {
   const createdAt = readString(value.created_at, new Date(0).toISOString());
   const updatedAt = readString(value.updated_at, createdAt);
   const usageCount = readNumber(value.usage_count, 1);
+  const id = readString(value.id, createRouteUrlPresetId(kind, baseUrl));
+  // Inherit a credential only from a baseline entry that is the same route *and*
+  // the same URL. Matching on the id alone was wrong in both directions: an
+  // omitted id is derived from the URL text, so a trailing slash produced a
+  // different id and silently kept the wipe, while a restated id paired with a
+  // changed base_url would have moved the stored secret onto a new host.
+  const existing = baseline?.find((preset) =>
+    preset.kind === kind &&
+    normalizeRouteUrl(preset.base_url) === normalizeRouteUrl(baseUrl)) ?? null;
 
   return {
-    id: readString(value.id, createRouteUrlPresetId(kind, baseUrl)),
+    id,
     kind,
     base_url: baseUrl,
-    api_key: readString(value.api_key, ""),
-    api_key_env: readString(value.api_key_env, ""),
+    api_key: Object.hasOwn(value, "api_key")
+      ? readString(value.api_key, "")
+      : existing?.api_key ?? "",
+    api_key_env: Object.hasOwn(value, "api_key_env")
+      ? readString(value.api_key_env, "")
+      : existing?.api_key_env ?? "",
     host: safeHost(baseUrl),
     created_at: createdAt,
     updated_at: updatedAt,

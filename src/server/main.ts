@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { ConfigStore, parseListenAddress } from "./config.js";
+import { listConfigBackups } from "./config-file-repository.js";
 import { createCompactGateServer, createRequestLogger } from "./http.js";
 
 const configPath = process.env.COMPACTGATE_CONFIG ?? "compactgate.json";
-const configStore = await ConfigStore.load(configPath);
+const configStore = await loadConfigStore(configPath);
 const { host, port } = parseListenAddress(configStore.get().listen);
 const logger = createRequestLogger(configStore);
 const server = createCompactGateServer(configStore, logger);
@@ -36,8 +38,7 @@ server.listen(port, host, () => {
   console.log(`Log database: ${logger.getDatabasePath()}`);
 });
 
-function describeListener(port: number): string | null {
-  const result = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], {
+function describeListener(port: number): string | null {  const result = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], {
     encoding: "utf8"
   });
 
@@ -47,4 +48,35 @@ function describeListener(port: number): string | null {
 
   const output = result.stdout.trim();
   return output.length > 0 ? output : null;
+}
+
+/**
+ * A malformed or invalid config file used to exit with a bare unhandled
+ * rejection, and the ten good backups sitting beside it are only reachable
+ * through the HTTP API of the service that just failed to start. Deliberately
+ * no auto-restore — `restoreBackup` requires an explicit confirmation for the
+ * same reason — but the operator does get told what broke and how to recover.
+ */
+async function loadConfigStore(target: string): Promise<ConfigStore> {
+  try {
+    return await ConfigStore.load(target);
+  } catch (error) {
+    const resolved = path.resolve(target);
+    console.error(`CompactGate could not load its config from ${resolved}.`);
+    console.error(error instanceof Error ? error.message : error);
+
+    const backups = await listConfigBackups(target).catch(() => []);
+    if (backups.length > 0) {
+      console.error("");
+      console.error("Version backups beside it, newest first:");
+      for (const backup of backups.slice(0, 5)) {
+        console.error(`  ${backup.id}  ${backup.created_at}  ${backup.size_bytes} bytes`);
+      }
+      console.error("");
+      console.error("Restore one with:");
+      console.error(`  cp ${path.join(path.dirname(resolved), backups[0].id)} ${resolved}`);
+    }
+
+    process.exit(1);
+  }
 }

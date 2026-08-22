@@ -68,4 +68,34 @@ describe("stale config patches", () => {
     const next = await store.patch({ logging: { keep_recent: 250 } });
     expect(next.logging.keep_recent).toBe(250);
   });
+
+  it("guards the profile writes that carry a form draft", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+
+    const saved = await store.saveProfile("codex", "Dev", {
+      primary: { base_url: "https://dev.example/v1", api_key: "sk-dev" }
+    });
+    const devId = saved.profile_scopes?.codex?.profiles?.[0]?.id ?? "";
+    const staleRevision = store.toPublicConfig().revision;
+
+    // Another tab lands a change, so the pinned revision is now superseded.
+    await store.patch({ logging: { keep_recent: 400 } });
+
+    await expect(store.saveProfile("codex", "Prod", {
+      primary: { base_url: "https://prod.example/v1" }
+    }, staleRevision)).rejects.toThrow(/superseded|revision/i);
+    await expect(store.updateProfile("codex", devId, "Dev", {
+      primary: { base_url: "https://moved.example/v1" }
+    }, staleRevision)).rejects.toThrow(/superseded|revision/i);
+
+    // The stored profile is untouched, and the current revision still works.
+    const current = store.toPublicConfig().revision;
+    const after = await store.updateProfile("codex", devId, "Dev", {
+      primary: { base_url: "https://moved.example/v1" }
+    }, current);
+    expect(
+      after.profile_scopes?.codex?.profiles?.find((p) => p.id === devId)?.config
+    ).toMatchObject({ primary: { base_url: "https://moved.example/v1" } });
+  });
 });

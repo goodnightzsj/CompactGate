@@ -37,6 +37,17 @@ export function saveProfile(
 
     const trimmedName = requireProfileName(name);
     const now = new Date().toISOString();
+    // Merge onto the live runtime, including for a by-name overwrite.
+    //
+    // Deliberately NOT the target profile's own config, which looks like the
+    // safer choice and is not: the Studio form is always built from the runtime
+    // and never from a non-active profile, so `patch` carries the runtime's
+    // base_url while omitting the untouched api_key. Basing the merge on the
+    // target then files the runtime's URL beside the target's key and produces a
+    // profile that 401s and cannot be repaired from the UI, because keys are
+    // never returned. Overwriting means "make this profile equal my draft", and
+    // the draft's blank key field means "the credential in effect for that
+    // route" — which is the runtime's.
     const profileConfig = extractScopedProfileConfig(mergeRuntimeConfig(current, patch), scope);
     validateProfileConfig(profileConfig, scope);
 
