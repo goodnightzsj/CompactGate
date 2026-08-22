@@ -113,6 +113,59 @@ describe("codex routing affinity is scoped to the profile that changed", () => {
     expect(state.boundProfileId({ sessionKey: "session-1" })).toBeNull();
     expect(state.preview(config, { sessionKey: "session-1" }).profileId).toBe("codex-b");
   });
+
+  it("releases the in-flight reservation when an unrelated profile changed mid-request", () => {
+    // Every finished request whose selection was reserved before an unrelated
+    // config edit used to leak one inFlight, and each leaked unit is a
+    // permanent -80 on that profile's score. codex-a leads codex-b by 1500
+    // (order plus the active bonus), so ~19 leaks are enough to hand every
+    // future request to codex-b even though codex-a never failed.
+    const state = new PrimaryFailoverState({ random: () => 0 });
+    let config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "key-b")
+    ]);
+
+    for (let round = 0; round < 24; round += 1) {
+      const selection = state.preview(config, {});
+      expect(selection.profileId).toBe("codex-a");
+      state.reserveSelection(selection, false);
+
+      // The operator rotates codex-b's key while the codex-a request is open.
+      config = configWithCodexProfiles([
+        codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a"),
+        codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", `key-b-${round}`)
+      ]);
+      state.preview(config, {});
+      state.recordResult(selection, 200);
+    }
+
+    expect(state.preview(config, {}).profileId).toBe("codex-a");
+  });
+
+  it("drops pins for a profile that was deleted from the candidate set", () => {
+    const state = new PrimaryFailoverState({ random: () => 0 });
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1", "key-a"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "key-b")
+    ]);
+
+    const selection = state.preview(config, { sessionKey: "session-1" });
+    expect(selection.profileId).toBe("codex-a");
+    state.reserveSelection(selection, true);
+    expect(state.boundProfileId({ sessionKey: "session-1" })).toBe("codex-a");
+
+    // codex-a is deleted. Its health goes with `reconcile`, but the pin used to
+    // sit in the sticky map for the rest of its 30 minute TTL, holding an LRU
+    // slot that a live session needs.
+    const remaining = configWithCodexProfiles(
+      [codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "key-b")],
+      "codex-b"
+    );
+    state.preview(remaining, {});
+
+    expect(state.boundProfileId({ sessionKey: "session-1" })).toBeNull();
+  });
 });
 
 describe("shared caches do not hand one request's state to another", () => {

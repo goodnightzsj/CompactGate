@@ -195,6 +195,7 @@ async function proxyPrimaryRequest(
   let delegatedToCompact = false;
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
+  const configRevision = configStore.revision;
   let providerStatePortability: ProviderStatePortabilityLog | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
@@ -268,7 +269,7 @@ async function proxyPrimaryRequest(
     primarySelection = plan.primarySelection;
     if (!requestProfile) {
       await syncScheduledPrimaryProfile({
-        config,
+        configRevision,
         configStore,
         logger,
         primarySelection,
@@ -618,14 +619,14 @@ function buildProviderStatePortabilityLog(input: {
 }
 
 async function syncScheduledPrimaryProfile({
-  config,
+  configRevision,
   configStore,
   logger,
   primarySelection,
   studioEvents,
   codexVersionMonitor
 }: {
-  config: CompactGateConfig;
+  configRevision: string;
   configStore: ConfigStore;
   logger: RequestLogger;
   primarySelection: PrimaryRouteSelection | null;
@@ -633,12 +634,27 @@ async function syncScheduledPrimaryProfile({
   codexVersionMonitor: CodexVersionMonitor;
 }): Promise<void> {
   const selectedProfileId = primarySelection?.profileId;
-  const activeProfileId = config.profile_scopes?.codex?.active_profile_id ?? null;
+  if (!selectedProfileId) {
+    return;
+  }
+
+  // Read the live config rather than this request's snapshot: the snapshot was
+  // taken before the body was read, so comparing against its
+  // `active_profile_id` both re-applied switches that had already landed and
+  // missed ones it had not seen.
+  const current = configStore.get();
   if (
-    !config.primary_failover.auto_schedule ||
-    !selectedProfileId ||
-    selectedProfileId === activeProfileId
+    !current.primary_failover.auto_schedule ||
+    selectedProfileId === (current.profile_scopes?.codex?.active_profile_id ?? null)
   ) {
+    return;
+  }
+
+  // Something wrote the config after this request took its snapshot — an
+  // operator applying a profile in Studio, or another request's own sync. That
+  // decision is newer than this selection, so leave it alone instead of
+  // reverting an explicit choice (and rotating a backup slot to do it).
+  if (configStore.revision !== configRevision) {
     return;
   }
 
@@ -669,6 +685,7 @@ async function proxyCompactRequest(
   }
 ): Promise<void> {
   const route: RouteKind = "compact";
+  const configRevision = configStore.revision;
   let upstream = new URL(config.compact.base_url);
   let attemptedUpstream = false;
   let primarySelection: PrimaryRouteSelection | null = null;
@@ -699,7 +716,7 @@ async function proxyCompactRequest(
       primaryFailover.reserveSelection(selectedPrimary, config.primary_failover.auto_schedule);
       primarySelection = selectedPrimary;
       await syncScheduledPrimaryProfile({
-        config,
+        configRevision,
         configStore,
         logger,
         primarySelection,

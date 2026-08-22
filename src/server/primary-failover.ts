@@ -103,11 +103,20 @@ export class PrimaryFailoverState {
         }
       : resultOrStatus;
     const health = this.health.get(selection.profileId);
-    if (!health || selection.generation !== this.generation) {
+    if (!health) {
       return;
     }
 
+    // Release the reservation before the staleness check. The generation moves
+    // whenever *any* candidate's config changes, while an unchanged profile
+    // keeps its health record — so returning first leaked one inFlight for
+    // every request that was open across an unrelated config edit, and each
+    // leaked unit is a permanent -80 on that profile's score.
     health.inFlight = Math.max(0, health.inFlight - 1);
+    if (selection.generation !== this.generation) {
+      return;
+    }
+
     const now = this.now();
     const category = classifyPrimaryRouteResult(result);
     const staleSuccess = category === "success" && selection.healthVersion !== health.version;
@@ -265,10 +274,16 @@ export class PrimaryFailoverState {
 
     const signatures = candidateSignatures(candidates);
     const changedProfileIds = new Set<string>();
+    const removedProfileIds = new Set<string>();
     for (const [profileId, signature] of signatures) {
       const previous = this.signatures.get(profileId);
       if (previous !== undefined && previous !== signature) {
         changedProfileIds.add(profileId);
+      }
+    }
+    for (const profileId of this.signatures.keys()) {
+      if (!signatures.has(profileId)) {
+        removedProfileIds.add(profileId);
       }
     }
     this.signatures = signatures;
@@ -280,6 +295,13 @@ export class PrimaryFailoverState {
       this.generation += 1;
       this.health.forgetProfiles(changedProfileIds);
       this.stickiness.forgetProfiles(changedProfileIds);
+    }
+    if (removedProfileIds.size > 0) {
+      // `reconcile` drops a deleted profile's health, but its pins would
+      // otherwise sit in the sticky maps until their 30 minute / 2 hour TTL,
+      // occupying LRU slots and evicting live pins. No generation bump: with
+      // the health record gone, `recordResult` already no-ops for them.
+      this.stickiness.forgetProfiles(removedProfileIds);
     }
 
     this.health.reconcile(candidates);
