@@ -86,8 +86,8 @@ export function createAnthropicToResponsesStream(): Transform {
   });
 
   function convertFrame(data: string, transform: Transform): void {
-    const event = JSON.parse(data) as unknown;
-    if (!isRecord(event) || typeof event.type !== "string") {
+    const event = readSseEventRecord(data);
+    if (!event || typeof event.type !== "string") {
       return;
     }
 
@@ -438,8 +438,8 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
   });
 
   function convertFrame(data: string, transform: Transform): void {
-    const event = JSON.parse(data) as unknown;
-    if (!isRecord(event) || typeof event.type !== "string") {
+    const event = readSseEventRecord(data);
+    if (!event || typeof event.type !== "string") {
       return;
     }
 
@@ -610,8 +610,8 @@ export function createResponsesToAnthropicStream(): Transform {
     if (data === "[DONE]") {
       return;
     }
-    const event = JSON.parse(data) as unknown;
-    if (!isRecord(event) || typeof event.type !== "string") {
+    const event = readSseEventRecord(data);
+    if (!event || typeof event.type !== "string") {
       return;
     }
 
@@ -1036,8 +1036,8 @@ export function createChatToResponsesStream(): Transform {
       finish(transform);
       return;
     }
-    const event = JSON.parse(data) as unknown;
-    if (!isRecord(event)) {
+    const event = readSseEventRecord(data);
+    if (!event) {
       return;
     }
     if (isRecord(event.error)) {
@@ -1396,6 +1396,21 @@ export function createChatToAnthropicResponseTransform(
     (body) => chatCompletionToAnthropic(body, status),
     "anthropic"
   );
+}
+
+/**
+ * Parses one SSE `data:` payload as a JSON object. A frame that is not valid
+ * JSON is skipped rather than thrown: `JSON.parse` inside a converter rejects
+ * the Transform, which destroys the whole stream, so one junk or truncated frame
+ * used to cost the client the entire response instead of that one event.
+ */
+function readSseEventRecord(data: string): Record<string, unknown> | null {
+  try {
+    const event = JSON.parse(data) as unknown;
+    return isRecord(event) ? event : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

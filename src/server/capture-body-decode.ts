@@ -44,7 +44,8 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
     return "";
   }
 
-  for (const decompress of decompressors(encoding)) {
+  const strategies = decompressors(encoding);
+  for (const decompress of strategies) {
     try {
       const out = decompress(bytes);
       if (out.byteLength > 0) {
@@ -53,6 +54,14 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
     } catch {
       // Fall through to the next strategy.
     }
+  }
+
+  if (strategies.length > 0) {
+    // The body declares an encoding and nothing could decompress it — normally a
+    // capture cut off before the first flush point. UTF-8 decoding compressed
+    // bytes is exactly what produced the mojibake the viewer used to show, and it
+    // reads as if it were the response.
+    return `[compactgate] ${encoding} 正文无法解压，可能在首个刷新点之前就被截断（已抓取 ${bytes.byteLength} 字节）。`;
   }
 
   return bytes.toString("utf8");

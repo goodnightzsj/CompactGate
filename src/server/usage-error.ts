@@ -2,7 +2,6 @@ import type { IncomingHttpHeaders } from "node:http";
 import {
   decodeResponseText,
   isRecord,
-  readHeader,
   readTrimmedString
 } from "./usage-utils.js";
 
@@ -20,9 +19,12 @@ export function extractResponseErrorSummary(
     return `Upstream returned HTTP ${status}.`;
   }
 
-  const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
-  const parsedSummary = contentType.includes("json") ? extractJsonErrorSummary(text) : null;
-  const summary = parsedSummary ?? text.trim().replace(/\s+/g, " ");
+  // Try the structured read whatever the content-type claims: gateways commonly
+  // return a JSON error body under `text/plain` or with no type at all, and
+  // trusting the header there showed the operator the raw JSON instead of the
+  // message inside it. Falling back to the trimmed body keeps plain-text and
+  // HTML errors intact.
+  const summary = extractJsonErrorSummary(text) ?? text.trim().replace(/\s+/g, " ");
 
   return summary.length > 0
     ? `Upstream returned HTTP ${status}: ${truncateSummary(summary)}`

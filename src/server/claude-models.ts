@@ -30,6 +30,8 @@ const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
  * dial. Matches the family generation, so `sonnet-4-5` stays budget-based.
  */
 const CLAUDE_EFFORT_THINKING_MODEL = /(?:opus|sonnet|haiku|fable)-5\b|opus-4-8\b/i;
+/** Anthropic's floor for `thinking.budget_tokens`, which must also stay under `max_tokens`. */
+const CLAUDE_MIN_THINKING_BUDGET = 1024;
 
 
 export interface ClaudeSceneDetection {
@@ -199,7 +201,16 @@ function effortThinkingToBudget(
   const maxTokens = typeof parsed.max_tokens === "number" && Number.isFinite(parsed.max_tokens)
     ? parsed.max_tokens
     : 32000;
-  const budget = Math.max(1024, Math.min(
+  if (maxTokens <= CLAUDE_MIN_THINKING_BUDGET) {
+    // Both constraints cannot hold at this ceiling. Any budget we could emit
+    // would be rejected with a 400, and so would the client's own
+    // `{type:"adaptive"}` on a budget-based target — so drop the thinking block
+    // outright rather than only the effort dial, and let the request through
+    // without thinking instead of failing it entirely.
+    return { thinking: undefined, output_config: undefined };
+  }
+
+  const budget = Math.max(CLAUDE_MIN_THINKING_BUDGET, Math.min(
     maxTokens - 1,
     Math.round(maxTokens * claudeThinkingShareForEffort(effort))
   ));

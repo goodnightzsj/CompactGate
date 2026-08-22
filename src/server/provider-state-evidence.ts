@@ -21,6 +21,14 @@ export function providerStateTargetHealthKey(scope: ProviderStateTargetScope): s
   ]);
 }
 
+/**
+ * Counts "this conversation failed against this target the same way again". The
+ * failure *mode* discriminates, deliberately not the response bytes: real error
+ * bodies carry a per-request id, so hashing them gave every attempt a fresh key
+ * and the two-strike threshold could never be reached — the recovery path this
+ * evidence gates was unreachable in production while passing its unit tests on
+ * synthetic identical bodies.
+ */
 export function providerStateLegacyFailureKey(
   scope: ProviderStateTargetScope,
   conversationHash: string,
@@ -32,7 +40,7 @@ export function providerStateLegacyFailureKey(
     scope.model ?? "",
     scope.endpoint ?? "",
     String(result.status),
-    createHash("sha256").update(result.responseBody).digest("hex")
+    providerStateErrorCode(result.status, result.responseBody) ?? ""
   ]);
 }
 

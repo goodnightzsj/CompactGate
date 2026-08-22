@@ -104,3 +104,58 @@ describe("capture bodies are stored as bytes and decoded on read", () => {
     expect(decoded.client_response).toBeNull();
   });
 });
+
+describe("undecodable compressed capture bodies", () => {
+  it("says so instead of rendering the compressed bytes as text", () => {
+    // Brotli cut off before its first flush point: nothing decodes at all. UTF-8
+    // decoding the compressed bytes is what made the viewer show mojibake and
+    // read as if that were the upstream's answer. (Four bytes of this fixture do
+    // still salvage a prefix, which the truncated-stream test above covers.)
+    const compressed = brotliCompressSync(Buffer.from(JSON.stringify({ hello: "world" })));
+    const decoded = decodeCaptureBody(
+      {
+        byte_length: compressed.byteLength,
+        captured_byte_length: 3,
+        truncated: true,
+        base64: compressed.subarray(0, 3).toString("base64")
+      },
+      { "content-encoding": "br" }
+    );
+
+    expect(decoded.text?.startsWith("[compactgate]")).toBe(true);
+    expect(decoded.text).toContain("br");
+    expect(decoded.byte_length).toBe(compressed.byteLength);
+    expect(decoded.truncated).toBe(true);
+  });
+
+  it("leaves an unencoded body alone even when it is not valid UTF-8", () => {
+    const raw = Buffer.from([0x7b, 0x22, 0xff, 0xfe, 0x22, 0x7d]);
+    const decoded = decodeCaptureBody(
+      {
+        byte_length: raw.byteLength,
+        captured_byte_length: raw.byteLength,
+        truncated: false,
+        base64: raw.toString("base64")
+      },
+      { "content-type": "application/json" }
+    );
+
+    expect(decoded.text?.startsWith("[compactgate]")).toBe(false);
+    expect(decoded.text).toContain('{"');
+  });
+
+  it("reports a body whose declared encoding does not match its bytes", () => {
+    const junk = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04]);
+    const decoded = decodeCaptureBody(
+      {
+        byte_length: junk.byteLength,
+        captured_byte_length: junk.byteLength,
+        truncated: false,
+        base64: junk.toString("base64")
+      },
+      { "content-encoding": "br" }
+    );
+
+    expect(decoded.text?.startsWith("[compactgate]")).toBe(true);
+  });
+});

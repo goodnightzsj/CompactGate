@@ -164,6 +164,37 @@ describe("Claude model rewrite thinking alignment", () => {
 
     expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 31999 });
   });
+
+  it("drops thinking instead of emitting a budget above max_tokens", () => {
+    // Anthropic wants budget_tokens >= 1024 and < max_tokens, so a small output
+    // ceiling satisfies neither. Clamping to the 1024 floor anyway sent
+    // budget_tokens: 1024 with max_tokens: 512 and the upstream 400'd the whole
+    // request — a subagent probe asking for a short answer would just fail.
+    for (const maxTokens of [512, 1000, 1024]) {
+      const result = rewritten({
+        model: "claude-opus-4-8",
+        max_tokens: maxTokens,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "high" }
+      }, "claude-sonnet-4-5-20250929");
+
+      // Both the budget *and* the client's own adaptive block have to go: a
+      // budget-based target 400s on `{type:"adaptive"}` just as it does on a
+      // budget above max_tokens.
+      expect(result.thinking).toBeUndefined();
+      expect(result.output_config).toBeUndefined();
+      expect(result.max_tokens).toBe(maxTokens);
+    }
+
+    // One token of headroom is enough to keep a real thinking block.
+    const usable = rewritten({
+      model: "claude-opus-4-8",
+      max_tokens: 1025,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" }
+    }, "claude-sonnet-4-5-20250929");
+    expect(usable.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+  });
 });
 
 describe("Claude model role classification", () => {
