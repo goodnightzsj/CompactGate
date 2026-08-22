@@ -1,6 +1,6 @@
 import type { CompactGateConfig } from "../shared/types.js";
 import {
-  candidateSignature,
+  candidateSignatures,
   codexPrimaryCandidates
 } from "./primary-failover-candidates.js";
 import { normalizeRequestContext } from "./primary-failover-context.js";
@@ -48,7 +48,7 @@ interface PrimaryFailoverOptions {
 }
 
 export class PrimaryFailoverState {
-  private signature = "";
+  private signatures = new Map<string, string>();
   private generation = 0;
   private forcedProfileId: string | null = null;
   private readonly health: PrimaryProfileHealthStore;
@@ -228,7 +228,20 @@ export class PrimaryFailoverState {
     return this.stickiness.findProfileId(normalizeRequestContext(context));
   }
 
-  forceNextProfileSelection(profileId: string): void {
+  /**
+   * Applying a codex profile means "move everyone onto it", so dropping the
+   * existing pins is intended. Only do it for a profile that can actually be
+   * selected — a profile with no `primary` block is never a candidate, and
+   * clearing every session's pin for one that can never win costs them all a
+   * prompt cache for nothing.
+   */
+  forceNextProfileSelection(config: CompactGateConfig, profileId: string): void {
+    const isCandidate = codexPrimaryCandidates(config)
+      .some((candidate) => candidate.id === profileId);
+    if (!isCandidate) {
+      return;
+    }
+
     this.stickiness.clear();
     this.forcedProfileId = profileId;
   }
@@ -250,12 +263,23 @@ export class PrimaryFailoverState {
       };
     }
 
-    const signature = candidateSignature(candidates);
-    if (signature !== this.signature) {
-      this.signature = signature;
+    const signatures = candidateSignatures(candidates);
+    const changedProfileIds = new Set<string>();
+    for (const [profileId, signature] of signatures) {
+      const previous = this.signatures.get(profileId);
+      if (previous !== undefined && previous !== signature) {
+        changedProfileIds.add(profileId);
+      }
+    }
+    this.signatures = signatures;
+    if (changedProfileIds.size > 0) {
+      // The generation still moves for everyone: an in-flight selection was
+      // computed against the old candidate set, so its result can no longer be
+      // attributed safely. Only the profiles that actually changed lose their
+      // health record and their pins.
       this.generation += 1;
-      this.health.clear();
-      this.stickiness.clear();
+      this.health.forgetProfiles(changedProfileIds);
+      this.stickiness.forgetProfiles(changedProfileIds);
     }
 
     this.health.reconcile(candidates);

@@ -658,7 +658,7 @@ describe("PrimaryFailoverState", () => {
 
     // The operator tops the account up and applies profile A, which forces one
     // request onto it. That request succeeds, which is proof it works again.
-    state.forceNextProfileSelection("codex-a");
+    state.forceNextProfileSelection(config, "codex-a");
     const forced = selectAndReserve(state, config, { model: "gpt-5.5" });
     expect(forced.profileId).toBe("codex-a");
     state.recordResult(forced, 200, null);
@@ -678,7 +678,7 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gone-1" }).profileId).toBe("codex-b");
     expect(state.preview(config, { model: "gone-2" }).profileId).toBe("codex-b");
 
-    state.forceNextProfileSelection("codex-a");
+    state.forceNextProfileSelection(config, "codex-a");
     const forced = selectAndReserve(state, config, { model: "gone-1" });
     state.recordResult(forced, 200, null);
 

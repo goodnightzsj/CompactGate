@@ -37,7 +37,21 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
 }
 
 export function candidateSignature(candidates: PrimaryCandidate[]): string {
-  const candidateParts = candidates.map((candidate) => [
+  return candidates.map((candidate) => profileSignature(candidate)).join("::");
+}
+
+/**
+ * One signature per profile rather than one for the whole set. Health and
+ * stickiness are per profile, so a change to profile B must only invalidate
+ * B — collapsing them into a single string made rotating one credential wipe
+ * every session's account pin and un-quarantine unrelated broken accounts.
+ */
+export function candidateSignatures(candidates: PrimaryCandidate[]): Map<string, string> {
+  return new Map(candidates.map((candidate) => [candidate.id, profileSignature(candidate)]));
+}
+
+function profileSignature(candidate: PrimaryCandidate): string {
+  return [
     candidate.id,
     candidate.config.primary.base_url,
     candidate.config.primary.api_key_env,
@@ -47,8 +61,7 @@ export function candidateSignature(candidates: PrimaryCandidate[]): string {
     candidate.config.primary.state_domain_id,
     primaryTransportSignature(candidate.config.primary),
     primaryCredentialSignature(candidate.config)
-  ].join("|"));
-  return candidateParts.join("::");
+  ].join("|");
 }
 
 function primaryTransportSignature(primary: CompactGateConfig["primary"]): string {

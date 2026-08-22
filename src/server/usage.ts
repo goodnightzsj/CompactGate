@@ -16,8 +16,6 @@ export {
 } from "./usage-request.js";
 import { sseDataFrames } from "./sse-frames.js";
 
-const EMPTY_USAGE = emptyUsageMetrics();
-
 export function emptyUsageMetrics(): TokenUsageMetrics {
   return {
     inputTokens: null,
@@ -41,12 +39,12 @@ export function extractResponseUsage(
   headers: IncomingHttpHeaders = {}
 ): TokenUsageMetrics {
   if (responseBody.byteLength === 0) {
-    return EMPTY_USAGE;
+    return emptyUsageMetrics();
   }
 
   const text = decodeResponseText(responseBody, headers);
   if (!text) {
-    return EMPTY_USAGE;
+    return emptyUsageMetrics();
   }
 
   const contentType = readHeader(headers["content-type"])?.toLowerCase() ?? "";
@@ -54,7 +52,7 @@ export function extractResponseUsage(
     ? extractSseUsage(text)
     : extractUsageFromJsonText(text);
 
-  return usage ?? EMPTY_USAGE;
+  return usage ?? emptyUsageMetrics();
 }
 
 export function hasTokenUsage(usage: TokenUsageMetrics | null | undefined): boolean {

@@ -38,6 +38,21 @@ export class PrimaryStickinessStore {
     this.compactionStateStickiness.clear();
   }
 
+  /** Drop only the pins that point at the given profiles. */
+  forgetProfiles(profileIds: Set<string>): void {
+    for (const map of [
+      this.sessionStickiness,
+      this.continuationStickiness,
+      this.compactionStateStickiness
+    ]) {
+      for (const [key, entry] of map.entries()) {
+        if (profileIds.has(entry.profileId)) {
+          map.delete(key);
+        }
+      }
+    }
+  }
+
   selectProfileId(
     context: Required<PrimaryRouteRequestContext>,
     isUsable: (profileId: string) => boolean

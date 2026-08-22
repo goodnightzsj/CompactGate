@@ -140,9 +140,9 @@ export class CompactionBridgeStore {
     rememberMapEntry(this.compactResponsesByKey, compactDedupeKey(input), {
       status: response.status,
       responseBody: Buffer.from(response.responseBody),
-      responseHeaders: { ...response.responseHeaders },
+      responseHeaders: withoutSessionHeaders(response.responseHeaders),
       clientResponseBody: Buffer.from(response.clientResponseBody),
-      clientResponseHeaders: { ...response.clientResponseHeaders },
+      clientResponseHeaders: withoutSessionHeaders(response.clientResponseHeaders),
       compactResponseNormalized: response.compactResponseNormalized,
       compactResponseNormalizeReason: response.compactResponseNormalizeReason,
       compactResponseSyntheticSource: response.compactResponseSyntheticSource,
@@ -292,6 +292,15 @@ function compactionKey(scope: CompactionBridgeScope, encryptedContent: string): 
     scope.targetModel ?? "",
     encryptedContent
   ]);
+}
+
+/**
+ * The dedupe cache is shared across sessions by construction, so a replay must
+ * not hand a later request the identity the upstream minted for an earlier one.
+ */
+function withoutSessionHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
+  const { "set-cookie": _setCookie, ...rest } = headers;
+  return rest;
 }
 
 function compactDedupeKey(input: CompactResponseDedupeInput): string {

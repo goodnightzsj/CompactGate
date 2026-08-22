@@ -165,9 +165,9 @@ export async function handleConfigApi(
     );
     const scope = readProfileScope(body, url);
     const profileId = readProfileId(body, "apply");
-    await configStore.applyProfile(scope, profileId);
+    const applied = await configStore.applyProfile(scope, profileId);
     if (scope === "codex") {
-      primaryFailover.forceNextProfileSelection(profileId);
+      primaryFailover.forceNextProfileSelection(applied, profileId);
     }
     broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, true);
     sendJson(res, 200, configStore.toPublicConfig());

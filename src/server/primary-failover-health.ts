@@ -47,6 +47,12 @@ export class PrimaryProfileHealthStore {
     this.health.clear();
   }
 
+  forgetProfiles(profileIds: Iterable<string>): void {
+    for (const profileId of profileIds) {
+      this.health.delete(profileId);
+    }
+  }
+
   get(profileId: string): ProfileHealth | null {
     return this.health.get(profileId) ?? null;
   }
