@@ -208,7 +208,7 @@ export function formToPatch(form: ConfigFormState) {
     },
     logging: {
       persist_body: form.loggingPersistBody,
-      keep_recent: form.loggingKeepRecent,
+      keep_recent: atLeast(form.loggingKeepRecent, 1),
       capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
       capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
       capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
@@ -457,8 +457,20 @@ function normalizedCaptureDir(value: string): string | null {
   return captureDir.length > 0 ? captureDir : null;
 }
 
+/**
+ * Clamped, because an emptied `<input type="number">` reads as `""` and
+ * `Number("")` is 0 — which the server rejects for every one of these limits, so
+ * a momentarily blank box would fail the *whole* PATCH over a field the operator
+ * was not editing. Clamping here rather than in the input keeps clear-and-retype
+ * working: forcing the minimum into the box left a leading digit that silently
+ * multiplied whatever was typed next.
+ */
 function bytesFromUnit(value: number, unitBytes: number): number {
-  return Math.round(value * unitBytes);
+  return Math.max(1, Math.round(atLeast(value, 0) * unitBytes));
+}
+
+function atLeast(value: number, minimum: number): number {
+  return Number.isFinite(value) && value > minimum ? value : minimum;
 }
 
 function normalizeRouteUrl(value: string): string {

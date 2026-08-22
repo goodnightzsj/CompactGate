@@ -62,6 +62,11 @@ export function AnalyticsDashboardPage() {
   const rangeLabel = PRESETS.find((item) => item.value === displayedPreset)?.label ?? "所选范围";
   const oneMinute = stats.data?.overview?.recent.one_minute;
   const fiveMinutes = stats.data?.overview?.recent.five_minutes;
+  // The bucket is the natural day containing the range end, and the page only
+  // refetches on a range change or a manual refresh. A dashboard left open past
+  // midnight, or pointed at a past range, kept labelling that bucket 今日 while
+  // it no longer was one.
+  const dayLabel = overviewDayLabel(stats.data?.overview?.today.from ?? null);
 
   function selectPreset(next: AnalyticsPreset) {
     setPreset(next);
@@ -111,14 +116,14 @@ export function AnalyticsDashboardPage() {
                 label: `${rangeLabel}请求`,
                 value: formatCompactMetricNumber(stats.data.summary.requests),
                 exactValue: formatMetricNumber(stats.data.summary.requests),
-                meta: `今日 ${formatCompactMetricNumber(stats.data.overview?.today.summary.requests ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.requests ?? 0)}`,
+                meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.requests ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.requests ?? 0)}`,
                 tone: "is-request"
               },
               {
                 label: `${rangeLabel} Token`,
                 value: formatCompactMetricNumber(stats.data.summary.total_tokens),
                 exactValue: formatMetricNumber(stats.data.summary.total_tokens),
-                meta: `今日 ${formatCompactMetricNumber(stats.data.overview?.today.summary.total_tokens ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.total_tokens ?? 0)}`,
+                meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.total_tokens ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.total_tokens ?? 0)}`,
                 tone: "is-token"
               },
               {
@@ -280,4 +285,28 @@ export function AnalyticsDashboardPage() {
 
 function roundMetric(value: number | null): number | null {
   return value === null ? null : Math.round(value);
+}
+
+/**
+ * Names the natural-day bucket the overview returned. Says 今日 only while that
+ * bucket really is the viewer's current local day.
+ */
+function overviewDayLabel(from: string | null): string {
+  if (!from) {
+    return "今日";
+  }
+
+  const bucketDay = new Date(from);
+  if (Number.isNaN(bucketDay.getTime())) {
+    return "今日";
+  }
+
+  const now = new Date();
+  const sameDay =
+    bucketDay.getFullYear() === now.getFullYear() &&
+    bucketDay.getMonth() === now.getMonth() &&
+    bucketDay.getDate() === now.getDate();
+  return sameDay
+    ? "今日"
+    : `${bucketDay.getMonth() + 1}/${bucketDay.getDate()}`;
 }

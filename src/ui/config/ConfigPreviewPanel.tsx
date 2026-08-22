@@ -12,7 +12,8 @@ export function ConfigPreviewPanel({
   onPathChange,
   onBodyChange,
   onHeadersChange,
-  onPreviewSubmit
+  onPreviewSubmit,
+  onPreviewClear
 }: {
   previewPath: string;
   previewBody: string;
@@ -23,6 +24,7 @@ export function ConfigPreviewPanel({
   onBodyChange: (body: string) => void;
   onHeadersChange: (headers: string) => void;
   onPreviewSubmit: (event: React.FormEvent) => void;
+  onPreviewClear: () => void;
 }) {
   return (
     <div className="config-preview-panel">
@@ -44,7 +46,14 @@ export function ConfigPreviewPanel({
         <textarea className="textarea config-preview-body" value={previewHeaders} onChange={(event) => onHeadersChange(event.target.value)} rows={3} spellCheck={false} />
       </div>
       {previewError && <div className="error-banner">{previewError}</div>}
-      <button className="btn btn-primary" onClick={onPreviewSubmit}>预览路由</button>
+      <div className="config-preview-actions">
+        <button className="btn btn-primary" onClick={onPreviewSubmit}>预览路由</button>
+        {preview && (
+          <button type="button" className="btn btn-sm" onClick={onPreviewClear}>
+            清除预览
+          </button>
+        )}
+      </div>
       {preview && (
         <div className="config-preview-result">
           <div><span className="field-hint">路由</span><div><span className={`route-chip ${preview.route}`}>{routeLabel(preview.route)}</span></div></div>

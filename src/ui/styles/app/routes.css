@@ -245,3 +245,16 @@
   background: var(--jade-soft);
   color: var(--muted);
 }
+
+/* Shown when the config page holds an unsaved draft: this page describes the
+   rules already in force, not the draft. */
+.route-draft-notice {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: var(--amber-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}

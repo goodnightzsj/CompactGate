@@ -10,15 +10,20 @@ export function ConfigSaveBar({
   config,
   saveState,
   saveError,
+  saveConflict,
   hasPendingChanges,
   onSaveConfig,
+  onOverrideSaveConflict,
   onSaveProfileAsNew
 }: {
   config: PublicConfig | null;
   saveState: SaveState;
   saveError: string | null;
+  /** The save was refused because someone else wrote since this draft was built. */
+  saveConflict: boolean;
   hasPendingChanges: boolean;
   onSaveConfig: (event: React.FormEvent) => void;
+  onOverrideSaveConflict: (event: React.FormEvent) => void;
   onSaveProfileAsNew: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
 }) {
   const [asNewOpen, setAsNewOpen] = useState(false);
@@ -26,7 +31,22 @@ export function ConfigSaveBar({
 
   return (
     <aside className={`config-save-bar ${hasPendingChanges ? "is-dirty" : ""}`} aria-label="配置保存">
-      {saveError && <div className="error-banner config-save-error">{saveError}</div>}
+      {saveError && (
+        <div className="error-banner config-save-error">
+          <span>{saveError}</span>
+          {saveConflict && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={saveState === "saving"}
+              title="保留当前草稿，按服务端最新版本重新保存。对方的改动会被本次保存覆盖。"
+              onClick={onOverrideSaveConflict}
+            >
+              仍然保存我的草稿
+            </button>
+          )}
+        </div>
+      )}
       <div className="config-save-copy" aria-live="polite">
         <strong>{saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}</strong>
         <span>{applyTarget.hint}</span>

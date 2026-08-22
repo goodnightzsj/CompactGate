@@ -480,6 +480,17 @@
 
 .config-save-error {
   grid-column: 1 / -1;
+  /* Carries an optional conflict-override action, so text and button share a row
+     without the button shrinking away on a narrow viewport. */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.config-save-error > button {
+  flex: 0 0 auto;
 }
 
 .profile-apply-button:disabled {
@@ -1266,6 +1277,19 @@
   background: var(--accent-soft);
   color: var(--ink);
 }
+
+/* An option's `tone` names what the row is about — the route it filters or the
+   outcome it selects. Without these the prop rendered a class nothing matched,
+   so the filter menus were uniformly grey while the rows they filter are not. */
+.custom-select-option[class*="is-"]:where(.is-ok, .is-err, .is-codex, .is-compact, .is-claude) {
+  border-left: 3px solid transparent;
+}
+
+.custom-select-option.is-ok { border-left-color: var(--forest); }
+.custom-select-option.is-err { border-left-color: var(--brick); }
+.custom-select-option.is-codex { border-left-color: var(--accent); }
+.custom-select-option.is-compact { border-left-color: var(--amber); }
+.custom-select-option.is-claude { border-left-color: var(--jade); }
 
 /* Model configuration is one continuous workspace, split by routing responsibility. */
 .model-config-workspace {

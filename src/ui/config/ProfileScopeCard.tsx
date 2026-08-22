@@ -60,9 +60,16 @@ export function ProfileScopeCard({
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [createMode, setCreateMode] = useState(false);
   const [overwriteCandidate, setOverwriteCandidate] = useState<ProfileOverwriteCandidate | null>(null);
+  // The rename path had no collision guard of its own, so it sent the PATCH and
+  // surfaced the server's raw English "Profile name already exists."
+  const [nameConflict, setNameConflict] = useState<string | null>(null);
   useEffect(() => {
     setCreateMode(false);
+    setNameConflict(null);
   }, [selectedProfileId]);
+  useEffect(() => {
+    setNameConflict(null);
+  }, [profileName]);
   const scopeState = config ? profileScopeState(config, scope) : { profiles: [], active_profile_id: null };
   const profiles = scopeState.profiles;
   const activeProfile = profiles.find((profile) => profile.id === scopeState.active_profile_id) ?? null;
@@ -115,7 +122,12 @@ export function ProfileScopeCard({
     const named = trimmedName
       ? profiles.find((profile) => profile.name === trimmedName) ?? null
       : null;
+    setNameConflict(null);
     if (!createMode && selectedProfile) {
+      if (named && named.id !== selectedProfile.id) {
+        setNameConflict(`已存在名为「${trimmedName}」的档案。请改用其他名称，或先选中那个档案再保存。`);
+        return;
+      }
       await onUpdateProfile(scope, selectedProfile.id);
       return;
     }
@@ -376,6 +388,7 @@ export function ProfileScopeCard({
         <span>{profileActionLabel(profileState)}</span>
       </div>
 
+      {nameConflict && <p className="error-note">{nameConflict}</p>}
       {profileError && <p className="error-note">{profileError}</p>}
 
       {overwriteCandidate && (

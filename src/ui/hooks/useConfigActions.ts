@@ -21,7 +21,9 @@ export function useConfigActions({
   form,
   linkedCompactModel,
   draftRevision,
+  formRevision,
   commitConfig,
+  rebaseFormRevision,
   setConfig,
   setForm,
   setHealth,
@@ -31,7 +33,9 @@ export function useConfigActions({
   form: ConfigFormState;
   linkedCompactModel: string;
   draftRevision: number;
+  formRevision: string | null;
   commitConfig: (config: PublicConfig, submittedRevision: number) => void;
+  rebaseFormRevision: () => void;
   setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
   setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
@@ -40,6 +44,10 @@ export function useConfigActions({
   const routePreview = useRoutePreviewAction();
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  // A save refused for a superseded revision is the one error the operator can
+  // resolve without losing the draft, so it gets its own affordance instead of a
+  // dead end that only a browser reload clears.
+  const [saveConflict, setSaveConflict] = useState(false);
   const {
     claudeProfileError,
     claudeProfileName,
@@ -58,6 +66,7 @@ export function useConfigActions({
   const persistenceActions = createConfigProfilePersistenceActions({
     config,
     form,
+    formRevision,
     setConfig,
     setForm,
     setHealth,
@@ -113,19 +122,16 @@ export function useConfigActions({
     window.setTimeout(() => setSaveState("idle"), 1600);
   }
 
-  async function saveConfig(event: FormEvent) {
-    event.preventDefault();
+  async function submitConfigPatch(revision: string | null | undefined) {
     const submittedRevision = draftRevision;
     setSaveState("saving");
     setSaveError(null);
+    setSaveConflict(false);
 
     try {
       const nextConfig = await api<PublicConfig>("/api/config", {
         method: "PATCH",
-        // Pin the snapshot this form was built from: another tab may have
-        // applied a different profile since, and the patch still carries this
-        // form's base_url while omitting the untouched api_key.
-        body: JSON.stringify({ ...formToPatch(form), revision: config?.revision })
+        body: JSON.stringify({ ...formToPatch(form), revision })
       });
       const nextHealth = await api<HealthResponse>("/api/health", {
         method: "GET"
@@ -135,9 +141,31 @@ export function useConfigActions({
       setSaveState("saved");
       window.setTimeout(() => setSaveState("idle"), 1400);
     } catch (error) {
+      const summary = errorSummary(error);
       setSaveState("error");
-      setSaveError(errorSummary(error));
+      setSaveError(summary);
+      setSaveConflict(/superseded revision/i.test(summary));
     }
+  }
+
+  async function saveConfig(event: FormEvent) {
+    event.preventDefault();
+    // Pin the snapshot this form was built from — `formRevision`, not
+    // `config.revision`: a snapshot broadcast by another tab refreshes the
+    // baseline while this draft survives, and sending the refreshed value would
+    // let the server accept the very lost update the guard rejects.
+    await submitConfigPatch(formRevision);
+  }
+
+  /**
+   * The operator read the conflict and chose their draft anyway. Saves against
+   * the current server revision and re-pins the draft to it, so this is a
+   * deliberate one-click override rather than a state the only reload clears.
+   */
+  async function overrideSaveConflict(event: FormEvent) {
+    event.preventDefault();
+    rebaseFormRevision();
+    await submitConfigPatch(config?.revision);
   }
 
   function unlockCompactModel() {
@@ -169,8 +197,10 @@ export function useConfigActions({
     profileError,
     profileName,
     profileState,
+    overrideSaveConflict,
     restoreLinkedMode,
     saveConfig,
+    saveConflict,
     saveError,
     saveState,
     selectedClaudeProfileId,

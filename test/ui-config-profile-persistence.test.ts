@@ -49,6 +49,7 @@ describe("config profile persistence", () => {
     const actions = createConfigProfilePersistenceActions({
       config: null,
       form: currentForm,
+      formRevision: null,
       setConfig: vi.fn(),
       setForm: vi.fn(),
       setHealth: vi.fn(),
@@ -110,6 +111,7 @@ describe("config profile persistence", () => {
     const actions = createConfigProfilePersistenceActions({
       config: renamedConfig,
       form: emptyForm(),
+      formRevision: null,
       setConfig: vi.fn(),
       setForm: vi.fn(),
       setHealth: vi.fn(),
@@ -173,6 +175,7 @@ describe("config profile persistence", () => {
     const actions = createConfigProfilePersistenceActions({
       config: serverConfig,
       form: draft,
+      formRevision: null,
       setConfig: vi.fn(),
       setForm,
       setHealth: vi.fn(),

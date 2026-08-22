@@ -70,8 +70,10 @@ function renderSaveBar(hasPendingChanges: boolean): string {
       config={null}
       saveState="idle"
       saveError={null}
+      saveConflict={false}
       hasPendingChanges={hasPendingChanges}
       onSaveConfig={() => undefined}
+      onOverrideSaveConflict={() => undefined}
       onSaveProfileAsNew={() => Promise.resolve(true)}
     />
   );

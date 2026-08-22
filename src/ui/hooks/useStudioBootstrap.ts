@@ -14,8 +14,18 @@ export function useStudioBootstrap(pageMode: PageMode) {
   );
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [bootstrapFailed, setBootstrapFailed] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const bootstrapScope = studioBootstrapScope(pageMode);
   const healthMode = bootstrapScope === "health";
+  /**
+   * The load effect only re-runs when the bootstrap scope changes, so a failure
+   * during a proxy restart left the operator with an error banner, whatever
+   * stale data was already rendered, and no way forward but a browser reload.
+   */
+  const retryBootstrap = useCallback(() => {
+    setReloadToken((token) => token + 1);
+  }, []);
   const setConfig = useCallback<React.Dispatch<React.SetStateAction<PublicConfig | null>>>(
     (value) => dispatchConfig({ type: "set_config", value }),
     []
@@ -29,6 +39,9 @@ export function useStudioBootstrap(pageMode: PageMode) {
   }, []);
   const commitConfig = useCallback((config: PublicConfig, submittedRevision: number) => {
     dispatchConfig({ type: "commit_config", config, submittedRevision });
+  }, []);
+  const rebaseFormRevision = useCallback(() => {
+    dispatchConfig({ type: "rebase_form_revision" });
   }, []);
 
   useEffect(() => {
@@ -45,6 +58,7 @@ export function useStudioBootstrap(pageMode: PageMode) {
 
           setHealth(nextHealth);
           setPageError(null);
+          setBootstrapFailed(false);
           return;
         }
 
@@ -60,9 +74,11 @@ export function useStudioBootstrap(pageMode: PageMode) {
         dispatchConfig({ type: "bootstrap", config: nextConfig });
         setHealth(nextHealth);
         setPageError(null);
+        setBootstrapFailed(false);
       } catch (error) {
         if (!cancelled) {
           setPageError(errorSummary(error));
+          setBootstrapFailed(true);
         }
       }
     }
@@ -71,7 +87,7 @@ export function useStudioBootstrap(pageMode: PageMode) {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapScope, healthMode]);
+  }, [bootstrapScope, healthMode, reloadToken]);
 
   return {
     config: configState.config,
@@ -81,10 +97,14 @@ export function useStudioBootstrap(pageMode: PageMode) {
     form: configState.form,
     setForm,
     draftRevision: configState.draftRevision,
+    formRevision: configState.formRevision,
     applyRemoteConfig,
     commitConfig,
     pageError,
-    setPageError
+    setPageError,
+    retryBootstrap,
+    rebaseFormRevision,
+    bootstrapFailed
   };
 }
 

@@ -36,7 +36,8 @@ describe("route preview request ordering", () => {
         onPathChange: () => undefined,
         onBodyChange: () => undefined,
         onHeadersChange: () => undefined,
-        onPreviewSubmit: () => undefined
+        onPreviewSubmit: () => undefined,
+    onPreviewClear: () => undefined
       })
     );
 

@@ -38,6 +38,20 @@
   font-weight: 600;
 }
 
+/* The page-level banner carries a retry, so it needs the text and the action on
+   one row without the action shrinking away on a narrow viewport. */
+.page-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.page-error-banner > button {
+  flex: 0 0 auto;
+}
+
 /* ═══════════════════════════════════════════════════
    Theme Switch
    ═══════════════════════════════════════════════════ */

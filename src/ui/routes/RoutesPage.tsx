@@ -15,6 +15,7 @@ export function RoutesPage({
   currentModel,
   compactModel,
   compactMode,
+  hasPendingChanges,
   activeRoute,
   activeCompactionMode,
   activeRouteSource,
@@ -25,6 +26,7 @@ export function RoutesPage({
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
+  hasPendingChanges: boolean;
   activeRoute: RouteKind | null;
   activeCompactionMode: OpenAiCompactionMode | null;
   activeRouteSource: RouteHitSource;
@@ -47,6 +49,12 @@ export function RoutesPage({
           {formatRouteHitStatus(activeRoute, activeRouteSource, latestLog)}
         </span>
       </div>
+
+      {hasPendingChanges && (
+        <p className="route-draft-notice" role="status">
+          配置页有未保存的改动。下面显示的是当前已生效的规则，保存后才会变化。
+        </p>
+      )}
 
       <CodexProtocolStatus status={codexStatus} />
 

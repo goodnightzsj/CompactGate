@@ -16,6 +16,9 @@ export type StudioPageOutletProps = {
   healthPage: ComponentProps<typeof HealthPage>;
   logsPage: ComponentProps<typeof LogsPage>;
   pageError: string | null;
+  /** True when the failed refresh left previously loaded data on screen. */
+  hasStaleData: boolean;
+  onRetry: () => void;
   routesPage: ComponentProps<typeof RoutesPage>;
 };
 
@@ -27,6 +30,8 @@ export function StudioPageOutlet({
   healthPage,
   logsPage,
   pageError,
+  hasStaleData,
+  onRetry,
   routesPage
 }: StudioPageOutletProps) {
   if (healthMode) {
@@ -35,7 +40,17 @@ export function StudioPageOutlet({
 
   return (
     <div className={`page-appear ${currentPage === "logs" ? "page-appear-logs" : ""}`}>
-      {pageError && <div className="error-banner">{pageError}</div>}
+      {pageError && (
+        <div className="error-banner page-error-banner" role="alert">
+          <span>
+            {pageError}
+            {hasStaleData && " 下面显示的是上次成功加载的数据。"}
+          </span>
+          <button type="button" className="btn btn-sm" onClick={onRetry}>
+            重试
+          </button>
+        </div>
+      )}
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}
 

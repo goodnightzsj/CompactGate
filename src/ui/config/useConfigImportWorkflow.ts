@@ -60,6 +60,10 @@ export function useConfigImportWorkflow({
 
     try {
       await onImportConfig(importCandidate.config);
+      // Drop the candidate: leaving it set kept the "about to import" summary and
+      // a live "overwrite current config" button on screen next to the success
+      // line, so one more click silently re-imported the same file.
+      setImportCandidate(null);
       setImportState("imported");
     } catch (error) {
       setImportState("error");

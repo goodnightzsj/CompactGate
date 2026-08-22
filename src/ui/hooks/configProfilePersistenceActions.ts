@@ -12,6 +12,7 @@ import type { ScopedProfileAccessors } from "./useScopedProfileControls.js";
 export function createConfigProfilePersistenceActions({
   config,
   form,
+  formRevision,
   setConfig,
   setForm,
   setHealth,
@@ -21,6 +22,7 @@ export function createConfigProfilePersistenceActions({
 }: {
   config: PublicConfig | null;
   form: ConfigFormState;
+  formRevision: string | null;
   setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
   setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
@@ -50,6 +52,10 @@ export function createConfigProfilePersistenceActions({
         body: JSON.stringify({
           scope,
           name: trimmedName,
+          // Carries a form draft, so it needs the same lost-update guard as
+          // PATCH /api/config. `applySelectedProfile` deliberately omits it:
+          // it sends no draft, only a profile id.
+          revision: formRevision,
           config: formToPatch(formOverride ?? form)
         })
       });
@@ -60,13 +66,17 @@ export function createConfigProfilePersistenceActions({
       const savedProfileIsActive = Boolean(
         savedProfile?.id && savedProfile.id === nextScope.active_profile_id
       );
-      const nextHealth = savedProfileIsActive
-        ? await api<HealthResponse>("/api/health", { method: "GET" })
-        : null;
 
+      // The write already landed on the server, so commit it before touching
+      // anything that can fail. Letting a health-probe error fall to the catch
+      // block used to leave the UI showing the pre-save profile while the file
+      // on disk had already changed.
       setConfig(nextConfig);
-      if (nextHealth) {
-        setHealth(nextHealth);
+      if (savedProfileIsActive) {
+        const nextHealth = await fetchHealthOrNull();
+        if (nextHealth) {
+          setHealth(nextHealth);
+        }
         // Only the saved scope round-tripped through the server; rebuilding the
         // whole form here would revert untouched draft fields.
         setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
@@ -106,14 +116,14 @@ export function createConfigProfilePersistenceActions({
           profile_id: targetProfileId
         })
       });
-      const nextHealth = await api<HealthResponse>("/api/health", {
-        method: "GET"
-      });
+      const nextHealth = await fetchHealthOrNull();
       const nextScope = profileScopeState(nextConfig, scope);
       const nextActiveProfileId = nextScope.active_profile_id ?? targetProfileId;
 
       setConfig(nextConfig);
-      setHealth(nextHealth);
+      if (nextHealth) {
+        setHealth(nextHealth);
+      }
       setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
       accessors.setSelectedId(nextActiveProfileId);
       accessors.setName(nextScope.profiles.find((profile) => profile.id === nextActiveProfileId)?.name ?? "");
@@ -157,19 +167,20 @@ export function createConfigProfilePersistenceActions({
         body: JSON.stringify({
           scope,
           profile_id: targetProfileId,
+          revision: formRevision,
           ...(trimmedName ? { name: trimmedName } : {}),
           config: formToPatch(form)
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);
       const profileIsActive = targetProfileId === nextScope.active_profile_id;
-      const nextHealth = profileIsActive
-        ? await api<HealthResponse>("/api/health", { method: "GET" })
-        : null;
 
       setConfig(nextConfig);
-      if (nextHealth) {
-        setHealth(nextHealth);
+      if (profileIsActive) {
+        const nextHealth = await fetchHealthOrNull();
+        if (nextHealth) {
+          setHealth(nextHealth);
+        }
         setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
         setSaveError(null);
         setSaveState("saved");
@@ -190,4 +201,17 @@ export function createConfigProfilePersistenceActions({
     saveConfigProfile,
     updateSelectedProfile
   };
+}
+
+/**
+ * The health probe is a read-only follow-up to a write that already succeeded.
+ * Letting it reject would abandon the config the server just returned, so the
+ * UI would keep rendering the pre-write state.
+ */
+async function fetchHealthOrNull(): Promise<HealthResponse | null> {
+  try {
+    return await api<HealthResponse>("/api/health", { method: "GET" });
+  } catch {
+    return null;
+  }
 }

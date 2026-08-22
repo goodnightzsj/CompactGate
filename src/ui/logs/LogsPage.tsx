@@ -159,8 +159,8 @@ export function LogsPage({
           value={statusFilter}
           options={[
             { value: "all", label: "全部", count: statusCounts.all },
-            { value: "normal", label: "正常", count: statusCounts.normal, tone: "is-ok" },
-            { value: "error", label: "错误", count: statusCounts.error, tone: "is-err" }
+            { value: "normal", label: "正常", count: statusCounts.normal, tone: "ok" },
+            { value: "error", label: "错误", count: statusCounts.error, tone: "err" }
           ]}
           onChange={(value) => onStatusFilterChange(value as "all" | LogStatusKind)}
         />

@@ -142,6 +142,7 @@ export function ConfigPage({
                 onBodyChange={actions.setPreviewBody}
                 onHeadersChange={actions.setPreviewHeaders}
                 onPreviewSubmit={actions.previewRoute}
+                onPreviewClear={actions.clearPreview}
               />
             )}
 
@@ -164,8 +165,10 @@ export function ConfigPage({
           config={config}
           saveState={actions.saveState}
           saveError={actions.saveError}
+          saveConflict={actions.saveConflict}
           hasPendingChanges={hasPendingChanges}
           onSaveConfig={actions.saveConfig}
+          onOverrideSaveConflict={actions.overrideSaveConflict}
           onSaveProfileAsNew={actions.saveConfigProfile}
         />
       </div>

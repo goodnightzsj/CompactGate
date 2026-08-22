@@ -40,10 +40,14 @@ export function useStudioPageModels({
     form,
     setForm,
     draftRevision,
+    formRevision,
     applyRemoteConfig,
     commitConfig,
     pageError,
-    setPageError
+    setPageError,
+    retryBootstrap,
+    rebaseFormRevision,
+    bootstrapFailed
   } = useStudioBootstrap(pageMode);
   const hasConfig = config !== null;
   const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
@@ -79,7 +83,9 @@ export function useStudioPageModels({
     form,
     linkedCompactModel,
     draftRevision,
+    formRevision,
     commitConfig,
+    rebaseFormRevision,
     setConfig,
     setForm,
     setHealth,
@@ -91,12 +97,28 @@ export function useStudioPageModels({
   const hasPendingChanges = useMemo(() => {
     return config ? isFormDirty(config, form) : false;
   }, [config, form]);
+  // The routes page describes what the proxy is doing right now, so it reads the
+  // saved config rather than the draft. Feeding it the form mixed unsaved model
+  // names with the saved hosts beside them and presented the result as the live
+  // rules; `hasPendingChanges` is passed through so the page can say so.
+  const savedCompactModel = useMemo(() => {
+    if (!config) {
+      return effectiveCompactModel;
+    }
+    return config.compact.model_mode === "linked"
+      ? renderLinkedModel(config.primary.model_override ?? "", config.compact.model_template)
+      : config.compact.model_override || "手动模型";
+  }, [config, effectiveCompactModel]);
 
   return {
     pageOutlet: {
       currentPage,
       healthMode,
       pageError,
+      onRetry: retryBootstrap,
+      // Only the load path leaves stale data on screen; other page errors (a
+      // failed export, say) sit over data that is perfectly current.
+      hasStaleData: hasConfig && bootstrapFailed,
       healthPage: {
         health,
         error: pageError,
@@ -114,9 +136,10 @@ export function useStudioPageModels({
       },
       routesPage: {
         config,
-        currentModel: form.primaryModelOverride,
-        compactModel: effectiveCompactModel,
-        compactMode: form.upstreamMode,
+        currentModel: config?.primary.model_override ?? form.primaryModelOverride,
+        compactModel: savedCompactModel,
+        compactMode: config?.compact.upstream_mode ?? form.upstreamMode,
+        hasPendingChanges,
         activeRoute: previewRoute ?? latestLog?.route ?? null,
         activeCompactionMode: previewRoute
           ? configActions.preview?.compaction_mode ?? null

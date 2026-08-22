@@ -42,6 +42,17 @@ export function useRoutePreviewAction() {
     }
   }
 
+  /**
+   * A preview outranks the newest real request on the routes page, so without a
+   * way to drop it the page kept showing a hypothetical route forever — every
+   * subsequent real request was invisible there until a reload.
+   */
+  function clearPreview() {
+    requestIdRef.current += 1;
+    setPreview(null);
+    setPreviewError(null);
+  }
+
   return {
     preview,
     previewBody,
@@ -49,6 +60,7 @@ export function useRoutePreviewAction() {
     previewHeaders,
     previewPath,
     previewRoute,
+    clearPreview,
     setPreviewBody,
     setPreviewHeaders,
     setPreviewPath
