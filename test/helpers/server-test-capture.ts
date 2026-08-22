@@ -101,8 +101,16 @@ export async function readCaptureRecords(dir: string) {
   );
 }
 
+/**
+ * Captures are written asynchronously after the response is sent, so every
+ * assertion about one has to wait for the file. The budget is generous because
+ * the whole suite runs 80+ files in parallel: the old 20 × 25ms = 500ms ceiling
+ * expired under load and returned an empty list, which surfaced as a confusing
+ * `undefined` destructure rather than a timeout, and a false failure like that
+ * hides real ones. A capture that lands promptly still returns on the first poll.
+ */
 export async function waitForCaptureRecords(dir: string, minCount: number) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const records = await readCaptureRecords(dir);
     if (records.length >= minCount) {
       return records;

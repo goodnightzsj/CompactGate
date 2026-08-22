@@ -21,7 +21,7 @@ import { proxyOpenAiRequest } from "./openai-proxy.js";
 import { PrimaryFailoverState } from "./primary-failover.js";
 import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
-import { StudioEventBroadcaster } from "./studio-events.js";
+import { createStudioSnapshot, StudioEventBroadcaster } from "./studio-events.js";
 import { CodexVersionMonitor } from "./codex-version.js";
 
 export function createRequestLogger(configStore: ConfigStore): RequestLogger {
@@ -36,18 +36,37 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
   );
 }
 
+/**
+ * Past this many rows in one prune pass, converge open Studios with a single
+ * snapshot instead of one `update` frame each. Lowering the directory cap can
+ * purge the entire capture directory at once, and the per-row loop wrote every
+ * frame synchronously to every connected client.
+ */
+const CAPTURE_PURGE_SNAPSHOT_THRESHOLD = 50;
+
 function createDebugCaptureWriter(
   configStore: ConfigStore,
   logger: RequestLogger,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  codexVersionMonitor: CodexVersionMonitor
 ): DebugCaptureWriter {
   const config = configStore.get();
   return DebugCaptureWriter.fromConfig(
     config.logging.capture_dir,
     config.logging.capture_body_max_bytes,
     config.logging.capture_dir_max_bytes,
-    (capturePath) => {
-      for (const entry of logger.markCapturePurged(capturePath)) {
+    (capturePaths) => {
+      const entries = capturePaths.flatMap((capturePath) => logger.markCapturePurged(capturePath));
+      if (entries.length === 0) {
+        return;
+      }
+
+      if (entries.length > CAPTURE_PURGE_SNAPSHOT_THRESHOLD) {
+        studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
+        return;
+      }
+
+      for (const entry of entries) {
         studioEvents.broadcastLog(entry, "update");
       }
     }
@@ -64,7 +83,8 @@ export function createCompactGateServer(
 ): http.Server {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
-    captureWriter ?? createDebugCaptureWriter(configStore, actualLogger, studioEvents);
+    captureWriter ??
+    createDebugCaptureWriter(configStore, actualLogger, studioEvents, codexVersionMonitor);
   const primaryFailover = new PrimaryFailoverState();
   codexVersionMonitor.start();
   const server = http.createServer((req, res) => {

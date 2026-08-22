@@ -45,15 +45,21 @@ export class DebugCaptureWriter {
     private captureDir: string | null,
     private maxBodyBytes: number,
     private maxDirBytes: number,
-    private readonly onCapturePurged: (capturePath: string) => void = () => {}
+    /**
+     * Called once per prune pass with every capture it deleted, not once per
+     * file: lowering the directory cap can purge the whole directory, and a
+     * per-file callback turned that into thousands of individual SQLite updates
+     * and SSE frames written synchronously to every open Studio.
+     */
+    private readonly onCapturesPurged: (capturePaths: string[]) => void = () => {}
   ) {}
 
-  static fromEnv(onCapturePurged?: (capturePath: string) => void): DebugCaptureWriter {
+  static fromEnv(onCapturesPurged?: (capturePaths: string[]) => void): DebugCaptureWriter {
     return DebugCaptureWriter.fromConfig(
       null,
       DEFAULT_MAX_CAPTURE_BODY_BYTES,
       DEFAULT_MAX_CAPTURE_DIR_BYTES,
-      onCapturePurged
+      onCapturesPurged
     );
   }
 
@@ -61,13 +67,13 @@ export class DebugCaptureWriter {
     captureDir: string | null,
     maxBodyBytes = DEFAULT_MAX_CAPTURE_BODY_BYTES,
     maxDirBytes = DEFAULT_MAX_CAPTURE_DIR_BYTES,
-    onCapturePurged?: (capturePath: string) => void
+    onCapturesPurged?: (capturePaths: string[]) => void
   ): DebugCaptureWriter {
     const writer = new DebugCaptureWriter(
       null,
       DEFAULT_MAX_CAPTURE_BODY_BYTES,
       DEFAULT_MAX_CAPTURE_DIR_BYTES,
-      onCapturePurged ?? (() => {})
+      onCapturesPurged ?? (() => {})
     );
     writer.configure(captureDir, maxBodyBytes, maxDirBytes);
     return writer;
@@ -244,6 +250,7 @@ export class DebugCaptureWriter {
       });
 
       let totalBytes = fileSizes.reduce((sum, f) => sum + f.size, 0);
+      const purgedPaths: string[] = [];
 
       for (const file of fileSizes) {
         if (totalBytes <= maxDirBytes) {
@@ -255,13 +262,18 @@ export class DebugCaptureWriter {
         try {
           await unlink(file.path);
           totalBytes -= file.size;
-          try {
-            this.onCapturePurged(file.path);
-          } catch {
-            // Capture deletion succeeded; callback failures must not over-prune.
-          }
+          purgedPaths.push(file.path);
         } catch {
           // Ignore unlink errors
+        }
+      }
+
+      if (purgedPaths.length > 0) {
+        try {
+          this.onCapturesPurged(purgedPaths);
+        } catch {
+          // The files are already gone; a notification failure must not make the
+          // next pass delete more to compensate.
         }
       }
     } catch {

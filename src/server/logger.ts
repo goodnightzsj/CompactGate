@@ -47,6 +47,8 @@ export interface RequestLoggerOptions {
 export const DEFAULT_MAX_LOG_DATABASE_BYTES = 1024 * 1024 * 1024;
 
 const STORAGE_PRUNE_DELETE_FRACTION = 0.1;
+/** Ceiling on one pass's delete, so a wildly over-cap database still keeps recent rows. */
+const STORAGE_PRUNE_MAX_DELETE_FRACTION = 0.9;
 const STORAGE_PRUNE_MIN_DELETE_ROWS = 100;
 const STORAGE_PRUNE_MAX_PASSES = 20;
 const PROVIDER_STATE_BINDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -923,21 +925,38 @@ export class RequestLogger {
       }
 
       let passes = 0;
-      while (
-        this.databaseFootprintBytes() > this.maxDatabaseBytes &&
-        passes < STORAGE_PRUNE_MAX_PASSES
-      ) {
+      while (passes < STORAGE_PRUNE_MAX_PASSES) {
+        // Checkpoint before measuring. The prune runs right after inserts, when
+        // the WAL is at its fullest, and the footprint counts it — so a database
+        // already under its cap can measure far over it, and the overshoot-based
+        // delete below would then throw away rows in proportion to WAL bytes
+        // that deleting rows cannot shrink.
+        this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        const footprint = this.databaseFootprintBytes();
+        if (footprint <= this.maxDatabaseBytes) {
+          return;
+        }
+
         const rowCount = this.persistedRowCount();
         if (rowCount <= 1) {
           this.reclaimSqliteStorage();
           return;
         }
 
+        // Size the delete from how far over the cap we are, so one reclaim does
+        // the work. A flat 10% per pass needed up to 20 passes, and every pass
+        // ran a VACUUM — which rewrites the whole database file synchronously on
+        // `node:sqlite`. At the 1 GiB default that was minutes of blocked event
+        // loop, i.e. minutes of stalled proxying, right when the disk is full.
+        const overshootFraction = 1 - this.maxDatabaseBytes / footprint;
         const rowsToDelete = Math.min(
           rowCount - 1,
           Math.max(
             STORAGE_PRUNE_MIN_DELETE_ROWS,
-            Math.ceil(rowCount * STORAGE_PRUNE_DELETE_FRACTION)
+            Math.ceil(rowCount * Math.min(
+              STORAGE_PRUNE_MAX_DELETE_FRACTION,
+              overshootFraction + STORAGE_PRUNE_DELETE_FRACTION
+            ))
           )
         );
         this.deleteOldestPersistedRows(rowsToDelete);
