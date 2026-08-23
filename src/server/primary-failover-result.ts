@@ -95,7 +95,11 @@ export function isReconnectLikePrimaryFailure(status: number, errorSummary: stri
 
 export function rateLimitCooldownMs(result: PrimaryRouteResult, failureCount: number, now: number): number {
   const retryAfterMs = parseRetryAfterMs(result.responseHeaders, now);
-  if (retryAfterMs !== null) {
+  // A `Retry-After: 0` (or an already-past date) used to mean *no* cooldown at
+  // all, so a profile that had just crossed the 11-failure rate-limit threshold
+  // was immediately eligible again and kept absorbing 429s. Zero is not a
+  // meaningful instruction to a scheduler; fall back to the backoff.
+  if (retryAfterMs !== null && retryAfterMs > 0) {
     return Math.min(RATE_LIMIT_MAX_MS, retryAfterMs);
   }
 

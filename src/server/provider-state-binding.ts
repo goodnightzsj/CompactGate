@@ -32,3 +32,34 @@ export function hashProviderStateIdentity(kind: string, value: string): string {
     .update(value)
     .digest("hex")}`;
 }
+
+/**
+ * The stable identity for "this conversation", used by the two-strike recovery
+ * evidence counter and by the logged `conversation hash`.
+ *
+ * Deliberately not `providerStateBindingIdentityHashes()[0]`: that array is ordered
+ * by *specificity* for binding lookup and therefore leads with
+ * `previous_response_id`, which is the least stable identity available — it changes
+ * every turn. Keying the 10-minute counter on it meant the second strike could only
+ * ever come from retrying the same turn, so the threshold was unreachable in a
+ * normal conversation, and every turn of one conversation logged a different
+ * conversation hash. Preferring the session key also stops the identity from
+ * silently switching the first time a `compaction` item appears mid-conversation,
+ * which reset the counter.
+ */
+export function providerStateConversationHash(
+  context: PrimaryRouteRequestContext
+): string | null {
+  const identities: Array<[string, string | null | undefined]> = [
+    ["session", context.sessionKey],
+    ["compaction", context.compactionStateKey],
+    ["continuation", context.previousResponseId]
+  ];
+  for (const [kind, value] of identities) {
+    const normalized = value?.trim();
+    if (normalized) {
+      return hashProviderStateIdentity(kind, normalized);
+    }
+  }
+  return null;
+}

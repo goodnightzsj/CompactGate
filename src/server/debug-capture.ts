@@ -16,6 +16,10 @@ export type CaptureReadResult =
   | { status: "unavailable" };
 
 const DEFAULT_MAX_CAPTURE_BODY_BYTES = 8 * 1024 * 1024;
+/** How far below the cap the in-memory estimate must sit to skip a full scan. */
+const PRUNE_SCAN_SKIP_MARGIN = 0.9;
+/** Longest a write-triggered prune may trust the in-memory estimate. */
+const PRUNE_SCAN_MAX_SKIP_MS = 60_000;
 const DEFAULT_MAX_CAPTURE_DIR_BYTES = 20 * 1024 * 1024 * 1024;
 const CAPTURE_FILE_PREFIX = "compactgate-capture-";
 const MAX_CAPTURE_FILENAME_CHARS = 240;
@@ -29,6 +33,10 @@ export class DebugCaptureWriter {
   private sequence = 0;
 
   private readonly protectedCapturePaths = new Set<string>();
+
+  private readonly directoryByteEstimates = new Map<string, number>();
+
+  private readonly lastPruneScanAt = new Map<string, number>();
 
   private readonly maxDirBytesByCaptureDir = new Map<string, number>();
 
@@ -171,6 +179,7 @@ export class DebugCaptureWriter {
     } finally {
       this.protectedCapturePaths.delete(absolutePath);
       const effectiveMaxDirBytes = this.maxDirBytesByCaptureDir.get(captureDir) ?? this.maxDirBytes;
+      this.addToDirectoryByteEstimate(captureDir, Buffer.byteLength(JSON.stringify(record, null, 2)) + 1);
       void this.requestPrune(captureDir, effectiveMaxDirBytes);
     }
   }
@@ -181,10 +190,52 @@ export class DebugCaptureWriter {
       return Promise.resolve();
     }
 
-    return this.requestPrune(captureDir, this.maxDirBytes);
+    // An explicit prune never trusts the estimate. It is the "actually check now"
+    // entry point — `configure` calls it before any capture exists, and a config
+    // change calls it after the cap moves — so skipping here let a directory that
+    // this process did not fill (captures left by an earlier run, a second
+    // instance, files dropped in by hand) stay unbounded forever.
+    return this.requestPrune(captureDir, this.maxDirBytes, { trustEstimate: false });
   }
 
-  private requestPrune(captureDir: string, maxDirBytes: number): Promise<void> {
+  /**
+   * Tracks the directory's size in memory so the common case can skip the scan.
+   * Every capture write used to trigger a full `readdir` plus a `stat` per file —
+   * measured 300 ms for a 10,000-file directory — even when the total was nowhere
+   * near the cap, and the default 20 GiB cap makes tens of thousands of files a
+   * normal steady state. The estimate is only ever used to decide whether a scan
+   * is needed; a scan always recomputes the true total, so drift self-corrects.
+   */
+  private addToDirectoryByteEstimate(captureDir: string, bytes: number): void {
+    const known = this.directoryByteEstimates.get(captureDir);
+    if (known !== undefined) {
+      this.directoryByteEstimates.set(captureDir, known + bytes);
+    }
+  }
+
+  private canSkipPruneScan(captureDir: string, maxDirBytes: number): boolean {
+    const known = this.directoryByteEstimates.get(captureDir);
+    if (known === undefined || known > maxDirBytes * PRUNE_SCAN_SKIP_MARGIN) {
+      return false;
+    }
+
+    // Bounded staleness as well as a margin. The estimate only counts what this
+    // writer wrote, so anything else adding files would otherwise go unseen for as
+    // long as our own total stayed under the cap; a forced rescan every interval
+    // caps how far the directory can drift past it.
+    const lastScanAt = this.lastPruneScanAt.get(captureDir) ?? 0;
+    return Date.now() - lastScanAt < PRUNE_SCAN_MAX_SKIP_MS;
+  }
+
+  private requestPrune(
+    captureDir: string,
+    maxDirBytes: number,
+    options: { trustEstimate?: boolean } = {}
+  ): Promise<void> {
+    if (options.trustEstimate !== false && this.canSkipPruneScan(captureDir, maxDirBytes)) {
+      return Promise.resolve();
+    }
+
     let state = this.pruneStates.get(captureDir);
     if (!state) {
       state = {
@@ -251,6 +302,8 @@ export class DebugCaptureWriter {
 
       let totalBytes = fileSizes.reduce((sum, f) => sum + f.size, 0);
       const purgedPaths: string[] = [];
+      this.directoryByteEstimates.set(captureDir, totalBytes);
+      this.lastPruneScanAt.set(captureDir, Date.now());
 
       for (const file of fileSizes) {
         if (totalBytes <= maxDirBytes) {
@@ -262,6 +315,7 @@ export class DebugCaptureWriter {
         try {
           await unlink(file.path);
           totalBytes -= file.size;
+          this.directoryByteEstimates.set(captureDir, totalBytes);
           purgedPaths.push(file.path);
         } catch {
           // Ignore unlink errors

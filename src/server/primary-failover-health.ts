@@ -102,6 +102,14 @@ export class PrimaryProfileHealthStore {
     enforceMaxEntries(health.modelCooldowns, this.maxModelCooldownEntries);
   }
 
+  /**
+   * Shares the model-cooldown bound, since both are keyed by the same
+   * client-supplied model string and neither has a TTL to fall back on.
+   */
+  enforceModelFailureBound(health: ProfileHealth): void {
+    enforceMaxEntries(health.modelIncompatibleFailuresByModel, this.maxModelCooldownEntries);
+  }
+
   blockedUntil(profileId: string, model: string | null, now: number): number {
     const health = this.forProfile(profileId);
     const modelCooldown = model ? health.modelCooldowns.get(model)?.until ?? 0 : 0;

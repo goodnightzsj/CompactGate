@@ -51,9 +51,14 @@ const STORAGE_PRUNE_DELETE_FRACTION = 0.1;
 const STORAGE_PRUNE_MAX_DELETE_FRACTION = 0.9;
 const STORAGE_PRUNE_MIN_DELETE_ROWS = 100;
 const STORAGE_PRUNE_MAX_PASSES = 20;
+/** Under SQLite's bound-parameter ceiling, with room to spare on older builds. */
+const CAPTURE_PURGE_CHUNK_SIZE = 400;
 const PROVIDER_STATE_BINDING_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_PROVIDER_STATE_BINDINGS = 8_192;
 const MAX_PROVIDER_STATE_RECOVERY_EVIDENCE = 8_192;
+const PROVIDER_STATE_EXPIRY_SWEEP_INTERVAL_MS = 60_000;
+const DATABASE_SIZE_CHECK_INTERVAL_MS = 30_000;
+const RESPONSE_MODEL_BACKFILL_BATCH_ROWS = 200;
 
 /**
  * Rows whose response_model_source is derivable as 'target_fallback'.
@@ -105,6 +110,10 @@ export class RequestLogger {
 
   private sizeWarningIssued = false;
 
+  private lastProviderStateSweepAt = 0;
+
+  private lastDatabaseSizeCheckAt = 0;
+
   constructor(
     private keepRecent: number,
     databasePath: string,
@@ -137,6 +146,9 @@ export class RequestLogger {
     this.keepRecent = options.keepRecent;
     this.maxDatabaseBytes = normalizeMaxDatabaseBytes(options.maxDatabaseBytes);
     this.sizeWarningIssued = false;
+    // An explicit reconfigure is an operator action, so let its size check run now
+    // rather than waiting out the sampling interval.
+    this.lastDatabaseSizeCheckAt = 0;
     this.requestStoragePrune();
     this.checkDatabaseSize();
   }
@@ -159,7 +171,7 @@ export class RequestLogger {
       return null;
     }
 
-    this.db.prepare("DELETE FROM provider_state_bindings WHERE expires_at <= ?").run(now);
+    this.sweepExpiredProviderState(now);
     const query = this.db.prepare(`
       SELECT state_domain_id, profile_id, generation, expires_at
       FROM provider_state_bindings
@@ -243,12 +255,32 @@ export class RequestLogger {
   }
 
   hasProviderStateRecoveryEvidence(evidenceKey: string, now = Date.now()): boolean {
-    this.db.prepare("DELETE FROM provider_state_recovery_evidence WHERE expires_at <= ?").run(now);
+    this.sweepExpiredProviderState(now);
     return Boolean(this.db.prepare(`
       SELECT 1
       FROM provider_state_recovery_evidence
       WHERE evidence_key = ? AND expires_at > ?
     `).get(evidenceKey, now));
+  }
+
+  /**
+   * Housekeeping only, so it is rate-limited rather than run per read. Both read
+   * paths already filter on `expires_at > now`, so correctness never depended on
+   * the delete — but each one was a WAL write transaction plus an fsync, twice per
+   * primary request, on the hot path.
+   */
+  private sweepExpiredProviderState(now: number): void {
+    if (now - this.lastProviderStateSweepAt < PROVIDER_STATE_EXPIRY_SWEEP_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastProviderStateSweepAt = now;
+    try {
+      this.db.prepare("DELETE FROM provider_state_bindings WHERE expires_at <= ?").run(now);
+      this.db.prepare("DELETE FROM provider_state_recovery_evidence WHERE expires_at <= ?").run(now);
+    } catch (error) {
+      this.recordPersistenceFailure("sweep expired provider state", error);
+    }
   }
 
   rememberProviderStateRecoveryEvidence(
@@ -711,43 +743,62 @@ export class RequestLogger {
     );
   }
 
+  /**
+   * Walked in id-ordered batches rather than read whole. `.all()` pulled *both*
+   * stored bodies of every pending row into memory at once, which with
+   * `persist_body=true` scales to the database size cap — a startup-time spike
+   * measured in the same order as the 1 GiB default. The cursor advances past rows
+   * whose extraction found nothing, so a batch cannot repeat; those rows are
+   * re-examined on the next startup, which is bounded work and the reason the
+   * batch size is small.
+   */
   private backfillResponseModels(): void {
-    const rows = this.db
-      .prepare(
-        `
-          SELECT id, upstream_response_body, client_response_body
-          FROM request_logs
-          WHERE response_model IS NULL
-            AND (
-              (upstream_response_body IS NOT NULL AND length(upstream_response_body) > 0) OR
-              (client_response_body IS NOT NULL AND length(client_response_body) > 0)
-            )
-        `
-      )
-      .all() as Array<{
-        id: number;
-        upstream_response_body: string | null;
-        client_response_body: string | null;
-      }>;
-
-    if (rows.length === 0) {
-      return;
-    }
-
+    const select = this.db.prepare(
+      `
+        SELECT id, upstream_response_body, client_response_body
+        FROM request_logs
+        WHERE response_model IS NULL
+          AND id > ?
+          AND (
+            (upstream_response_body IS NOT NULL AND length(upstream_response_body) > 0) OR
+            (client_response_body IS NOT NULL AND length(client_response_body) > 0)
+          )
+        ORDER BY id
+        LIMIT ?
+      `
+    );
     const update = this.db.prepare("UPDATE request_logs SET response_model = ? WHERE id = ?");
-    this.db.exec("BEGIN");
+    let cursor = 0;
+
     try {
-      for (const row of rows) {
-        const responseModel =
-          extractResponseModelFromText(row.upstream_response_body ?? "") ??
-          extractResponseModelFromText(row.client_response_body ?? "");
-        if (responseModel) {
-          update.run(responseModel, row.id);
+      for (;;) {
+        const rows = select.all(cursor, RESPONSE_MODEL_BACKFILL_BATCH_ROWS) as Array<{
+          id: number;
+          upstream_response_body: string | null;
+          client_response_body: string | null;
+        }>;
+        if (rows.length === 0) {
+          return;
         }
+
+        this.db.exec("BEGIN");
+        try {
+          for (const row of rows) {
+            const responseModel =
+              extractResponseModelFromText(row.upstream_response_body ?? "") ??
+              extractResponseModelFromText(row.client_response_body ?? "");
+            if (responseModel) {
+              update.run(responseModel, row.id);
+            }
+          }
+          this.db.exec("COMMIT");
+        } catch (error) {
+          this.db.exec("ROLLBACK");
+          throw error;
+        }
+        cursor = rows[rows.length - 1].id;
       }
-      this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
       this.recordPersistenceFailure("backfill response models", error);
       console.error(`Failed to backfill response models in ${this.databasePath}.`, error);
     }
@@ -824,9 +875,13 @@ export class RequestLogger {
     };
 
     for (const row of rows) {
+      // Accumulated, not assigned: `normalizeRoute` folds an unrecognised route
+      // into `primary`, so two facet rows can land in the same bucket and the
+      // second used to overwrite the first, leaving `all` disagreeing with the
+      // sum of its parts.
       const route = normalizeRoute(row.route);
       const count = readCount(row);
-      counts[route] = count;
+      counts[route] += count;
       counts.all += count;
     }
 
@@ -858,9 +913,10 @@ export class RequestLogger {
     };
 
     for (const row of rows) {
+      // Accumulated for the same reason as the route buckets above.
       const status = normalizeLogStatus(row.status_kind);
       const count = readCount(row);
-      counts[status] = count;
+      counts[status] += count;
       counts.all += count;
     }
 
@@ -1034,33 +1090,63 @@ export class RequestLogger {
   }
 
   markCapturePurged(capturePath: string): RequestLogEntry[] {
+    return this.markCapturesPurged([capturePath], 1);
+  }
+
+  /**
+   * Batched on purpose. Doing this one path at a time meant a fresh `prepare` plus
+   * a full-column `SELECT` plus another `prepare` and `UPDATE` per file, all
+   * synchronous on the event loop — measured 489 ms for 5,000 rows, so lowering
+   * `capture_dir_max_bytes` on a large directory froze proxying for seconds.
+   * Batching only the SSE frames fixed half of that stall and left this half.
+   *
+   * `maxEntries` skips the expensive row read entirely when the caller is going to
+   * discard the entries and broadcast one snapshot instead: those full-row SELECTs
+   * previously ran and were thrown away in exactly the case that hurt most.
+   */
+  markCapturesPurged(capturePaths: string[], maxEntries: number): RequestLogEntry[] {
+    if (capturePaths.length === 0) {
+      return [];
+    }
+
+    const wantEntries = capturePaths.length <= maxEntries;
+    const purged: RequestLogEntry[] = [];
     try {
-      const entries = (
-        this.db
+      // Chunked under SQLite's bound-parameter ceiling, which a 20 GiB directory
+      // purge would otherwise blow straight through.
+      for (let offset = 0; offset < capturePaths.length; offset += CAPTURE_PURGE_CHUNK_SIZE) {
+        const chunk = capturePaths.slice(offset, offset + CAPTURE_PURGE_CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(",");
+        const entries = wantEntries
+          ? (
+            this.db
+              .prepare(
+                `
+                  SELECT ${RECENT_LOG_FIELDS}
+                  FROM request_logs
+                  WHERE capture_path IN (${placeholders})
+                `
+              )
+              .all(...chunk) as Array<Record<string, unknown>>
+          ).map(rowToLogEntry)
+          : [];
+        const result = this.db
           .prepare(
-            `
-              SELECT ${RECENT_LOG_FIELDS}
-              FROM request_logs
-              WHERE capture_path = ?
-            `
+            `UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE capture_path IN (${placeholders})`
           )
-          .all(capturePath) as Array<Record<string, unknown>>
-      ).map(rowToLogEntry);
-      const result = this.db
-        .prepare(
-          "UPDATE request_logs SET capture_path = NULL, capture_status = 'purged' WHERE capture_path = ?"
-        )
-        .run(capturePath);
-      if (Number(result.changes) === 0) {
-        return [];
+          .run(...chunk);
+        if (Number(result.changes) === 0) {
+          continue;
+        }
+        purged.push(...entries.map((entry) => ({
+          ...entry,
+          capture_path: null,
+          capture_status: "purged" as const
+        })));
       }
-      return entries.map((entry) => ({
-        ...entry,
-        capture_path: null,
-        capture_status: "purged"
-      }));
+      return purged;
     } catch (error) {
-      this.recordPersistenceFailure("mark capture purged", error);
+      this.recordPersistenceFailure("mark captures purged", error);
       return [];
     }
   }
@@ -1106,10 +1192,18 @@ export class RequestLogger {
     }
   }
 
-  private checkDatabaseSize(): void {
+  private checkDatabaseSize(now = Date.now()): void {
     if (this.sizeWarningIssued) {
       return;
     }
+    // Rate-limited: this runs on every log insert and each call is three
+    // synchronous `statSync` calls (db + -wal + -shm). It only exists to print a
+    // one-shot warning, so sampling it costs nothing but the exact moment the
+    // warning appears.
+    if (now - this.lastDatabaseSizeCheckAt < DATABASE_SIZE_CHECK_INTERVAL_MS) {
+      return;
+    }
+    this.lastDatabaseSizeCheckAt = now;
     const sizeBytes = this.databaseFootprintBytes();
     const oneGB = 1024 * 1024 * 1024;
     if (sizeBytes >= oneGB) {

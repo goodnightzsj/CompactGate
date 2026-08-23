@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BufferedUpstreamResult } from "./upstream-client.js";
-import { decodeBodyText } from "./http-utils.js";
+import { decodeBodyText, isRecord, parseJsonRecord } from "./http-utils.js";
 import { providerStateErrorCode } from "./provider-state-portability.js";
 
 export interface ProviderStateTargetScope {
@@ -82,20 +82,65 @@ export function isEligibleGenericProviderStateFailure(
     return false;
   }
 
-  return !isUnavailableResourceFailure(summary, "model") &&
-    !isUnavailableResourceFailure(summary, "endpoint");
+  return !isUnavailableResourceFailure(summary, result);
 }
 
-function isUnavailableResourceFailure(summary: string, resource: "model" | "endpoint"): boolean {
-  return summary.includes(resource) && [
-    "not found",
-    "does not exist",
-    "unavailable",
-    "unsupported",
-    "not supported",
-    "invalid",
-    "unknown"
-  ].some((pattern) => summary.includes(pattern));
+/**
+ * Matched against the upstream's error *code* rather than its prose. A code is a
+ * single short token, so co-occurrence carries no risk there and the separator is
+ * whatever the provider chose — `model_not_found`, `unsupported-endpoint`,
+ * `invalidModel`. Enumerating the codes missed whichever spelling was not on the
+ * list.
+ */
+const RESOURCE_UNAVAILABLE_CODE = new RegExp([
+  "(?:model|endpoint)[ _-]?(?:not[ _-]?found|not[ _-]?supported|unsupported|invalid|unknown|does[ _-]?not[ _-]?exist)",
+  "|(?:no[ _-]?such|unknown|unsupported|invalid|nonexistent|missing)[ _-]?(?:model|endpoint)"
+].join(""), "i");
+
+/**
+ * The resource word and the unavailability word have to be *attached to each
+ * other* — at most one identifier token apart — not merely present somewhere in
+ * the same response.
+ *
+ * A bag-of-words match over `errorSummary + whole body` excluded exactly the
+ * failures this layer exists for. A request always names a model and relays
+ * routinely echo it, so `502 "bad gateway while calling model gpt-5.6-sol;
+ * upstream unavailable"` and `400 "Invalid 'input[59].encrypted_content' for model
+ * gpt-5.6-sol"` both read as "the model is unavailable": `startGenericRecovery`
+ * returned null, and the request died with the raw upstream error instead of
+ * getting a CPA or a strict retry. Same failure shape as hashing the response body
+ * for the legacy key — green on synthetic fixtures, dead on real bodies.
+ *
+ * The identifier token may contain dots, because model ids do (`gpt-4.1`); what
+ * must not appear between the two is punctuation joining separate clauses. Erring
+ * toward not-excluding is the safe direction: a wrong exclusion means recovery
+ * never runs at all, while a wrong inclusion costs one attempt that then fails the
+ * same way.
+ */
+const RESOURCE_UNAVAILABLE_PHRASE = new RegExp([
+  "(?:model|endpoint)\\s*(?:['\"`]?[\\w.:/-]+['\"`]?\\s*)?(?:is\\s+|was\\s+)?",
+  "(?:not found|does not exist|unavailable|unsupported|not supported|invalid|unknown)",
+  "|(?:no such|unknown|unsupported|invalid|nonexistent)\\s+(?:model|endpoint)"
+].join(""));
+
+function isUnavailableResourceFailure(summary: string, result: BufferedUpstreamResult): boolean {
+  const code = readUpstreamErrorCode(result.responseBody);
+  if (code && RESOURCE_UNAVAILABLE_CODE.test(code)) {
+    return true;
+  }
+
+  return RESOURCE_UNAVAILABLE_PHRASE.test(summary);
+}
+
+function readUpstreamErrorCode(responseBody: Buffer): string | null {
+  const parsed = parseJsonRecord(responseBody);
+  const error = isRecord(parsed?.error) ? parsed.error : null;
+  for (const candidate of [error?.code, error?.type, parsed?.code, parsed?.type]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim().toLowerCase();
+    }
+  }
+  return null;
 }
 
 function hashEvidenceKey(kind: string, parts: string[]): string {

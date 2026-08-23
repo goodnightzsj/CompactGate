@@ -93,8 +93,16 @@ export class StudioEventBroadcaster {
   }
 
   private broadcast(event: "log" | "snapshot", payload: StudioLogEvent | StudioSnapshotEvent): void {
+    if (this.clients.size === 0) {
+      return;
+    }
+
+    // Serialized once for the whole fan-out. A snapshot carries a full
+    // `keep_recent` page, so stringifying it per client repeated megabytes of work
+    // for every open Studio tab.
+    const frame = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of [...this.clients]) {
-      if (!writeSseEvent(client.res, event, payload)) {
+      if (!writeSseFrame(client.res, frame)) {
         this.disposeClient(client);
       }
     }
@@ -135,24 +143,47 @@ function writeSseEvent(
   event: "log" | "snapshot",
   payload: StudioLogEvent | StudioSnapshotEvent
 ): boolean {
+  return writeSseFrame(res, `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+function writeSseFrame(res: ServerResponse, frame: string): boolean {
   if (res.destroyed || res.writableEnded) {
     return false;
   }
 
   try {
-    return (
-      writeSseChunk(res, `event: ${event}\n`) &&
-      writeSseChunk(res, `data: ${JSON.stringify(payload)}\n\n`)
-    );
+    return writeSseChunk(res, frame);
   } catch {
     return false;
   }
 }
 
+/**
+ * A snapshot carries a whole `keep_recent` log page — up to 2000 rows — so a
+ * client that has stopped reading (a suspended laptop, a zero-window socket)
+ * accumulates megabytes per broadcast. `res.write()` returning false is
+ * backpressure rather than failure and never throws, so treating the write as
+ * successful meant nothing reaped that client and nothing bounded its buffer: a
+ * single dead tab held 41 MB after 40 broadcasts, and the keep-alive comment kept
+ * "succeeding" into the same buffer forever.
+ *
+ * The cap is generous enough to absorb several ordinary snapshots back to back.
+ * Past it the client is dropped, which is what the documented contract already
+ * said happens on a failed write — Studio reconnects on its own and gets a fresh
+ * snapshot, so the cost of being wrong here is one reconnect.
+ */
+const MAX_STUDIO_EVENT_CLIENT_BUFFER_BYTES = 8 * 1024 * 1024;
+
 function writeSseChunk(res: ServerResponse, chunk: string): boolean {
   try {
     res.write(chunk);
-    return true;
+    // Backpressure by itself must NOT drop the client: a slow but healthy tab
+    // returns false routinely, and disconnecting on the first false would churn
+    // every such tab. Only a buffer that has actually grown past the cap counts.
+    // An unmeasurable buffer keeps the client — never disconnect over a number we
+    // could not read.
+    const buffered = res.writableLength;
+    return typeof buffered !== "number" || buffered <= MAX_STUDIO_EVENT_CLIENT_BUFFER_BYTES;
   } catch {
     return false;
   }

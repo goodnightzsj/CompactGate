@@ -86,7 +86,10 @@ import {
   type ProviderStateRecoveryTrigger,
   type ProviderStateMigrationResult
 } from "./provider-state-migration.js";
-import { providerStateBindingIdentityHashes } from "./provider-state-binding.js";
+import {
+  providerStateBindingIdentityHashes,
+  providerStateConversationHash
+} from "./provider-state-binding.js";
 import {
   hashStateDomain,
   stateDomainForPrimary,
@@ -297,6 +300,7 @@ async function proxyPrimaryRequest(
       "x-compactgate-request-id": requestId
     };
     const bindingIdentityHashes = providerStateBindingIdentityHashes(primaryRequestContext);
+    const conversationIdentityHash = providerStateConversationHash(primaryRequestContext);
     const persistedBinding = logger.findProviderStateBinding(bindingIdentityHashes);
     const sourceProfileId = persistedBinding?.profileId ?? inMemorySourceProfileId;
     const sourceStateDomain = persistedBinding?.stateDomainId ??
@@ -339,7 +343,7 @@ async function proxyPrimaryRequest(
                 ? null
                 : "profile_switch_failure";
             }
-            const conversationHash = bindingIdentityHashes[0];
+            const conversationHash = conversationIdentityHash;
             if (!conversationHash) {
               return null;
             }
@@ -403,7 +407,7 @@ async function proxyPrimaryRequest(
     }
     providerStatePortability = buildProviderStatePortabilityLog({
       enabled: recoveryEnabled,
-      conversationHash: bindingIdentityHashes[0] ?? null,
+      conversationHash: conversationIdentityHash,
       sourceProfileId,
       targetProfileId: primarySelection?.profileId ?? null,
       sourceStateDomain,

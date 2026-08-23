@@ -551,8 +551,10 @@ describe("CompactGate HTTP basics", () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(res.writableEnded).toBe(true);
+    // Each event is one write now, so the snapshot's single write succeeds and the
+    // throwing write is the one the next broadcast makes.
     expect(res.body).toContain("event: snapshot");
+    expect(res.writableEnded).toBe(false);
 
     broadcaster.broadcastLog({
       time: new Date().toISOString(),
@@ -597,6 +599,7 @@ describe("CompactGate HTTP basics", () => {
     });
 
     expect(res.writeCount).toBe(2);
+    expect(res.writableEnded).toBe(true);
     broadcaster.close();
   });
 

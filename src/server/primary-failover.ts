@@ -211,6 +211,13 @@ export class PrimaryFailoverState {
         const modelFailureKey = model ?? "";
         const modelFailures = (health.modelIncompatibleFailuresByModel.get(modelFailureKey) ?? 0) + 1;
         health.modelIncompatibleFailuresByModel.set(modelFailureKey, modelFailures);
+        // Bounded like every other per-model map in this state. Keyed by the
+        // client-supplied model string, this was the one map with neither a size
+        // cap nor an expiry: entries leave only by reaching the threshold or by a
+        // non-stale success clearing the whole map, so a client sending varying
+        // model names against an upstream that answers "model not found" grew it
+        // for the process's lifetime.
+        this.health.enforceModelFailureBound(health);
         if (modelFailures >= FAILOVER_FAILURE_THRESHOLD) {
           if (model) {
             this.health.rememberModelCooldown(health, model, {

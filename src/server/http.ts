@@ -56,13 +56,12 @@ function createDebugCaptureWriter(
     config.logging.capture_body_max_bytes,
     config.logging.capture_dir_max_bytes,
     (capturePaths) => {
-      const entries = capturePaths.flatMap((capturePath) => logger.markCapturePurged(capturePath));
-      if (entries.length === 0) {
+      const entries = logger.markCapturesPurged(capturePaths, CAPTURE_PURGE_SNAPSHOT_THRESHOLD);
+      if (capturePaths.length > CAPTURE_PURGE_SNAPSHOT_THRESHOLD) {
+        studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
         return;
       }
-
-      if (entries.length > CAPTURE_PURGE_SNAPSHOT_THRESHOLD) {
-        studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
+      if (entries.length === 0) {
         return;
       }
 
