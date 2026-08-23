@@ -10,12 +10,16 @@ export function saveLabel(state: SaveState, hasPendingChanges: boolean, savedAt?
     return "刚刚保存";
   }
 
-  if (state === "error") {
-    return "保存失败";
-  }
-
+  // Pending changes outrank a past failure, matching `saveButtonLabel`, which has
+  // no error branch at all and already reads "保存到当前档案并应用" here. The two
+  // used to contradict each other for as long as the draft stayed dirty, and the
+  // reason for the failure is on the error banner either way.
   if (hasPendingChanges) {
     return "有未保存更改";
+  }
+
+  if (state === "error") {
+    return "保存失败";
   }
 
   return savedAt ? `已保存 ${formatClock(savedAt)}` : "使用默认配置";

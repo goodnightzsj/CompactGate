@@ -20,6 +20,13 @@ export interface StudioConfigState {
    * reject.
    */
   formRevision: string | null;
+  /** The page-level banner text, whatever produced it. */
+  pageError: string | null;
+  /**
+   * The last bootstrap load failed, so whatever is rendered below the banner is
+   * the previous successful load rather than current data.
+   */
+  bootstrapFailed: boolean;
 }
 
 export type StudioConfigAction =
@@ -28,13 +35,18 @@ export type StudioConfigAction =
   | { type: "set_form"; value: SetStateAction<ConfigFormState> }
   | { type: "remote_config"; config: PublicConfig }
   | { type: "rebase_form_revision" }
-  | { type: "commit_config"; config: PublicConfig; submittedRevision: number };
+  | { type: "commit_config"; config: PublicConfig; submittedRevision: number }
+  | { type: "page_load_result"; error: string | null }
+  | { type: "set_page_error"; value: SetStateAction<string | null> }
+  | { type: "server_recovered" };
 
 export const INITIAL_STUDIO_CONFIG_STATE: StudioConfigState = {
   config: null,
   form: emptyForm(),
   draftRevision: 0,
-  formRevision: null
+  formRevision: null,
+  pageError: null,
+  bootstrapFailed: false
 };
 
 export function reduceStudioConfigState(
@@ -71,11 +83,15 @@ export function reduceStudioConfigState(
       };
     }
     case "remote_config": {
-      if (!state.config || !isFormDirty(state.config, state.form)) {
-        return replaceConfigAndForm(state, action.config);
+      // A snapshot only arrives from a server that just answered, so it also
+      // retires a stale-load banner: the reconnect refreshes config, health and
+      // logs, and the operator should not have to press 重试 on live data.
+      const recovered = clearStaleLoadFailure(state);
+      if (!recovered.config || !isFormDirty(recovered.config, recovered.form)) {
+        return replaceConfigAndForm(recovered, action.config);
       }
 
-      return adoptBaselineKeepingDraft(state, action.config);
+      return adoptBaselineKeepingDraft(recovered, action.config);
     }
     case "rebase_form_revision":
       // The operator saw the conflict and chose to keep their draft anyway. Only
@@ -95,7 +111,31 @@ export function reduceStudioConfigState(
         config: action.config,
         formRevision: action.config.revision
       };
+    case "page_load_result":
+      return {
+        ...state,
+        pageError: action.error,
+        bootstrapFailed: action.error !== null
+      };
+    case "set_page_error":
+      return {
+        ...state,
+        pageError: applyStateAction(state.pageError, action.value)
+      };
+    case "server_recovered":
+      return clearStaleLoadFailure(state);
   }
+}
+
+/**
+ * Drops the "showing the last successful load" banner once something proves the
+ * server is answering again. Gated on the flag so a page error from a live
+ * request (a failed export, say) is not swallowed by an unrelated snapshot.
+ */
+function clearStaleLoadFailure(state: StudioConfigState): StudioConfigState {
+  return state.bootstrapFailed
+    ? { ...state, pageError: null, bootstrapFailed: false }
+    : state;
 }
 
 /**
@@ -127,6 +167,7 @@ function replaceConfigAndForm(
   config: PublicConfig
 ): StudioConfigState {
   return {
+    ...state,
     config,
     form: formFromConfig(config),
     draftRevision: state.draftRevision + 1,

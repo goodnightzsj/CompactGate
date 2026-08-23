@@ -59,7 +59,10 @@ export function createConfigProfileCollectionActions({
         ? accessors.selectedId
         : nextScope.active_profile_id ?? nextScope.profiles[0]?.id ?? "";
       accessors.setSelectedId(nextSelectedProfileId);
-      accessors.setName(nextScope.profiles.find((profile) => profile.id === nextSelectedProfileId)?.name ?? "");
+      // No explicit setName: reordering renames nothing, and `setName` resets the
+      // rename draft, so dragging a row used to snap a half-typed new name back
+      // to the stored one. The name sync effect adopts the stored name on its own
+      // and keeps a dirty draft that still belongs to the selected profile.
       accessors.setState("reordered");
       window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {
@@ -103,7 +106,8 @@ export function createConfigProfileCollectionActions({
 
       setConfig(nextConfig);
       accessors.setSelectedId(copiedProfile?.id ?? targetProfileId);
-      accessors.setName(copiedProfile?.name ?? copyName);
+      // The name follows the new selection through the sync effect; calling
+      // setName here would also drop an unrelated in-progress rename.
       accessors.setState("duplicated");
       window.setTimeout(() => accessors.setState("idle"), 1600);
     } catch (error) {

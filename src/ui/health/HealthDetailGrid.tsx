@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { HealthResponse } from "../../shared/types.js";
 
 export function HealthDetailGrid({
@@ -10,6 +11,10 @@ export function HealthDetailGrid({
   attentionRoutes: number;
 }) {
   const needsAttention = failedRoutes > 0 || attentionRoutes > 0;
+  // The label used to be swapped with font-size: 0 plus a ::after, which leaves
+  // both the old and the new wording in the accessibility tree: the summary
+  // announced "展开查看" and "收起" at the same time.
+  const [jsonOpen, setJsonOpen] = useState(false);
 
   return (
     <section className={`health-detail-grid ${needsAttention ? "" : "is-compact"}`}>
@@ -35,13 +40,16 @@ export function HealthDetailGrid({
         </div>
       </section>}
 
-      <details className="panel health-json-panel">
+      <details
+        className="health-json-panel"
+        onToggle={(event) => setJsonOpen(event.currentTarget.open)}
+      >
         <summary>
           <span>
             <small>响应内容</small>
             <strong>原始健康响应</strong>
           </span>
-          <span className="health-json-action">展开查看</span>
+          <span className="health-json-action">{jsonOpen ? "收起" : "展开查看"}</span>
         </summary>
 
         <pre className="health-json">

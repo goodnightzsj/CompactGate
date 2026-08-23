@@ -48,6 +48,12 @@ export function ConfigPage({
   const importWorkflow = useConfigImportWorkflow({
     onImportConfig: actions.importConfig
   });
+  // The profile card renders these on the profiles tab only, but the save bar's
+  // dialogs are reachable from every tab.
+  const profileErrors = {
+    codex: actions.profileError,
+    claude: actions.claudeProfileError
+  };
 
   return (
     <>
@@ -167,6 +173,7 @@ export function ConfigPage({
           saveError={actions.saveError}
           saveConflict={actions.saveConflict}
           hasPendingChanges={hasPendingChanges}
+          profileErrors={profileErrors}
           onSaveConfig={actions.saveConfig}
           onOverrideSaveConflict={actions.overrideSaveConflict}
           onSaveProfileAsNew={actions.saveConfigProfile}
@@ -177,6 +184,7 @@ export function ConfigPage({
         <CrossScopeProfileDialog
           config={config}
           draft={crossScopeDraft}
+          profileErrors={profileErrors}
           onCancel={() => setCrossScopeDraft(null)}
           onConfirm={async (scope, name) => {
             const ok = await actions.saveConfigProfile(scope, name, crossScopeDraft.form);
@@ -201,11 +209,13 @@ type CrossScopeProfileDraft = {
 function CrossScopeProfileDialog({
   config,
   draft,
+  profileErrors,
   onCancel,
   onConfirm
 }: {
   config: PublicConfig | null;
   draft: CrossScopeProfileDraft;
+  profileErrors: Record<ConfigProfileScope, string | null>;
   onCancel: () => void;
   onConfirm: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
 }) {
@@ -222,6 +232,7 @@ function CrossScopeProfileDialog({
       initialName={suggestedName}
       initialScope={draft.targetScope}
       scopeLocked
+      profileErrors={profileErrors}
       title={`创建为 ${targetLabel} 档案`}
       description={`将「${draft.sourceProfile.name}」的路由映射到 ${targetLabel}。上游协议保持源值，以决定直通或协议转换；不复制源凭据，目标端专属设置及现有凭据保持不变。`}
       submitLabel={`创建 ${targetLabel} 档案`}

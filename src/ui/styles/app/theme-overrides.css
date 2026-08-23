@@ -5,9 +5,8 @@
   background: var(--paper-warm);
 }
 
-/* No bare .eyebrow / .tag rule exists to fold into, and these must outrank
-   .page-header .eyebrow and .route-mapping-row .tag, which both ask for
-   var(--faint). */
+/* No bare .eyebrow / .tag rule exists to fold into, and these two labels are
+   muted everywhere: without this they inherit their parent's body ink. */
 :root[data-theme] .eyebrow,
 :root[data-theme] .tag {
   color: var(--muted);

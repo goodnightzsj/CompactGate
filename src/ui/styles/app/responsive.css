@@ -60,7 +60,13 @@
   .profile-item-handle {
     display: none;
   }
+}
 
+/* The page grids collapse where two columns actually stop fitting, not at the
+   breakpoint above: 1180px is where the sidebar leaves its vertical rail, so the
+   content area gets ~218px *wider* there. .dashboard-grid's own minimums
+   (250 + 280 + 340 + gaps = 902px) are what decide this number. */
+@media (max-width: 980px) {
   .dashboard-grid,
   .health-grid,
   .routes-layout {
@@ -233,6 +239,10 @@
     align-items: stretch;
     padding: 8px;
     overflow: visible;
+    /* Stacked nav is ~280px tall on a phone — a third of the viewport. Sticky at
+       that height also nests a permanently scrolled page inside the log list's
+       own scroll area, so it scrolls away with the rest of the page instead. */
+    position: static;
   }
 
   .sidebar-brand {
@@ -281,10 +291,6 @@
   .theme-switch {
     width: 100%;
     justify-content: center;
-  }
-
-  .theme-switch {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .theme-switch button {
@@ -550,13 +556,8 @@
     justify-content: center;
   }
 
-  .log-row {
-    margin-bottom: 10px;
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius-md);
-    background: var(--surface);
-    overflow: hidden;
-  }
+  /* `.log-row` is only ever a <tr>: `.log-table .log-row` in logs.css outranks
+     any card styling here, and margin/overflow do nothing on a table row. */
 
   .log-model-cell,
   .token-tooltip {
@@ -573,12 +574,18 @@
     justify-self: end;
   }
 
-  .token-tooltip-panel {
-    display: none;
-  }
-
   .custom-select-menu {
     max-width: calc(100vw - 24px);
+  }
+}
+
+/* The desktop table gives way to the summary cards at 720px (logs.css), so the
+   hover panel has to survive down to the same width: hiding it at 760 left a
+   40px band where the Token column showed a total with no way to see the
+   input / output / cache split behind it. */
+@media (max-width: 720px) {
+  .token-tooltip-panel {
+    display: none;
   }
 }
 

@@ -28,12 +28,16 @@ export function ConfigModelPanel({
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
 }) {
+  // No `last_saved_at`: it changes on *every* save, so editing an unrelated field
+  // like the log page size discarded the fetched model catalogue and greyed the
+  // pickers until the operator clicked 拉取模型 again. What actually invalidates the
+  // catalogue is the upstream URL, the credential, or the active profile — all
+  // three are already in the key.
   const primarySourceKey = [
     config?.primary.base_url ?? "loading",
     config?.primary.active_api_key_env ?? "",
     config?.primary.api_key_source ?? "missing",
-    config?.profile_scopes.codex.active_profile_id ?? "",
-    config?.last_saved_at ?? ""
+    config?.profile_scopes.codex.active_profile_id ?? ""
   ].join("\n");
   const {
     models,
@@ -225,8 +229,7 @@ export function ConfigModelPanel({
           config?.claude.primary.base_url ?? "loading",
           config?.claude.primary.active_api_key_env ?? "",
           config?.claude.primary.api_key_source ?? "missing",
-          config?.profile_scopes.claude.active_profile_id ?? "",
-          config?.last_saved_at ?? ""
+          config?.profile_scopes.claude.active_profile_id ?? ""
         ].join("\n")}
         onModelMapChange={updateClaudeModelMap}
       />

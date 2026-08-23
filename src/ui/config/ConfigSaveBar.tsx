@@ -12,6 +12,7 @@ export function ConfigSaveBar({
   saveError,
   saveConflict,
   hasPendingChanges,
+  profileErrors,
   onSaveConfig,
   onOverrideSaveConflict,
   onSaveProfileAsNew
@@ -22,6 +23,8 @@ export function ConfigSaveBar({
   /** The save was refused because someone else wrote since this draft was built. */
   saveConflict: boolean;
   hasPendingChanges: boolean;
+  /** Passed to the dialog: this bar is on every config tab, its error was not. */
+  profileErrors: Record<ConfigProfileScope, string | null>;
   onSaveConfig: (event: React.FormEvent) => void;
   onOverrideSaveConflict: (event: React.FormEvent) => void;
   onSaveProfileAsNew: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
@@ -73,6 +76,7 @@ export function ConfigSaveBar({
       {asNewOpen && (
         <ConfigSaveAsNewProfileDialog
           config={config}
+          profileErrors={profileErrors}
           onCancel={() => setAsNewOpen(false)}
           onConfirm={async (scope, name) => {
             const ok = await onSaveProfileAsNew(scope, name);

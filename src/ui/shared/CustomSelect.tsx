@@ -226,7 +226,10 @@ export function CustomSelect({
               aria-selected={option.value === value}
               onClick={() => {
                 onChange(option.value);
-                setOpen(false);
+                // Closing unmounts the portal together with the focused option,
+                // which drops focus on <body>: the next Tab restarts from the
+                // top of the page and Shift+Tab cannot reach this select again.
+                closeAndFocusTrigger();
               }}
               onKeyDown={(event) => handleOptionKeyDown(event, optionIndex)}
             >

@@ -147,6 +147,10 @@
   gap: 8px;
 }
 
+.logs-new-entries-live {
+  display: inline-flex;
+}
+
 .logs-new-entries-motion {
   display: inline-flex;
 }
@@ -199,7 +203,7 @@
   border-bottom: 1px solid var(--hairline);
   font-size: 0.68rem;
   font-weight: 800;
-  color: var(--faint);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -781,7 +785,7 @@
 }
 
 .log-table-full .log-detail-kicker {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.64rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -1284,7 +1288,7 @@
 }
 
 .logs-mobile-list .log-detail-kicker {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.64rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -1317,6 +1321,7 @@
 
 @media (max-width: 720px) {
   .logs-page-actions,
+  .logs-new-entries-live,
   .logs-new-entries-motion,
   .logs-new-entries {
     width: 100%;
@@ -1333,7 +1338,10 @@
   .logs-mobile-list {
     display: grid;
     gap: 10px;
-    max-height: 72vh;
+    /* dvh, not vh, so mobile browser chrome is excluded, and the reserve covers
+       the "load earlier" row below the list. 72vh left the bottom of the inner
+       scroll area permanently below the fold, forcing two nested scrolls. */
+    max-height: calc(100dvh - 96px);
     overflow-y: auto;
     overflow-anchor: none;
     padding-right: 2px;

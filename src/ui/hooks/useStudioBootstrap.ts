@@ -13,8 +13,6 @@ export function useStudioBootstrap(pageMode: PageMode) {
     INITIAL_STUDIO_CONFIG_STATE
   );
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [pageError, setPageError] = useState<string | null>(null);
-  const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const bootstrapScope = studioBootstrapScope(pageMode);
   const healthMode = bootstrapScope === "health";
@@ -25,6 +23,18 @@ export function useStudioBootstrap(pageMode: PageMode) {
    */
   const retryBootstrap = useCallback(() => {
     setReloadToken((token) => token + 1);
+  }, []);
+  const setPageError = useCallback<React.Dispatch<React.SetStateAction<string | null>>>(
+    (value) => dispatchConfig({ type: "set_page_error", value }),
+    []
+  );
+  /**
+   * A poll that answers is the other proof the proxy came back — the SSE
+   * snapshot path clears the banner through `remote_config`, but the fallback
+   * poll carries no config and used to clear only the log-level error.
+   */
+  const notifyServerRecovered = useCallback(() => {
+    dispatchConfig({ type: "server_recovered" });
   }, []);
   const setConfig = useCallback<React.Dispatch<React.SetStateAction<PublicConfig | null>>>(
     (value) => dispatchConfig({ type: "set_config", value }),
@@ -57,8 +67,7 @@ export function useStudioBootstrap(pageMode: PageMode) {
           }
 
           setHealth(nextHealth);
-          setPageError(null);
-          setBootstrapFailed(false);
+          dispatchConfig({ type: "page_load_result", error: null });
           return;
         }
 
@@ -73,12 +82,10 @@ export function useStudioBootstrap(pageMode: PageMode) {
 
         dispatchConfig({ type: "bootstrap", config: nextConfig });
         setHealth(nextHealth);
-        setPageError(null);
-        setBootstrapFailed(false);
+        dispatchConfig({ type: "page_load_result", error: null });
       } catch (error) {
         if (!cancelled) {
-          setPageError(errorSummary(error));
-          setBootstrapFailed(true);
+          dispatchConfig({ type: "page_load_result", error: errorSummary(error) });
         }
       }
     }
@@ -87,7 +94,9 @@ export function useStudioBootstrap(pageMode: PageMode) {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapScope, healthMode, reloadToken]);
+    // `healthMode` is derived from `bootstrapScope`, so listing it again would
+    // only suggest the two can move independently.
+  }, [bootstrapScope, reloadToken]);
 
   return {
     config: configState.config,
@@ -100,11 +109,12 @@ export function useStudioBootstrap(pageMode: PageMode) {
     formRevision: configState.formRevision,
     applyRemoteConfig,
     commitConfig,
-    pageError,
+    notifyServerRecovered,
+    pageError: configState.pageError,
     setPageError,
     retryBootstrap,
     rebaseFormRevision,
-    bootstrapFailed
+    bootstrapFailed: configState.bootstrapFailed
   };
 }
 

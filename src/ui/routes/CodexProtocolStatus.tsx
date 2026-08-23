@@ -6,9 +6,7 @@ export function CodexProtocolStatus({ status }: { status: CodexVersionStatus | n
     ? status.observed_clients[0] ?? null
     : status?.local_client ?? null;
   const protocolLabel = status ? protocolStatusLabel(status.observed_protocol) : "读取中";
-  const protocolClass = status?.observed_protocol === "mixed"
-    ? "mixed"
-    : status?.observed_protocol ?? "unknown";
+  const protocolClass = status ? protocolChipClass(status.observed_protocol) : "unknown";
   const sourceLabel = status ? protocolSourceLabel(status.protocol_source) : "等待状态";
 
   return (
@@ -80,6 +78,15 @@ function protocolStatusLabel(protocol: CodexVersionStatus["observed_protocol"]):
     default:
       return "协议未观测";
   }
+}
+
+function protocolChipClass(protocol: CodexVersionStatus["observed_protocol"]): string {
+  // The wire values are `remote_v1` / `remote_v2` while primitives.css defines
+  // `.remote-v1` / `.remote-v2`, so passing the raw value through left the two
+  // most common states as bare bold text. `mixed` and `unknown` need no mapping.
+  return protocol === "mixed" || protocol === "unknown"
+    ? protocol
+    : compactionModeClass(protocol);
 }
 
 function protocolSourceLabel(source: CodexVersionStatus["protocol_source"]): string {

@@ -56,12 +56,15 @@ export function useLogFeed({
   hasConfig,
   logPageLimit,
   applyRemoteConfig,
+  onServerRecovered,
   setHealth
 }: {
   enabled: boolean;
   hasConfig: boolean;
   logPageLimit: number;
   applyRemoteConfig: (config: PublicConfig) => void;
+  /** A page that answers proves the proxy is back, not just the log feed. */
+  onServerRecovered: () => void;
   setHealth: React.Dispatch<React.SetStateAction<HealthResponse | null>>;
 }) {
   const [logState, setLogState] = useState<LogPresentationState>(() => ({
@@ -227,6 +230,7 @@ export function useLogFeed({
             liveInsertIds: []
           }));
           setLogError(null);
+          onServerRecovered();
           return true;
         }
       } catch (error) {
@@ -393,6 +397,7 @@ export function useLogFeed({
   }, [
     enabled,
     applyRemoteConfig,
+    onServerRecovered,
     setHealth
   ]);
 

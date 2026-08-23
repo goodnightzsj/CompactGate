@@ -13,6 +13,9 @@
   --ink: #1a1c1e;
   --ink-soft: #3d4044;
   --muted: #737578;
+  /* Rules, dots and other graphics only. It measures ~2.7:1 on the light
+     surfaces and ~2.6:1 on the dark ones, so text — including 10-11px table
+     headers and kickers — uses --muted, which clears 4.5:1 in both palettes. */
   --faint: #9b9d9f;
   --hairline: #e4dfd5;
   --hairline-strong: #cfc8b8;
@@ -24,6 +27,12 @@
   --jade-soft: #edf8f4;
   --brick: #b33028;
   --brick-soft: #fef5f4;
+  /* Foreground for text sitting on a solid --accent / --brick fill. A literal
+     white only works while those fills are dark; the dark palette inverts them
+     to light tints, so the pairing has to be a token or the label drops to
+     ~2.7:1 on exactly the pages' most prominent buttons. */
+  --on-accent: #ffffff;
+  --on-brick: #ffffff;
   --forest: #2d6a3f;
   --forest-soft: #edf7ef;
   --live-profile-selected-border: color-mix(in srgb, var(--accent) 40%, var(--hairline));
@@ -45,8 +54,8 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Dark palette. useThemeMode always resolves "auto" to a concrete
-   data-theme, so this selector covers system-preference dark too. */
+/* Dark palette, applied once the inline bootstrap in index.html has resolved
+   "auto" into a concrete data-theme. */
 :root[data-theme="dark"],
 :root[data-theme-mode="dark"] {
   --paper: #16181b;
@@ -67,9 +76,45 @@
   --jade-soft: rgba(90,173,160,0.12);
   --brick: #e06058;
   --brick-soft: rgba(224,96,88,0.12);
+  --on-accent: #16181b;
+  --on-brick: #16181b;
   --forest: #5aa870;
   --forest-soft: rgba(90,168,112,0.12);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+/* Same palette without any script: covers a blocked or failed bootstrap, and any
+   document that renders this stylesheet without the attribute. Scoped with
+   :not([data-theme="light"]) so an explicit light choice still wins on a machine
+   whose system preference is dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme-mode="light"]) {
+    --paper: #16181b;
+    --paper-warm: #1c1e22;
+    --surface: #1f2125;
+    --surface-raised: #26282c;
+    --ink: #e6e7e9;
+    --ink-soft: #bcbdbf;
+    --muted: #8b8d8f;
+    --faint: #5f6063;
+    --hairline: #333538;
+    --hairline-strong: #4a4c50;
+    --accent: #7b9fd4;
+    --accent-soft: rgba(123,159,212,0.12);
+    --amber: #e09040;
+    --amber-soft: rgba(224,144,64,0.12);
+    --jade: #5aada0;
+    --jade-soft: rgba(90,173,160,0.12);
+    --brick: #e06058;
+    --brick-soft: rgba(224,96,88,0.12);
+    --on-accent: #16181b;
+    --on-brick: #16181b;
+    --forest: #5aa870;
+    --forest-soft: rgba(90,168,112,0.12);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);
+  }
 }

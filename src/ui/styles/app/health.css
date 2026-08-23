@@ -436,15 +436,6 @@
   font-weight: 800;
 }
 
-.health-json-panel[open] .health-json-action {
-  font-size: 0;
-}
-
-.health-json-panel[open] .health-json-action::after {
-  font-size: 0.72rem;
-  content: "收起";
-}
-
 .health-json {
   max-width: 100%;
   max-height: 420px;

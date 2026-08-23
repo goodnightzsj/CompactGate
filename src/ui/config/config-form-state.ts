@@ -208,7 +208,7 @@ export function formToPatch(form: ConfigFormState) {
     },
     logging: {
       persist_body: form.loggingPersistBody,
-      keep_recent: atLeast(form.loggingKeepRecent, 1),
+      keep_recent: boundedKeepRecent(form.loggingKeepRecent),
       capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
       capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
       capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
@@ -269,11 +269,17 @@ export function applyDraftToConfigExport(
     logging: {
       redact_body: config.logging.redact_body,
       persist_body: form.loggingPersistBody,
-      keep_recent: form.loggingKeepRecent,
+      // Falls back to the saved value where the patch path omits the key: an
+      // export is a complete config, and writing the blank box through as 0 or
+      // 1 byte produced a file CompactGate's own import then rejects.
+      keep_recent: boundedKeepRecent(form.loggingKeepRecent) ?? config.logging.keep_recent,
       capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
-      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
-      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
+      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE)
+        ?? config.logging.capture_body_max_bytes,
+      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE)
+        ?? config.logging.capture_dir_max_bytes,
       max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
+        ?? config.logging.max_database_bytes
     },
     primary_failover: {
       auto_schedule: form.autoSchedulePrimaryFailover,
@@ -458,19 +464,35 @@ function normalizedCaptureDir(value: string): string | null {
 }
 
 /**
- * Clamped, because an emptied `<input type="number">` reads as `""` and
- * `Number("")` is 0 — which the server rejects for every one of these limits, so
- * a momentarily blank box would fail the *whole* PATCH over a field the operator
- * was not editing. Clamping here rather than in the input keeps clear-and-retype
- * working: forcing the minimum into the box left a leading digit that silently
- * multiplied whatever was typed next.
+ * Omitted rather than clamped when the box holds no usable number.
+ *
+ * An emptied `<input type="number">` reads as `""` and `Number("")` is 0, which
+ * the server rejects for every one of these limits — so sending it verbatim
+ * would fail the *whole* PATCH over a field the operator was not editing. But
+ * clamping to the legal floor was far worse than that: 1 byte passes validation,
+ * and `RequestLogger.configure` then prunes the entire log history and capture
+ * directory to honour it, reporting a successful save. Omitting the key means
+ * "unchanged", which is what a blank box actually expresses. Deciding it here
+ * rather than in the input keeps clear-and-retype working: forcing the minimum
+ * into the box left a leading digit that silently multiplied the next keystroke.
  */
-function bytesFromUnit(value: number, unitBytes: number): number {
-  return Math.max(1, Math.round(atLeast(value, 0) * unitBytes));
+function bytesFromUnit(value: number, unitBytes: number): number | undefined {
+  return Number.isFinite(value) && value > 0
+    ? Math.max(1, Math.round(value * unitBytes))
+    : undefined;
 }
 
-function atLeast(value: number, minimum: number): number {
-  return Number.isFinite(value) && value > minimum ? value : minimum;
+/**
+ * Bounded at both ends, because the server rejects the whole patch outside 1—2000
+ * and the box advertises `max="2000"` that nothing enforced: the page has no
+ * `<form>`, so HTML5 constraint validation never runs. Clamping down to the
+ * advertised ceiling honours "as many as possible" instead of discarding every
+ * other edit in the draft along with it.
+ */
+function boundedKeepRecent(value: number): number | undefined {
+  return Number.isFinite(value) && value >= 1
+    ? Math.min(2_000, Math.round(value))
+    : undefined;
 }
 
 function normalizeRouteUrl(value: string): string {

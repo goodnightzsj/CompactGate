@@ -126,7 +126,9 @@ export function createConfigProfilePersistenceActions({
       }
       setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
       accessors.setSelectedId(nextActiveProfileId);
-      accessors.setName(nextScope.profiles.find((profile) => profile.id === nextActiveProfileId)?.name ?? "");
+      // Applying a profile stores no name, so it must not reset the rename draft:
+      // the sync effect fills the field from the selected profile whenever the
+      // operator is not mid-edit.
       setSaveError(null);
       setSaveState("saved");
       accessors.setState("applied");

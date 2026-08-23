@@ -39,7 +39,7 @@ export function DashboardRecentRequests({
                 <col className="log-summary-col-duration" />
               </colgroup>
               <thead>
-                <tr className="log-table-header">
+                <tr>
                   <th scope="col">开始</th>
                   <th scope="col">完成</th>
                   <th scope="col">模型</th>

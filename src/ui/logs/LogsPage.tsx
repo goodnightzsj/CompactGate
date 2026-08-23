@@ -120,22 +120,26 @@ export function LogsPage({
           <h2>请求日志</h2>
         </div>
         <div className="logs-page-actions">
-          <AnimatePresence initial={false}>
-            {unseenLogCount > 0 && (
-              <MotionSpan
-                className="logs-new-entries-motion"
-                aria-live="polite"
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -3 }}
-                transition={detailTransition}
-              >
-                <button className="btn btn-sm logs-new-entries" type="button" onClick={scrollToLatest}>
-                  新增 {unseenLogCount} 条 · 回到最新
-                </button>
-              </MotionSpan>
-            )}
-          </AnimatePresence>
+          {/* The live region stays mounted and only its contents change: an
+              aria-live element that enters the DOM already holding its text is
+              normally not announced at all. */}
+          <span className="logs-new-entries-live" aria-live="polite">
+            <AnimatePresence initial={false}>
+              {unseenLogCount > 0 && (
+                <MotionSpan
+                  className="logs-new-entries-motion"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  transition={detailTransition}
+                >
+                  <button className="btn btn-sm logs-new-entries" type="button" onClick={scrollToLatest}>
+                    新增 {unseenLogCount} 条 · 回到最新
+                  </button>
+                </MotionSpan>
+              )}
+            </AnimatePresence>
+          </span>
           <span className="status-pill">
             显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
           </span>
@@ -265,7 +269,7 @@ export function LogsPage({
                 <col className="log-col-duration" />
               </colgroup>
               <thead>
-                <tr className="log-table-header">
+                <tr>
                   <th scope="col">开始时间</th>
                   <th scope="col">状态</th>
                   <th scope="col">模型 / 通道</th>
@@ -355,14 +359,16 @@ export function LogsPage({
           </MotionDiv>
       </div>
 
-      <MotionDiv
-        ref={mobileListRef}
-        className="logs-mobile-list"
-        aria-label="请求日志摘要"
-        layoutScroll
-        onScroll={handleMobileLogScroll}
-        hidden={logs.length === 0}
-      >
+      {/* Rendered conditionally rather than with `hidden`: the narrow-screen rule
+          sets `display: grid`, which outranks the UA rule for [hidden]. */}
+      {logs.length > 0 && (
+        <MotionDiv
+          ref={mobileListRef}
+          className="logs-mobile-list"
+          aria-label="请求日志摘要"
+          layoutScroll
+          onScroll={handleMobileLogScroll}
+        >
           <AnimatePresence initial={false} mode="popLayout">
             {logs.map((entry, index) => {
               const logKey = logEntryKey(entry);
@@ -387,7 +393,8 @@ export function LogsPage({
               );
             })}
           </AnimatePresence>
-      </MotionDiv>
+        </MotionDiv>
+      )}
 
       {hasMoreLogs && (
         <div className="log-load-more">

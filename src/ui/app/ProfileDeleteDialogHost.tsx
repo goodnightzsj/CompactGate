@@ -3,7 +3,9 @@ import type { ProfileActionState, ProfileDeleteCandidate } from "../config/types
 
 export type ProfileDeleteDialogHostProps = {
   candidate: ProfileDeleteCandidate | null;
+  claudeProfileError: string | null;
   claudeProfileState: ProfileActionState;
+  codexProfileError: string | null;
   codexProfileState: ProfileActionState;
   onCancel: () => void;
   onConfirm: () => void | Promise<void>;
@@ -11,7 +13,9 @@ export type ProfileDeleteDialogHostProps = {
 
 export function ProfileDeleteDialogHost({
   candidate,
+  claudeProfileError,
   claudeProfileState,
+  codexProfileError,
   codexProfileState,
   onCancel,
   onConfirm
@@ -20,13 +24,14 @@ export function ProfileDeleteDialogHost({
     return null;
   }
 
-  const isDeleting =
-    (candidate.scope === "codex" ? codexProfileState : claudeProfileState) === "deleting";
+  const isCodex = candidate.scope === "codex";
+  const isDeleting = (isCodex ? codexProfileState : claudeProfileState) === "deleting";
 
   return (
     <ConfirmProfileDeleteDialog
       profile={candidate.profile}
       isDeleting={isDeleting}
+      error={isCodex ? codexProfileError : claudeProfileError}
       onCancel={onCancel}
       onConfirm={onConfirm}
     />

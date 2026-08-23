@@ -13,6 +13,7 @@ export function ConfigSaveAsNewProfileDialog({
   initialScope = "codex",
   onCancel,
   onConfirm,
+  profileErrors,
   scopeLocked = false,
   submitLabel = "保存为新档案",
   title = "另存为新档案",
@@ -24,6 +25,13 @@ export function ConfigSaveAsNewProfileDialog({
   initialScope?: ConfigProfileScope;
   onCancel: () => void;
   onConfirm: (scope: ConfigProfileScope, name: string) => void | Promise<boolean>;
+  /**
+   * Why the write failed, per scope. A rejected save only flips the button back
+   * to its idle label, and the profile card that used to be the single render
+   * point for these messages is mounted on the profiles tab alone — so from any
+   * other tab the dialog just sat there with no reason given.
+   */
+  profileErrors?: Record<ConfigProfileScope, string | null>;
   scopeLocked?: boolean;
   submitLabel?: string;
   title?: string;
@@ -39,6 +47,7 @@ export function ConfigSaveAsNewProfileDialog({
     : new Set<string>();
   const nameTaken = trimmedName.length > 0 && existingNames.has(trimmedName);
   const scopeLabel = scope === "codex" ? "Codex" : "Claude";
+  const writeError = profileErrors?.[scope] ?? null;
 
   async function handleConfirm() {
     if (!trimmedName || nameTaken) {
@@ -104,6 +113,7 @@ export function ConfigSaveAsNewProfileDialog({
         />
         {nameTaken && <small className="confirm-field-error">{scopeLabel} 已有同名档案，请换个名字。</small>}
       </div>
+      {writeError && <p className="error-note">{writeError}</p>}
       <div className="confirm-actions">
         <button className="ghost-button" type="button" disabled={submitting} onClick={onCancel}>
           取消

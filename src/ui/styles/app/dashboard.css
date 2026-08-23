@@ -261,7 +261,7 @@
 }
 
 .analytics-metric > span {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.67rem;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -384,7 +384,7 @@
 }
 
 .analytics-chart text {
-  fill: var(--faint);
+  fill: var(--muted);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0;
@@ -533,7 +533,7 @@
 }
 
 .analytics-table th {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.66rem;
   font-weight: 800;
   letter-spacing: 0.05em;
@@ -812,7 +812,7 @@
   display: grid;
   height: 24px;
   place-items: center;
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.62rem;
   font-weight: 700;
 }

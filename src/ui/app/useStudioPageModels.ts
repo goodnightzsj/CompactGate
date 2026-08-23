@@ -43,6 +43,7 @@ export function useStudioPageModels({
     formRevision,
     applyRemoteConfig,
     commitConfig,
+    notifyServerRecovered,
     pageError,
     setPageError,
     retryBootstrap,
@@ -56,6 +57,7 @@ export function useStudioPageModels({
     hasConfig,
     logPageLimit,
     applyRemoteConfig,
+    onServerRecovered: notifyServerRecovered,
     setHealth
   });
   const healthRefresh = useHealthRefresh({
@@ -185,7 +187,9 @@ export function useStudioPageModels({
       ? null
       : {
           candidate: configActions.profileDeleteCandidate,
+          claudeProfileError: configActions.claudeProfileError,
           claudeProfileState: configActions.claudeProfileState,
+          codexProfileError: configActions.profileError,
           codexProfileState: configActions.profileState,
           onCancel: () => configActions.setProfileDeleteCandidate(null),
           onConfirm: configActions.confirmDeleteSelectedProfile

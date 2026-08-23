@@ -2,14 +2,18 @@
    App Shell: Sidebar + Main
    ═══════════════════════════════════════════════════ */
 .app-shell {
+  /* One source of truth for the column and the element that fills it. The width
+     lived on `.sidebar`, where the parent grid could not read it, so the two
+     numbers drifted apart and left an 8px strip of the page background showing
+     down the full height — faint in the light theme, obvious in the dark one. */
+  --sidebar-width: 212px;
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: var(--sidebar-width) 1fr;
   min-height: 100vh;
 }
 
 /* ── Sidebar ── */
 .sidebar {
-  --sidebar-width: 212px;
   position: sticky;
   top: 0;
   width: var(--sidebar-width);
@@ -243,6 +247,6 @@
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--muted);
   margin: 0 0 3px;
 }

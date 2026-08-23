@@ -1,6 +1,8 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { CSSProperties } from "react";
 import type { UpstreamProtocol } from "../../shared/types.js";
-import { formatClock } from "../shared/format.js";
+import { clamp, formatClock } from "../shared/format.js";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
 import { Field } from "./Field.js";
 
@@ -74,6 +76,9 @@ export function RouteCredentialFields({
 }) {
   const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const [suggestionsStyle, setSuggestionsStyle] = useState<CSSProperties | null>(null);
+  const baseUrlInputRef = useRef<HTMLInputElement | null>(null);
+  const repositionFrameRef = useRef<number | null>(null);
   const suggestionsId = useId();
   const visibleSuggestions = routeUrlSuggestions.slice(0, 8);
   const showSuggestions = urlSuggestionsOpen && visibleSuggestions.length > 0;
@@ -91,6 +96,71 @@ export function RouteCredentialFields({
     setActiveSuggestionIndex((previous) =>
       previous >= visibleSuggestions.length ? visibleSuggestions.length - 1 : previous
     );
+  }, [showSuggestions, visibleSuggestions.length]);
+
+  /**
+   * `.config-section` and (on narrow screens) `.route-config-card` both clip
+   * their overflow, and the animated page wrapper keeps a transform, so an
+   * absolutely positioned list was cut off with no way to scroll to the rest of
+   * it. Same treatment as `.custom-select-menu`: portal it out and place it in
+   * viewport coordinates.
+   */
+  useLayoutEffect(() => {
+    if (!showSuggestions) {
+      setSuggestionsStyle(null);
+      return undefined;
+    }
+
+    function place() {
+      const input = baseUrlInputRef.current;
+      if (!input) {
+        return;
+      }
+
+      const rect = input.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 6;
+      const availableBelow = window.innerHeight - rect.bottom - viewportPadding - gap;
+      const availableAbove = rect.top - viewportPadding - gap;
+      const openBelow = availableBelow >= availableAbove;
+      const maxHeight = Math.max(
+        120,
+        Math.min(230, openBelow ? availableBelow : availableAbove)
+      );
+
+      setSuggestionsStyle({
+        left: clamp(
+          rect.left,
+          viewportPadding,
+          Math.max(viewportPadding, window.innerWidth - rect.width - viewportPadding)
+        ),
+        top: openBelow ? rect.bottom + gap : Math.max(viewportPadding, rect.top - maxHeight - gap),
+        width: rect.width,
+        maxHeight
+      });
+    }
+
+    function scheduleReposition() {
+      if (repositionFrameRef.current !== null) {
+        return;
+      }
+      repositionFrameRef.current = requestAnimationFrame(() => {
+        repositionFrameRef.current = null;
+        place();
+      });
+    }
+
+    place();
+    window.addEventListener("resize", scheduleReposition);
+    window.addEventListener("scroll", scheduleReposition, true);
+    return () => {
+      window.removeEventListener("resize", scheduleReposition);
+      window.removeEventListener("scroll", scheduleReposition, true);
+      if (repositionFrameRef.current !== null) {
+        cancelAnimationFrame(repositionFrameRef.current);
+        repositionFrameRef.current = null;
+      }
+    };
   }, [showSuggestions, visibleSuggestions.length]);
 
   function selectSuggestion(suggestion: RouteUrlSuggestion) {
@@ -121,6 +191,7 @@ export function RouteCredentialFields({
       <Field label={baseUrlLabel} hint={baseUrlHint}>
         <div className="route-url-input-wrap">
           <input
+            ref={baseUrlInputRef}
             aria-label={baseUrlLabel}
             role="combobox"
             aria-autocomplete="list"
@@ -180,8 +251,13 @@ export function RouteCredentialFields({
             }}
             spellCheck={false}
           />
-          {showSuggestions && (
-            <div id={suggestionsId} className="route-url-suggestions" role="listbox">
+          {showSuggestions && suggestionsStyle && createPortal(
+            <div
+              id={suggestionsId}
+              className="route-url-suggestions"
+              role="listbox"
+              style={suggestionsStyle}
+            >
               {visibleSuggestions.map((suggestion, index) => (
                 <button
                   id={`${suggestionsId}-option-${index}`}
@@ -206,7 +282,8 @@ export function RouteCredentialFields({
                   </span>
                 </button>
               ))}
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </Field>

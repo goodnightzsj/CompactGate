@@ -84,5 +84,5 @@
 .theme-switch button.is-active {
   background: var(--surface-raised);
   color: var(--ink);
-  box-shadow: 0 1px 3px rgba(26,28,30,0.06);
+  box-shadow: var(--shadow-sm);
 }

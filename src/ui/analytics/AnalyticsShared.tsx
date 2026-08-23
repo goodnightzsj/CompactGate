@@ -154,6 +154,18 @@ export function AnalyticsTrendChart({
             cy={y(point[metric])}
             r="3"
             key={point.key}
+          />
+        ))}
+        {/* The 3px dot is too small to hit, especially on touch where there is no
+            hover at all, so the tooltip lives on a transparent 7px target — the
+            same pairing the token chart below already uses. */}
+        {points.map((point, index) => (
+          <circle
+            className="analytics-chart-hit-target"
+            cx={x(index)}
+            cy={y(point[metric])}
+            r="7"
+            key={`${point.key}-hit`}
           >
             <title>{`${point.label}: ${formatMetricNumber(point[metric])}${metric === "requests" ? `，错误 ${point.error_requests}` : " Token"}`}</title>
           </circle>
@@ -326,6 +338,9 @@ export function AnalyticsLoadState({
   }
   return (
     <div className="analytics-loading" role="status" aria-live="polite">
+      {/* A <p>, not a <span>: `.analytics-loading span` is the skeleton box. The
+          boxes carry no text, so the live region had nothing to announce. */}
+      <p className="visually-hidden">正在加载统计数据。</p>
       <span />
       <span />
       <span />

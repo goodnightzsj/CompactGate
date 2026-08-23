@@ -128,7 +128,7 @@
 .btn-primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -168,7 +168,7 @@
 
 .btn-danger:active {
   background: var(--brick);
-  color: #fff;
+  color: var(--on-brick);
   transform: scale(0.98);
 }
 
@@ -200,7 +200,7 @@
 
 .solid-button {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   box-shadow: var(--shadow-sm);
 }
 
@@ -239,6 +239,7 @@
 .danger-solid-button {
   border-color: color-mix(in srgb, var(--brick) 58%, var(--hairline));
   background: var(--brick);
+  color: var(--on-brick);
 }
 
 /* ── Form ── */
@@ -302,7 +303,7 @@ textarea:hover,
 }
 
 .field small {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.4;
 }
@@ -344,6 +345,19 @@ textarea:hover,
   color: var(--brick);
 }
 
+/* Announced by screen readers, invisible on screen. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .error-note {
   margin: 0;
   padding: 10px 12px;
@@ -380,7 +394,7 @@ textarea:hover,
 .toggle-group button.is-active {
   background: var(--surface-raised);
   color: var(--ink);
-  box-shadow: 0 1px 2px rgba(26,28,30,0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 /* ── Tabs ── */
