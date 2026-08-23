@@ -75,7 +75,7 @@ function responsesRecordToAnthropic(
   if (system.length > 0) {
     translated.system = system;
   }
-  const tools = responsesToolsToAnthropic(body.tools);
+  const tools = [...responsesToolsToAnthropic(body.tools), ...input.tools];
   if (tools.length > 0) {
     translated.tools = tools;
   }
@@ -98,8 +98,13 @@ function responsesRecordToAnthropic(
     maxTokens = Math.max(maxTokens, (positiveInteger(thinking.budget_tokens) ?? 0) + 1024);
   }
   translated.max_tokens = maxTokens;
-  if (body.parallel_tool_calls === false && toolChoice) {
-    translated.tool_choice = { ...toolChoice, disable_parallel_tool_use: true };
+  // Only meaningful alongside tools: Anthropic can express "no parallel calls" only
+  // inside tool_choice, so a request that disabled parallel calls without naming a
+  // choice had the instruction dropped entirely and the upstream was free to fan
+  // out. But synthesizing a tool_choice for a request that declares no tools at all
+  // sends a directive about tools that do not exist.
+  if (body.parallel_tool_calls === false && tools.length > 0) {
+    translated.tool_choice = { ...(toolChoice ?? { type: "auto" }), disable_parallel_tool_use: true };
   }
   if (body.stream === true) {
     translated.stream = true;
@@ -285,9 +290,13 @@ export function anthropicRequestToResponses(
   if (topP !== null) {
     translated.top_p = topP;
   }
-  const reasoning = anthropicThinkingConfigToResponses(body.thinking);
+  const reasoning = anthropicThinkingConfigToResponses(body.thinking, body.output_config);
   if (reasoning) {
     translated.reasoning = reasoning;
+  }
+  const textFormat = anthropicOutputFormatToResponses(body.output_config);
+  if (textFormat) {
+    translated.text = { format: textFormat };
   }
   const metadata = anthropicMetadataToResponses(body.metadata);
   if (metadata) {
@@ -321,12 +330,12 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
   }
   rejectUnsupportedResponsesChatFields(body);
 
-  const messages = responsesInputToChatMessages(body.instructions, body.input);
+  const input = responsesInputToChatMessages(body.instructions, body.input);
   const translated: Record<string, unknown> = {
     model: body.model,
-    messages
+    messages: input.messages
   };
-  const tools = responsesToolsToChat(body.tools);
+  const tools = [...responsesToolsToChat(body.tools), ...input.tools];
   if (tools.length > 0) {
     translated.tools = tools;
   }
@@ -340,6 +349,10 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
   const reasoningEffort = chatReasoningEffort(body.reasoning);
   if (reasoningEffort !== null) {
     translated.reasoning_effort = reasoningEffort;
+  }
+  const responseFormat = responsesTextFormatToChat(body.text);
+  if (responseFormat) {
+    translated.response_format = responseFormat;
   }
 
   const maxTokens = positiveInteger(body.max_output_tokens);
@@ -635,13 +648,24 @@ export function openAiUsageToAnthropic(value: unknown): Record<string, unknown> 
   return result;
 }
 
-export function openAiStopReason(response: Record<string, unknown>): "end_turn" | "max_tokens" | "tool_use" {
+export function openAiStopReason(
+  response: Record<string, unknown>
+): "end_turn" | "max_tokens" | "tool_use" | "refusal" {
   if (
     response.status === "incomplete" &&
     isRecord(response.incomplete_details) &&
     response.incomplete_details.reason === "max_output_tokens"
   ) {
     return "max_tokens";
+  }
+  // A filtered turn reported as end_turn reached the client as an ordinary empty
+  // assistant message, so it looked like the model simply had nothing to say.
+  // Anthropic has a stop reason for exactly this.
+  if (
+    isRecord(response.incomplete_details) &&
+    response.incomplete_details.reason === "content_filter"
+  ) {
+    return "refusal";
   }
   const output = Array.isArray(response.output) ? response.output : [];
   return output.some((item) => isRecord(item) && item.type === "function_call")
@@ -712,14 +736,17 @@ function responsesSystem(value: unknown): Array<Record<string, unknown>> {
  * `rewritePrimaryBody` injects `reasoning: {effort}` from `primary.reasoning_effort`
  * on every /responses request, so an effort-only object has to translate rather
  * than be refused — otherwise CompactGate rejects the request it just built.
+ *
+ * Siblings of `effort` are ignored rather than disqualifying: Codex sends
+ * `{context, effort}` on 100% of real requests, and the Anthropic→Responses
+ * translation above produces `{effort, summary}`. Requiring a lone `effort` key
+ * meant the carve-out never matched real traffic, so every such request fell
+ * through to the blanket rejection. Nothing Chat accepts can express either
+ * sibling, which is why dropping them is the whole of the translation.
  * The value is passed through verbatim; the upstream owns which efforts it takes.
  */
 function chatReasoningEffort(value: unknown): string | null {
   if (!isRecord(value)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  if (keys.length !== 1 || keys[0] !== "effort") {
     return null;
   }
   return typeof value.effort === "string" && value.effort.length > 0 ? value.effort : null;
@@ -734,8 +761,7 @@ function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): vo
     "conversation",
     "background",
     "prompt",
-    "truncation",
-    "include"
+    "truncation"
   ]) {
     if (field === "reasoning" && chatReasoningEffort(body.reasoning) !== null) {
       continue;
@@ -744,17 +770,11 @@ function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): vo
       throw new ProtocolConversionError(`Responses ${field} cannot be translated to OpenAI Chat.`);
     }
   }
-  if (Array.isArray(body.input) && body.input.some((item) =>
-    isRecord(item) && (
-      item.type === "reasoning" ||
-      item.type === "compaction" ||
-      item.type === "compaction_trigger"
-    )
-  )) {
-    throw new ProtocolConversionError("Responses reasoning and compaction state cannot be translated to OpenAI Chat.");
-  }
+  // `include` only asks the upstream to echo extra fields back — Codex sends
+  // `["reasoning.encrypted_content"]` on every request. Chat cannot produce those
+  // fields whether we forward the ask or not, so ignoring it *is* the translation;
+  // refusing it made every real Codex request 422.
   if (
-    Object.hasOwn(body, "text") ||
     Object.hasOwn(body, "response_format") ||
     Object.hasOwn(body, "modalities") ||
     Object.hasOwn(body, "audio") ||
@@ -762,10 +782,47 @@ function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): vo
   ) {
     throw new ProtocolConversionError("Responses structured text output cannot be translated to OpenAI Chat.");
   }
+  // `text` splits: `format` is a schema the caller parses against and maps onto
+  // Chat's `response_format`, while `verbosity` (which Codex sends on every
+  // request) is a style hint with no Chat counterpart and is dropped. An unknown
+  // third key stays fail-loud rather than silently discarding a constraint.
+  if (isRecord(body.text)) {
+    const unsupported = Object.keys(body.text).find((key) => key !== "format" && key !== "verbosity");
+    if (unsupported) {
+      throw new ProtocolConversionError(`Responses text.${unsupported} cannot be translated to OpenAI Chat.`);
+    }
+  } else if (Object.hasOwn(body, "text")) {
+    throw new ProtocolConversionError("Responses text must be an object to translate to OpenAI Chat.");
+  }
 }
 
-function responsesInputToChatMessages(instructions: unknown, value: unknown): Array<Record<string, unknown>> {
+/** Responses names its schema and Chat nests it; otherwise the shape is the same. */
+function responsesTextFormatToChat(value: unknown): Record<string, unknown> | null {
+  const format = isRecord(value) ? value.format : null;
+  if (!isRecord(format) || format.type === "text") {
+    return null;
+  }
+  if (format.type !== "json_schema" || !isRecord(format.schema)) {
+    throw new ProtocolConversionError(
+      `Responses text.format type ${String(format.type)} cannot be translated to OpenAI Chat.`
+    );
+  }
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: readTrimmedText(format.name) ?? "response",
+      schema: format.schema,
+      strict: format.strict === true
+    }
+  };
+}
+
+function responsesInputToChatMessages(
+  instructions: unknown,
+  value: unknown
+): { messages: Array<Record<string, unknown>>; tools: unknown[] } {
   const messages: Array<Record<string, unknown>> = [];
+  const tools: unknown[] = [];
   const instructionText = responsesSystem(instructions)
     .map((part) => typeof part.text === "string" ? part.text : "")
     .filter(Boolean)
@@ -775,7 +832,7 @@ function responsesInputToChatMessages(instructions: unknown, value: unknown): Ar
   }
   if (typeof value === "string") {
     messages.push({ role: "user", content: value });
-    return messages;
+    return { messages, tools };
   }
   if (!Array.isArray(value)) {
     throw new ProtocolConversionError("Responses input must be a string or array.", 400);
@@ -795,22 +852,37 @@ function responsesInputToChatMessages(instructions: unknown, value: unknown): Ar
       });
       continue;
     }
+    // Codex declares part of its tool set inside the input rather than in `tools`,
+    // on 100% of real requests. Dropping the item would leave the upstream unaware
+    // of tools the very next `custom_tool_call` item then calls, so the definitions
+    // are lifted into the request's tool list instead.
+    if (item.type === "additional_tools") {
+      tools.push(...responsesToolsToChat(item.tools));
+      continue;
+    }
     if (
-      item.type === "function_call" &&
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.call_id === "string" &&
       typeof item.name === "string"
     ) {
+      // A custom tool takes freeform text where a function takes JSON; Chat has
+      // only the function shape, whose `arguments` is itself a string.
       appendChatToolCall(messages, {
         id: item.call_id,
         type: "function",
         function: {
           name: item.name,
-          arguments: chatToolArguments(item.arguments, 400)
+          arguments: item.type === "custom_tool_call"
+            ? typeof item.input === "string" ? item.input : chatToolArguments(item.input, 400)
+            : chatToolArguments(item.arguments, 400)
         }
       });
       continue;
     }
-    if (item.type === "function_call_output" && typeof item.call_id === "string") {
+    if (
+      (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+      typeof item.call_id === "string"
+    ) {
       messages.push({
         role: "tool",
         tool_call_id: item.call_id,
@@ -818,9 +890,21 @@ function responsesInputToChatMessages(instructions: unknown, value: unknown): Ar
       });
       continue;
     }
+    // Reasoning and compaction items carry provider-encrypted state that only the
+    // issuing provider can read. Chat has no field to carry it, so it is dropped:
+    // the turn loses reasoning continuity, which is the cost of a Chat upstream,
+    // and refusing instead made every request with a prior turn 422.
+    if (item.type === "reasoning" || item.type === "compaction") {
+      continue;
+    }
+    // A compaction_trigger *is* content — the instruction asking for the summary.
+    if (item.type === "compaction_trigger") {
+      messages.push({ role: "user", content: responsesContentToChat(item.content, "user") });
+      continue;
+    }
     throw new ProtocolConversionError(`Unsupported Responses input item type for OpenAI Chat: ${item.type}.`);
   }
-  return messages;
+  return { messages, tools };
 }
 
 function appendChatToolCall(
@@ -981,29 +1065,43 @@ function rejectUnsupportedAnthropicRequestFields(body: Record<string, unknown>):
   if (Array.isArray(body.stop_sequences) && body.stop_sequences.length > 0) {
     throw new ProtocolConversionError("Anthropic stop_sequences cannot be translated to OpenAI Responses.");
   }
-  for (const field of ["mcp_servers", "container", "context_management", "output_config"]) {
+  for (const field of ["mcp_servers", "container"]) {
     if (Object.hasOwn(body, field)) {
       throw new ProtocolConversionError(`Anthropic ${field} cannot be translated to OpenAI Responses.`);
+    }
+  }
+  // `context_management` is dropped rather than refused. It is a server-side
+  // context-editing directive — Claude Code sends
+  // `{edits:[{type:"clear_thinking_…",keep:"all"}]}` on nearly every turn — and an
+  // OpenAI upstream does not edit context at all. Ignoring it costs input tokens
+  // and leaves prior thinking visible to the model; refusing it made *every* real
+  // Claude Code request fail with a 422 before the upstream was ever contacted.
+  //
+  // `output_config` is translated instead of refused (see the two helpers below),
+  // but only for the keys whose meaning is known. An unrecognised key stays
+  // fail-loud: `format` carries a schema the client is about to parse against, so
+  // silently dropping a future sibling of it would corrupt the answer rather than
+  // merely degrade it.
+  if (isRecord(body.output_config)) {
+    const unsupported = Object.keys(body.output_config)
+      .find((key) => key !== "effort" && key !== "format");
+    if (unsupported) {
+      throw new ProtocolConversionError(
+        `Anthropic output_config.${unsupported} cannot be translated to OpenAI Responses.`
+      );
     }
   }
 }
 
 function rejectUnsupportedAnthropicChatFields(body: Record<string, unknown>): void {
   rejectUnsupportedAnthropicRequestFields(body);
-  if (isRecord(body.thinking) && body.thinking.type !== "disabled") {
-    throw new ProtocolConversionError("Anthropic thinking cannot be translated to OpenAI Chat.");
-  }
-  if (Array.isArray(body.messages) && body.messages.some((message) =>
-    isRecord(message) && Array.isArray(message.content) && message.content.some((block) =>
-      isRecord(block) && (
-        block.type === "thinking" ||
-        block.type === "redacted_thinking" ||
-        block.type === "compaction"
-      )
-    )
-  )) {
-    throw new ProtocolConversionError("Anthropic thinking and compaction state cannot be translated to OpenAI Chat.");
-  }
+  // Thinking and prior thinking/compaction blocks used to be refused here. They
+  // now translate through the same two hops the rest of this route takes —
+  // Anthropic → Responses turns the config into `reasoning.effort` and the blocks
+  // into reasoning items, and Responses → Chat maps the effort onto
+  // `reasoning_effort` and drops the opaque items Chat has no field for. Refusing
+  // them meant every Claude Code turn (which sends `thinking:{type:"adaptive"}`)
+  // failed with a 422 before the upstream was contacted.
 }
 
 function anthropicMessagesToResponsesInput(
@@ -1282,12 +1380,18 @@ function anthropicToolChoiceToResponses(value: unknown): {
   throw new ProtocolConversionError("Unsupported Anthropic tool_choice for Responses.");
 }
 
-function anthropicThinkingConfigToResponses(value: unknown): Record<string, unknown> | null {
+function anthropicThinkingConfigToResponses(
+  value: unknown,
+  outputConfig: unknown
+): Record<string, unknown> | null {
   if (!isRecord(value) || value.type === "disabled") {
     return null;
   }
   if (value.type === "adaptive") {
-    return { effort: "high", summary: "auto" };
+    // The adaptive dialect carries no token count — the level lives in
+    // `output_config.effort`, which is where every current Claude Code request
+    // puts it. Hardcoding "high" silently discarded max/medium/low/minimal.
+    return { effort: anthropicEffortToResponses(outputConfig) ?? "high", summary: "auto" };
   }
   if (value.type !== "enabled") {
     throw new ProtocolConversionError("Unsupported Anthropic thinking configuration.");
@@ -1295,6 +1399,46 @@ function anthropicThinkingConfigToResponses(value: unknown): Record<string, unkn
   const budget = positiveInteger(value.budget_tokens) ?? 4096;
   const effort = budget <= 2048 ? "low" : budget <= 4096 ? "medium" : budget <= 8192 ? "high" : "xhigh";
   return { effort, summary: "auto" };
+}
+
+/** Anthropic's top tier has no Responses counterpart under the same name. */
+function anthropicEffortToResponses(outputConfig: unknown): string | null {
+  const effort = isRecord(outputConfig) ? readTrimmedText(outputConfig.effort)?.toLowerCase() : null;
+  if (!effort) {
+    return null;
+  }
+  return effort === "max" ? "xhigh" : effort;
+}
+
+/**
+ * Anthropic's structured-output constraint. Claude Code uses it for the calls
+ * whose answer it immediately parses (naming a session, picking a branch), so
+ * this one cannot be dropped the way `context_management` can: handing back
+ * free-form prose where the caller is about to `JSON.parse` turns a degraded
+ * answer into a broken one. Responses requires the schema to be named and
+ * Anthropic does not name it, so supply one.
+ */
+function anthropicOutputFormatToResponses(value: unknown): Record<string, unknown> | null {
+  const format = isRecord(value) ? value.format : null;
+  if (!isRecord(format)) {
+    return null;
+  }
+  if (format.type !== "json_schema" || !isRecord(format.schema)) {
+    throw new ProtocolConversionError(
+      `Anthropic output_config.format type ${String(format.type)} cannot be translated to OpenAI Responses.`
+    );
+  }
+  return {
+    type: "json_schema",
+    name: readTrimmedText(format.name) ?? "response",
+    schema: format.schema,
+    strict: true
+  };
+}
+
+function readTrimmedText(value: unknown): string | null {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text.length > 0 ? text : null;
 }
 
 function anthropicMetadataToResponses(value: unknown): Record<string, string> | null {
@@ -1394,11 +1538,13 @@ function anthropicErrorType(status: number, sourceType: unknown): string {
 function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigger: boolean): {
   messages: Array<Record<string, unknown>>;
   system: Array<Record<string, unknown>>;
+  tools: unknown[];
 } {
   if (typeof value === "string") {
     return {
       messages: [{ role: "user", content: [{ type: "text", text: value }] }],
-      system: []
+      system: [],
+      tools: []
     };
   }
   if (!Array.isArray(value)) {
@@ -1407,6 +1553,7 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
 
   const messages: Array<Record<string, unknown>> = [];
   const system: Array<Record<string, unknown>> = [];
+  const tools: unknown[] = [];
   for (const item of value) {
     if (!isRecord(item)) {
       throw new ProtocolConversionError("Responses input items must be objects.", 400);
@@ -1419,8 +1566,14 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
         const role = item.role === "assistant" ? "assistant" : "user";
         pushAnthropicMessage(messages, role, content);
       }
+    } else if (item.type === "additional_tools") {
+      // Codex declares part of its tool set inside the input rather than in
+      // `tools`, on 100% of real requests. Refusing the item made every Codex
+      // request 422 here; dropping it would leave the upstream unaware of tools
+      // the very next custom_tool_call item goes on to call.
+      tools.push(...responsesToolsToAnthropic(item.tools));
     } else if (
-      item.type === "function_call" &&
+      (item.type === "function_call" || item.type === "custom_tool_call") &&
       typeof item.call_id === "string" &&
       typeof item.name === "string"
     ) {
@@ -1428,9 +1581,19 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
         type: "tool_use",
         id: item.call_id,
         name: item.name,
-        input: parseToolArguments(item.arguments, 400, "Function call arguments must be a JSON object.")
+        // A custom tool takes freeform text where a function takes JSON, and
+        // Anthropic's tool_use.input is always an object — so the raw text is
+        // carried under a single key rather than being parsed as JSON it is not.
+        input: item.type === "custom_tool_call"
+          ? typeof item.input === "string"
+            ? { input: item.input }
+            : parseToolArguments(item.input, 400, "Custom tool call input must be text or a JSON object.")
+          : parseToolArguments(item.arguments, 400, "Function call arguments must be a JSON object.")
       }]);
-    } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
+    } else if (
+      (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+      typeof item.call_id === "string"
+    ) {
       pushAnthropicMessage(messages, "user", [{
         type: "tool_result",
         tool_use_id: item.call_id,
@@ -1464,7 +1627,7 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
       throw new ProtocolConversionError(`Unsupported Responses input item type: ${String(item.type)}.`);
     }
   }
-  return { messages, system };
+  return { messages, system, tools };
 }
 
 function pushAnthropicMessage(

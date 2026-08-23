@@ -64,6 +64,7 @@ export function createAnthropicToResponsesStream(): Transform {
   let model: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
+  let inputTokenDetails: Record<string, unknown> | null = null;
   let nextOutputIndex = 0;
   let completed = false;
   let stopReason: string | null = null;
@@ -97,6 +98,7 @@ export function createAnthropicToResponsesStream(): Transform {
       const usage = anthropicUsageToResponses(event.message.usage);
       inputTokens = usage && typeof usage.input_tokens === "number" ? usage.input_tokens : inputTokens;
       outputTokens = usage && typeof usage.output_tokens === "number" ? usage.output_tokens : outputTokens;
+      inputTokenDetails = isRecord(usage?.input_tokens_details) ? usage.input_tokens_details : inputTokenDetails;
       emit(transform, "response.created", {
         type: "response.created",
         response: responseEnvelope("in_progress")
@@ -342,6 +344,20 @@ export function createAnthropicToResponsesStream(): Transform {
       if (usage && typeof usage.output_tokens === "number") {
         outputTokens = usage.output_tokens;
       }
+      // Anthropic restates the *cumulative* counts here, and reports the cache split
+      // in this frame when it is only settled at the end. Adopt the input total only
+      // when it actually grew: the translated value is a derived sum, so a delta that
+      // restates `input_tokens` without restating the cache split resolves to the
+      // fresh part alone and would shrink message_start's correct total — producing a
+      // usage where cached_tokens exceeds input_tokens, which the analytics layer then
+      // reads as an additive dialect. Cumulative counters never decrease, so "grew" is
+      // the right guard rather than "was present".
+      if (typeof usage?.input_tokens === "number" && usage.input_tokens > inputTokens) {
+        inputTokens = usage.input_tokens;
+      }
+      if (isRecord(usage?.input_tokens_details)) {
+        inputTokenDetails = usage.input_tokens_details;
+      }
       return;
     }
 
@@ -380,7 +396,13 @@ export function createAnthropicToResponsesStream(): Transform {
       usage: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
-        total_tokens: inputTokens + outputTokens
+        total_tokens: inputTokens + outputTokens,
+        // Rebuilding the usage from two scalars dropped `input_tokens_details`,
+        // which is where the cache split lives. The non-streaming converter emits
+        // it, so the same upstream reported a cache hit rate on the JSON path and
+        // zero on the SSE path while the total matched — the analytics panel read
+        // that as "no cache" rather than "unknown".
+        ...(inputTokenDetails ? { input_tokens_details: inputTokenDetails } : {})
       },
       ...extra
     };
@@ -403,6 +425,7 @@ export function createAnthropicToResponsesResponseTransform(
     };
   }
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => anthropicMessageToResponses(body, status),
     "openai"
@@ -574,6 +597,7 @@ export function createAnthropicToResponsesCompactionResponseTransform(
     };
   }
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => anthropicMessageToResponsesCompaction(body, status),
     "openai"
@@ -584,6 +608,7 @@ export function createResponsesToAnthropicStream(): Transform {
   const messageId = `msg_${randomUUID()}`;
   let model: string | null = null;
   let outputTokens = 0;
+  let finalUsage: Record<string, unknown> | null = null;
   let messageStarted = false;
   let completed = false;
   let nextBlockIndex = 0;
@@ -752,6 +777,15 @@ export function createResponsesToAnthropicStream(): Transform {
       model = response.model;
     }
     if (isRecord(response.usage)) {
+      // Keep the whole translated usage, not just the output count. Real upstreams
+      // send `usage: null` on response.created and the real numbers only on
+      // response.completed, so message_start's usage is always zeros and
+      // message_delta is the one frame left that can carry input and cache counts.
+      // Emitting output_tokens alone made every Claude-ingress stream over an
+      // OpenAI upstream log inputTokens: 0 — claude-proxy prefers the usage
+      // observed off the translated stream, so the numbers CompactGate reports
+      // are the ones written here.
+      finalUsage = openAiUsageToAnthropic(response.usage);
       if (typeof response.usage.output_tokens === "number") {
         outputTokens = response.usage.output_tokens;
       }
@@ -769,7 +803,15 @@ export function createResponsesToAnthropicStream(): Transform {
       return current;
     }
     const block: AnthropicStreamBlock = {
-      blockIndex: nextBlockIndex++,
+      // Assigned when the block actually starts, not here. Anthropic's `index` is
+      // the block's position in the final `message.content` array, and a block
+      // that never starts must not consume a position: a reasoning item with no
+      // summary and no encrypted_content is dropped by
+      // openAiReasoningToAnthropic, so allocating on creation burnt index 0 and
+      // the following text block opened at index 1 with nothing at 0. Consumers
+      // that assign by index get a hole; push-based accumulators only survive it
+      // by ignoring the number.
+      blockIndex: -1,
       outputIndex,
       contentIndex,
       type,
@@ -782,16 +824,25 @@ export function createResponsesToAnthropicStream(): Transform {
     return block;
   }
 
+  function startBlock(
+    transform: Transform,
+    block: AnthropicStreamBlock,
+    contentBlock: Record<string, unknown>
+  ): void {
+    block.started = true;
+    block.blockIndex = nextBlockIndex++;
+    emit(transform, "content_block_start", {
+      type: "content_block_start",
+      index: block.blockIndex,
+      content_block: contentBlock
+    });
+  }
+
   function ensureTextBlock(transform: Transform, outputIndex: number, contentIndex: number): AnthropicStreamBlock {
     const block = ensureBlock(outputIndex, contentIndex, "text");
     ensureMessageStart(transform, null);
     if (!block.started) {
-      block.started = true;
-      emit(transform, "content_block_start", {
-        type: "content_block_start",
-        index: block.blockIndex,
-        content_block: { type: "text", text: "" }
-      });
+      startBlock(transform, block, { type: "text", text: "" });
     }
     return block;
   }
@@ -819,12 +870,12 @@ export function createResponsesToAnthropicStream(): Transform {
     }
     if (!block.started && block.callId && block.name) {
       ensureMessageStart(transform, null);
-      block.started = true;
       sawToolUse = true;
-      emit(transform, "content_block_start", {
-        type: "content_block_start",
-        index: block.blockIndex,
-        content_block: { type: "tool_use", id: block.callId, name: block.name, input: {} }
+      startBlock(transform, block, {
+        type: "tool_use",
+        id: block.callId,
+        name: block.name,
+        input: {}
       });
     }
     return block;
@@ -834,12 +885,7 @@ export function createResponsesToAnthropicStream(): Transform {
     const block = ensureBlock(outputIndex, -1, "reasoning");
     ensureMessageStart(transform, null);
     if (!block.started) {
-      block.started = true;
-      emit(transform, "content_block_start", {
-        type: "content_block_start",
-        index: block.blockIndex,
-        content_block: { type: "thinking", thinking: "", signature: "" }
-      });
+      startBlock(transform, block, { type: "thinking", thinking: "", signature: "" });
     }
     return block;
   }
@@ -894,12 +940,7 @@ export function createResponsesToAnthropicStream(): Transform {
         ensureMessageStart(transform, null);
         const block = ensureBlock(outputIndex, -1, "reasoning");
         if (!block.started) {
-          block.started = true;
-          emit(transform, "content_block_start", {
-            type: "content_block_start",
-            index: block.blockIndex,
-            content_block: anthropic
-          });
+          startBlock(transform, block, anthropic);
         }
         stopBlock(transform, block);
         return;
@@ -953,11 +994,17 @@ export function createResponsesToAnthropicStream(): Transform {
     for (const block of blocks.values()) {
       stopBlock(transform, block);
     }
-    const stopReason = sawToolUse ? "tool_use" : openAiStopReason(response);
+    // Truncation outranks the tool call. A response cut off at max_output_tokens
+    // mid-arguments was reported as a complete `tool_use`, so the client executed
+    // a half-serialized call instead of seeing that the turn ran out of room.
+    const upstreamStopReason = openAiStopReason(response);
+    const stopReason = upstreamStopReason === "max_tokens" || !sawToolUse
+      ? upstreamStopReason
+      : "tool_use";
     emit(transform, "message_delta", {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { output_tokens: outputTokens }
+      usage: { ...finalUsage, output_tokens: outputTokens }
     });
     emit(transform, "message_stop", { type: "message_stop" });
     completed = true;
@@ -984,6 +1031,7 @@ export function createResponsesToAnthropicResponseTransform(
     };
   }
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => openAiResponseToAnthropic(body, status),
     "anthropic"
@@ -996,6 +1044,7 @@ export function createOpenAiInputTokensToAnthropicResponseTransform(
 ): UpstreamResponseTransform {
   ensureIdentityEncoding(headers);
   return bufferedJsonTransform(
+    status,
     translatedHeaders(headers),
     (body) => openAiInputTokensToAnthropic(body, status),
     "anthropic"
@@ -1017,6 +1066,8 @@ export function createChatToResponsesStream(): Transform {
   let usage: Record<string, unknown> | null = null;
   const emit = createSequencedEmitter();
   const toolCalls = new Map<number, ChatStreamToolCall>();
+  const toolCallSlotsById = new Map<string, number>();
+  let lastToolCallSlot = 0;
 
   return createSseTransform({
     onData: convertFrame,
@@ -1079,6 +1130,9 @@ export function createChatToResponsesStream(): Transform {
       text += delta.content;
       emit(transform, "response.output_text.delta", {
         type: "response.output_text.delta",
+        // Present on every other emitter in this module and on the real Responses
+        // API; a client that keys deltas by item_id saw undefined here.
+        item_id: textItemId,
         output_index: textOutputIndex,
         content_index: 0,
         delta: delta.content
@@ -1092,7 +1146,19 @@ export function createChatToResponsesStream(): Transform {
         if (!isRecord(item)) {
           throw new ProtocolConversionError("OpenAI Chat stream tool_calls must be objects.", 502);
         }
-        const index = nonNegativeStreamInteger(item.index) ?? 0;
+        // An upstream that omits `index` used to land every call on slot 0, merging
+        // parallel calls into one whose name was the concatenation of all of theirs.
+        // A frame carrying an id gets its own slot; a continuation frame carries
+        // neither an index nor an id, so it continues the slot most recently
+        // touched. Keying purely on the id would have been worse than the original:
+        // the very upstreams that omit `index` also omit `id` after the first frame,
+        // so every argument fragment fell back to slot 0 and conjured a second,
+        // nameless call there — turning a working single call into a 502.
+        const index = nonNegativeStreamInteger(item.index)
+          ?? (typeof item.id === "string" && item.id.length > 0
+            ? toolCallSlotForId(item.id)
+            : lastToolCallSlot);
+        lastToolCallSlot = index;
         const call = ensureToolCall(transform, index, item);
         if (item.type !== undefined && item.type !== "function") {
           throw new ProtocolConversionError("Only OpenAI Chat function tool calls can be translated.", 502);
@@ -1144,10 +1210,23 @@ export function createChatToResponsesStream(): Transform {
     });
     emit(transform, "response.content_part.added", {
       type: "response.content_part.added",
+      item_id: textItemId,
       output_index: textOutputIndex,
       content_index: 0,
       part: { type: "output_text", text: "", annotations: [] }
     });
+  }
+
+  function toolCallSlotForId(callId: string): number {
+    const existing = toolCallSlotsById.get(callId);
+    if (existing !== undefined) {
+      return existing;
+    }
+    // Above any real index the same stream could also use, so an upstream that
+    // mixes indexed and unindexed frames cannot have the two collide.
+    const slot = 1_000 + toolCallSlotsById.size;
+    toolCallSlotsById.set(callId, slot);
+    return slot;
   }
 
   function ensureToolCall(
@@ -1323,6 +1402,7 @@ export function createChatToResponsesResponseTransform(
     };
   }
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => chatCompletionToResponses(body, status),
     "openai"
@@ -1340,6 +1420,7 @@ export function createChatToResponsesCompactionResponseTransform(
     ? "text/event-stream; charset=utf-8"
     : "application/json; charset=utf-8";
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => {
       const compacted = chatCompletionToResponsesCompaction(body, status);
@@ -1392,6 +1473,7 @@ export function createChatToAnthropicResponseTransform(
     };
   }
   return bufferedJsonTransform(
+    status,
     responseHeaders,
     (body) => chatCompletionToAnthropic(body, status),
     "anthropic"
@@ -1487,29 +1569,70 @@ function createSequencedEmitter(): (transform: Transform, event: string, payload
 }
 
 function bufferedJsonTransform(
+  status: number,
   responseHeaders: IncomingHttpHeaders,
   convert: (body: Buffer) => Buffer,
   streamProtocol: "openai" | "anthropic"
 ): UpstreamResponseTransform {
   const chunks: Buffer[] = [];
-  return {
+  const transform: UpstreamResponseTransform = {
     stream: new Transform({
       transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
         chunks.push(Buffer.from(chunk));
         callback();
       },
       flush(callback: TransformCallback) {
+        const raw = Buffer.concat(chunks);
         try {
-          this.push(convert(Buffer.concat(chunks)));
-          callback();
+          this.push(convert(raw));
         } catch (error) {
-          callback(error as Error);
+          // The status line and headers are already on the wire by the time flush
+          // runs, so failing the transform here destroyed the socket with zero
+          // bytes written: the client saw a transport error ("fetch failed")
+          // instead of the upstream's own message, and the log's error_summary
+          // was overwritten with the converter's complaint. Every non-JSON error
+          // body on a translated route took this path — an nginx HTML 502, a
+          // plain-text gateway message, an empty body with a status code — which
+          // is exactly when the operator most needs to see what the upstream said.
+          this.push(untranslatableUpstreamBody(status, raw, responseHeaders, streamProtocol, error));
+          // Reported out of band so the request is still recorded as a failure. A
+          // 2xx whose body cannot be translated has nothing else marking it, and
+          // failover reads a success as "this profile is healthy".
+          transform.translationError = error instanceof Error
+            ? `[compactgate] ${error.message}`
+            : "[compactgate] Upstream response could not be translated.";
         }
+        callback();
       }
     }),
     responseHeaders,
     streamProtocol
   };
+  return transform;
+}
+
+/**
+ * A last-resort body in the protocol the client is expecting, carrying whatever
+ * the upstream actually sent. Framed as SSE when the response already announced
+ * a stream, because a bare JSON object mid-stream is no more parseable to the
+ * client than a dropped socket.
+ */
+function untranslatableUpstreamBody(
+  status: number,
+  raw: Buffer,
+  responseHeaders: IncomingHttpHeaders,
+  streamProtocol: "openai" | "anthropic",
+  error: unknown
+): Buffer {
+  const detail = raw.toString("utf8").trim().replace(/\s+/g, " ").slice(0, 600);
+  const reason = error instanceof Error ? error.message : "Upstream response could not be translated.";
+  const message = `[compactgate] ${reason} Upstream returned HTTP ${status}${detail ? `: ${detail}` : " with an empty body"}`;
+  const payload = streamProtocol === "anthropic"
+    ? { type: "error", error: { type: "api_error", message } }
+    : { error: { message, type: "upstream_error", code: null } };
+  return headerText(responseHeaders["content-type"]).toLowerCase().includes("text/event-stream")
+    ? Buffer.from(`event: error\ndata: ${JSON.stringify(payload)}\n\n`)
+    : Buffer.from(JSON.stringify(payload));
 }
 
 function composeTransforms(first: Transform, second: Transform): Duplex {

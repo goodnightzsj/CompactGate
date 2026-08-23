@@ -191,7 +191,10 @@ describe("sendBufferedUpstreamRequest", () => {
         res,
         upstream: new URL(upstream.url),
         startedAt: performance.now(),
-        timeoutMs: 1_000,
+        // Generous on purpose: a local round trip plus gzip inflate can exceed a
+        // one-second budget while the other 89 test files are running, and this
+        // case is about what the observer sees, not how fast it sees it.
+        timeoutMs: 15_000,
         timeoutMessage: "test upstream timed out",
         requestHeaders: {},
         body: Buffer.alloc(0),

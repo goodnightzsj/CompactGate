@@ -132,11 +132,29 @@ describe("OpenAI Chat upstream conversion", () => {
     expect(body.reasoning).toBeUndefined();
   });
 
-  it("still rejects a Responses reasoning object Chat cannot express", () => {
-    expect(() => responsesRequestToChat(Buffer.from(JSON.stringify({
+  it("translates a Responses reasoning object by keeping the effort and dropping its siblings", () => {
+    // Requiring a lone `effort` key meant the carve-out never matched real
+    // traffic: Codex sends `{context, effort}` on 100% of requests and this
+    // module's own Anthropic→Responses step emits `{effort, summary}`, so both
+    // fell through to the blanket rejection and every request 422'd. Nothing Chat
+    // accepts can express either sibling, so dropping them is the translation.
+    expect(JSON.parse(responsesRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5",
       input: "hello",
       reasoning: { effort: "high", summary: "detailed" }
+    }))).toString("utf8"))).toMatchObject({ reasoning_effort: "high" });
+
+    expect(JSON.parse(responsesRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: "hello",
+      reasoning: { effort: "medium", context: "prior-turn" }
+    }))).toString("utf8"))).toMatchObject({ reasoning_effort: "medium" });
+
+    // An object carrying no effort at all still has nothing to translate.
+    expect(() => responsesRequestToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      input: "hello",
+      reasoning: { summary: "detailed" }
     })))).toThrow(/cannot be translated to OpenAI Chat/);
   });
 
@@ -225,7 +243,7 @@ describe("OpenAI Chat upstream conversion", () => {
     expect(toolMessage.content).toBe("[image]");
   });
 
-  it("maps supported Anthropic Messages input to Chat and rejects stateful features", () => {
+  it("maps supported Anthropic Messages input to Chat and translates its stateful features", () => {
     const converted = anthropicRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
       system: "Be precise.",
@@ -251,15 +269,29 @@ describe("OpenAI Chat upstream conversion", () => {
       ]
     });
 
-    expect(() => anthropicRequestToChat(Buffer.from(JSON.stringify({
+    // Thinking now translates instead of failing the request. A budget-based dial
+    // becomes the effort tier it corresponds to; refusing it made every Claude Code
+    // turn 422 before the upstream was contacted, since Claude Code always sends a
+    // thinking block.
+    expect(JSON.parse(anthropicRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
       thinking: { type: "enabled", budget_tokens: 4096 },
       messages: [{ role: "user", content: "think" }]
-    })))).toThrow("Anthropic thinking cannot be translated to OpenAI Chat.");
-    expect(() => responsesRequestToChat(Buffer.from(JSON.stringify({
+    }))).toString("utf8"))).toMatchObject({ reasoning_effort: "medium" });
+
+    // A prior reasoning item carries provider-encrypted state that Chat has no
+    // field for, so it is dropped rather than refused — which is also what the
+    // client's own `context_management: clear_thinking` directive asks for. The
+    // surrounding turn still has to survive.
+    expect(JSON.parse(responsesRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
-      input: [{ type: "reasoning", encrypted_content: "state" }]
-    })))).toThrow("reasoning and compaction state cannot be translated");
+      input: [
+        { type: "reasoning", encrypted_content: "state" },
+        { type: "message", role: "user", content: "after" }
+      ]
+    }))).toString("utf8"))).toMatchObject({
+      messages: [{ role: "user", content: "after" }]
+    });
     expect(() => anthropicRequestToChat(Buffer.from(JSON.stringify({
       model: "gpt-5.5-chat",
       messages: [{ role: "user", content: "count" }]

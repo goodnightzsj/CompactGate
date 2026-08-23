@@ -46,6 +46,15 @@ export interface UpstreamResponseTransform {
   stream: Duplex;
   responseHeaders: IncomingHttpHeaders;
   streamProtocol: "openai" | "anthropic";
+  /**
+   * Set by the transform when it could not translate the upstream body and emitted
+   * a fallback error envelope instead. The envelope keeps the client from seeing a
+   * dropped socket, but the request still failed: without this the failure would be
+   * invisible to the log and — on a 2xx status, where nothing else marks it — would
+   * reach failover as a *success*, resetting the profile's failure counters and
+   * reinforcing stickiness onto an upstream that just returned garbage.
+   */
+  translationError?: string;
 }
 
 export interface BufferedUpstreamResult {
@@ -377,13 +386,14 @@ export function sendBufferedUpstreamRequest(
       const streamSummary = responseState.streamObserver
         ? await responseState.streamObserver.finish()
         : null;
+      const translationError = responseState.responseTransform?.translationError ?? null;
       resolveOnce({
         status: responseState.status,
         errorSummary: extractResponseErrorSummary(
           responseState.status,
           responseBody,
           responseState.response.headers
-        ),
+        ) ?? translationError,
         responseBody,
         responseBodyTruncated: responseState.responseBodyTruncated,
         responseHeaders: responseState.response.headers,

@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import {
   createBrotliDecompress,
   createGunzip,
@@ -112,8 +113,16 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     private readonly maxEventBytes: number
   ) {}
 
+  /**
+   * Decoding per chunk split multi-byte characters across chunk boundaries into
+   * replacement characters, garbling any observed text that straddled one. JSON
+   * still parsed, so usage and terminal detection survived — the damage was to the
+   * text CompactGate reports.
+   */
+  private readonly decoder = new StringDecoder("utf8");
+
   observe(chunk: Buffer): void {
-    const text = chunk.toString("utf8");
+    const text = this.decoder.write(chunk);
     let offset = 0;
 
     while (offset < text.length) {

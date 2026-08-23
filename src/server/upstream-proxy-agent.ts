@@ -5,8 +5,13 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
-let cachedHttpsProxyAgentKey: string | null = null;
-let cachedHttpsProxyAgent: HttpsAgent | null = null;
+/**
+ * Keyed rather than single-slot: alternating between profiles with different
+ * proxy_url values rebuilt the agent on every request, discarding its whole
+ * connection pool each time and defeating the point of having one.
+ */
+const httpsProxyAgents = new Map<string, HttpsAgent>();
+const MAX_CACHED_PROXY_AGENTS = 8;
 
 export const DEFAULT_MAX_PROXY_CONNECT_RESPONSE_HEADER_BYTES = 64 * 1024;
 const CONNECT_HEADER_END = Buffer.from("\r\n\r\n", "latin1");
@@ -34,12 +39,22 @@ export function resolveUpstreamAgent(
   }
 
   const key = proxy.toString();
-  if (cachedHttpsProxyAgentKey !== key || !cachedHttpsProxyAgent) {
-    cachedHttpsProxyAgentKey = key;
-    cachedHttpsProxyAgent = new HttpConnectHttpsAgent(proxy);
+  const cached = httpsProxyAgents.get(key);
+  if (cached) {
+    return cached;
   }
-
-  return cachedHttpsProxyAgent ?? undefined;
+  const agent = new HttpConnectHttpsAgent(proxy);
+  // Bounded so a config that cycles through many proxies cannot grow the map for
+  // the process's lifetime; the evicted agent's sockets close with it.
+  if (httpsProxyAgents.size >= MAX_CACHED_PROXY_AGENTS) {
+    const oldest = httpsProxyAgents.keys().next().value;
+    if (oldest !== undefined) {
+      httpsProxyAgents.get(oldest)?.destroy();
+      httpsProxyAgents.delete(oldest);
+    }
+  }
+  httpsProxyAgents.set(key, agent);
+  return agent;
 }
 
 class HttpConnectHttpsAgent extends HttpsAgent {

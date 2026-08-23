@@ -25,12 +25,24 @@ function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics
   const inputTokens = readInputTokens(usage);
   const outputTokens = readOutputTokens(usage, reasoningTokens);
   const cacheReadInputTokens = readCacheReadInputTokens(usage);
-  const cacheCreationInputTokens =
+  // Anthropic-shaped sources only: in that dialect the cache counters are *additive*
+  // to input_tokens, which is what `additiveCachedInputTokens` signals downstream.
+  const additiveCacheCreationInputTokens =
     readCacheCreationInputTokens(usage) ??
     readAnthropicCacheCreationInputTokens(usage.cache_creation);
+  // OpenAI-shaped, and therefore already counted *inside* input_tokens — exactly
+  // like `input_tokens_details.cached_tokens`, which feeds the non-additive channel
+  // below. Cache writes were only ever looked for at the root, which is not where
+  // anthropicUsageToResponses puts them, so a translated Anthropic response reported
+  // its cache reads and never its cache writes. It has to be reported without
+  // joining the additive sum: doing both told the analytics layer to add the cache
+  // on top of a total that already contained it, inflating input by the cache size
+  // and collapsing the hit rate.
+  const nestedCacheWriteTokens = readNestedNumber(usage.input_tokens_details, "cache_write_tokens");
+  const cacheCreationInputTokens = additiveCacheCreationInputTokens ?? nestedCacheWriteTokens;
   const additiveCachedInputTokens = sumNullableNumberList([
     cacheReadInputTokens,
-    cacheCreationInputTokens
+    additiveCacheCreationInputTokens
   ]);
   const additiveCachedOutputTokens = readFirstNumber(usage, [
     "cache_read_output_tokens",
