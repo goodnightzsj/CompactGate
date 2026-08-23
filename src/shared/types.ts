@@ -201,9 +201,13 @@ export interface PublicRouteUrlPreset {
 }
 
 export interface CompactGateConfig extends CompactGateRuntimeConfig {
-  /** @deprecated Legacy combined profiles. Loaded as both codex and claude profile scopes. */
+  /**
+   * @deprecated Legacy combined profiles. Migrated into `profile_scopes` when a
+   * loaded or imported config has none: each entry lands in the codex scope
+   * unless its stored config carries nothing but the `claude` section.
+   */
   profiles?: SavedConfigProfile[];
-  /** @deprecated Legacy combined active profile. Loaded as both codex and claude active profile IDs. */
+  /** @deprecated Legacy combined active profile. Migrated to whichever scope owns the referenced profile. */
   active_profile_id?: string | null;
   profile_scopes?: SavedConfigProfileScopes;
   route_url_presets?: RouteUrlPreset[];
@@ -217,6 +221,7 @@ export interface PublicConfigProfile {
   updated_at: string;
   primary_base_url: string | null;
   primary_state_domain_id: string | null;
+  primary_reasoning_effort: PrimaryReasoningEffort | null;
   compact_base_url: string | null;
   claude_primary_base_url: string | null;
   claude_compact_base_url: string | null;

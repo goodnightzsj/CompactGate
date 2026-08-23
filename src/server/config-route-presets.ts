@@ -167,7 +167,8 @@ export function withRecordedRouteUrlPresets(
 
 export function mergeRouteUrlPresets(
   baseValue: RouteUrlPreset[] | undefined,
-  patchValue: unknown
+  patchValue: unknown,
+  strict = false
 ): RouteUrlPreset[] {
   const source = Array.isArray(patchValue) ? patchValue : baseValue ?? [];
   // Only when the patch supplies the list: an omitted credential then means
@@ -179,7 +180,7 @@ export function mergeRouteUrlPresets(
   const baseline = Array.isArray(patchValue) ? baseValue ?? [] : null;
   return normalizeRouteUrlPresets(
     source
-      .map((value) => readRouteUrlPreset(value, baseline))
+      .map((value) => readRouteUrlPreset(value, baseline, strict))
       .filter((preset): preset is RouteUrlPreset => preset !== null)
   );
 }
@@ -247,20 +248,24 @@ function applyCredentialPresetToRoutePatch(
 
 function readRouteUrlPreset(
   value: unknown,
-  baseline: RouteUrlPreset[] | null
+  baseline: RouteUrlPreset[] | null,
+  strict: boolean
 ): RouteUrlPreset | null {
   if (!isRecord(value)) {
-    return null;
+    return rejectRouteUrlPreset("route_url_presets entries must be JSON objects.", strict);
   }
 
   const kind = readString(value.kind, "");
   if (!isRouteUrlPresetKind(kind)) {
-    return null;
+    return rejectRouteUrlPreset("route_url_presets.kind must be a known route URL preset kind.", strict);
   }
 
   const baseUrl = readString(value.base_url, "");
   if (!baseUrl || !isValidBaseUrl(baseUrl)) {
-    return null;
+    return rejectRouteUrlPreset(
+      `route_url_presets.${kind}.base_url must be a valid http or https URL.`,
+      strict
+    );
   }
 
   const createdAt = readString(value.created_at, new Date(0).toISOString());
@@ -291,6 +296,17 @@ function readRouteUrlPreset(
     updated_at: updatedAt,
     usage_count: Number.isInteger(usageCount) && usageCount > 0 ? usageCount : 1
   };
+}
+
+function rejectRouteUrlPreset(message: string, strict: boolean): null {
+  // Tolerated on the patch path, rejected on import: an import replaces the whole
+  // file and its preview already counted the presets, so a silent drop returns
+  // 200 while persisting fewer credentials than the user was shown.
+  if (strict) {
+    throw new ConfigError(message);
+  }
+
+  return null;
 }
 
 function sortRouteUrlPresets(presets: RouteUrlPreset[]): RouteUrlPreset[] {

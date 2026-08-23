@@ -178,7 +178,10 @@ export function sendJson(res: ServerResponse, status: number, payload: unknown):
 
 export function statusForError(error: unknown): number {
   if (error instanceof ConfigError) {
-    return 400;
+    // A lost write (409) and a missing profile (404) are not malformed payloads;
+    // the client has to be able to tell them apart without matching English
+    // prose, so `status` carries the distinction from the throw site.
+    return error.status ?? 400;
   }
 
   if (error instanceof RequestBodyTooLargeError) {

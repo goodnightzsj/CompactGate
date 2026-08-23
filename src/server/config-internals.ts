@@ -10,9 +10,17 @@ import type {
 export { isRecord };
 
 export class ConfigError extends Error {
-  constructor(message: string) {
+  /**
+   * HTTP status this error should surface as, when 400 is wrong. Clients could
+   * otherwise only tell a lost write from a bad payload by regex-matching the
+   * English message.
+   */
+  readonly status: number | undefined;
+
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "ConfigError";
+    this.status = status;
   }
 }
 

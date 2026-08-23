@@ -118,6 +118,41 @@ describe("config writes cannot pair one route's URL with another's credential", 
     expect(moved?.api_key).toBe("");
   });
 
+  it("keeps an update-by-id internally coherent, and leaves a rename alone", async () => {
+    const store = await loadStore();
+
+    await store.saveProfile("codex", "A", {
+      primary: { base_url: "https://a.example/v1", api_key: "sk-A" }
+    });
+    const withB = await store.saveProfile("codex", "B", {
+      primary: { base_url: "https://b.example/v1", api_key: "sk-B" }
+    });
+    const ids = withB.profile_scopes?.codex?.profiles ?? [];
+    const aId = ids.find((p) => p.name === "A")?.id ?? "";
+    const bId = ids.find((p) => p.name === "B")?.id ?? "";
+    await store.applyProfile("codex", aId);
+
+    // "保存当前草稿到这个档案" on the *inactive* card B. The form is always built
+    // from the runtime, so the patch carries A's base_url and omits the untouched
+    // api_key. Merging onto B's own config filed A's URL beside B's key — a
+    // guaranteed 401 that cannot be repaired from the UI.
+    const updated = await store.updateProfile("codex", bId, "B", {
+      primary: { base_url: "https://a.example/v1" }
+    });
+    expect(updated.profile_scopes?.codex?.profiles?.find((p) => p.id === bId)?.config)
+      .toMatchObject({ primary: { base_url: "https://a.example/v1", api_key: "sk-A" } });
+
+    // A rename carries no config at all, and must not rewrite the profile: the
+    // runtime is still A, so merging it in would overwrite every field of the
+    // profile being renamed.
+    const renamed = await store.updateProfile("codex", bId, "B renamed", undefined);
+    const after = renamed.profile_scopes?.codex?.profiles?.find((p) => p.id === bId);
+    expect(after?.name).toBe("B renamed");
+    expect(after?.config).toMatchObject({
+      primary: { base_url: "https://a.example/v1", api_key: "sk-A" }
+    });
+  });
+
   it("rejects duplicate profile ids instead of locking reorder forever", async () => {
     const store = await loadStore();
 

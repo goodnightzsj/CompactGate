@@ -77,8 +77,8 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   ) {
     throw new ConfigError("claude.long_context_bytes must be between 0 and 104857600.");
   }
-  validateUpstreamMode(config.compact.upstream_mode);
-  validateUpstreamMode(config.claude.compact.upstream_mode);
+  validateUpstreamMode(config.compact.upstream_mode, "compact.upstream_mode");
+  validateUpstreamMode(config.claude.compact.upstream_mode, "claude.compact.upstream_mode");
   validateModelMode(config.compact.model_mode);
 
   if (!config.compact.model_template.includes("{model}")) {
@@ -345,9 +345,11 @@ function validateClaudeSceneMap(sceneMap: ClaudeSceneMap): void {
   }
 }
 
-function validateUpstreamMode(value: string): asserts value is CompactUpstreamMode {
+function validateUpstreamMode(value: string, field: string): asserts value is CompactUpstreamMode {
   if (value !== "split" && value !== "primary") {
-    throw new ConfigError("compact.upstream_mode must be split or primary.");
+    // Named field: a bad `claude.compact.upstream_mode` used to report
+    // `compact.upstream_mode`, pointing the reader at the Codex route.
+    throw new ConfigError(`${field} must be split or primary.`);
   }
 }
 

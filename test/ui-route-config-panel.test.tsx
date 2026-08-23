@@ -114,6 +114,7 @@ function baseProfile(): PublicConfig["profiles"][number] {
     updated_at: "2026-08-14T00:00:00.000Z",
     primary_base_url: null,
     primary_state_domain_id: null,
+    primary_reasoning_effort: null,
     compact_base_url: null,
     claude_primary_base_url: null,
     claude_compact_base_url: null,

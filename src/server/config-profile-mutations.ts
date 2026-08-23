@@ -63,10 +63,14 @@ export function saveProfile(
     };
 
     const nextConfig = withProfileScope(current, scope, {
-      profiles: [
-        ...existingProfiles.filter((profile) => profile.id !== nextProfile.id).map(cloneProfile),
-        nextProfile
-      ],
+      // Replaced in place rather than filtered-and-appended. List position is the
+      // failover order — `codexPrimaryCandidates` derives `order` from it, and the
+      // UI offers explicit drag-and-drop reordering — so overwriting B by name used
+      // to move B last and silently turn A→B→C into A→C→B.
+      profiles: existing
+        ? existingProfiles.map((profile) =>
+          profile.id === nextProfile.id ? nextProfile : cloneProfile(profile))
+        : [...existingProfiles.map(cloneProfile), nextProfile],
       active_profile_id: scopeState.active_profile_id ?? null
     });
     const savedConfig =
@@ -87,7 +91,7 @@ export function updateProfile(
   patch: unknown
 ): CompactGateConfig {
     const { scopeState, profile } = requireProfile(current, scope, profileId);
-    if (!isRecord(patch)) {
+    if (patch !== undefined && !isRecord(patch)) {
       throw new ConfigError("Profile config patch must be a JSON object.");
     }
 
@@ -101,10 +105,21 @@ export function updateProfile(
     }
 
     const now = new Date().toISOString();
-    const profileConfig = extractScopedProfileConfig(
-      mergeRuntimeConfig(profileConfigToRuntime(profile.config), patch),
-      scope
-    );
+    // Same merge base as `saveProfile`, and for the same reason: a supplied patch
+    // came from the Studio form, which is always built from the runtime and never
+    // from a non-active profile. Basing it on the target's own config filed the
+    // runtime's base_url beside the target's api_key — one provider's URL with
+    // another's credential, a guaranteed 401 that cannot be repaired from the UI
+    // because keys are never returned. Overwriting a profile means "make it equal
+    // my draft", and the draft's blank key box means "the credential in effect for
+    // that route".
+    //
+    // A rename carries no patch at all, and must leave the stored config alone —
+    // merging the runtime in on a rename would silently rewrite every field of the
+    // profile being renamed.
+    const profileConfig = patch === undefined
+      ? cloneProfileConfig(profile.config)
+      : extractScopedProfileConfig(mergeRuntimeConfig(current, patch), scope);
     validateProfileConfig(profileConfig, scope);
     const nextConfig = withProfileScope(current, scope, {
       profiles: existingProfiles.map((item) =>
@@ -301,7 +316,7 @@ function requireProfile(
     const scopeState = getProfileScopeState(current, scope);
     const profile = (scopeState.profiles ?? []).find((item) => item.id === profileId);
     if (!profile) {
-      throw new ConfigError("Profile not found.");
+      throw new ConfigError("Profile not found.", 404);
     }
 
     return { scopeState, profile };

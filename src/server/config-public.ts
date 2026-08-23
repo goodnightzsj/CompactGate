@@ -103,6 +103,9 @@ function toPublicProfile(
     updated_at: profile.updated_at,
     primary_base_url: codexProfile ? runtime.primary.base_url : null,
     primary_state_domain_id: codexProfile ? runtime.primary.state_domain_id : null,
+    // Codex profiles override the client's reasoning effort, so the card has to
+    // be able to show which one this profile pins.
+    primary_reasoning_effort: codexProfile ? runtime.primary.reasoning_effort : null,
     compact_base_url: codexProfile ? runtime.compact.base_url : null,
     claude_primary_base_url: codexProfile ? null : runtime.claude.primary.base_url,
     claude_compact_base_url: codexProfile ? null : runtime.claude.compact.base_url,

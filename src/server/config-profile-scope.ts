@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import type {
   CompactGateConfig,
   CompactGateRuntimeConfig,
@@ -14,6 +15,7 @@ import {
   cloneProfileConfig,
   cloneProfileScope,
   cloneRuntimeConfig,
+  ConfigError,
   isRecord,
   readChild,
   readString
@@ -24,6 +26,8 @@ import {
   mergeRuntimeConfig,
   validateRuntimeConfig
 } from "./config-runtime.js";
+
+const EPOCH_ISO = new Date(0).toISOString();
 
 export function extractScopedProfileConfig(
   runtime: CompactGateRuntimeConfig,
@@ -49,73 +53,183 @@ export function extractScopedProfileConfig(
 
 export function mergeProfileScopes(
   base: CompactGateConfig,
-  patchRecord: Record<string, unknown>
+  patchRecord: Record<string, unknown>,
+  strict = false
 ): SavedConfigProfileScopes {
   const baseScopes = base.profile_scopes;
   const patchScopes = readChild(patchRecord.profile_scopes);
+  const legacy = migrateLegacyProfiles(base, patchRecord, strict);
 
   return {
-    codex: mergeProfileScopeState("codex", baseScopes?.codex, readChild(patchScopes.codex)),
-    claude: mergeProfileScopeState("claude", baseScopes?.claude, readChild(patchScopes.claude))
+    codex: mergeProfileScopeState(
+      "codex",
+      baseScopes?.codex,
+      readChild(patchScopes.codex),
+      legacy.codex,
+      strict
+    ),
+    claude: mergeProfileScopeState(
+      "claude",
+      baseScopes?.claude,
+      readChild(patchScopes.claude),
+      legacy.claude,
+      strict
+    )
   };
 }
 
 function mergeProfileScopeState(
   scope: ConfigProfileScope,
   baseState: SavedConfigProfileScopeState | undefined,
-  patchState: Record<string, unknown>
+  patchState: Record<string, unknown>,
+  legacyState: SavedConfigProfileScopeState | null,
+  strict: boolean
 ): SavedConfigProfileScopeState {
-  const baseProfiles = baseState?.profiles ?? [];
+  // The migrated legacy list only stands in while this scope has nothing stored:
+  // a source that already carries `profile_scopes` is authoritative, and an
+  // omitted list means "unchanged", never "empty".
+  const fallbackState = legacyState && (baseState?.profiles ?? []).length === 0
+    ? legacyState
+    : baseState;
+  const baseProfiles = fallbackState?.profiles ?? [];
   return {
     profiles: Array.isArray(patchState.profiles)
-      ? mergeProfiles(scope, baseProfiles, patchState.profiles)
+      ? mergeProfiles(scope, baseProfiles, patchState.profiles, strict)
       : baseProfiles.map(cloneProfile),
     active_profile_id: readActiveProfileId(
       patchState.active_profile_id,
-      baseState?.active_profile_id ?? null
+      fallbackState?.active_profile_id ?? null
     )
+  };
+}
+
+/**
+ * Legacy configs — and exported backups written by that era — keep the whole
+ * profile list at the top level with no `profile_scopes` at all. Reading only
+ * `profile_scopes` loses every profile and credential in such a file, and the
+ * next write persists the emptied list, so opening the file destroys it. A
+ * top-level profile predates the scope split and therefore has no scope of its
+ * own: it is a Codex profile unless its stored config carries nothing but the
+ * `claude` section, which is the shape CompactGate wrote for Claude-only
+ * profiles before the split landed.
+ */
+function migrateLegacyProfiles(
+  base: CompactGateConfig,
+  patchRecord: Record<string, unknown>,
+  strict: boolean
+): Record<ConfigProfileScope, SavedConfigProfileScopeState | null> {
+  const source = Array.isArray(patchRecord.profiles) ? patchRecord.profiles : base.profiles;
+  if (!Array.isArray(source) || source.length === 0) {
+    return { codex: null, claude: null };
+  }
+
+  const activeProfileId = readActiveProfileId(
+    patchRecord.active_profile_id,
+    base.active_profile_id ?? null
+  );
+  const migrated: Record<ConfigProfileScope, SavedConfigProfile[]> = { codex: [], claude: [] };
+  for (const item of source) {
+    const scope = legacyProfileScope(item);
+    const profile = readProfile(item, scope, null, strict);
+    if (profile) {
+      migrated[scope].push(profile);
+    }
+  }
+
+  return {
+    codex: legacyScopeState(migrated.codex, activeProfileId),
+    claude: legacyScopeState(migrated.claude, activeProfileId)
+  };
+}
+
+function legacyProfileScope(value: unknown): ConfigProfileScope {
+  const config = readChild(readChild(value).config);
+  return Object.hasOwn(config, "claude") &&
+    !Object.hasOwn(config, "primary") &&
+    !Object.hasOwn(config, "compact")
+    ? "claude"
+    : "codex";
+}
+
+function legacyScopeState(
+  profiles: SavedConfigProfile[],
+  activeProfileId: string | null
+): SavedConfigProfileScopeState {
+  return {
+    profiles,
+    active_profile_id: profiles.some((profile) => profile.id === activeProfileId)
+      ? activeProfileId
+      : null
   };
 }
 
 function mergeProfiles(
   scope: ConfigProfileScope,
   baseProfiles: SavedConfigProfile[],
-  value: unknown
+  value: unknown[],
+  strict: boolean
 ): SavedConfigProfile[] {
-  if (!Array.isArray(value)) {
-    return baseProfiles.map(cloneProfile);
-  }
-
+  const baseline = new Map(baseProfiles.map((profile) => [profile.id, profile]));
   return value
-    .map((item) => readProfile(item, scope))
+    .map((item) => readProfile(item, scope, baseline, strict))
     .filter((item): item is SavedConfigProfile => item !== null);
 }
 
 function readProfile(
   value: unknown,
-  scope: ConfigProfileScope
+  scope: ConfigProfileScope,
+  baseline: Map<string, SavedConfigProfile> | null,
+  strict: boolean
 ): SavedConfigProfile | null {
   if (!isRecord(value)) {
-    return null;
+    return rejectProfile("profile must be a JSON object.", strict);
   }
 
   const id = readString(value.id, "");
-  const name = readString(value.name, "");
-  if (!id || !name) {
-    return null;
+  if (!id) {
+    return rejectProfile("profile.id is required.", strict);
   }
 
+  const existing = baseline?.get(id) ?? null;
+  const name = readString(value.name, existing?.name ?? "");
+  if (!name) {
+    return rejectProfile("profile.name is required.", strict);
+  }
+
+  // "Omitted means unchanged", the same rule `route_url_presets` follows, and
+  // here it is forced: `PublicConfigProfile` carries no `config` field at all, so
+  // the ordinary GET /api/config → change one field → PATCH round trip restates
+  // every profile by id, name and timestamps only. Rebuilding those on
+  // DEFAULT_CONFIG kept the identity while resetting base_url, api_key,
+  // state_domain_id, protocol and compact settings to the defaults — a 200 that
+  // silently destroyed every stored credential. `importConfig` merges against
+  // DEFAULT_CONFIG, where the baseline is empty, so a real import still replaces
+  // the list outright.
   const config = extractScopedProfileConfig(
-    mergeRuntimeConfig(DEFAULT_CONFIG, readChild(value.config)),
+    mergeRuntimeConfig(
+      existing ? profileConfigToRuntime(existing.config) : DEFAULT_CONFIG,
+      readChild(value.config)
+    ),
     scope
   );
   return {
     id,
     name,
-    created_at: readString(value.created_at, new Date(0).toISOString()),
-    updated_at: readString(value.updated_at, new Date(0).toISOString()),
+    created_at: readString(value.created_at, existing?.created_at ?? EPOCH_ISO),
+    updated_at: readString(value.updated_at, existing?.updated_at ?? EPOCH_ISO),
     config
   };
+}
+
+function rejectProfile(message: string, strict: boolean): null {
+  // Dropping junk entries is deliberate on the patch path. An import replaces
+  // the whole file and its preview already counted the entries, so a silent drop
+  // there returns 200 while persisting fewer profiles than the user was shown.
+  if (strict) {
+    throw new ConfigError(message);
+  }
+
+  return null;
 }
 
 function readActiveProfileId(value: unknown, fallback: string | null): string | null {
@@ -192,10 +306,14 @@ export function withProfileScope(
   };
 }
 
-export function syncActiveProfilesFromRuntime(config: CompactGateConfig): CompactGateConfig {
+export function syncActiveProfilesFromRuntime(
+  config: CompactGateConfig,
+  previous: CompactGateConfig
+): CompactGateConfig {
   const now = new Date().toISOString();
   return syncActiveProfileScopeFromRuntime(
-    syncActiveProfileScopeFromRuntime(config, "codex", now),
+    syncActiveProfileScopeFromRuntime(config, previous, "codex", now),
+    previous,
     "claude",
     now
   );
@@ -203,6 +321,7 @@ export function syncActiveProfilesFromRuntime(config: CompactGateConfig): Compac
 
 function syncActiveProfileScopeFromRuntime(
   config: CompactGateConfig,
+  previous: CompactGateConfig,
   scope: ConfigProfileScope,
   updatedAt: string
 ): CompactGateConfig {
@@ -215,13 +334,34 @@ function syncActiveProfileScopeFromRuntime(
     });
   }
 
+  // A patch that moves the pointer is a profile switch, not an edit of the
+  // profile it lands on. Mirroring the runtime into the target would overwrite
+  // the target's stored base_url and api_key with the ones belonging to the
+  // profile being left — the switch would destroy the credentials it was meant
+  // to activate. Apply the target instead, the same direction `applyProfile`
+  // moves. While the pointer stays put the mirror is still right: a patch that
+  // only touches runtime fields *is* an edit of the active profile.
+  const target = scopeState.profiles.find((profile) => profile.id === activeProfileId);
+  if (target && getProfileScopeState(previous, scope).active_profile_id !== activeProfileId) {
+    return withProfileScope(
+      { ...config, ...mergeRuntimeForProfileScope(config, target.config, scope) },
+      scope,
+      { profiles: scopeState.profiles, active_profile_id: activeProfileId }
+    );
+  }
+
   const runtimeProfileConfig = extractScopedProfileConfig(config, scope);
   validateProfileConfig(runtimeProfileConfig, scope);
   const profiles = scopeState.profiles.map((profile) =>
     profile.id === activeProfileId
       ? {
           ...profile,
-          updated_at: updatedAt,
+          // Only a real change counts as an edit. Restamping on every patch made
+          // an unrelated `logging.keep_recent` change age both scopes' active
+          // profile cards to "just updated".
+          updated_at: sameProfileConfig(profile.config, runtimeProfileConfig)
+            ? profile.updated_at
+            : updatedAt,
           config: cloneProfileConfig(runtimeProfileConfig)
         }
       : cloneProfile(profile)
@@ -233,11 +373,27 @@ function syncActiveProfileScopeFromRuntime(
   });
 }
 
+function sameProfileConfig(
+  left: SavedConfigProfileConfig,
+  right: SavedConfigProfileConfig
+): boolean {
+  // Both sides are produced by `extractScopedProfileConfig`, so the key order
+  // matches and a string compare is enough. A false negative only costs a
+  // spurious timestamp, which is what this replaces.
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function createProfileId(name: string, isoTime: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "profile";
-  return `${slug}-${Date.parse(isoTime).toString(36)}`;
+  // The slug is lossy — truncated at 40 characters and every run of
+  // non-alphanumerics collapsed to one dash — so two different names can slug
+  // identically, and two profiles created in the same millisecond then get the
+  // same id. `validateConfig` rejects that as "ids must be unique", an error
+  // pointing nowhere near the actual cause. Bind the id to the full name so
+  // distinct names cannot collide.
+  return `${slug}-${Date.parse(isoTime).toString(36)}-${hash("sha1", name, "hex").slice(0, 6)}`;
 }

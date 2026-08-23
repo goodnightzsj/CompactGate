@@ -99,10 +99,8 @@ export class ConfigStore {
 
     return this.mutate(() => {
       const merged = mergeConfig(this.current, applyRouteUrlCredentialPresetBindings(this.current, patch));
-      return withRecordedRouteUrlPresets(syncActiveProfilesFromRuntime({
-        ...merged,
-        active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
-      }), routeUrlEntriesFromRuntime(merged));
+      const next = syncActiveProfilesFromRuntime(merged, this.current);
+      return withRecordedRouteUrlPresets(next, routeUrlEntriesFromRuntime(next));
     }, patch.revision);
   }
 
@@ -111,13 +109,7 @@ export class ConfigStore {
       throw new ConfigError("Imported config must be a JSON object.");
     }
 
-    return this.mutate(() => {
-      const merged = mergeConfig(DEFAULT_CONFIG, value);
-      return {
-        ...merged,
-        active_profile_id: merged.profile_scopes?.codex?.active_profile_id ?? null
-      };
-    });
+    return this.mutate(() => mergeConfig(DEFAULT_CONFIG, value, true));
   }
 
   async saveProfile(
@@ -217,8 +209,13 @@ export class ConfigStore {
     }
 
     if (revision !== this.revision) {
+      // 409, not 400: nothing about the payload is malformed, the client simply
+      // lost a race and has an override path ("save my draft anyway"). The
+      // message text is load-bearing for older clients that detect the conflict
+      // by matching it, so it must not change.
       throw new ConfigError(
-        "Config patch was built from a superseded revision. Reload the config and reapply the change."
+        "Config patch was built from a superseded revision. Reload the config and reapply the change.",
+        409
       );
     }
   }
@@ -334,15 +331,15 @@ function validateRouteUrlPreset(preset: RouteUrlPreset): void {
   }
 }
 
-function mergeConfig(base: CompactGateConfig, patch: unknown): CompactGateConfig {
+function mergeConfig(base: CompactGateConfig, patch: unknown, strict = false): CompactGateConfig {
   const patchRecord = isRecord(patch) ? patch : {};
   const runtime = mergeRuntimeConfig(base, patchRecord);
-  const profileScopes = mergeProfileScopes(base, patchRecord);
+  const profileScopes = mergeProfileScopes(base, patchRecord, strict);
 
   return {
     ...runtime,
     active_profile_id: profileScopes.codex?.active_profile_id ?? null,
     profile_scopes: profileScopes,
-    route_url_presets: mergeRouteUrlPresets(base.route_url_presets, patchRecord.route_url_presets)
+    route_url_presets: mergeRouteUrlPresets(base.route_url_presets, patchRecord.route_url_presets, strict)
   };
 }

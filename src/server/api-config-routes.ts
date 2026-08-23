@@ -109,7 +109,7 @@ export async function handleConfigApi(
       await readJsonBody(req),
       "config profile update requires a profile id."
     );
-    const profilePatch = Object.hasOwn(body, "config") ? body.config : {};
+    const profilePatch = Object.hasOwn(body, "config") ? body.config : undefined;
     await configStore.updateProfile(
       readProfileScope(body, url),
       readProfileId(body, "update"),
