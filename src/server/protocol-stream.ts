@@ -46,6 +46,8 @@ interface AnthropicStreamBlock {
   arguments: string;
   callId?: string;
   name?: string;
+  customTool?: boolean;
+  inputEmitted?: boolean;
 }
 
 interface ChatStreamToolCall {
@@ -341,7 +343,13 @@ export function createAnthropicToResponsesStream(): Transform {
         stopReason = event.delta.stop_reason;
       }
       const usage = anthropicUsageToResponses(event.usage);
-      if (usage && typeof usage.output_tokens === "number") {
+      // Cumulative here too, so the same "only when it grew" rule the input
+      // total uses below applies. Some relays append a zero-filled `usage` to
+      // every frame after the real one — the behaviour `mergeUsage` already
+      // guards against — and taking the last word wiped the output count the
+      // preceding delta had just reported, in the very frame both the client
+      // and the log read.
+      if (usage && typeof usage.output_tokens === "number" && usage.output_tokens > outputTokens) {
         outputTokens = usage.output_tokens;
       }
       // Anthropic restates the *cumulative* counts here, and reports the cache split
@@ -649,6 +657,8 @@ export function createResponsesToAnthropicStream(): Transform {
       const outputIndex = readIndex(event.output_index);
       if (event.item.type === "function_call") {
         ensureToolBlock(transform, outputIndex, event.item);
+      } else if (event.item.type === "custom_tool_call") {
+        ensureToolBlock(transform, outputIndex, event.item, true);
       } else if (event.item.type === "reasoning") {
         ensureBlock(outputIndex, -1, "reasoning");
       }
@@ -713,12 +723,38 @@ export function createResponsesToAnthropicStream(): Transform {
       const block = ensureToolBlock(transform, readIndex(event.output_index), event);
       if (block.arguments.length === 0 && typeof event.arguments === "string" && event.arguments.length > 0) {
         block.arguments = event.arguments;
-        emit(transform, "content_block_delta", {
-          type: "content_block_delta",
-          index: block.blockIndex,
-          delta: { type: "input_json_delta", partial_json: event.arguments }
-        });
+        // Same guard as the `.delta` branch above. A block that never started
+        // has no index yet, and emitting for it put `index: -1` on the wire:
+        // an upstream that omits `output_index` on this frame resolves to slot
+        // 0, which is a different, unstarted block whenever the real call sat
+        // at a later output index.
+        if (block.started) {
+          emit(transform, "content_block_delta", {
+            type: "content_block_delta",
+            index: block.blockIndex,
+            delta: { type: "input_json_delta", partial_json: event.arguments }
+          });
+        }
       }
+      stopBlock(transform, block);
+      return;
+    }
+
+    if (event.type === "response.custom_tool_call_input.delta" && typeof event.delta === "string") {
+      // Accumulated but not forwarded: the fragments of a JSON string are not
+      // themselves valid JSON, and a custom tool's freeform text has to be
+      // wrapped into an object before it can go out as `input_json_delta`. The
+      // whole input is emitted once the item closes.
+      ensureToolBlock(transform, readIndex(event.output_index), event, true).arguments += event.delta;
+      return;
+    }
+
+    if (event.type === "response.custom_tool_call_input.done") {
+      const block = ensureToolBlock(transform, readIndex(event.output_index), event, true);
+      if (typeof event.input === "string" && event.input.length > 0) {
+        block.arguments = event.input;
+      }
+      emitToolInput(transform, block, block.arguments);
       stopBlock(transform, block);
       return;
     }
@@ -859,9 +895,13 @@ export function createResponsesToAnthropicStream(): Transform {
   function ensureToolBlock(
     transform: Transform,
     outputIndex: number,
-    item: Record<string, unknown>
+    item: Record<string, unknown>,
+    customTool = false
   ): AnthropicStreamBlock {
     const block = ensureBlock(outputIndex, -1, "tool_use");
+    if (customTool) {
+      block.customTool = true;
+    }
     if (typeof item.call_id === "string") {
       block.callId = item.call_id;
     }
@@ -879,6 +919,25 @@ export function createResponsesToAnthropicStream(): Transform {
       });
     }
     return block;
+  }
+
+  function emitToolInput(transform: Transform, block: AnthropicStreamBlock, raw: string): void {
+    if (!block.started || block.inputEmitted || raw.length === 0) {
+      return;
+    }
+    block.inputEmitted = true;
+    emit(transform, "content_block_delta", {
+      type: "content_block_delta",
+      index: block.blockIndex,
+      delta: {
+        type: "input_json_delta",
+        // A custom tool carries freeform text where a function carries JSON, and
+        // Anthropic's tool_use.input is always an object — so the text goes under
+        // a single key, the same shape the request direction produces for the
+        // matching input item.
+        partial_json: block.customTool ? JSON.stringify({ input: raw }) : raw
+      }
+    });
   }
 
   function ensureReasoningBlock(transform: Transform, outputIndex: number): AnthropicStreamBlock {
@@ -915,18 +974,23 @@ export function createResponsesToAnthropicStream(): Transform {
       }
       return;
     }
-    if (item.type === "function_call") {
-      const block = ensureToolBlock(transform, outputIndex, item);
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      const customTool = item.type === "custom_tool_call";
+      const block = ensureToolBlock(transform, outputIndex, item, customTool);
       if (!block.started) {
-        throw new ProtocolConversionError("OpenAI function call stream item was missing call_id or name.", 502);
+        throw new ProtocolConversionError("OpenAI tool call stream item was missing call_id or name.", 502);
       }
-      if (block.arguments.length === 0 && typeof item.arguments === "string" && item.arguments.length > 0) {
-        block.arguments = item.arguments;
-        emit(transform, "content_block_delta", {
-          type: "content_block_delta",
-          index: block.blockIndex,
-          delta: { type: "input_json_delta", partial_json: item.arguments }
-        });
+      // A custom tool names its payload `input`, a function names it `arguments`.
+      // Refusing the item instead killed the whole stream, while the request
+      // direction has always translated the matching input item.
+      const raw = customTool ? item.input : item.arguments;
+      if (block.arguments.length === 0 && typeof raw === "string" && raw.length > 0) {
+        block.arguments = raw;
+        emitToolInput(transform, block, raw);
+      } else if (customTool) {
+        // Its fragments were buffered rather than forwarded, so the input still
+        // has to go out — once, whichever closing event arrives first.
+        emitToolInput(transform, block, block.arguments);
       }
       stopBlock(transform, block);
       return;
@@ -1154,10 +1218,9 @@ export function createChatToResponsesStream(): Transform {
         // the very upstreams that omit `index` also omit `id` after the first frame,
         // so every argument fragment fell back to slot 0 and conjured a second,
         // nameless call there — turning a working single call into a 502.
-        const index = nonNegativeStreamInteger(item.index)
-          ?? (typeof item.id === "string" && item.id.length > 0
-            ? toolCallSlotForId(item.id)
-            : lastToolCallSlot);
+        const index = typeof item.id === "string" && item.id.length > 0
+          ? toolCallSlotForId(item.id, nonNegativeStreamInteger(item.index))
+          : nonNegativeStreamInteger(item.index) ?? lastToolCallSlot;
         lastToolCallSlot = index;
         const call = ensureToolCall(transform, index, item);
         if (item.type !== undefined && item.type !== "function") {
@@ -1217,13 +1280,22 @@ export function createChatToResponsesStream(): Transform {
     });
   }
 
-  function toolCallSlotForId(callId: string): number {
+  function toolCallSlotForId(callId: string, streamIndex: number | null): number {
     const existing = toolCallSlotsById.get(callId);
     if (existing !== undefined) {
       return existing;
     }
+    // Bind the id to the index the upstream gave it, so the continuation frames
+    // that carry the index but drop the id still land on this same call.
+    if (streamIndex !== null && ![...toolCallSlotsById.values()].includes(streamIndex)) {
+      toolCallSlotsById.set(callId, streamIndex);
+      return streamIndex;
+    }
     // Above any real index the same stream could also use, so an upstream that
-    // mixes indexed and unindexed frames cannot have the two collide.
+    // mixes indexed and unindexed frames cannot have the two collide. Reached
+    // either with no index at all, or with an index another id already owns —
+    // an upstream that restarts `index` at 0 for its second call. Sharing that
+    // slot concatenated both names into one call that matches no tool.
     const slot = 1_000 + toolCallSlotsById.size;
     toolCallSlotsById.set(callId, slot);
     return slot;

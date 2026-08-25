@@ -343,7 +343,10 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
   if (toolChoice !== null) {
     translated.tool_choice = toolChoice;
   }
-  if (body.parallel_tool_calls !== undefined) {
+  // Only meaningful alongside tools, and OpenAI rejects the pair outright when
+  // `tools` is absent. Same condition the Anthropic direction applies before it
+  // synthesises `tool_choice`.
+  if (body.parallel_tool_calls !== undefined && tools.length > 0) {
     translated.parallel_tool_calls = body.parallel_tool_calls === true;
   }
   const reasoningEffort = chatReasoningEffort(body.reasoning);
