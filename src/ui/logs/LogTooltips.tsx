@@ -83,7 +83,7 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
               <em>{hasAdditiveCachedInput(entry) ? "缓存读取" : "缓存输入 Token"}</em>
               <b>{formatMetricNumber(cacheReadInputTokens(entry))}</b>
             </span>
-            {hasAdditiveCachedInput(entry) && (
+            {cacheCreationInputTokens(entry) !== null && (
               <span className="token-tooltip-row">
                 <em>缓存写入</em>
                 <b>{formatMetricNumber(cacheCreationInputTokens(entry))}</b>

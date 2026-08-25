@@ -85,7 +85,10 @@ const ANALYTICS_ROWS_SQL = `
       ${TOTAL_INPUT} AS input_tokens,
       ${OUTPUT} AS output_tokens,
       ${CACHE_READ_TOTAL} AS cache_read_tokens,
-      CASE WHEN ${ADDITIVE_INPUT} THEN ${CACHE_CREATION} END AS cache_creation_tokens,
+      -- Reported for both dialects. Its own SUM is the only place it lands;
+      -- TOTAL_INPUT and TOTAL_TOKEN_FLOOR each re-derive the additive decision
+      -- from the raw columns, so surfacing it here cannot double count.
+      ${CACHE_CREATION} AS cache_creation_tokens,
       ${REASONING} AS reasoning_tokens,
       ${EFFECTIVE_TOTAL} AS total_tokens
     FROM request_logs

@@ -40,7 +40,13 @@ export function cacheReadInputTokens(entry: RequestLogEntry): number | null {
 }
 
 export function cacheCreationInputTokens(entry: RequestLogEntry): number | null {
-  return hasAdditiveCachedInput(entry) ? entry.cache_creation_input_tokens : null;
+  // Reported for both dialects. The additive flag decides whether the cache is
+  // *added* to the input total — which `displayInputTokens` and the analytics
+  // totals each work out for themselves — not whether the upstream told us how
+  // much it wrote. Gating here meant a Claude model reached through translation
+  // recorded its cache writes and then showed none, while the same model on the
+  // native Anthropic route showed them.
+  return entry.cache_creation_input_tokens;
 }
 
 export function cachedInputTotalTokens(entry: RequestLogEntry): number | null {

@@ -229,6 +229,43 @@ describe("RequestLogger stats", () => {
       logger.close();
     }
   });
+
+  it("counts a cache write reported by the non-additive dialect", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-stats-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"));
+
+    try {
+      // OpenAI semantics: input_tokens already contains the cache, so the cache
+      // is not added to the totals — but the write itself was still reported and
+      // used to be dropped on the floor for this dialect.
+      logger.add(logEntry({
+        time: "2026-08-07T00:15:00.000Z",
+        request_id: "openai-dialect",
+        input_tokens: 50_100,
+        output_tokens: 7,
+        cached_input_tokens: 0,
+        cache_creation_input_tokens: 50_000,
+        additive_cached_input_tokens: false,
+        total_tokens: 50_107
+      }));
+
+      const stats = logger.stats({
+        from: "2026-08-07T00:00:00.000Z",
+        to: "2026-08-07T01:00:00.000Z",
+        includeOverview: true
+      });
+
+      expect(stats.summary).toMatchObject({
+        cache_creation_tokens: 50_000,
+        // Unchanged: the write is a breakdown of the input, never an addition.
+        input_tokens: 50_100,
+        total_tokens: 50_107
+      });
+    } finally {
+      logger.close();
+    }
+  });
 });
 
 function logEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {

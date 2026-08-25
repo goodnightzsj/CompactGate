@@ -8,6 +8,10 @@ import {
   compactionModeLabel,
   compactionDetectionLabel
 } from "../src/ui/logs/log-utils.js";
+import {
+  cacheCreationInputTokens,
+  displayInputTokens
+} from "../src/ui/logs/log-token-metrics.js";
 
 describe("UI log status helpers", () => {
   it("treats a 2xx response with only a diagnostic summary as an error", () => {
@@ -121,6 +125,36 @@ describe("UI log status helpers", () => {
     expect(compactionDetectionLabel(requestLog({
       compaction_detection_source: "input"
     }))).toBe("compaction_trigger");
+  });
+});
+
+describe("UI cache token metrics", () => {
+  it("reports the cache write for both usage dialects", () => {
+    // The additive flag decides whether the cache is *added* to the input total,
+    // not whether the upstream told us how much it wrote. Gating the number on it
+    // meant a Claude model reached through translation recorded its cache writes
+    // and then displayed none, while the same model on the native Anthropic route
+    // displayed them.
+    const openAiDialect = requestLog({
+      input_tokens: 50_100,
+      output_tokens: 7,
+      cached_input_tokens: 0,
+      cache_creation_input_tokens: 50_000,
+      additive_cached_input_tokens: false,
+      total_tokens: 50_107
+    });
+    expect(cacheCreationInputTokens(openAiDialect)).toBe(50_000);
+    // Still a breakdown of the input rather than an addition to it.
+    expect(displayInputTokens(openAiDialect)).toBe(50_100);
+
+    const anthropicDialect = requestLog({
+      input_tokens: 100,
+      cache_read_input_tokens: 900,
+      cache_creation_input_tokens: 50,
+      additive_cached_input_tokens: true
+    });
+    expect(cacheCreationInputTokens(anthropicDialect)).toBe(50);
+    expect(displayInputTokens(anthropicDialect)).toBe(150);
   });
 });
 

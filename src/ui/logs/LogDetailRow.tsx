@@ -227,7 +227,7 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-label">{hasAdditiveCachedInput(entry) ? "缓存读取" : "缓存输入"}</span>
                 <span className="log-detail-value">{formatMetricNumber(cacheReadInputTokens(entry))}</span>
               </div>
-              {hasAdditiveCachedInput(entry) && (
+              {cacheCreationInputTokens(entry) !== null && (
                 <div className="log-detail-item">
                   <span className="log-detail-label">缓存写入</span>
                   <span className="log-detail-value">{formatMetricNumber(cacheCreationInputTokens(entry))}</span>
