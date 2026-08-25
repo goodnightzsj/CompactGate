@@ -92,9 +92,20 @@ function mergeProfileScopeState(
     ? legacyState
     : baseState;
   const baseProfiles = fallbackState?.profiles ?? [];
+  // An empty list cannot erase the profiles that were just migrated either. A
+  // document carrying both a legacy top-level `profiles` array and a present
+  // but empty `profile_scopes` — a hand-edited file, or an export from the
+  // transition — otherwise loaded as "no profiles at all", and the next write
+  // persisted that, destroying every stored credential. Where there is nothing
+  // to migrate this changes nothing, so an ordinary patch or import can still
+  // clear the list.
+  const patchProfiles = Array.isArray(patchState.profiles) ? patchState.profiles : null;
+  const keepMigratedProfiles = patchProfiles !== null &&
+    patchProfiles.length === 0 &&
+    fallbackState === legacyState;
   return {
-    profiles: Array.isArray(patchState.profiles)
-      ? mergeProfiles(scope, baseProfiles, patchState.profiles, strict)
+    profiles: patchProfiles !== null && !keepMigratedProfiles
+      ? mergeProfiles(scope, baseProfiles, patchProfiles, strict)
       : baseProfiles.map(cloneProfile),
     active_profile_id: readActiveProfileId(
       patchState.active_profile_id,

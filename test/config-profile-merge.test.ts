@@ -85,6 +85,32 @@ describe("legacy top-level profiles", () => {
     expect(patched.primary.api_key).toBe("legacy-primary-key");
   });
 
+  it("migrates them even when an empty profile_scopes sits alongside", async () => {
+    // A hand-edited file, or an export from the transition, carries both shapes.
+    // An explicitly present but empty scope list was treated as authoritative and
+    // erased everything the migration had just recovered, and the next write
+    // persisted the emptied file — the exact loss the migration exists to prevent.
+    const dir = await makeConfigDir();
+    const configPath = path.join(dir, "compactgate.json");
+    await writeFile(configPath, JSON.stringify({
+      ...LEGACY_CONFIG,
+      profile_scopes: {
+        codex: { profiles: [], active_profile_id: null },
+        claude: { profiles: [], active_profile_id: null }
+      }
+    }), "utf8");
+
+    const store = await ConfigStore.load(configPath);
+    expect(store.get().profile_scopes?.codex?.profiles?.map((profile) => profile.id)).toEqual(["legacy-codex"]);
+    expect(store.get().profile_scopes?.claude?.profiles?.map((profile) => profile.id)).toEqual(["legacy-claude"]);
+
+    // And they survive the write that follows, credentials included.
+    const patched = await store.patch({ logging: { keep_recent: 123 } });
+    expect(patched.profile_scopes?.codex?.profiles?.[0]?.config).toMatchObject({
+      primary: { api_key: "legacy-primary-key" }
+    });
+  });
+
   it("migrates an imported legacy export", async () => {
     const dir = await makeConfigDir();
     const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
