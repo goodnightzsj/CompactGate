@@ -194,4 +194,32 @@ describe("CompactGate Claude routing", () => {
     expect(body.models).toEqual([]);
     expect(body.error).toBe("上游模型列表不可用：认证失败，状态码 401");
   });
+
+  it("introduces itself as a Claude Code client and lets extra_headers override that", async () => {
+    let seen: Record<string, string | string[] | undefined> = {};
+    const claude = await startClaudeUpstream((req, res) => {
+      seen = req.headers;
+      writeJsonResponse(res, { data: [{ id: "gated-claude-model" }] });
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        primary: {
+          base_url: claude.url,
+          api_key: "identity-token",
+          extra_headers: { "x-app": "operator-override" }
+        }
+      }
+    });
+
+    const { body } = await fetchJson<{
+      models: string[];
+      error: string | null;
+    }>(`${app.url}/api/claude/models`, "GET");
+
+    expect(body).toMatchObject({ models: ["gated-claude-model"], error: null });
+    // `x-app` and `anthropic-beta` do not satisfy the gate on their own; the
+    // product token in `user-agent` is what these relays actually read.
+    expect(seen["user-agent"]).toBe("claude-cli/2.1.234 (external, cli)");
+    expect(seen["x-app"]).toBe("operator-override");
+  });
 });

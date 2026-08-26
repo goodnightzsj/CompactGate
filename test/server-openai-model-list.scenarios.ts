@@ -131,4 +131,30 @@ describe("CompactGate OpenAI model list", () => {
       error: null
     });
   });
+
+  it("introduces itself as a Codex client and lets extra_headers override that", async () => {
+    let seen: Record<string, string | string[] | undefined> = {};
+    const primary = await startUpstream((req, res) => {
+      seen = req.headers;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gated-model" }] }));
+    });
+    const app = await startApp(primary.url, undefined, {
+      primary: {
+        api_key: "identity-token",
+        extra_headers: { originator: "operator-override" }
+      }
+    });
+
+    const payload = await (await fetch(`${app.url}/api/openai/models`)).json() as {
+      models: string[];
+      error: string | null;
+    };
+
+    expect(payload).toMatchObject({ models: ["gated-model"], error: null });
+    // Without a product token a client-whitelisting relay answers 401, so the
+    // probe must carry one where proxied traffic would have forwarded the CLI's.
+    expect(seen["user-agent"]).toBe("codex_cli_rs/0.56.0");
+    expect(seen.originator).toBe("operator-override");
+  });
 });

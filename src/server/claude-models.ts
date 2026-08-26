@@ -49,12 +49,23 @@ export interface ClaudeRequestRouting {
   sceneModel: string | null;
 }
 
+/**
+ * Same identity gate the Codex probe faces (see `CODEX_CLIENT_IDENTITY` in
+ * `openai-models.ts`): a relay that whitelists clients answers 401 without a
+ * recognised `user-agent`, and neither `x-app` nor `anthropic-beta` satisfies it
+ * on their own. `extra_headers` still overrides every entry here.
+ */
+const CLAUDE_CLIENT_IDENTITY: Record<string, string> = {
+  accept: "application/json",
+  "anthropic-version": "2023-06-01",
+  "user-agent": "claude-cli/2.1.234 (external, cli)",
+  "x-app": "cli"
+};
+
 export async function fetchClaudeModels(config: CompactGateConfig): Promise<UpstreamModelsResponse> {
   const auth = resolveClaudeCredential(config);
   const headers = buildAnthropicUpstreamHeaders(
-    {
-      "anthropic-version": "2023-06-01"
-    },
+    CLAUDE_CLIENT_IDENTITY,
     auth.apiKey,
     config.claude.primary.extra_headers
   );
