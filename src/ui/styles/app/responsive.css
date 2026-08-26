@@ -134,8 +134,34 @@
   .log-table-full .log-col-reasoning,
   .log-table-full .log-col-response-model {
     visibility: collapse;
+    /* Collapsing hides the cells but leaves the base 7%/10% in the width sum, so
+       the total would reach 117%, get normalized back down, and then shrink again
+       by the collapsed share — leaving the table at ~85% of its container. The
+       widths have to be zeroed here, not just hidden. */
+    width: 0;
   }
 
+  /**
+   * Percentages under `table-layout: fixed` do not renormalize when a column is
+   * collapsed, so every breakpoint that hides one must restate the visible
+   * columns to a full 100%. Without this the missing share parked itself as dead
+   * space past the last column and squeezed `duration` until it clipped
+   * mid-glyph. Keep this block's total at exactly 100.
+   *
+   * ponytail: below roughly 900px the timestamp still ellipsises — nine nowrap
+   * columns do not fit and this table deliberately has no horizontal scroll
+   * (under 760px it switches to `LogMobileCard`). Add a third breakpoint here if
+   * that band ever needs the full timestamp.
+   */
+  .log-table-full .log-col-started { width: 14%; }
+  .log-table-full .log-col-status { width: 7%; }
+  .log-table-full .log-col-model-route { width: 16%; }
+  .log-table-full .log-col-host { width: 14%; }
+  .log-table-full .log-col-endpoint { width: 14%; }
+  .log-table-full .log-col-type { width: 8%; }
+  .log-table-full .log-col-token { width: 9%; }
+  .log-table-full .log-col-first-token { width: 9%; }
+  .log-table-full .log-col-duration { width: 9%; }
 }
 
 @media (max-width: 760px) {

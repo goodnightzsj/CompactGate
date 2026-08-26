@@ -266,6 +266,11 @@
 
 .log-table .log-row.has-error td:first-child {
   border-left: 3px solid var(--brick);
+  /* `box-sizing: border-box` makes the accent bar eat 3px of the content box, so
+     without this the first column is narrower on exactly the error rows — and the
+     timestamp, the thing you most want to read on a failure, was the text that
+     got truncated. Give the 3px back out of the padding. */
+  padding-left: calc(clamp(12px, 1vw, 18px) - 3px);
 }
 
 .log-table .log-detail-row td {
@@ -307,9 +312,16 @@
 
 .log-cell-time  {
   display: inline-block;
+  max-inline-size: 100%;
+  overflow: hidden;
   font-family: var(--font-mono);
   color: var(--muted);
   font-size: 0.72rem;
+  /* Duration and first-token live in the narrowest columns, so a squeeze has to
+     end in an ellipsis rather than a half-drawn glyph. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .log-cell-model,
@@ -701,17 +713,21 @@
   overflow: hidden;
 }
 
-.log-table-full .log-col-started { width: 11%; }
+/* Total must stay at exactly 100: `table-layout: fixed` does not renormalize a
+   short sum, and any shortfall becomes dead space past the last column. The
+   duration and first-token columns carry values like `132.9s`, so they need real
+   room — at the original 5% the duration text was clipped at every viewport. */
+.log-table-full .log-col-started { width: 13%; }
 .log-table-full .log-col-status { width: 6%; }
-.log-table-full .log-col-model-route { width: 14%; }
+.log-table-full .log-col-model-route { width: 13%; }
 .log-table-full .log-col-reasoning { width: 7%; }
-.log-table-full .log-col-response-model { width: 10%; }
-.log-table-full .log-col-host { width: 12%; }
-.log-table-full .log-col-endpoint { width: 12%; }
+.log-table-full .log-col-response-model { width: 8%; }
+.log-table-full .log-col-host { width: 11%; }
+.log-table-full .log-col-endpoint { width: 11%; }
 .log-table-full .log-col-type { width: 7%; }
 .log-table-full .log-col-token { width: 8%; }
 .log-table-full .log-col-first-token { width: 8%; }
-.log-table-full .log-col-duration { width: 5%; }
+.log-table-full .log-col-duration { width: 8%; }
 
 .log-table-summary .log-table-body {
   overflow-x: hidden;
