@@ -34,6 +34,14 @@ const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
 const TOP_K_SCORE_WINDOW = 100;
+/** How many near-tied candidates the weighted pick draws from. sub2api's
+ * `lb_top_k` is 7; at 3, a spread pool's fourth key could never win a slot. */
+const TOP_K_CANDIDATES = 7;
+/** Jitter added to the soonest-to-unblock fallback. Without it, concurrent
+ * requests that all find every candidate blocked wake in lockstep and stampede
+ * whichever candidate recovers first — the thundering herd both sub2api and
+ * CLIProxyAPI guard against explicitly. */
+const UNBLOCK_JITTER_MS = 2_000;
 
 interface ScoredCandidate {
   candidate: PrimaryCandidate;
@@ -67,23 +75,27 @@ export class PrimaryFailoverState {
     selection: PrimaryRouteSelection,
     rememberRequestStickiness: boolean
   ): void {
-    if (!selection.profileId) {
+    // Health and stickiness are keyed by the composite candidate id — that is
+    // the whole point of the key pool: one key's in-flight load and cooldowns
+    // must not bleed into its siblings'.
+    const candidateId = selection.candidateId ?? selection.profileId;
+    if (!candidateId) {
       return;
     }
 
-    const health = this.health.get(selection.profileId);
+    const health = this.health.get(candidateId);
     if (!health || selection.generation !== this.generation) {
       throw new Error("Cannot reserve a stale primary route selection.");
     }
 
     const now = this.now();
-    if (selection.profileId === this.forcedProfileId) {
+    if (candidateId === this.forcedProfileId || selection.profileId === this.forcedProfileId) {
       this.forcedProfileId = null;
     }
     health.inFlight += 1;
     health.lastSelectedAt = now;
     if (rememberRequestStickiness) {
-      this.stickiness.rememberRequest(selection.context, selection.profileId, now);
+      this.stickiness.rememberRequest(selection.context, candidateId, now);
     }
   }
 
@@ -92,7 +104,8 @@ export class PrimaryFailoverState {
     resultOrStatus: PrimaryRouteResult | number,
     maybeErrorSummary?: string | null
   ): void {
-    if (!selection.profileId) {
+    const candidateId = selection.candidateId ?? selection.profileId;
+    if (!candidateId) {
       return;
     }
 
@@ -102,7 +115,7 @@ export class PrimaryFailoverState {
           errorSummary: maybeErrorSummary ?? null
         }
       : resultOrStatus;
-    const health = this.health.get(selection.profileId);
+    const health = this.health.get(candidateId);
     if (!health) {
       return;
     }
@@ -143,14 +156,16 @@ export class PrimaryFailoverState {
           // the evidence the long blocks should yield to. Without this, topping
           // up a quota or an upstream fixing its model catalog leaves the
           // profile shut out for the rest of the 30 minute / 12 hour window,
-          // because only a credential change resets health otherwise.
+          // because only a credential change resets health otherwise. A success
+          // also ends the sticky-only zone: the cap is clearly clear.
           health.quarantineUntil = 0;
+          health.stickyOnlyUntil = 0;
           if (selection.context.model) {
             health.modelCooldowns.delete(selection.context.model);
           }
           health.version += 1;
         }
-        this.stickiness.rememberResponse(selection, result, now);
+        this.stickiness.rememberResponse(selection, result, now, candidateId);
         break;
       case "auth":
       case "quota": {
@@ -161,25 +176,33 @@ export class PrimaryFailoverState {
         }
         health.transientFailures = 0;
         health.emptyStreamFailures = 0;
-        if (
-          health.authFailures >= FAILOVER_FAILURE_THRESHOLD ||
-          health.quotaFailures >= FAILOVER_FAILURE_THRESHOLD
-        ) {
-          health.quarantineUntil = Math.max(health.quarantineUntil, now + ACCOUNT_QUARANTINE_MS);
-        }
+        // An auth or quota verdict is self-describing — the upstream states the
+        // credential or its balance is no good, not maybe. An 11-failure window
+        // burned eleven doomed requests per dead key; every mature pool rotates
+        // on the first one. Ambiguous classes below keep their window.
+        health.quarantineUntil = Math.max(health.quarantineUntil, now + ACCOUNT_QUARANTINE_MS);
         health.version += 1;
         break;
       }
       case "rate_limit": {
         health.rateLimitFailures += 1;
-        if (health.rateLimitFailures >= FAILOVER_FAILURE_THRESHOLD) {
-          const cooldownFailureCount = Math.max(
-            1,
-            health.rateLimitFailures - FAILOVER_FAILURE_THRESHOLD + 1
-          );
-          health.rateLimitUntil = Math.max(
-            health.rateLimitUntil,
-            now + rateLimitCooldownMs(result, cooldownFailureCount, now)
+        // Every 429 cools the key per Retry-After (or the backoff when the
+        // header is absent or malformed). Treating a 429 as never-disable is the
+        // other half of the one-api lesson: quota exhaustion is a cooldown, not
+        // a verdict on the credential.
+        const cooldownFailureCount = Math.max(1, health.rateLimitFailures);
+        health.rateLimitUntil = Math.max(
+          health.rateLimitUntil,
+          now + rateLimitCooldownMs(result, cooldownFailureCount, now)
+        );
+        const reserveMs = (selection.config.primary.sticky_reserve_seconds ?? 0) * 1000;
+        if (reserveMs > 0) {
+          // Once the cooldown itself expires the key still stays sticky-only
+          // for the reserve window — the upstream only said "try me later", not
+          // "I am whole again". A success ends the zone earlier.
+          health.stickyOnlyUntil = Math.max(
+            health.stickyOnlyUntil,
+            health.rateLimitUntil + reserveMs
           );
         }
         health.version += 1;
@@ -249,11 +272,12 @@ export class PrimaryFailoverState {
    * existing pins is intended. Only do it for a profile that can actually be
    * selected — a profile with no `primary` block is never a candidate, and
    * clearing every session's pin for one that can never win costs them all a
-   * prompt cache for nothing.
+   * prompt cache for nothing. The target is the profile, so any of its keys
+   * satisfies the force; the first one in failover order wins.
    */
   forceNextProfileSelection(config: CompactGateConfig, profileId: string): void {
     const isCandidate = codexPrimaryCandidates(config)
-      .some((candidate) => candidate.id === profileId);
+      .some((candidate) => candidate.profileId === profileId);
     if (!isCandidate) {
       return;
     }
@@ -272,6 +296,8 @@ export class PrimaryFailoverState {
       return {
         config,
         profileId: null,
+        keyId: null,
+        candidateId: null,
         profileName: null,
         generation: this.generation,
         healthVersion: 0,
@@ -314,7 +340,9 @@ export class PrimaryFailoverState {
     this.health.reconcile(candidates);
 
     const forcedCandidate = this.forcedProfileId
-      ? candidates.find((candidate) => candidate.id === this.forcedProfileId) ?? null
+      ? candidates
+          .filter((candidate) => candidate.profileId === this.forcedProfileId)
+          .sort((left, right) => left.order - right.order)[0] ?? null
       : null;
     if (this.forcedProfileId && !forcedCandidate) {
       this.forcedProfileId = null;
@@ -323,7 +351,9 @@ export class PrimaryFailoverState {
       const health = this.health.forProfile(forcedCandidate.id);
       return {
         config: forcedCandidate.config,
-        profileId: forcedCandidate.id,
+        profileId: forcedCandidate.profileId,
+        keyId: forcedCandidate.keyId,
+        candidateId: forcedCandidate.id,
         profileName: forcedCandidate.name,
         generation: this.generation,
         healthVersion: health.version,
@@ -336,7 +366,9 @@ export class PrimaryFailoverState {
       const health = this.health.forProfile(selected.id);
       return {
         config: selected.config,
-        profileId: selected.id,
+        profileId: selected.profileId,
+        keyId: selected.keyId,
+        candidateId: selected.id,
         profileName: selected.name,
         generation: this.generation,
         healthVersion: health.version,
@@ -351,7 +383,9 @@ export class PrimaryFailoverState {
     const health = this.health.forProfile(selected.id);
     return {
       config: selected.config,
-      profileId: selected.id,
+      profileId: selected.profileId,
+      keyId: selected.keyId,
+      candidateId: selected.id,
       profileName: selected.name,
       generation: this.generation,
       healthVersion: health.version,
@@ -364,6 +398,15 @@ export class PrimaryFailoverState {
     context: Required<PrimaryRouteRequestContext>,
     now: number
   ): PrimaryCandidate {
+    // Account-bound credentials stay reachable through manual apply or a pinned
+    // active profile, but automatic rotation never hands them traffic — a
+    // failover to one would silently reuse the bound account's authorization
+    // against a different upstream account.
+    const rotationPool = candidates.some((candidate) => candidate.rotationOptOut)
+      ? candidates.filter((candidate) => !candidate.rotationOptOut)
+      : candidates;
+    const selectionPool = rotationPool.length > 0 ? rotationPool : candidates;
+
     const stickyProfileId = this.stickiness.selectProfileId(
       context,
       (profileId) => this.usableCandidate(candidates, context, now, profileId) !== null
@@ -375,15 +418,27 @@ export class PrimaryFailoverState {
       return sticky;
     }
 
-    const eligible = candidates.filter((candidate) => this.isEligible(candidate, context, now));
+    // Three-zone admission (sub2api's window-cost reserve, mapped onto the
+    // traffic we already observe): a key that was rate-limited at least once
+    // since its last success and is no longer cooling is "sticky-only" — keep
+    // serving the sessions already bound to it, stop taking new ones. A success
+    // moves it back into the free zone automatically.
+    const eligible = selectionPool.filter(
+      (candidate) => this.isEligible(candidate, context, now) &&
+        !this.isStickyOnly(candidate, now)
+    );
     if (eligible.length === 0) {
-      // Nothing is usable, so the request has to land somewhere regardless.
-      // Health scoring is the wrong tie-break here — it would happily pick a
-      // profile quarantined for half an hour over one that recovers in a
-      // second. Take the soonest to unblock instead.
-      return [...candidates].sort((left, right) => {
-        const leftUntil = this.health.blockedUntil(left.id, context.model, now);
-        const rightUntil = this.health.blockedUntil(right.id, context.model, now);
+      // Nothing takes new sessions, so the request has to land somewhere
+      // regardless. Health scoring is the wrong tie-break here — it would
+      // happily pick a profile quarantined for half an hour over one that
+      // recovers in a second. Take the soonest to unblock instead, with jitter
+      // so concurrent requests do not all wake on the same deadline and
+      // stampede it. A sticky-only key has no deadline at all, so it sorts to
+      // the front naturally — flood-back prefers the key that is usable right
+      // now over one that recovers in an instant.
+      return [...selectionPool].sort((left, right) => {
+        const leftUntil = this.blockedUntilWithJitter(left, context, now);
+        const rightUntil = this.blockedUntilWithJitter(right, context, now);
         return leftUntil === rightUntil ? left.order - right.order : leftUntil - rightUntil;
       })[0] ?? candidates[0];
     }
@@ -403,8 +458,17 @@ export class PrimaryFailoverState {
 
     const topK = scored
       .filter((candidate) => best.score - candidate.score <= TOP_K_SCORE_WINDOW)
-      .slice(0, 3);
+      .slice(0, TOP_K_CANDIDATES);
     return topK.length <= 1 ? best.candidate : weightedChoice(topK, this.random);
+  }
+
+  private blockedUntilWithJitter(
+    candidate: PrimaryCandidate,
+    context: Required<PrimaryRouteRequestContext>,
+    now: number
+  ): number {
+    return this.health.blockedUntil(candidate.id, context.model, now) +
+      Math.round(this.random() * UNBLOCK_JITTER_MS);
   }
 
   private scoreCandidate(candidate: PrimaryCandidate): number {
@@ -442,6 +506,18 @@ export class PrimaryFailoverState {
     now: number
   ): boolean {
     return this.health.blockedUntil(candidate.id, context.model, now) <= now;
+  }
+
+  /**
+   * The middle of the three admission zones: rate-limited at least once since
+   * the last success, no longer actively cooling, no success since. The key
+   * still works — it serves the sessions already bound to it (that path checks
+   * `isEligible`, not this) — but it stops taking new ones until a success
+   * moves it back to the free zone.
+   */
+  private isStickyOnly(candidate: PrimaryCandidate, now: number): boolean {
+    const health = this.health.forProfile(candidate.id);
+    return health.stickyOnlyUntil > now;
   }
 
   private cleanupExpiredState(now: number): void {

@@ -19,6 +19,7 @@ import {
 import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
 import { proxyOpenAiRequest } from "./openai-proxy.js";
 import { PrimaryFailoverState } from "./primary-failover.js";
+import { ClaudeKeyPoolState } from "./claude-key-pool.js";
 import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
 import { createStudioSnapshot, StudioEventBroadcaster } from "./studio-events.js";
@@ -85,6 +86,7 @@ export function createCompactGateServer(
     captureWriter ??
     createDebugCaptureWriter(configStore, actualLogger, studioEvents, codexVersionMonitor);
   const primaryFailover = new PrimaryFailoverState();
+  const claudeKeyPool = new ClaudeKeyPoolState();
   codexVersionMonitor.start();
   const server = http.createServer((req, res) => {
     void routeRequest(
@@ -96,7 +98,8 @@ export function createCompactGateServer(
       compactionBridge,
       studioEvents,
       primaryFailover,
-      codexVersionMonitor
+      codexVersionMonitor,
+      claudeKeyPool
     );
   });
   server.on("upgrade", (_req, socket) => {
@@ -123,7 +126,8 @@ async function routeRequest(
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  claudeKeyPool: ClaudeKeyPoolState
 ): Promise<void> {
   try {
     const url = parseRequestUrl(req.url);
@@ -152,7 +156,8 @@ async function routeRequest(
         configStore,
         logger,
         captureWriter,
-        studioEvents
+        studioEvents,
+        claudeKeyPool
       );
       return;
     }

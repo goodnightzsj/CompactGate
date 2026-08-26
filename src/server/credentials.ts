@@ -2,6 +2,7 @@ import type {
   CompactGateConfig,
   CredentialScope,
   CredentialSource,
+  UpstreamApiKey,
   UpstreamConfig
 } from "../shared/types.js";
 
@@ -11,6 +12,17 @@ export interface ResolvedCredential {
   apiKeySource: CredentialSource;
   activeApiKeyEnv: string | null;
   activeCredentialScope: CredentialScope;
+}
+
+/**
+ * The schedulable entries of a route's key pool. An absent or empty pool is the
+ * single `api_key` — never materialized into an entry, so a legacy file cannot
+ * lose its stored key to an empty array.
+ */
+export function enabledApiKeyPool(route: UpstreamConfig): UpstreamApiKey[] {
+  return (route.api_keys ?? []).filter(
+    (key) => key.enabled && key.api_key.trim().length > 0
+  );
 }
 
 export function resolveRouteCredential(
@@ -24,7 +36,12 @@ export function resolveRouteCredential(
         ? "claude_primary"
         : route;
   const activeConfig = configForCredentialScope(activeCredentialScope, config);
-  const directApiKey = activeConfig.api_key.trim();
+  // Outside the failover scheduler (compact routing, health, model probes) a
+  // pool is served by its first enabled key. Per-request rotation lives in the
+  // candidate list, not here — this function must stay pure: the failover
+  // signatures hash its output on every preview.
+  const poolKey = enabledApiKeyPool(activeConfig)[0];
+  const directApiKey = poolKey ? poolKey.api_key.trim() : activeConfig.api_key.trim();
 
   if (directApiKey.length > 0) {
     return {

@@ -172,3 +172,76 @@ describe("UI config form state", () => {
     expect(isFormDirty(config, { ...form, loggingKeepRecent: 322 })).toBe(true);
   });
 });
+
+describe("UI key pool form state", () => {
+  it("round-trips key entries through the patch with empty secrets meaning unchanged", async () => {
+    const dir = await makeConfigDir();
+    const storeWithPool = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    // Seed a stored pool through the real merge path.
+    const patched = await storeWithPool.patch({
+      primary: {
+        ...storeWithPool.get().primary,
+        api_keys: [
+          { id: "saved-1", label: "主号", api_key: "sk-stored", enabled: true },
+          { id: "saved-2", label: "备用", api_key: "sk-spare", enabled: false }
+        ]
+      }
+    });
+    if (!("primary" in patched)) {
+      throw new Error("Expected patched config.");
+    }
+
+    const form = formFromConfig(storeWithPool.toPublicConfig());
+    expect(form.codexPrimaryApiKeys).toEqual([
+      { id: "saved-1", label: "主号", apiKey: "", enabled: true, tail: "ored" },
+      { id: "saved-2", label: "备用", apiKey: "", enabled: false, tail: "pare" }
+    ]);
+
+    // Typing a new secret for the first entry and adding a third.
+    const dirty = {
+      ...form,
+      codexPrimaryApiKeys: [
+        { ...form.codexPrimaryApiKeys[0], apiKey: "sk-rotated" },
+        form.codexPrimaryApiKeys[1],
+        { id: "draft-3", label: "新钥匙", apiKey: "sk-new", enabled: true, tail: "" }
+      ],
+      codexPrimaryKeyStrategy: "spread" as const,
+      codexPrimaryStickyReserveSeconds: 300
+    };
+
+    const patch = formToPatch(dirty);
+    expect(patch.primary.api_keys).toEqual([
+      // Stored secret travels as absent so the server inherits by id.
+      { id: "saved-1", label: "主号", enabled: true, api_key: "sk-rotated" },
+      { id: "saved-2", label: "备用", enabled: false },
+      { id: "draft-3", label: "新钥匙", enabled: true, api_key: "sk-new" }
+    ]);
+    expect(patch.primary).toMatchObject({
+      key_strategy: "spread",
+      sticky_reserve_seconds: 300
+    });
+    expect(isFormDirty(storeWithPool.toPublicConfig(), dirty)).toBe(true);
+
+    // The export baseline keeps the stored secret for the untouched entry.
+    expect(applyDraftToConfigExport(storeWithPool.get(), dirty)).toMatchObject({
+      primary: {
+        key_strategy: "spread",
+        api_keys: [
+          { id: "saved-1", label: "主号", api_key: "sk-rotated", enabled: true },
+          { id: "saved-2", label: "备用", api_key: "sk-spare", enabled: false },
+          { id: "draft-3", label: "新钥匙", api_key: "sk-new", enabled: true }
+        ]
+      }
+    });
+  });
+
+  it("defaults the pool to an empty list in the pristine form", () => {
+    const form = emptyForm();
+
+    expect(form.codexPrimaryApiKeys).toEqual([]);
+    expect(form.codexPrimaryKeyStrategy).toBe("fill_first");
+    expect(form.codexPrimaryRotationOptOut).toBe(false);
+    expect(form.codexPrimaryStickyReserveSeconds).toBe(0);
+    expect(formToPatch(form).primary.api_keys).toEqual([]);
+  });
+});

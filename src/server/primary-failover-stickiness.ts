@@ -104,28 +104,29 @@ export class PrimaryStickinessStore {
   rememberResponse(
     selection: PrimaryRouteSelection,
     result: PrimaryRouteResult,
-    now: number
+    now: number,
+    candidateId: string = selection.candidateId ?? selection.profileId ?? ""
   ): void {
-    if (!selection.profileId) {
+    if (!candidateId) {
       return;
     }
 
     const responseId = readResponseId(result);
     if (responseId) {
       this.rememberStickyEntry(this.continuationStickiness, responseId, {
-        profileId: selection.profileId,
+        profileId: candidateId,
         expiresAt: now + CONTINUATION_STICKY_TTL_MS
       });
     }
     if (selection.context.sessionKey) {
       this.rememberStickyEntry(this.sessionStickiness, selection.context.sessionKey, {
-        profileId: selection.profileId,
+        profileId: candidateId,
         expiresAt: now + SESSION_STICKY_TTL_MS
       });
     }
     if (selection.context.compactionStateKey) {
       this.rememberStickyEntry(this.compactionStateStickiness, selection.context.compactionStateKey, {
-        profileId: selection.profileId,
+        profileId: candidateId,
         expiresAt: now + CONTINUATION_STICKY_TTL_MS
       });
     }

@@ -246,6 +246,8 @@ async function proxyPrimaryRequest(
       ? {
           config,
           profileId: requestProfile.profileId,
+          keyId: null,
+          candidateId: requestProfile.profileId,
           profileName: requestProfile.profileName,
           generation: 0,
           healthVersion: 0,
@@ -306,7 +308,11 @@ async function proxyPrimaryRequest(
     const sourceStateDomain = persistedBinding?.stateDomainId ??
       stateDomainForProfile(config, inMemorySourceProfileId);
     const targetStateDomain = primarySelection
-      ? stateDomainForPrimary(primarySelection.config.primary, primarySelection.profileId)
+      ? stateDomainForPrimary(
+          primarySelection.config.primary,
+          primarySelection.profileId,
+          primarySelection.keyId
+        )
       : stateDomainForPrimary(config.primary);
     const stateAnalysis = analyzeProviderState(transaction.upstreamBody);
     const targetScope: ProviderStateTargetScope = {

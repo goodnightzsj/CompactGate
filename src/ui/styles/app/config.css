@@ -1936,3 +1936,173 @@
   background: var(--brick-soft);
   color: var(--brick);
 }
+
+/* ---- Key pool editor (Codex primary route) ---- */
+
+.key-pool-editor {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--hairline-strong);
+}
+
+.key-pool-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.key-pool-editor-head h5 {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.key-pool-editor-hint,
+.key-pool-empty {
+  margin: 6px 0 10px;
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.key-pool-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.key-pool-row {
+  display: grid;
+  grid-template-columns: 22px minmax(90px, 0.7fr) minmax(140px, 1.3fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.key-pool-row.is-disabled {
+  opacity: 0.55;
+}
+
+.key-pool-index {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.key-pool-label-input,
+.key-pool-secret-input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Small switch, same pattern as .auto-schedule-switch. */
+.key-pool-toggle {
+  position: relative;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 0.7rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.key-pool-toggle input,
+.key-pool-policy-toggle input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.key-pool-track {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 18px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: var(--paper-warm);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--ink) 10%, transparent);
+  transition:
+    background 150ms var(--ease),
+    border-color 150ms var(--ease),
+    box-shadow 150ms var(--ease);
+}
+
+.key-pool-thumb {
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 150ms var(--ease),
+    background 150ms var(--ease);
+}
+
+.key-pool-toggle input:checked + .key-pool-track,
+.key-pool-policy-toggle input:checked + .key-pool-track {
+  border-color: color-mix(in srgb, var(--jade) 45%, var(--hairline));
+  background: color-mix(in srgb, var(--jade) 26%, var(--surface-raised));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--jade) 10%, transparent);
+}
+
+.key-pool-toggle input:checked + .key-pool-track .key-pool-thumb,
+.key-pool-policy-toggle input:checked + .key-pool-track .key-pool-thumb {
+  background: var(--jade);
+  transform: translateX(14px);
+}
+
+.key-pool-toggle input:focus-visible + .key-pool-track,
+.key-pool-policy-toggle input:focus-visible + .key-pool-track {
+  outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 3px;
+}
+
+.key-pool-toggle-text {
+  color: var(--ink);
+  user-select: none;
+}
+
+.key-pool-actions {
+  margin-top: 10px;
+}
+
+.key-pool-add {
+  font-size: 0.72rem;
+}
+
+.key-pool-policies {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--hairline-strong);
+}
+
+.key-pool-policy-toggle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--ink);
+  line-height: 1.5;
+  cursor: pointer;
+}

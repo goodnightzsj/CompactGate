@@ -323,10 +323,18 @@ describe("ConfigStore", () => {
       extra_headers: {},
       proxy_url: "",
       upstream_protocol: "anthropic_messages",
-      model_override: ""
+      model_override: "",
+      key_strategy: "fill_first",
+      rotation_opt_out: false,
+      sticky_reserve_seconds: 0
     });
     expect(config.claude.compact).toEqual({
-      ...config.claude.primary,
+      base_url: "http://127.0.0.1:9010",
+      api_key: "legacy-claude-key",
+      api_key_env: "LEGACY_CLAUDE_KEY",
+      extra_headers: {},
+      proxy_url: "",
+      upstream_protocol: "anthropic_messages",
       upstream_mode: "primary",
       model_override: ""
     });

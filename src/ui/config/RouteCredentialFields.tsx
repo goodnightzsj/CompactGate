@@ -1,10 +1,27 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
-import type { UpstreamProtocol } from "../../shared/types.js";
+import type {
+  PrimaryKeyStrategy,
+  UpstreamProtocol
+} from "../../shared/types.js";
 import { clamp, formatClock } from "../shared/format.js";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
 import { Field } from "./Field.js";
+import type { FormKeyPoolEntry } from "./types.js";
+
+const KEY_STRATEGY_OPTIONS: SelectOption[] = [
+  {
+    value: "fill_first",
+    label: "故障转移（用尽再换）",
+    meta: "适合订阅型 5h / 7d 窗口配额"
+  },
+  {
+    value: "spread",
+    label: "分摊（同时轮转）",
+    meta: "适合按 token 计费的中转站"
+  }
+];
 
 const UPSTREAM_PROTOCOL_OPTIONS: SelectOption[] = [
   {
@@ -49,11 +66,19 @@ export function RouteCredentialFields({
   storedApiKey,
   clearApiKey,
   routeUrlSuggestions = [],
+  keyPool,
+  keyStrategy,
+  rotationOptOut,
+  stickyReserveSeconds,
   onBaseUrlChange,
   onSuggestionSelect,
   onApiKeyChange,
   onUpstreamProtocolChange,
-  onToggleClearApiKey
+  onToggleClearApiKey,
+  onKeyPoolChange,
+  onKeyStrategyChange,
+  onRotationOptOutChange,
+  onStickyReserveChange
 }: {
   title: string;
   badge: string;
@@ -68,12 +93,34 @@ export function RouteCredentialFields({
   storedApiKey: boolean;
   clearApiKey: boolean;
   routeUrlSuggestions?: RouteUrlSuggestion[];
+  keyPool?: FormKeyPoolEntry[];
+  keyStrategy?: PrimaryKeyStrategy;
+  rotationOptOut?: boolean;
+  stickyReserveSeconds?: number;
   onBaseUrlChange: (value: string) => void;
   onSuggestionSelect?: (suggestion: RouteUrlSuggestion) => void;
   onApiKeyChange: (value: string) => void;
   onUpstreamProtocolChange: (value: UpstreamProtocol) => void;
   onToggleClearApiKey: () => void;
+  onKeyPoolChange?: (entries: FormKeyPoolEntry[]) => void;
+  onKeyStrategyChange?: (strategy: PrimaryKeyStrategy) => void;
+  onRotationOptOutChange?: (optedOut: boolean) => void;
+  onStickyReserveChange?: (seconds: number) => void;
 }) {
+  const showKeyPool = Boolean(
+    keyPool &&
+    onKeyPoolChange &&
+    onKeyStrategyChange &&
+    onRotationOptOutChange &&
+    onStickyReserveChange
+  );
+
+  function updateEntry(id: string, patch: Partial<Omit<FormKeyPoolEntry, "id" | "tail">>) {
+    if (!keyPool || !onKeyPoolChange) {
+      return;
+    }
+    onKeyPoolChange(keyPool.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
+  }
   const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const [suggestionsStyle, setSuggestionsStyle] = useState<CSSProperties | null>(null);
@@ -310,6 +357,117 @@ export function RouteCredentialFields({
           </div>
         )}
       </Field>
+
+      {showKeyPool && keyPool && (
+        <section className="key-pool-editor" aria-label={`${title} 密钥池`}>
+          <div className="key-pool-editor-head">
+            <h5>密钥池（同一档案多账号轮转）</h5>
+            <span className="route-chip primary">
+              {keyPool.filter((entry) => entry.enabled).length}/{keyPool.length} 可用
+            </span>
+          </div>
+          <p className="key-pool-editor-hint">
+            每把密钥是一个独立上游账号：故障转移时按序使用，401/429 单独冷却与隔离，加密会话状态按密钥隔离。
+          </p>
+
+          {keyPool.length === 0 ? (
+            <p className="key-pool-empty">
+              还没有密钥。添加第二把密钥后，本档案会在它们之间自动轮转 —— 单把密钥就是原有行为。
+            </p>
+          ) : (
+            <div className="key-pool-rows">
+              {keyPool.map((entry, index) => (
+                <div
+                  key={entry.id}
+                  className={`key-pool-row${entry.enabled ? "" : " is-disabled"}`}
+                >
+                  <span className="key-pool-index">{index + 1}</span>
+                  <input
+                    className="key-pool-label-input"
+                    aria-label="密钥标签"
+                    placeholder={entry.tail ? `密钥 …${entry.tail}` : "新密钥标签"}
+                    value={entry.label}
+                    onChange={(event) => updateEntry(entry.id, { label: event.target.value })}
+                  />
+                  <input
+                    className="key-pool-secret-input"
+                    aria-label="密钥值"
+                    type="password"
+                    autoComplete="off"
+                    placeholder={entry.tail ? "输入新值以覆盖，留空保持不变" : "sk-..."}
+                    value={entry.apiKey}
+                    onChange={(event) => updateEntry(entry.id, { apiKey: event.target.value })}
+                    spellCheck={false}
+                  />
+                  <label className="key-pool-toggle">
+                    <input
+                      type="checkbox"
+                      checked={entry.enabled}
+                      onChange={(event) => updateEntry(entry.id, { enabled: event.target.checked })}
+                    />
+                    <span className="key-pool-track" aria-hidden="true">
+                      <span className="key-pool-thumb" />
+                    </span>
+                    <span className="key-pool-toggle-text">启用</span>
+                  </label>
+                  <button
+                    className="field-inline-button is-danger"
+                    type="button"
+                    onClick={() => onKeyPoolChange?.(keyPool.filter((item) => item.id !== entry.id))}
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="key-pool-actions">
+            <button
+              className="ghost-button key-pool-add"
+              type="button"
+              onClick={() => onKeyPoolChange?.([...keyPool, {
+                id: crypto.randomUUID(),
+                label: "",
+                apiKey: "",
+                enabled: true,
+                tail: ""
+              }])}
+            >
+              + 添加密钥
+            </button>
+          </div>
+
+          <div className="key-pool-policies">
+            <CustomSelect
+              label="轮转策略"
+              value={keyStrategy ?? "fill_first"}
+              options={KEY_STRATEGY_OPTIONS}
+              onChange={(value) => onKeyStrategyChange?.(value as PrimaryKeyStrategy)}
+            />
+            <Field label="粘性保留带宽（秒）" hint="429 冷却结束后仍只服务已绑定会话的时长；0 关闭。">
+              <input
+                type="number"
+                min={0}
+                max={86400}
+                value={stickyReserveSeconds ?? 0}
+                onChange={(event) => onStickyReserveChange?.(Number(event.target.value))}
+              />
+            </Field>
+            <label className="key-pool-policy-toggle">
+              <input
+                type="checkbox"
+                checked={rotationOptOut ?? false}
+                onChange={(event) => onRotationOptOutChange?.(event.target.checked)}
+              />
+              <span className="key-pool-track" aria-hidden="true">
+                <span className="key-pool-thumb" />
+              </span>
+              <span>不参与自动轮转（账号绑定凭据，如 OAuth；故障转移永不主动使用）</span>
+            </label>
+          </div>
+        </section>
+      )}
     </section>
   );
 }

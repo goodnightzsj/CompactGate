@@ -73,10 +73,37 @@ export interface CodexVersionStatus {
   v2_default_from: string;
 }
 
+/**
+ * One credential inside a profile's key pool. `id` is the stable handle the
+ * patch merge and the failover health key on; renaming a label or reordering
+ * must never mint a new one. `enabled` is operator intent only — runtime
+ * cooldowns never touch it, and failure never permanently disables a key.
+ */
+export interface UpstreamApiKey {
+  id: string;
+  label: string;
+  api_key: string;
+  enabled: boolean;
+}
+
+/**
+ * How a profile's keys consume the shared candidate `order`:
+ * `fill_first` burns one key before the next (right default for rolling-window
+ * subscriptions), `spread` shares the profile's order across its keys so the
+ * top-K weighted pick distributes load (right for per-token relays).
+ */
+export type PrimaryKeyStrategy = "fill_first" | "spread";
+
 export interface UpstreamConfig {
   base_url: string;
   api_key: string;
   api_key_env: string;
+  /**
+   * Optional key pool. Absent or empty means the single `api_key` above is the
+   * whole pool — the load path never materializes it into an entry, so an
+   * explicitly empty array can never wipe a stored key.
+   */
+  api_keys?: UpstreamApiKey[];
   extra_headers: Record<string, string>;
   proxy_url: string;
   upstream_protocol: UpstreamProtocol;
@@ -86,6 +113,23 @@ export interface UpstreamConfig {
 export interface PrimaryUpstreamConfig extends UpstreamConfig {
   reasoning_effort: PrimaryReasoningEffort;
   state_domain_id: string;
+  key_strategy: PrimaryKeyStrategy;
+  /**
+   * Account-bound credentials (OAuth sessions, encrypted provider state pinned
+   * to one account) must never leak onto another account through automatic
+   * failover. `true` keeps the profile out of the automatic rotation pool while
+   * leaving it fully usable through manual apply, a fixed active profile, or an
+   * explicit `x-compactgate-profile` request.
+   */
+  rotation_opt_out: boolean;
+  /**
+   * Width of the sticky-only zone in seconds (sub2api's
+   * `window_cost_sticky_reserve`, mapped onto observed traffic). When a key's
+   * rate-limit cooldown expires it does not instantly take new sessions again —
+   * for this many seconds it serves only the sessions already bound to it,
+   * until a success proves the cap is clear. 0 disables the zone entirely.
+   */
+  sticky_reserve_seconds: number;
 }
 
 export interface ClaudeCompactConfig extends UpstreamConfig {
@@ -95,6 +139,9 @@ export interface ClaudeCompactConfig extends UpstreamConfig {
 
 export interface ClaudePrimaryConfig extends UpstreamConfig {
   model_override: string;
+  key_strategy: PrimaryKeyStrategy;
+  rotation_opt_out: boolean;
+  sticky_reserve_seconds: number;
 }
 
 export interface CompactConfig extends UpstreamConfig {
@@ -250,6 +297,18 @@ export interface PublicCredentialState {
   active_credential_scope: CredentialScope;
 }
 
+/**
+ * One key-pool entry as the Studio may see it: identity, label and enablement
+ * are readable, the secret is reduced to its tail four characters — the amount
+ * needed to tell two keys apart, never enough to replay.
+ */
+export interface PublicApiKeyEntry {
+  id: string;
+  label: string;
+  tail: string;
+  enabled: boolean;
+}
+
 export interface PublicUpstreamConfig extends PublicCredentialState {
   base_url: string;
   host: string;
@@ -259,6 +318,8 @@ export interface PublicUpstreamConfig extends PublicCredentialState {
   proxy_authenticated: boolean;
   upstream_protocol: UpstreamProtocol;
   model_override: string;
+  /** Masked key-pool entries; absent when the route has no pool. */
+  api_keys: PublicApiKeyEntry[] | null;
 }
 
 export interface PublicCompactConfig extends PublicCredentialState {
@@ -276,7 +337,12 @@ export interface PublicCompactConfig extends PublicCredentialState {
 }
 
 export interface PublicClaudeConfig {
-  primary: PublicUpstreamConfig & { model_override: string };
+  primary: PublicUpstreamConfig & {
+    model_override: string;
+    key_strategy: PrimaryKeyStrategy;
+    rotation_opt_out: boolean;
+    sticky_reserve_seconds: number;
+  };
   compact: PublicUpstreamConfig & { upstream_mode: CompactUpstreamMode; model_override: string };
   model_map: ClaudeModelMap;
   scene_map: ClaudeSceneMap;
@@ -298,6 +364,9 @@ export interface PublicConfig {
   primary: PublicUpstreamConfig & {
     reasoning_effort: PrimaryReasoningEffort;
     state_domain_id: string;
+    key_strategy: PrimaryKeyStrategy;
+    rotation_opt_out: boolean;
+    sticky_reserve_seconds: number;
   };
   compact: PublicCompactConfig;
   claude: PublicClaudeConfig;

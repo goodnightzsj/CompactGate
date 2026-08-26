@@ -1,12 +1,15 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import type {
   ClaudeModelMap,
+  ClaudePrimaryConfig,
   ClaudeSceneMap,
   CompactGateRuntimeConfig,
   CompactModelMode,
   CompactUpstreamMode,
+  PrimaryKeyStrategy,
   PrimaryReasoningEffort,
   PrimaryStatePortabilityMode,
+  UpstreamApiKey,
   UpstreamConfig,
   UpstreamProtocol
 } from "../shared/types.js";
@@ -62,10 +65,12 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
     validateEnvName(upstream.api_key_env, `${field}.api_key_env`);
     validateExtraHeaders(upstream.extra_headers, `${field}.extra_headers`);
     validateProxyUrl(upstream.proxy_url, upstream.base_url, `${field}.proxy_url`);
+    validateApiKeys(upstream.api_keys, `${field}.api_keys`);
   }
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validatePrimaryReasoningEffort(config.primary.reasoning_effort);
   validateStateDomainId(config.primary.state_domain_id);
+  readKeyStrategy(config.primary.key_strategy, "fill_first");
   validateOptionalModelName(config.claude.primary.model_override, "claude.primary.model_override");
   validateOptionalModelName(config.claude.compact.model_override, "claude.compact.model_override");
   validateClaudeModelMap(config.claude.model_map);
@@ -263,6 +268,30 @@ function validateEnvName(value: string, field: string): void {
   }
 }
 
+const MAX_API_KEYS_PER_ROUTE = 16;
+
+function validateApiKeys(value: UpstreamApiKey[] | undefined, field: string): void {
+  if (!value) {
+    return;
+  }
+  if (value.length > MAX_API_KEYS_PER_ROUTE) {
+    throw new ConfigError(`${field} must contain at most ${MAX_API_KEYS_PER_ROUTE} entries.`);
+  }
+
+  const seen = new Set<string>();
+  for (const [index, key] of value.entries()) {
+    // The id is what patch merge and failover health key on — a blank or
+    // duplicated one would either orphan or conflate two credentials.
+    if (key.id.trim().length === 0) {
+      throw new ConfigError(`${field}[${index}].id must be a non-empty string.`);
+    }
+    if (seen.has(key.id)) {
+      throw new ConfigError(`${field} contains a duplicate key id: ${key.id}.`);
+    }
+    seen.add(key.id);
+  }
+}
+
 function validateExtraHeaders(value: Record<string, string>, field: string): void {
   const entries = Object.entries(value);
   if (entries.length > MAX_EXTRA_HEADERS) {
@@ -367,15 +396,61 @@ function mergeUpstreamConfig(
   base: UpstreamConfig,
   patch: Record<string, unknown>
 ): UpstreamConfig & { model_override: string } {
+  const apiKeys = mergeApiKeys(patch.api_keys, base.api_keys);
   return {
     base_url: readString(patch.base_url, base.base_url),
     api_key: readString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
+    // An absent pool must not materialize as an `api_keys: undefined` key —
+    // persisted files and deep-equality expectations stay byte-identical to a
+    // pool-free configuration.
+    ...(apiKeys ? { api_keys: apiKeys } : {}),
     extra_headers: readExtraHeaders(patch.extra_headers, base.extra_headers),
     proxy_url: readString(patch.proxy_url, base.proxy_url),
     upstream_protocol: readUpstreamProtocol(patch.upstream_protocol, base.upstream_protocol),
     model_override: readString(patch.model_override, base.model_override ?? "")
   };
+}
+
+/**
+ * Pool entries merge by `id`: a patch that restates an entry may omit `api_key`,
+ * and the stored secret is inherited from the baseline entry. Reading it as the
+ * empty string would wipe every key the patch did not restate — the public
+ * config never returns plaintext, so a client cannot restate them. Omitting
+ * `api_keys` entirely keeps the baseline pool; an explicitly empty array clears
+ * it, falling back to the single `api_key` above.
+ */
+function mergeApiKeys(
+  value: unknown,
+  base: UpstreamApiKey[] | undefined
+): UpstreamApiKey[] | undefined {
+  if (value === undefined) {
+    return base?.map((key) => ({ ...key }));
+  }
+  if (!Array.isArray(value)) {
+    throw new ConfigError("api_keys must be an array of key pool entries.");
+  }
+
+  const baseline = new Map((base ?? []).map((key) => [key.id, key]));
+  const merged = value.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new ConfigError("api_keys entries must be JSON objects.");
+    }
+    const id = readString(entry.id, "");
+    const existing = baseline.get(id);
+    return {
+      id,
+      label: readString(entry.label, existing?.label ?? ""),
+      api_key: Object.hasOwn(entry, "api_key")
+        ? readString(entry.api_key, "")
+        : existing?.api_key ?? "",
+      enabled: typeof entry.enabled === "boolean" ? entry.enabled : existing?.enabled ?? true
+    };
+  });
+
+  // An empty pool is the single-key configuration, not a distinct state — keep
+  // it out of the file so the single `api_key` stays the one source of truth.
+  return merged.length > 0 ? merged : undefined;
 }
 
 function readExtraHeaders(
@@ -413,7 +488,47 @@ function mergePrimaryConfig(
       patch.reasoning_effort,
       base.reasoning_effort
     ) as PrimaryReasoningEffort,
-    state_domain_id: readString(patch.state_domain_id, base.state_domain_id)
+    state_domain_id: readString(patch.state_domain_id, base.state_domain_id),
+    key_strategy: readKeyStrategy(patch.key_strategy, base.key_strategy),
+    rotation_opt_out: typeof patch.rotation_opt_out === "boolean"
+      ? patch.rotation_opt_out
+      : base.rotation_opt_out,
+    sticky_reserve_seconds: readStickyReserveSeconds(
+      patch.sticky_reserve_seconds,
+      base.sticky_reserve_seconds
+    )
+  };
+}
+
+function readStickyReserveSeconds(value: unknown, fallback: number): number {
+  const seconds = readNumber(value, fallback);
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > 86_400) {
+    throw new ConfigError("primary.sticky_reserve_seconds must be an integer between 0 and 86400.");
+  }
+  return seconds;
+}
+
+function readKeyStrategy(value: unknown, fallback: PrimaryKeyStrategy): PrimaryKeyStrategy {
+  const strategy = readString(value, fallback) as PrimaryKeyStrategy;
+  if (strategy !== "fill_first" && strategy !== "spread") {
+    throw new ConfigError("primary.key_strategy must be either fill_first or spread.");
+  }
+  return strategy;
+}
+
+function mergeClaudePrimaryPolicies(
+  base: ClaudePrimaryConfig,
+  patch: Record<string, unknown>
+): Pick<ClaudePrimaryConfig, "key_strategy" | "rotation_opt_out" | "sticky_reserve_seconds"> {
+  return {
+    key_strategy: readKeyStrategy(patch.key_strategy, base.key_strategy),
+    rotation_opt_out: typeof patch.rotation_opt_out === "boolean"
+      ? patch.rotation_opt_out
+      : base.rotation_opt_out,
+    sticky_reserve_seconds: readStickyReserveSeconds(
+      patch.sticky_reserve_seconds,
+      base.sticky_reserve_seconds
+    )
   };
 }
 
@@ -437,7 +552,8 @@ function mergeClaudeConfig(
     return {
       primary: {
         ...mergeUpstreamConfig(base.primary, primaryPatch),
-        model_override: modelMap.default
+        model_override: modelMap.default,
+        ...mergeClaudePrimaryPolicies(base.primary, primaryPatch)
       },
       compact: mergeClaudeCompactConfig(base.compact, compactPatch),
       model_map: modelMap,
@@ -458,7 +574,8 @@ function mergeClaudeConfig(
     return {
       primary: {
         ...legacy,
-        model_override: modelMap.default
+        model_override: modelMap.default,
+        ...mergeClaudePrimaryPolicies(base.primary, patch)
       },
       compact: {
         ...legacy,

@@ -83,6 +83,10 @@ export function emptyForm(): ConfigFormState {
     primaryReasoningEffort: "",
     primaryStateDomainId: "",
     primaryStatePortability: "recover_on_error",
+    codexPrimaryApiKeys: [],
+    codexPrimaryKeyStrategy: "fill_first",
+    codexPrimaryRotationOptOut: false,
+    codexPrimaryStickyReserveSeconds: 0,
     codexCompactBaseUrl: "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
@@ -93,6 +97,10 @@ export function emptyForm(): ConfigFormState {
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
     claudePrimaryUpstreamProtocol: "anthropic_messages",
+    claudePrimaryApiKeys: [],
+    claudePrimaryKeyStrategy: "fill_first",
+    claudePrimaryRotationOptOut: false,
+    claudePrimaryStickyReserveSeconds: 0,
     claudeModelMap: emptyClaudeModelMap(),
     claudeCompactBaseUrl: "",
     claudeCompactApiKey: "",
@@ -125,6 +133,18 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     primaryModelOverride: config.primary.model_override ?? "",
     primaryReasoningEffort: config.primary.reasoning_effort,
     primaryStateDomainId: config.primary.state_domain_id,
+    // Pool entries keep their saved ids — the server merge matches on id to
+    // inherit the stored plaintext, which the public config never returns.
+    codexPrimaryApiKeys: (config.primary.api_keys ?? []).map((key) => ({
+      id: key.id,
+      label: key.label,
+      apiKey: "",
+      enabled: key.enabled,
+      tail: key.tail
+    })),
+    codexPrimaryKeyStrategy: config.primary.key_strategy ?? "fill_first",
+    codexPrimaryRotationOptOut: config.primary.rotation_opt_out,
+    codexPrimaryStickyReserveSeconds: config.primary.sticky_reserve_seconds ?? 0,
     primaryStatePortability: config.primary_failover.state_portability,
     codexCompactBaseUrl: config.compact.base_url,
     codexCompactApiKey: "",
@@ -136,6 +156,16 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
     claudePrimaryUpstreamProtocol: config.claude.primary.upstream_protocol,
+    claudePrimaryApiKeys: (config.claude.primary.api_keys ?? []).map((key) => ({
+      id: key.id,
+      label: key.label,
+      apiKey: "",
+      enabled: key.enabled,
+      tail: key.tail
+    })),
+    claudePrimaryKeyStrategy: config.claude.primary.key_strategy ?? "fill_first",
+    claudePrimaryRotationOptOut: config.claude.primary.rotation_opt_out,
+    claudePrimaryStickyReserveSeconds: config.claude.primary.sticky_reserve_seconds ?? 0,
     claudeModelMap: normalizeClaudeModelMap(config.claude.model_map),
     claudeCompactBaseUrl: config.claude.compact.base_url,
     claudeCompactApiKey: "",
@@ -167,7 +197,18 @@ export function formToPatch(form: ConfigFormState) {
     model_override: form.primaryModelOverride,
     upstream_protocol: form.codexPrimaryUpstreamProtocol,
     reasoning_effort: form.primaryReasoningEffort,
-    state_domain_id: form.primaryStateDomainId
+    state_domain_id: form.primaryStateDomainId,
+    key_strategy: form.codexPrimaryKeyStrategy,
+    rotation_opt_out: form.codexPrimaryRotationOptOut,
+    sticky_reserve_seconds: form.codexPrimaryStickyReserveSeconds,
+    // A typed secret travels; an empty one means "keep the stored value", which
+    // the server inherits by id. Deleting every row clears the pool outright.
+    api_keys: form.codexPrimaryApiKeys.map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      enabled: entry.enabled,
+      ...(entry.apiKey.trim().length > 0 ? { api_key: entry.apiKey.trim() } : {})
+    }))
   };
   const compact = {
     base_url: form.codexCompactBaseUrl,
@@ -185,7 +226,16 @@ export function formToPatch(form: ConfigFormState) {
       ...credentialPresetPatch(form.claudePrimaryCredentialPresetId),
       ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey),
       model_override: claudeModelMap.default,
-      upstream_protocol: form.claudePrimaryUpstreamProtocol
+      upstream_protocol: form.claudePrimaryUpstreamProtocol,
+      key_strategy: form.claudePrimaryKeyStrategy,
+      rotation_opt_out: form.claudePrimaryRotationOptOut,
+      sticky_reserve_seconds: form.claudePrimaryStickyReserveSeconds,
+      api_keys: form.claudePrimaryApiKeys.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        enabled: entry.enabled,
+        ...(entry.apiKey.trim().length > 0 ? { api_key: entry.apiKey.trim() } : {})
+      }))
     },
     model_map: claudeModelMap,
     compact: {
@@ -236,7 +286,22 @@ export function applyDraftToConfigExport(
       upstream_protocol: form.codexPrimaryUpstreamProtocol,
       model_override: form.primaryModelOverride,
       reasoning_effort: form.primaryReasoningEffort,
-      state_domain_id: form.primaryStateDomainId
+      state_domain_id: form.primaryStateDomainId,
+      key_strategy: form.codexPrimaryKeyStrategy,
+      rotation_opt_out: form.codexPrimaryRotationOptOut,
+      sticky_reserve_seconds: form.codexPrimaryStickyReserveSeconds,
+      api_keys: form.codexPrimaryApiKeys.map((entry) => {
+        // The export baseline is the full plaintext config, so an untouched
+        // entry keeps its stored secret here — unlike the patch path, which has
+        // to inherit by id on the server.
+        const stored = config.primary.api_keys?.find((candidate) => candidate.id === entry.id);
+        return {
+          id: entry.id,
+          label: entry.label,
+          api_key: entry.apiKey.trim().length > 0 ? entry.apiKey.trim() : stored?.api_key ?? "",
+          enabled: entry.enabled
+        };
+      })
     },
     compact: {
       ...config.compact,
@@ -252,7 +317,19 @@ export function applyDraftToConfigExport(
         ...config.claude.primary,
         base_url: form.claudePrimaryBaseUrl,
         upstream_protocol: form.claudePrimaryUpstreamProtocol,
-        model_override: claudeModelMap.default
+        model_override: claudeModelMap.default,
+        key_strategy: form.claudePrimaryKeyStrategy,
+        rotation_opt_out: form.claudePrimaryRotationOptOut,
+        sticky_reserve_seconds: form.claudePrimaryStickyReserveSeconds,
+        api_keys: form.claudePrimaryApiKeys.map((entry) => {
+          const stored = config.claude.primary.api_keys?.find((candidate) => candidate.id === entry.id);
+          return {
+            id: entry.id,
+            label: entry.label,
+            api_key: entry.apiKey.trim().length > 0 ? entry.apiKey.trim() : stored?.api_key ?? "",
+            enabled: entry.enabled
+          };
+        })
       },
       compact: {
         ...config.claude.compact,
@@ -380,6 +457,16 @@ function draftComparisonState(form: ConfigFormState) {
     primaryReasoningEffort: form.primaryReasoningEffort,
     primaryStateDomainId: form.primaryStateDomainId,
     primaryStatePortability: form.primaryStatePortability,
+    codexPrimaryApiKeys: form.codexPrimaryApiKeys.map((entry) => [
+      entry.id,
+      entry.label,
+      entry.apiKey,
+      entry.enabled,
+      entry.tail
+    ]),
+    codexPrimaryKeyStrategy: form.codexPrimaryKeyStrategy,
+    codexPrimaryRotationOptOut: form.codexPrimaryRotationOptOut,
+    codexPrimaryStickyReserveSeconds: form.codexPrimaryStickyReserveSeconds,
     codexCompactBaseUrl: form.codexCompactBaseUrl,
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,
@@ -390,6 +477,16 @@ function draftComparisonState(form: ConfigFormState) {
     clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
     claudePrimaryCredentialPresetId: form.claudePrimaryCredentialPresetId,
     claudePrimaryUpstreamProtocol: form.claudePrimaryUpstreamProtocol,
+    claudePrimaryApiKeys: form.claudePrimaryApiKeys.map((entry) => [
+      entry.id,
+      entry.label,
+      entry.apiKey,
+      entry.enabled,
+      entry.tail
+    ]),
+    claudePrimaryKeyStrategy: form.claudePrimaryKeyStrategy,
+    claudePrimaryRotationOptOut: form.claudePrimaryRotationOptOut,
+    claudePrimaryStickyReserveSeconds: form.claudePrimaryStickyReserveSeconds,
     claudeModelMap: normalizeClaudeModelMap(form.claudeModelMap),
     claudeCompactBaseUrl: form.claudeCompactBaseUrl,
     claudeCompactApiKey: normalizedApiKey(form.claudeCompactApiKey),

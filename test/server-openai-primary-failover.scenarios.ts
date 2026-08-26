@@ -454,10 +454,11 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    for (let index = 0; index < 11; index += 1) {
+    // One 403 is a self-describing verdict: the profile quarantines immediately.
+    {
       const failingResponse = await fetch(`${app.url}/v1/responses`, {
         method: "POST",
-        body: JSON.stringify({ model: "gpt-5.5", input: `account failure ${index}` }),
+        body: JSON.stringify({ model: "gpt-5.5", input: "account failure" }),
         headers: JSON_HEADERS
       });
       expect(failingResponse.status).toBe(403);
@@ -480,7 +481,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(compactResponse.status).toBe(200);
     await compactResponse.text();
 
-    expect(firstPrimaryRequests).toHaveLength(11);
+    expect(firstPrimaryRequests).toHaveLength(1);
     expect(secondPrimaryRequests).toHaveLength(1);
     expect(compactRequests).toHaveLength(1);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
@@ -497,7 +498,7 @@ describe("CompactGate OpenAI routing", () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const firstPrimary = await startCapturedOpenAiUpstream(firstPrimaryRequests, (res) => {
-      if (firstPrimaryRequests.length <= 11) {
+      if (firstPrimaryRequests.length <= 1) {
         res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
         res.end(JSON.stringify({ error: { message: "rate limit" } }));
         return;
@@ -527,15 +528,14 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    for (let index = 0; index < 11; index += 1) {
-      const rateLimitedResponse = await fetch(`${app.url}/v1/responses`, {
-        method: "POST",
-        body: JSON.stringify({ model: "gpt-5.5", input: `prime rate limit ${index}` }),
-        headers: JSON_HEADERS
-      });
-      expect(rateLimitedResponse.status).toBe(429);
-      await rateLimitedResponse.text();
-    }
+    // A single 429 cools the profile per Retry-After — no failure window first.
+    const rateLimitedResponse = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      body: JSON.stringify({ model: "gpt-5.5", input: "prime rate limit" }),
+      headers: JSON_HEADERS
+    });
+    expect(rateLimitedResponse.status).toBe(429);
+    await rateLimitedResponse.text();
 
     const compactionInput = [
       { type: "compaction", encrypted_content: "OPAQUE_REMOTE_STATE" },
@@ -559,7 +559,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(secondCompactionResponse.status).toBe(200);
     expect(await secondCompactionResponse.text()).toContain("second ok");
 
-    expect(firstPrimaryRequests).toHaveLength(11);
+    expect(firstPrimaryRequests).toHaveLength(1);
     expect(secondPrimaryRequests).toHaveLength(2);
     expect(JSON.parse(secondPrimaryRequests[0].body)).toMatchObject({
       model: "gpt-5.5",

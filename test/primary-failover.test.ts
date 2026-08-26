@@ -130,22 +130,15 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
   });
 
-  it("quarantines auth and balance failures after more than ten standalone errors", () => {
+  it("quarantines a credential on its first auth or balance failure", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
     ]);
     const { state } = createState();
 
-    recordRequests(
-      state,
-      config,
-      10,
-      403,
-      "Upstream returned HTTP 403: insufficient balance."
-    );
-    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
-
+    // One 403 is a self-describing verdict: A cools for 30 minutes at once —
+    // an 11-failure window burned eleven doomed requests per dead credential.
     state.recordResult(
       selectAndReserve(state, config, { model: "gpt-5.5" }),
       403,
@@ -154,21 +147,14 @@ describe("PrimaryFailoverState", () => {
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
 
-    recordRequests(
-      state,
-      config,
-      10,
-      401,
-      "Upstream returned HTTP 401: invalid token."
-    );
-    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
-
     state.recordResult(
       selectAndReserve(state, config, { model: "gpt-5.5" }),
       401,
       "Upstream returned HTTP 401: invalid token."
     );
 
+    // Both are quarantined now; the fallback prefers A because it started
+    // cooling first and so unblocks sooner.
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
   });
 
@@ -198,13 +184,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    recordRequests(
-      state,
-      config,
-      11,
-      401,
-      "Upstream returned HTTP 401: invalid token."
-    );
+    recordRequests(state, config, 1, 401, "Upstream returned HTTP 401: invalid token.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
 
     const rotatedConfig = configWithCodexProfiles([
@@ -278,13 +258,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    recordRequests(
-      state,
-      config,
-      11,
-      401,
-      "Upstream returned HTTP 401: invalid token."
-    );
+    recordRequests(state, config, 1, 401, "Upstream returned HTTP 401: invalid token.");
     const quarantined = state.preview(config, { model: "gpt-5.5" });
     expect(quarantined.profileId).toBe("codex-b");
 
@@ -308,13 +282,7 @@ describe("PrimaryFailoverState", () => {
     const { state } = createState();
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
-    recordRequests(
-      state,
-      config,
-      11,
-      403,
-      "Upstream returned HTTP 403: insufficient balance."
-    );
+    recordRequests(state, config, 1, 403, "Upstream returned HTTP 403: insufficient balance.");
 
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-c");
   });
@@ -326,19 +294,15 @@ describe("PrimaryFailoverState", () => {
     ]);
     const clock = createState(1_000);
 
-    for (let index = 0; index < 10; index += 1) {
-      clock.state.recordResult(
-        selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
-        {
-          status: 429,
-          errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-          responseHeaders: { "retry-after": "2" }
-        }
-      );
-    }
-    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
-
-    recordRateLimitFailures(clock.state, config, 1);
+    // Every 429 cools the credential for retry-after — no failure window first.
+    clock.state.recordResult(
+      selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
+      {
+        status: 429,
+        errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+        responseHeaders: { "retry-after": "2" }
+      }
+    );
 
     expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
     clock.advance(2_100);
@@ -351,18 +315,6 @@ describe("PrimaryFailoverState", () => {
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
     ]);
     const clock = createState(1_000);
-
-    for (let index = 0; index < 10; index += 1) {
-      clock.state.recordResult(
-        selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
-        {
-          status: 429,
-          errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
-          responseHeaders: { "retry-after": "1e6" }
-        }
-      );
-    }
-    expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
 
     clock.state.recordResult(
       selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
@@ -403,6 +355,68 @@ describe("PrimaryFailoverState", () => {
 
     expect(state.preview(config, { model: "gpt-missing" }).profileId).toBe("codex-b");
     expect(state.preview(config, { model: "gpt-available" }).profileId).toBe("codex-a");
+  });
+
+  it("never disables on 429 — repeated quotas cool, then the key is reused", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const clock = createState(1_000);
+
+    // Three separate 429s with Retry-After: 2s each. Each one cools A for 2s
+    // and B absorbs the next — nobody is *disabled*, so when A's cooldown
+    // expires the very next request lands back on it.
+    for (let index = 0; index < 3; index += 1) {
+      clock.state.recordResult(
+        selectAndReserve(clock.state, config, { model: "gpt-5.5" }),
+        {
+          status: 429,
+          errorSummary: "Upstream returned HTTP 429: rate limit exceeded.",
+          responseHeaders: { "retry-after": "2" }
+        }
+      );
+      clock.advance(2_001);
+      expect(clock.state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+      clock.state.recordResult(selectAndReserve(clock.state, config, { model: "gpt-5.5" }), 200, null);
+    }
+  });
+
+  it("lets a spread pool's fourth key win the weighted pick", () => {
+    // The top-K draw used to be capped at three, so a pool sharing one order
+    // starved every key past the third. With the window widened, five siblings
+    // are all in the draw and each wins its share of the rolls.
+    const config = configWithCodexProfiles([
+      pooledProfile("codex-a", "A", ["k0", "k1", "k2", "k3", "k4"])
+    ]);
+    const hits = new Map<string, number>();
+    for (let index = 0; index < 5_000; index += 1) {
+      // A fresh state per draw keeps all five keys identical; the roll walks
+      // evenly across [0, 1) — note the winning band for the last key is the
+      // top roll, so the sweep has to reach (total-1, total), not just the
+      // integer steps.
+      const state = new PrimaryFailoverState({ random: () => (index % 101) / 101 });
+      const selection = state.preview(config, { model: "gpt-5.5" });
+      hits.set(selection.keyId ?? "", (hits.get(selection.keyId ?? "") ?? 0) + 1);
+    }
+
+    expect(hits.get("k4") ?? 0).toBeGreaterThan(0);
+    expect(hits.get("k3") ?? 0).toBeGreaterThan(0);
+  });
+
+  it("never lets jitter beat a real cooldown deadline", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+    // A is quarantined for the 30 minute deadline; B for the 60s fallback. The
+    // 2s jitter must never flip that order, or flood-back would hammer a key
+    // that is still cooling.
+    recordRequests(state, config, 1, 401, "Upstream returned HTTP 401: invalid token.");
+    recordRequests(state, config, 1, 429, "Upstream returned HTTP 429: slow down.");
+
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
   });
 
   it("ignores request-shape errors for profile health", () => {
@@ -603,13 +617,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState(1_000, { maxModelCooldownEntries: 2 });
 
-    recordRequests(
-      state,
-      config,
-      11,
-      403,
-      "Upstream returned HTTP 403: insufficient balance."
-    );
+    recordRequests(state, config, 1, 403, "Upstream returned HTTP 403: insufficient balance.");
 
     for (const model of ["missing-0", "missing-1", "missing-2"]) {
       for (let index = 0; index < 11; index += 1) {
@@ -635,10 +643,10 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    // A is quarantined for 30 minutes on a bad credential.
-    recordRequests(state, config, 11, 401, "Upstream returned HTTP 401: invalid token.");
-    // B is rate limited for one second.
-    recordRequests(state, config, 11, 429, "Upstream returned HTTP 429: slow down.");
+    // A is quarantined for 30 minutes on its first bad credential response.
+    recordRequests(state, config, 1, 401, "Upstream returned HTTP 401: invalid token.");
+    // B is rate limited for the minute of the fallback backoff (no Retry-After).
+    recordRequests(state, config, 1, 429, "Upstream returned HTTP 429: slow down.");
 
     // Both are ineligible now, so the fallback ordering decides. A's health score
     // is higher (it is the active profile, order 0), but it stays blocked for
@@ -653,7 +661,7 @@ describe("PrimaryFailoverState", () => {
     ]);
     const { state } = createState();
 
-    recordRequests(state, config, 11, 403, "Upstream returned HTTP 403: insufficient balance.");
+    recordRequests(state, config, 1, 403, "Upstream returned HTTP 403: insufficient balance.");
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
 
     // The operator tops the account up and applies profile A, which forces one
@@ -873,7 +881,7 @@ function recordModelRequests(
 function recordRateLimitFailures(
   state: PrimaryFailoverState,
   config: CompactGateConfig,
-  count = 11
+  count = 1
 ): void {
   for (let index = 0; index < count; index += 1) {
     state.recordResult(
@@ -885,6 +893,21 @@ function recordRateLimitFailures(
       }
     );
   }
+}
+
+function pooledProfile(id: string, name: string, keyIds: string[]): SavedConfigProfile {
+  const profile = codexProfile(id, name, "http://127.0.0.1:9101/v1");
+  if (!("primary" in profile.config)) {
+    throw new Error("Expected Codex profile primary config.");
+  }
+  profile.config.primary.key_strategy = "spread";
+  profile.config.primary.api_keys = keyIds.map((keyId) => ({
+    id: keyId,
+    label: "",
+    api_key: `sk-${keyId}`,
+    enabled: true
+  }));
+  return profile;
 }
 
 function configWithCodexProfiles(

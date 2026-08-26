@@ -64,6 +64,14 @@ export function RouteConfigPanel({
             clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey,
             codexPrimaryCredentialPresetId: ""
           }))}
+          keyPool={form.codexPrimaryApiKeys}
+          keyStrategy={form.codexPrimaryKeyStrategy}
+          rotationOptOut={form.codexPrimaryRotationOptOut}
+          stickyReserveSeconds={form.codexPrimaryStickyReserveSeconds}
+          onKeyPoolChange={(codexPrimaryApiKeys) => onFormChange((previous) => ({ ...previous, codexPrimaryApiKeys }))}
+          onKeyStrategyChange={(codexPrimaryKeyStrategy) => onFormChange((previous) => ({ ...previous, codexPrimaryKeyStrategy }))}
+          onRotationOptOutChange={(codexPrimaryRotationOptOut) => onFormChange((previous) => ({ ...previous, codexPrimaryRotationOptOut }))}
+          onStickyReserveChange={(codexPrimaryStickyReserveSeconds) => onFormChange((previous) => ({ ...previous, codexPrimaryStickyReserveSeconds }))}
         />
         <RouteCredentialFields
           title="Codex 压缩路由" badge="压缩" tone="compact"
@@ -138,6 +146,14 @@ export function RouteConfigPanel({
             clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey,
             claudePrimaryCredentialPresetId: ""
           }))}
+          keyPool={form.claudePrimaryApiKeys}
+          keyStrategy={form.claudePrimaryKeyStrategy}
+          rotationOptOut={form.claudePrimaryRotationOptOut}
+          stickyReserveSeconds={form.claudePrimaryStickyReserveSeconds}
+          onKeyPoolChange={(claudePrimaryApiKeys) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKeys }))}
+          onKeyStrategyChange={(claudePrimaryKeyStrategy) => onFormChange((previous) => ({ ...previous, claudePrimaryKeyStrategy }))}
+          onRotationOptOutChange={(claudePrimaryRotationOptOut) => onFormChange((previous) => ({ ...previous, claudePrimaryRotationOptOut }))}
+          onStickyReserveChange={(claudePrimaryStickyReserveSeconds) => onFormChange((previous) => ({ ...previous, claudePrimaryStickyReserveSeconds }))}
         />
         <RouteCredentialFields
           title="Claude 压缩路由" badge="压缩" tone="claude"

@@ -1,6 +1,7 @@
 import type {
   ClaudeModelMap,
   ConfigProfileScope,
+  PrimaryKeyStrategy,
   PrimaryReasoningEffort,
   PrimaryStatePortabilityMode,
   PublicConfig,
@@ -25,6 +26,18 @@ export type ProfileActionState =
   | "applied"
   | "error";
 
+export interface FormKeyPoolEntry {
+  /** Stable handle from the saved pool; new draft entries get a fresh uuid. */
+  id: string;
+  label: string;
+  /** Newly typed secret. Empty means "keep the stored one" — the public config
+   * never returns plaintext, so the merge inherits by id on the server. */
+  apiKey: string;
+  enabled: boolean;
+  /** Four trailing characters of the stored secret, for telling keys apart. */
+  tail: string;
+}
+
 export type ConfigFormState = {
   codexPrimaryBaseUrl: string;
   codexPrimaryApiKey: string;
@@ -35,6 +48,10 @@ export type ConfigFormState = {
   primaryReasoningEffort: PrimaryReasoningEffort;
   primaryStateDomainId: string;
   primaryStatePortability: PrimaryStatePortabilityMode;
+  codexPrimaryApiKeys: FormKeyPoolEntry[];
+  codexPrimaryKeyStrategy: PrimaryKeyStrategy;
+  codexPrimaryRotationOptOut: boolean;
+  codexPrimaryStickyReserveSeconds: number;
   codexCompactBaseUrl: string;
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;
@@ -45,6 +62,10 @@ export type ConfigFormState = {
   clearClaudePrimaryApiKey: boolean;
   claudePrimaryCredentialPresetId: string;
   claudePrimaryUpstreamProtocol: UpstreamProtocol;
+  claudePrimaryApiKeys: FormKeyPoolEntry[];
+  claudePrimaryKeyStrategy: PrimaryKeyStrategy;
+  claudePrimaryRotationOptOut: boolean;
+  claudePrimaryStickyReserveSeconds: number;
   claudeModelMap: ClaudeModelMap;
   claudeCompactBaseUrl: string;
   claudeCompactApiKey: string;

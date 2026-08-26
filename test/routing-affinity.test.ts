@@ -63,14 +63,12 @@ describe("codex routing affinity is scoped to the profile that changed", () => {
     ]);
     const state = new PrimaryFailoverState({ random: () => 0 });
 
-    // Block codex-a on auth failures so selection has to fall through to codex-b.
-    for (let attempt = 0; attempt < 11; attempt += 1) {
-      const selection = selectAndReserve(state, config, {});
-      state.recordResult(selection, {
-        status: 401,
-        errorSummary: "Upstream returned HTTP 401: invalid token."
-      });
-    }
+    // Block codex-a on its first auth failure so selection falls through to codex-b.
+    const selection = selectAndReserve(state, config, {});
+    state.recordResult(selection, {
+      status: 401,
+      errorSummary: "Upstream returned HTTP 401: invalid token."
+    });
     expect(state.preview(config, {}).profileId).toBe("codex-b");
 
     // Rotating codex-b must not resurrect codex-a's quarantine record.

@@ -53,7 +53,10 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
     upstream_protocol: "openai_responses",
     model_override: "",
     reasoning_effort: "",
-    state_domain_id: ""
+    state_domain_id: "",
+    key_strategy: "fill_first",
+    rotation_opt_out: false,
+    sticky_reserve_seconds: 0
   },
   compact: {
     base_url: "https://compact.example/v1",
@@ -75,7 +78,10 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
       extra_headers: {},
       proxy_url: "",
       upstream_protocol: "anthropic_messages",
-      model_override: ""
+      model_override: "",
+      key_strategy: "fill_first",
+      rotation_opt_out: false,
+      sticky_reserve_seconds: 0
     },
     compact: {
       base_url: "https://api.anthropic.com",

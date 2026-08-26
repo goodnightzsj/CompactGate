@@ -1,0 +1,160 @@
+import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/server/config.js";
+import { ClaudeKeyPoolState } from "../src/server/claude-key-pool.js";
+import type { CompactGateConfig, UpstreamApiKey } from "../src/shared/types.js";
+
+const HEADERS = { "x-claude-code-session-id": "session-1" };
+
+describe("Claude key pool selection", () => {
+  it("falls through untouched for profiles without a pool", () => {
+    const { state, config } = setup([]);
+
+    expect(state.select(config, "claude-a", HEADERS)).toBeNull();
+  });
+
+  it("serves the first fill_first key and rotates only on a verdict", () => {
+    const { state, config } = setup([
+      key("k1", "sk-1"),
+      key("k2", "sk-2")
+    ]);
+
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+    // A second new session still lands on k1 — no verdict yet.
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+
+    state.recordResult("claude-a", "k1", { status: 401, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+  });
+
+  it("cools on 429 per Retry-After and recovers after it", () => {
+    const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", {
+      status: 429,
+      responseHeaders: { "retry-after": "2" }
+    }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+
+    advance(2_100);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
+  it("never disables on 429 — a fresh quota cools, not kills", () => {
+    const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")], 1_000);
+    const start = Date.now;
+
+    for (let index = 0; index < 3; index += 1) {
+      state.recordResult("claude-a", "k1", {
+        status: 429,
+        responseHeaders: { "retry-after": "2" }
+      }, HEADERS);
+      advance(2_001);
+      expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+    }
+    void start;
+  });
+
+  it("spreads new sessions across a spread pool", () => {
+    const { config } = setup([key("k1", "sk-1"), key("k2", "sk-2"), key("k3", "sk-3")]);
+    config.claude.primary.key_strategy = "spread";
+
+    const picks = new Set<string>();
+    // Sweep the roll evenly so every key gets a turn.
+    let roll = 0;
+    for (let index = 0; index < 60; index += 1) {
+      roll = (roll + 0.017) % 1;
+      const state = new ClaudeKeyPoolState({ now: () => 0, random: () => roll });
+      picks.add(state.select(config, "claude-a", {})?.keyId ?? "");
+    }
+
+    expect(picks.size).toBe(3);
+  });
+
+  it("keeps a session pinned to the key that served it", () => {
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    const first = state.select(config, "claude-a", HEADERS);
+    expect(first?.keyId).toBe("k1");
+    state.recordResult("claude-a", "k1", { status: 200, responseHeaders: {} }, HEADERS);
+
+    // k1 is now cool for this session only; a fresh session still picks it.
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+    const fresh = state.select(config, "claude-a", { "x-claude-code-session-id": "session-2" });
+    expect(fresh?.keyId).toBe("k1");
+
+    // Kill k1; the pinned session must fall through to k2, then return after
+    // the quarantine when the pin still points at a whole key.
+    state.recordResult("claude-a", "k1", { status: 401, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+  });
+
+  it("broadens the transient window before cooling on repeated 5xx", () => {
+    const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    // Two 502s: no cooldown yet — 5xx is ambiguous, it needs a window.
+    state.recordResult("claude-a", "k1", { status: 502, responseHeaders: {} }, HEADERS);
+    state.recordResult("claude-a", "k1", { status: 502, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+
+    state.recordResult("claude-a", "k1", { status: 502, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+
+    advance(60_100);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
+  it("ignores request-shape and model verdicts entirely", () => {
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", { status: 400, responseHeaders: {} }, HEADERS);
+    state.recordResult("claude-a", "k1", { status: 404, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
+  it("resurrects a key on its first success", () => {
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", { status: 401, responseHeaders: {} }, HEADERS);
+    expect(state.blockState("claude-a", "k1")).not.toBeNull();
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+
+    // A success proves the key whole again; the quarantine yields.
+    state.recordResult("claude-a", "k1", { status: 200, responseHeaders: {} }, HEADERS);
+    expect(state.blockState("claude-a", "k1")).toBeNull();
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
+  it("floods back to the soonest-unblocking key when every key is out", () => {
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", { status: 401, responseHeaders: {} }, HEADERS);
+    state.recordResult("claude-a", "k2", { status: 401, responseHeaders: {} }, HEADERS);
+    // Both quarantined from the same instant — the fallback prefers the
+    // earlier deadline, which is k1.
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+});
+
+function key(id: string, apiKey: string): UpstreamApiKey {
+  return { id, label: "", api_key: apiKey, enabled: true };
+}
+
+function setup(
+  pool: UpstreamApiKey[],
+  startNow = 0
+): { state: ClaudeKeyPoolState; config: CompactGateConfig; advance: (ms: number) => void } {
+  let now = startNow;
+  const config: CompactGateConfig = structuredClone(DEFAULT_CONFIG);
+  config.claude.primary.api_keys = pool;
+  return {
+    state: new ClaudeKeyPoolState({
+      now: () => now,
+      // Deterministic mid-range roll so spread tests never land on a boundary.
+      random: () => 0.5
+    }),
+    config,
+    advance: (ms: number) => {
+      now += ms;
+    }
+  };
+}

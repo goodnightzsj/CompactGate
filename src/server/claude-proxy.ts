@@ -11,6 +11,7 @@ import {
   rewriteClaudeModelBody
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
+import type { ClaudeKeyPoolState } from "./claude-key-pool.js";
 import { applyHostQuirks, resolveHostShortCircuit } from "./host-quirks.js";
 import {
   buildUpstreamHeaders,
@@ -64,7 +65,8 @@ export async function proxyClaudeRequest(
   configStore: ConfigStore,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  claudeKeyPool?: ClaudeKeyPoolState
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
@@ -77,6 +79,7 @@ export async function proxyClaudeRequest(
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
   let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
+  let claudeKeySelection: { keyId: string; apiKey: string } | null = null;
 
   try {
     transaction.rawBody = await readRawBody(req, 100 * 1024 * 1024);
@@ -91,6 +94,21 @@ export async function proxyClaudeRequest(
       req.socket.remoteAddress
     );
     config = routing.config;
+    if (claudeKeyPool && routing.profileId) {
+      claudeKeySelection = claudeKeyPool.select(config, routing.profileId, req.headers);
+    }
+    if (claudeKeySelection) {
+      config = {
+        ...config,
+        claude: {
+          ...config.claude,
+          primary: {
+            ...config.claude.primary,
+            api_key: claudeKeySelection.apiKey
+          }
+        }
+      };
+    }
     transaction.targetModel = routing.sceneModel ??
       resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ??
       transaction.sourceModel;
@@ -260,6 +278,18 @@ export async function proxyClaudeRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
+    if (claudeKeyPool && routing?.profileId) {
+      claudeKeyPool.recordResult(
+        routing.profileId,
+        claudeKeySelection?.keyId ?? null,
+        {
+          status: transaction.status,
+          responseHeaders: transaction.responseHeaders ?? {},
+          firstTokenMs: transaction.firstTokenMs ?? null
+        },
+        req.headers
+      );
+    }
     const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");
     await finalizeFromTransaction(transaction, {
       logger,

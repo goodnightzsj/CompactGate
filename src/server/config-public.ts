@@ -34,7 +34,10 @@ export function buildPublicConfig({
       ...publicUpstream(config.primary, resolveRouteCredential("primary", config)),
       model_override: config.primary.model_override ?? "",
       reasoning_effort: config.primary.reasoning_effort,
-      state_domain_id: config.primary.state_domain_id
+      state_domain_id: config.primary.state_domain_id,
+      key_strategy: config.primary.key_strategy ?? "fill_first",
+      rotation_opt_out: config.primary.rotation_opt_out === true,
+      sticky_reserve_seconds: config.primary.sticky_reserve_seconds ?? 0
     },
     compact: {
       ...publicUpstream(config.compact, resolveRouteCredential("compact", config)),
@@ -46,7 +49,10 @@ export function buildPublicConfig({
     claude: {
       primary: {
         ...publicUpstream(config.claude.primary, resolveRouteCredential("claude_primary", config)),
-        model_override: config.claude.primary.model_override
+        model_override: config.claude.primary.model_override,
+        key_strategy: config.claude.primary.key_strategy ?? "fill_first",
+        rotation_opt_out: config.claude.primary.rotation_opt_out === true,
+        sticky_reserve_seconds: config.claude.primary.sticky_reserve_seconds ?? 0
       },
       compact: {
         ...publicUpstream(config.claude.compact, resolveRouteCredential("claude_compact", config)),
@@ -148,6 +154,14 @@ function publicUpstream(
     api_key_configured: credential.apiKeyConfigured,
     api_key_source: credential.apiKeySource,
     active_api_key_env: credential.activeApiKeyEnv,
-    active_credential_scope: credential.activeCredentialScope
+    active_credential_scope: credential.activeCredentialScope,
+    api_keys: upstream.api_keys && upstream.api_keys.length > 0
+      ? upstream.api_keys.map((key) => ({
+          id: key.id,
+          label: key.label,
+          tail: key.api_key.slice(-4),
+          enabled: key.enabled
+        }))
+      : null
   };
 }
