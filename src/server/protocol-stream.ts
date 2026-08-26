@@ -3,6 +3,12 @@ import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import type { IncomingHttpHeaders } from "node:http";
 import {
+  createBrotliDecompress,
+  createGunzip,
+  createInflate,
+  createZstdDecompress
+} from "node:zlib";
+import {
   anthropicErrorToOpenAi,
   anthropicMessageToResponses,
   anthropicMessageToResponsesCompaction,
@@ -1550,6 +1556,159 @@ export function createChatToAnthropicResponseTransform(
     (body) => chatCompletionToAnthropic(body, status),
     "anthropic"
   );
+}
+
+/**
+ * Terminator repair for an Anthropic upstream that is proxied verbatim.
+ *
+ * A relay that drops the connection mid-stream leaves the SSE without its
+ * `content_block_stop`/`message_delta`/`message_stop`, and Claude Code discards
+ * the whole assistant message when the terminator never arrives — the text it
+ * already rendered disappears, so a truncated answer reads as no answer at all.
+ * Bytes are forwarded unchanged; only an upstream that ends without
+ * `message_stop` gets the open blocks closed and the terminator appended, so the
+ * client keeps whatever did arrive.
+ *
+ * The repair is deliberately silent: nothing is injected into the text, because
+ * an injected notice would become part of the assistant message and be replayed
+ * to the model on the next turn. The truncation stays visible through the
+ * upstream stream summary, which still reports `upstream_stream_incomplete`.
+ */
+export function createAnthropicPassthroughResponseTransform(
+  _status: number,
+  headers: IncomingHttpHeaders
+): UpstreamResponseTransform | null {
+  const contentType = headerText(headers["content-type"]).toLowerCase();
+  if (!contentType.includes("text/event-stream")) {
+    // Non-stream bodies have no terminator to repair, so they stay byte-for-byte.
+    return null;
+  }
+  const decompressor = responseDecompressor(headers);
+  const repair = createAnthropicTerminatorRepairStream();
+  const responseHeaders = { ...headers };
+  delete responseHeaders["content-length"];
+  if (decompressor) {
+    // The appended terminator is plain text and a compressed body cannot be
+    // extended by concatenating a second compressed member, so the stream is
+    // decompressed here and forwarded uncompressed. The upstream request keeps
+    // its original accept-encoding, so only the loopback hop loses compression.
+    delete responseHeaders["content-encoding"];
+  }
+  return {
+    stream: decompressor ? composeTransforms(decompressor, repair) : repair,
+    responseHeaders,
+    streamProtocol: "anthropic"
+  };
+}
+
+function responseDecompressor(headers: IncomingHttpHeaders): Transform | null {
+  const encoding = headerText(headers["content-encoding"]).trim().toLowerCase();
+  if (encoding.includes("br")) {
+    return createBrotliDecompress();
+  }
+  if (encoding.includes("gzip")) {
+    return createGunzip();
+  }
+  if (encoding.includes("deflate")) {
+    return createInflate();
+  }
+  if (encoding.includes("zstd")) {
+    return createZstdDecompress();
+  }
+  return null;
+}
+
+function createAnthropicTerminatorRepairStream(): Transform {
+  const decoder = new StringDecoder("utf8");
+  const openBlocks = new Set<number>();
+  let pending = "";
+  let sawMessageStop = false;
+  let sawMessageDelta = false;
+  let usage: Record<string, unknown> | null = null;
+
+  const observeFrame = (frame: string): void => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) {
+      return;
+    }
+    const event = readSseEventRecord(data);
+    if (!event || typeof event.type !== "string") {
+      return;
+    }
+    if (event.type === "content_block_start" && typeof event.index === "number") {
+      openBlocks.add(event.index);
+      return;
+    }
+    if (event.type === "content_block_stop" && typeof event.index === "number") {
+      openBlocks.delete(event.index);
+      return;
+    }
+    if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
+      usage = event.message.usage;
+      return;
+    }
+    if (event.type === "message_delta") {
+      sawMessageDelta = true;
+      if (isRecord(event.usage)) {
+        usage = event.usage;
+      }
+      return;
+    }
+    if (event.type === "message_stop") {
+      sawMessageStop = true;
+    }
+  };
+
+  const observe = (text: string): void => {
+    pending += text;
+    while (true) {
+      const match = pending.match(/\r?\n\r?\n/);
+      if (!match || match.index === undefined) {
+        break;
+      }
+      observeFrame(pending.slice(0, match.index));
+      pending = pending.slice(match.index + match[0].length);
+    }
+  };
+
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback: TransformCallback) {
+      observe(decoder.write(chunk));
+      callback(null, chunk);
+    },
+    flush(callback: TransformCallback) {
+      observe(decoder.end());
+      if (pending.trim()) {
+        // A connection cut mid-frame leaves a trailing frame with no blank line.
+        observeFrame(pending);
+      }
+      if (sawMessageStop) {
+        callback();
+        return;
+      }
+      let repaired = "";
+      for (const index of [...openBlocks].sort((left, right) => left - right)) {
+        repaired += sseFrame("content_block_stop", { type: "content_block_stop", index });
+      }
+      if (!sawMessageDelta) {
+        repaired += sseFrame("message_delta", {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          ...(usage ? { usage } : {})
+        });
+      }
+      repaired += sseFrame("message_stop", { type: "message_stop" });
+      callback(null, repaired);
+    }
+  });
+}
+
+function sseFrame(event: string, payload: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
 /**

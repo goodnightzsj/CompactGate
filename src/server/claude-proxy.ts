@@ -48,6 +48,7 @@ import {
   ProtocolConversionError
 } from "./protocol-conversion.js";
 import {
+  createAnthropicPassthroughResponseTransform,
   createChatToAnthropicResponseTransform,
   createOpenAiInputTokensToAnthropicResponseTransform,
   createResponsesToAnthropicResponseTransform
@@ -199,9 +200,17 @@ export async function proxyClaudeRequest(
           : createResponsesToAnthropicResponseTransform
         : upstreamProtocol === "openai_chat"
           ? createChatToAnthropicResponseTransform
-          : undefined
+          : createAnthropicPassthroughResponseTransform
     });
-    applyOpenAiProxyUpstreamResult(transaction, completedResult);
+    // An Anthropic upstream is forwarded verbatim apart from a repaired
+    // terminator, so every diagnostic has to be read off the upstream stream and
+    // never off the repaired one — otherwise the repair would report a truncated
+    // upstream as a clean message_stop and hide the failure it compensates for.
+    const passthroughUpstream = upstreamProtocol === "anthropic_messages";
+    const observedResult = passthroughUpstream
+      ? { ...completedResult, clientStreamSummary: null }
+      : completedResult;
+    applyOpenAiProxyUpstreamResult(transaction, observedResult);
 
     if (!res.headersSent) {
       copyResponseHeaders(completedResult.clientResponseHeaders ?? completedResult.responseHeaders, res);
@@ -212,7 +221,8 @@ export async function proxyClaudeRequest(
       res.end(completedResult.clientResponseBody ?? completedResult.responseBody);
     }
 
-    const responseWasTransformed = completedResult.clientResponseHeaders !== null &&
+    const responseWasTransformed = !passthroughUpstream &&
+      completedResult.clientResponseHeaders !== null &&
       completedResult.clientResponseHeaders !== undefined;
     const clientResult = responseWasTransformed
       ? { ...completedResult, streamSummary: completedResult.clientStreamSummary ?? null }
@@ -225,7 +235,7 @@ export async function proxyClaudeRequest(
     const clientResponseBody = completedResult.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = completedResult.clientResponseHeaders ?? transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
-    transaction.usage = completedResult.clientStreamSummary?.usage ??
+    transaction.usage = observedResult.clientStreamSummary?.usage ??
       extractResponseUsage(clientResponseBody, clientResponseHeaders);
     if (transaction.requestMetadata.requestType === "stream") {
       transaction.errorSummary ??= responseWasTransformed
