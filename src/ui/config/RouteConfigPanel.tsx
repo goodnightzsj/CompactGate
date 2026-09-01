@@ -216,6 +216,9 @@ export function RouteConfigPanel({
                 <button
                   key={value}
                   type="button"
+                  // Selection was carried by the class alone, which is invisible to a
+                  // screen reader: all three read as plain buttons with no state.
+                  aria-pressed={form.primaryStatePortability === value}
                   className={form.primaryStatePortability === value ? "is-active" : ""}
                   onClick={() => onFormChange((previous) => ({
                     ...previous,
@@ -232,15 +235,15 @@ export function RouteConfigPanel({
           <div>
             <div className="field-label field-label-block">Codex 压缩上游模式</div>
             <div className="toggle-group" role="group" aria-label="Codex 压缩上游模式">
-              <button type="button" className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
-              <button type="button" className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
+              <button type="button" aria-pressed={form.upstreamMode === "split"} className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
+              <button type="button" aria-pressed={form.upstreamMode === "primary"} className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
             </div>
           </div>
           <div>
             <div className="field-label field-label-block">Claude 压缩上游模式</div>
             <div className="toggle-group" role="group" aria-label="Claude 压缩上游模式">
-              <button type="button" className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
-              <button type="button" className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
+              <button type="button" aria-pressed={form.claudeCompactUpstreamMode === "split"} className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
+              <button type="button" aria-pressed={form.claudeCompactUpstreamMode === "primary"} className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
             </div>
           </div>
         </div>
@@ -339,12 +342,17 @@ export function routeUrlSuggestions(
     }
 
     seen.add(key);
+    // `storedApiKey: false` claimed "无绑定密钥" for every profile-derived row, even
+    // one that does hold a credential. The public projection only counts keys per
+    // profile, not per route, so this is profile-level truth — which the row's own
+    // "档案：" label already scopes it to — rather than the false absence it printed.
+    const profileHasKey = profile.stored_api_key_count > 0;
     suggestions.push({
       baseUrl,
       credentialPresetId: "",
       apiKeyEnv: "",
-      storedApiKey: false,
-      apiKeyConfigured: false,
+      storedApiKey: profileHasKey,
+      apiKeyConfigured: profileHasKey,
       host: hostLabel(baseUrl),
       label: `档案：${profile.name}`,
       updatedAt: profile.updated_at

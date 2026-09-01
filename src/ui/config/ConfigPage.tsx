@@ -65,16 +65,33 @@ export function ConfigPage({
       <div className="config-layout">
         <div className="config-section">
           <div className="tab-bar config-tab-bar" role="tablist" aria-label="配置分类">
-            {CONFIG_TABS.map((tabItem) => (
+            {/*
+              Roving tabindex plus arrow keys: a tablist is one stop in the page's
+              tab order, and the arrows move between the tabs inside it. Every tab
+              being separately tabbable worked but made the keyboard user walk the
+              whole bar to reach what follows it.
+            */}
+            {CONFIG_TABS.map((tabItem, index) => (
               <button
                 type="button"
                 role="tab"
                 id={`config-tab-${tabItem.id}`}
                 aria-controls={`config-panel-${tabItem.id}`}
                 aria-selected={configTab === tabItem.id}
+                tabIndex={configTab === tabItem.id ? 0 : -1}
                 key={tabItem.id}
                 className={`config-tab ${configTab === tabItem.id ? "is-active" : ""}`}
                 onClick={() => onConfigTabChange(tabItem.id)}
+                onKeyDown={(event) => {
+                  const delta = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+                  if (delta === 0) {
+                    return;
+                  }
+                  event.preventDefault();
+                  const next = CONFIG_TABS[(index + delta + CONFIG_TABS.length) % CONFIG_TABS.length];
+                  onConfigTabChange(next.id);
+                  document.getElementById(`config-tab-${next.id}`)?.focus();
+                }}
               >
                 {tabItem.label}
               </button>

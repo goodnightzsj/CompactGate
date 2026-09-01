@@ -271,16 +271,36 @@ export function ProfileScopeCard({
                 onDragLeave={(event) => handleProfileDragLeave(event, profile.id)}
                 onDrop={(event) => handleProfileDrop(event, profile.id)}
               >
+                {/*
+                  Order is not decoration — it is the failover sequence — and drag
+                  was the only way to change it, so `tabIndex={-1}` put it out of
+                  reach entirely for anyone not using a mouse. The arrow keys drive
+                  the same reorder the drop handler does.
+                */}
                 <button
                   className="profile-item-handle"
                   type="button"
                   draggable={canReorderProfiles}
                   disabled={!canReorderProfiles}
-                  aria-label={`拖动排序 ${profile.name}`}
-                  tabIndex={-1}
-                  title="拖动排序"
+                  aria-label={`拖动或用方向键排序 ${profile.name}`}
+                  title="拖动排序，或用 ↑ ↓ 移动"
                   onDragStart={(event) => handleProfileDragStart(event, profile.id)}
                   onDragEnd={resetDragState}
+                  onKeyDown={(event) => {
+                    const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                    if (!canReorderProfiles || delta === 0) {
+                      return;
+                    }
+                    const order = profiles.map((item) => item.id);
+                    const from = order.indexOf(profile.id);
+                    const to = from + delta;
+                    if (from === -1 || to < 0 || to >= order.length) {
+                      return;
+                    }
+                    event.preventDefault();
+                    order.splice(to, 0, ...order.splice(from, 1));
+                    void onReorderProfiles(scope, order);
+                  }}
                 >
                   <span aria-hidden="true">≡</span>
                 </button>
@@ -388,8 +408,16 @@ export function ProfileScopeCard({
         <span>{profileActionLabel(profileState)}</span>
       </div>
 
-      {nameConflict && <p className="error-note">{nameConflict}</p>}
-      {profileError && <p className="error-note">{profileError}</p>}
+      {/*
+        Both messages sat outside the status region above, so neither was ever
+        announced — including the name collision, which is the one the user most
+        needs to hear before retrying. The wrapper is always rendered: a live region
+        has to exist before its content changes, or the first message is missed.
+      */}
+      <div role="alert">
+        {nameConflict && <p className="error-note">{nameConflict}</p>}
+        {profileError && <p className="error-note">{profileError}</p>}
+      </div>
 
       {overwriteCandidate && (
         <ConfirmProfileOverwriteDialog
