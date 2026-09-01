@@ -456,6 +456,13 @@ async function proxyPrimaryRequest(
       }, Date.now(), Math.round((performance.timeOrigin + startedAt) * 1_000));
     }
   } catch (error) {
+    // Once the compact path has taken the request it owns the response and its own
+    // logging, so a throw arriving from inside it must not be answered again here:
+    // writing a second body onto that stream corrupts what the client already
+    // received. Rethrowing keeps the failure visible to the server's own handler.
+    if (delegatedToCompact) {
+      throw error;
+    }
     if (error instanceof UpstreamRequestError) {
       applyUpstreamFailureToTransaction(transaction, error.details);
     }
@@ -473,10 +480,10 @@ async function proxyPrimaryRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
-    if (delegatedToCompact) {
-      return;
-    }
-
+    // Guarded rather than returned from: a `return` inside `finally` discards any
+    // exception still propagating out of the try or the catch, so the delegation
+    // check used to swallow whatever the compact path had thrown.
+    if (!delegatedToCompact) {
     if (primarySelection && !requestProfile) {
       primaryFailover.recordResult(primarySelection, {
         status: transaction.status,
@@ -505,6 +512,7 @@ async function proxyPrimaryRequest(
         providerStatePortability,
         persistBody: config.logging.persist_body
       });
+    }
   }
 }
 

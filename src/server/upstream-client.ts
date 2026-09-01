@@ -456,10 +456,18 @@ export async function sendOpenAiUpstreamRequest(
 ): Promise<BufferedUpstreamResult> {
   const retryStatuses = new Set(options.retryHttpStatuses ?? []);
   const maxStatusRetries = Math.max(0, Math.floor(options.maxHttpStatusRetries ?? 0));
+  // `timeoutMs` is the budget for the whole request, not for one attempt. Passing
+  // it unchanged to each of the up-to-four attempts below turned a 900 s compact
+  // timeout into a connection held for an hour. `sendRecoveringPrimaryRequest`
+  // already spends the budget this way; the retry loop simply had not.
+  const remainingTimeoutMs = () =>
+    Math.max(1, options.timeoutMs - Math.round(performance.now() - options.startedAt));
+
   if (retryStatuses.size > 0 && maxStatusRetries > 0) {
     for (let retry = 0; retry < maxStatusRetries; retry += 1) {
       const result = await sendBufferedUpstreamRequest({
         ...options,
+        timeoutMs: remainingTimeoutMs(),
         deferRetryableStreamErrors: true
       });
       if (retryStatuses.has(result.status) && !result.responseBodyTruncated) {
@@ -482,7 +490,7 @@ export async function sendOpenAiUpstreamRequest(
       return finalResult;
     }
 
-    return sendBufferedUpstreamRequest(options);
+    return sendBufferedUpstreamRequest({ ...options, timeoutMs: remainingTimeoutMs() });
   }
 
   if (options.retryEmptyStreamError !== true) {
@@ -505,7 +513,10 @@ export async function sendOpenAiUpstreamRequest(
     return finalResult;
   }
 
-  const retryResult = await sendBufferedUpstreamRequest(options);
+  const retryResult = await sendBufferedUpstreamRequest({
+    ...options,
+    timeoutMs: remainingTimeoutMs()
+  });
   if (retryResult.errorSummary) {
     retryResult.errorSummary = `${retryResult.errorSummary} (retried after empty upstream stream)`;
   }
