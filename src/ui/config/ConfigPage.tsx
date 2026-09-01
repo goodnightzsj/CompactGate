@@ -14,12 +14,10 @@ import { ConfigSaveBar } from "./ConfigSaveBar.js";
 import { ConfigSaveAsNewProfileDialog } from "./ConfigSaveAsNewProfileDialog.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
 import { RouteConfigPanel } from "./RouteConfigPanel.js";
-import { copyProfileRoutesToOtherDraft } from "./config-form-state.js";
 import {
   compactModeLabel,
   nextUniqueProfileName,
-  profileScopeState,
-  upstreamProtocolLabel
+  profileScopeState
 } from "./profile-utils.js";
 import type { ConfigFormState, ConfigTab } from "./types.js";
 import type { ConfigActions } from "../hooks/useConfigActions.js";
@@ -110,8 +108,7 @@ export function ConfigPage({
                 onCreateProfileForOtherScope={(profile) => {
                   setCrossScopeDraft({
                     sourceProfile: profile,
-                    targetScope: profile.scope === "codex" ? "claude" : "codex",
-                    form: copyProfileRoutesToOtherDraft(form, profile)
+                    targetScope: profile.scope === "codex" ? "claude" : "codex"
                   });
                 }}
                 onDeleteProfile={actions.requestDeleteSelectedProfile}
@@ -187,12 +184,15 @@ export function ConfigPage({
           profileErrors={profileErrors}
           onCancel={() => setCrossScopeDraft(null)}
           onConfirm={async (scope, name) => {
-            const ok = await actions.saveConfigProfile(scope, name, crossScopeDraft.form);
-            if (ok !== false) {
+            const ok = await actions.duplicateSelectedProfile(
+              crossScopeDraft.sourceProfile.scope,
+              crossScopeDraft.sourceProfile.id,
+              { targetScope: scope, name }
+            );
+            if (ok) {
               setCrossScopeDraft(null);
-              return true;
             }
-            return false;
+            return ok;
           }}
         />
       )}
@@ -203,7 +203,6 @@ export function ConfigPage({
 type CrossScopeProfileDraft = {
   sourceProfile: PublicConfig["profiles"][number];
   targetScope: ConfigProfileScope;
-  form: ConfigFormState;
 };
 
 function CrossScopeProfileDialog({
@@ -234,7 +233,7 @@ function CrossScopeProfileDialog({
       scopeLocked
       profileErrors={profileErrors}
       title={`创建为 ${targetLabel} 档案`}
-      description={`将「${draft.sourceProfile.name}」的路由映射到 ${targetLabel}。上游协议保持源值，以决定直通或协议转换；不复制源凭据，目标端专属设置及现有凭据保持不变。`}
+      description={`将「${draft.sourceProfile.name}」的地址与凭据复制到 ${targetLabel}。上游协议、模型与环境变量改用 ${targetLabel} 默认值；不会自动应用，目标端现有档案保持不变。`}
       submitLabel={`创建 ${targetLabel} 档案`}
       onCancel={onCancel}
       onConfirm={onConfirm}
@@ -243,36 +242,37 @@ function CrossScopeProfileDialog({
         <div className="cross-scope-route">
           <span>主路由</span>
           <strong>{routes.primaryUrl || "未配置"}</strong>
-          <small>{upstreamProtocolLabel(routes.primaryProtocol)}</small>
+          <small>沿用源凭据</small>
         </div>
         <div className="cross-scope-route">
           <span>压缩路由</span>
           <strong>{routes.compactUrl || "未配置"}</strong>
-          <small>
-            {upstreamProtocolLabel(routes.compactProtocol)} · {compactModeLabel(routes.compactMode)}
-          </small>
+          <small>沿用源凭据 · {compactModeLabel(routes.compactMode)}</small>
         </div>
       </div>
     </ConfigSaveAsNewProfileDialog>
   );
 }
 
+/**
+ * Read off the source profile, not a local draft: the server builds the copy, and
+ * the only fields it carries across scopes are the URLs and the compact mode shown
+ * here. The protocol is deliberately absent — it resets to the destination's
+ * default, so quoting the source's value would misreport what gets created.
+ */
 function crossScopeRoutePreview(draft: CrossScopeProfileDraft) {
-  if (draft.targetScope === "codex") {
-    return {
-      primaryUrl: draft.form.codexPrimaryBaseUrl,
-      primaryProtocol: draft.form.codexPrimaryUpstreamProtocol,
-      compactUrl: draft.form.codexCompactBaseUrl,
-      compactProtocol: draft.form.codexCompactUpstreamProtocol,
-      compactMode: draft.form.upstreamMode
-    };
-  }
-
-  return {
-    primaryUrl: draft.form.claudePrimaryBaseUrl,
-    primaryProtocol: draft.form.claudePrimaryUpstreamProtocol,
-    compactUrl: draft.form.claudeCompactBaseUrl,
-    compactProtocol: draft.form.claudeCompactUpstreamProtocol,
-    compactMode: draft.form.claudeCompactUpstreamMode
-  };
+  const source = draft.sourceProfile;
+  return source.scope === "codex"
+    ? {
+        primaryUrl: source.primary_base_url ?? "",
+        compactUrl: source.compact_base_url ?? "",
+        // A profile saved before the mode was stored reports null; the copy lands
+        // on the destination default, which is what "复用主上游" describes.
+        compactMode: source.compact_upstream_mode ?? "primary"
+      }
+    : {
+        primaryUrl: source.claude_primary_base_url ?? "",
+        compactUrl: source.claude_compact_base_url ?? "",
+        compactMode: source.claude_compact_upstream_mode ?? "primary"
+      };
 }

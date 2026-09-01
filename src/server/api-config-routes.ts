@@ -146,7 +146,8 @@ export async function handleConfigApi(
     await configStore.duplicateProfile(
       readProfileScope(body, url),
       readProfileId(body, "duplicate"),
-      typeof body.name === "string" ? body.name : undefined
+      typeof body.name === "string" ? body.name : undefined,
+      readOptionalProfileScope(body.target_scope)
     );
     broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor);
     sendJson(res, 200, configStore.toPublicConfig());
@@ -227,6 +228,16 @@ function readProfileScope(body: Record<string, unknown>, url: URL): ConfigProfil
   const value = typeof body.scope === "string" ? body.scope : url.searchParams.get("scope") ?? "codex";
   if (value !== "codex" && value !== "claude") {
     throw new ConfigError("config profile scope must be codex or claude.");
+  }
+  return value;
+}
+
+function readOptionalProfileScope(value: unknown): ConfigProfileScope | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (value !== "codex" && value !== "claude") {
+    throw new ConfigError("config profile target_scope must be codex or claude.");
   }
   return value;
 }

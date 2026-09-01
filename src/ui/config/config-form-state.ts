@@ -408,40 +408,6 @@ export function renderLinkedModel(model: string, template: string): string {
   return template.replaceAll("{model}", model || "model");
 }
 
-export function copyProfileRoutesToOtherDraft(
-  form: ConfigFormState,
-  profile: PublicConfig["profiles"][number]
-): ConfigFormState {
-  if (profile.scope === "codex") {
-    return {
-      ...form,
-      claudePrimaryBaseUrl: profile.primary_base_url ?? form.claudePrimaryBaseUrl,
-      claudePrimaryCredentialPresetId: "",
-      claudePrimaryUpstreamProtocol:
-        profile.primary_upstream_protocol ?? form.claudePrimaryUpstreamProtocol,
-      claudeCompactBaseUrl: profile.compact_base_url ?? form.claudeCompactBaseUrl,
-      claudeCompactCredentialPresetId: "",
-      claudeCompactUpstreamProtocol:
-        profile.compact_upstream_protocol ?? form.claudeCompactUpstreamProtocol,
-      claudeCompactUpstreamMode:
-        profile.compact_upstream_mode ?? form.claudeCompactUpstreamMode
-    };
-  }
-
-  return {
-    ...form,
-    codexPrimaryBaseUrl: profile.claude_primary_base_url ?? form.codexPrimaryBaseUrl,
-    codexPrimaryCredentialPresetId: "",
-    codexPrimaryUpstreamProtocol:
-      profile.claude_primary_upstream_protocol ?? form.codexPrimaryUpstreamProtocol,
-    codexCompactBaseUrl: profile.claude_compact_base_url ?? form.codexCompactBaseUrl,
-    codexCompactCredentialPresetId: "",
-    codexCompactUpstreamProtocol:
-      profile.claude_compact_upstream_protocol ?? form.codexCompactUpstreamProtocol,
-    upstreamMode: profile.claude_compact_upstream_mode ?? form.upstreamMode
-  };
-}
-
 function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split" | "primary" {
   return value === "split" || value === "primary" ? value : fallback;
 }

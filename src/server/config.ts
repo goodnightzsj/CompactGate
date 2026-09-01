@@ -146,9 +146,11 @@ export class ConfigStore {
   async duplicateProfile(
     scope: ConfigProfileScope,
     profileId: string,
-    name?: string
+    name?: string,
+    targetScope?: ConfigProfileScope
   ): Promise<CompactGateConfig> {
-    return this.mutate(() => duplicateConfigProfile(this.current, scope, profileId, name));
+    return this.mutate(() =>
+      duplicateConfigProfile(this.current, scope, profileId, name, targetScope ?? scope));
   }
 
   async deleteProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {

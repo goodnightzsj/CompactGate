@@ -228,6 +228,100 @@ describe("ConfigStore", () => {
     expect(applied.profile_scopes?.claude?.active_profile_id).toBe(claudeId);
   });
 
+  it("carries the source credential across a cross-scope copy", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    // A live Claude credential that must not be mistaken for the copied one.
+    await store.patch({
+      claude: { primary: { base_url: "https://claude.example", api_key: "claude-live-key" } }
+    });
+    await store.saveProfile("codex", "Relay", {
+      primary: {
+        base_url: "https://relay.example/v1",
+        api_key: "relay-key",
+        proxy_url: "http://127.0.0.1:1080",
+        extra_headers: { "x-relay": "1" },
+        rotation_opt_out: true,
+        sticky_reserve_seconds: 45,
+        reasoning_effort: "high",
+        model_override: "gpt-5.6"
+      },
+      compact: { base_url: "https://relay.example/v1", api_key: "relay-key", upstream_mode: "split" }
+    });
+    const sourceId = store.get().profile_scopes?.codex?.profiles?.[0]?.id ?? "";
+
+    await store.duplicateProfile("codex", sourceId, "Relay on Claude", "claude");
+
+    const scopes = store.get().profile_scopes;
+    const copied = scopes?.claude?.profiles?.[0];
+    expect(copied?.name).toBe("Relay on Claude");
+    expect(copied?.config).toMatchObject({
+      claude: {
+        primary: {
+          base_url: "https://relay.example/v1",
+          api_key: "relay-key",
+          proxy_url: "http://127.0.0.1:1080",
+          extra_headers: { "x-relay": "1" },
+          rotation_opt_out: true,
+          sticky_reserve_seconds: 45,
+          // Reset to the destination's own defaults: carrying these would point a
+          // Claude route at an OpenAI dialect, an OpenAI model, and no env var.
+          upstream_protocol: "anthropic_messages",
+          api_key_env: "ANTHROPIC_AUTH_TOKEN",
+          model_override: ""
+        },
+        compact: { base_url: "https://relay.example/v1", api_key: "relay-key", upstream_mode: "split" }
+      }
+    });
+    expect(JSON.stringify(copied?.config)).not.toContain("gpt-5.6");
+    // The copy is filed, not applied, and the source scope is untouched.
+    expect(scopes?.claude?.active_profile_id ?? null).toBeNull();
+    expect(store.get().claude.primary.api_key).toBe("claude-live-key");
+    expect(scopes?.codex?.profiles).toHaveLength(1);
+    // The destination kind's URL suggestions learn the address the copy introduced.
+    expect(store.get().route_url_presets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "claude_primary", base_url: "https://relay.example/v1" })
+      ])
+    );
+  });
+
+  it("carries the whole key pool through a same-scope duplicate", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    await store.saveProfile("claude", "Pooled", {
+      claude: {
+        primary: {
+          base_url: "https://pool.example",
+          api_keys: [
+            { id: "k1", label: "first", api_key: "pool-key-1", enabled: true },
+            { id: "k2", label: "second", api_key: "pool-key-2", enabled: false }
+          ]
+        }
+      }
+    });
+    const sourceId = store.get().profile_scopes?.claude?.profiles?.[0]?.id ?? "";
+
+    await store.duplicateProfile("claude", sourceId, "Pooled copy");
+    await store.duplicateProfile("claude", sourceId, "Pooled on Codex", "codex");
+
+    const scopes = store.get().profile_scopes;
+    const sameScope = scopes?.claude?.profiles?.find((profile) => profile.name === "Pooled copy");
+    const crossScope = scopes?.codex?.profiles?.[0];
+    // Entry ids ride along on purpose: health is keyed by `profileId#keyId`, and a
+    // fresh profile id already separates the copy's statistics from the source's.
+    for (const config of [
+      (sameScope?.config as { claude: { primary: { api_keys?: unknown } } }).claude.primary,
+      (crossScope?.config as { primary: { api_keys?: unknown } }).primary
+    ]) {
+      expect(config.api_keys).toEqual([
+        { id: "k1", label: "first", api_key: "pool-key-1", enabled: true },
+        { id: "k2", label: "second", api_key: "pool-key-2", enabled: false }
+      ]);
+    }
+    expect(sameScope?.id).not.toBe(sourceId);
+  });
+
   it("serializes concurrent config mutations before persisting", async () => {
     const dir = await makeConfigDir();
 

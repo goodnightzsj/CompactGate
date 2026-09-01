@@ -71,19 +71,32 @@ export function createConfigProfileCollectionActions({
     }
   }
 
-  async function duplicateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
-    const accessors = scopedProfileAccessors(scope);
-    const targetProfileId = profileId ?? accessors.selectedId;
-    const scopeState = config ? profileScopeState(config, scope) : null;
-    const sourceProfile = scopeState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
+  /**
+   * `targetScope` copies into the other scope instead of alongside the source.
+   * Both directions run through the same endpoint so the copy carries the source
+   * profile's credential — the server holds the keys, and a draft built here
+   * never could.
+   */
+  async function duplicateSelectedProfile(
+    scope: ConfigProfileScope = "codex",
+    profileId?: string,
+    options: { targetScope?: ConfigProfileScope; name?: string } = {}
+  ): Promise<boolean> {
+    const targetScope = options.targetScope ?? scope;
+    const sourceState = config ? profileScopeState(config, scope) : null;
+    const targetProfileId = profileId ?? scopedProfileAccessors(scope).selectedId;
+    const sourceProfile = sourceState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
+    // Progress and failure belong to the scope the copy lands in, which is the
+    // panel the user is watching.
+    const accessors = scopedProfileAccessors(targetScope);
     if (!sourceProfile) {
       accessors.setState("error");
       accessors.setError("请先选择一个已保存的配置档案。");
-      return;
+      return false;
     }
 
-    const copyName = nextDuplicateProfileName({
-      profiles: scopeState?.profiles ?? [],
+    const copyName = options.name?.trim() || nextDuplicateProfileName({
+      profiles: sourceState?.profiles ?? [],
       selectedName: targetProfileId === accessors.selectedId ? accessors.name : "",
       sourceName: sourceProfile.name
     });
@@ -96,23 +109,29 @@ export function createConfigProfileCollectionActions({
         body: JSON.stringify({
           scope,
           profile_id: targetProfileId,
-          name: copyName
+          name: copyName,
+          ...(targetScope === scope ? {} : { target_scope: targetScope })
         })
       });
-      const nextScope = profileScopeState(nextConfig, scope);
+      const nextScope = profileScopeState(nextConfig, targetScope);
       const copiedProfile = [...nextScope.profiles]
         .reverse()
         .find((profile) => profile.name === copyName);
 
       setConfig(nextConfig);
-      accessors.setSelectedId(copiedProfile?.id ?? targetProfileId);
+      // The source id is only a sane fallback within its own scope; across scopes
+      // it names nothing the destination panel can select, so hold its selection.
+      const fallbackId = targetScope === scope ? targetProfileId : accessors.selectedId;
+      accessors.setSelectedId(copiedProfile?.id ?? fallbackId);
       // The name follows the new selection through the sync effect; calling
       // setName here would also drop an unrelated in-progress rename.
       accessors.setState("duplicated");
       window.setTimeout(() => accessors.setState("idle"), 1600);
+      return true;
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
+      return false;
     }
   }
 

@@ -39,7 +39,7 @@ export function ConfigProfilesPanel({
   onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
-  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<unknown>;
   onCreateProfileForOtherScope: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
 }) {

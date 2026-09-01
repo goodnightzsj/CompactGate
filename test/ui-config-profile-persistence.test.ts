@@ -12,7 +12,7 @@ describe("config profile persistence", () => {
     vi.unstubAllGlobals();
   });
 
-  it("saves an explicit mapped draft instead of the form captured by the action", async () => {
+  it("saves the captured form under an overridden name", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response(JSON.stringify(createdClaudeProfile()), {
@@ -25,11 +25,6 @@ describe("config profile persistence", () => {
 
     const currentForm = {
       ...emptyForm(),
-      claudePrimaryBaseUrl: "https://old.example",
-      claudePrimaryUpstreamProtocol: "anthropic_messages" as const
-    };
-    const mappedForm = {
-      ...currentForm,
       claudePrimaryBaseUrl: "https://mapped.example/v1",
       claudePrimaryApiKey: "target-draft-key",
       claudePrimaryUpstreamProtocol: "openai_responses" as const,
@@ -58,7 +53,7 @@ describe("config profile persistence", () => {
       scopedProfileAccessors: () => accessors
     });
 
-    await expect(actions.saveConfigProfile("claude", "Mapped", mappedForm)).resolves.toBe(true);
+    await expect(actions.saveConfigProfile("claude", "Mapped")).resolves.toBe(true);
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
 

@@ -283,6 +283,43 @@ describe("CompactGate config API", () => {
     expect(JSON.stringify(deletedConfig)).not.toContain("profile-api-primary-key");
   });
 
+  it("copies a profile into the other scope through the public API", async () => {
+    const app = await startApp();
+
+    await fetchJson<PublicConfig>(`${app.url}/api/config/profiles`, "POST", {
+      scope: "codex",
+      name: "Relay",
+      config: { primary: { base_url: "https://relay.example/v1", api_key: "relay-api-key" } }
+    });
+    const { body: saved } = await fetchJson<PublicConfig>(`${app.url}/api/config`, "GET");
+    const sourceId = saved.profile_scopes.codex.profiles[0].id;
+
+    const { response, body: copied } = await fetchJson<PublicConfig>(
+      `${app.url}/api/config/profiles/duplicate`,
+      "POST",
+      { scope: "codex", profile_id: sourceId, name: "Relay on Claude", target_scope: "claude" }
+    );
+
+    expect(response.status).toBe(200);
+    expect(copied.profile_scopes.claude.profiles).toHaveLength(1);
+    expect(copied.profile_scopes.claude.profiles[0]).toMatchObject({
+      name: "Relay on Claude",
+      claude_primary_base_url: "https://relay.example/v1",
+      // The credential travels but is never echoed back; only its presence shows.
+      stored_api_key_count: 1
+    });
+    expect(copied.profile_scopes.codex.profiles).toHaveLength(1);
+    expect(copied.profile_scopes.claude.active_profile_id).toBeNull();
+    expect(JSON.stringify(copied)).not.toContain("relay-api-key");
+
+    const { response: rejected } = await fetchJson(
+      `${app.url}/api/config/profiles/duplicate`,
+      "POST",
+      { scope: "codex", profile_id: sourceId, name: "Bad target", target_scope: "gemini" }
+    );
+    expect(rejected.status).toBe(400);
+  });
+
   it("reorders scoped config profiles through the public API", async () => {
     const app = await startApp();
 

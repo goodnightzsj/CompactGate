@@ -1,8 +1,12 @@
 import { hash } from "node:crypto";
 import type {
+  ClaudeCompactConfig,
+  ClaudePrimaryConfig,
+  CompactConfig,
   CompactGateConfig,
   CompactGateRuntimeConfig,
   ConfigProfileScope,
+  PrimaryUpstreamConfig,
   SavedClaudeProfileConfig,
   SavedCodexProfileConfig,
   SavedConfigProfile,
@@ -48,6 +52,89 @@ export function extractScopedProfileConfig(
       scene_map: structuredClone(runtime.claude.scene_map),
       long_context_bytes: runtime.claude.long_context_bytes
     }
+  };
+}
+
+/**
+ * Re-file a saved profile under the other scope, carrying the credential with it.
+ *
+ * Only the fields that keep their meaning across a scope change travel: where the
+ * upstream is (`base_url`, `proxy_url`, `extra_headers`), what gets you in
+ * (`api_key` and the whole `api_keys` pool), and how the pool is consumed
+ * (`key_strategy`, `rotation_opt_out`, `sticky_reserve_seconds`, `upstream_mode`).
+ * A relay that serves one scope almost always serves the other on the same host
+ * and the same key, which is the case this exists for.
+ *
+ * Everything else resets to the destination scope's default, each for its own
+ * reason: `upstream_protocol` because carrying it forces a lossy translation
+ * where a native passthrough was available; `api_key_env` because the two scopes
+ * name different variables; `model_override` and `model_map` because a model name
+ * does not survive a change of provider family; and `reasoning_effort`,
+ * `state_domain_id`, `model_mode`, `model_template`, `scene_map`,
+ * `long_context_bytes` because they exist on one side only.
+ *
+ * Pool entry ids are kept as they are. Key health is tracked per
+ * `profileId#keyId`, so a fresh profile id already separates the copy's
+ * statistics from the source's; regenerating the key ids would only discard the
+ * history the source built up.
+ *
+ * `from` and `to` must differ — a same-scope copy reproduces the stored config
+ * verbatim and must not be routed through this reset.
+ */
+export function reScopeProfileConfig(
+  config: SavedConfigProfileConfig,
+  from: ConfigProfileScope,
+  to: ConfigProfileScope
+): SavedCodexProfileConfig | SavedClaudeProfileConfig {
+  const source = profileConfigToRuntime(config);
+  const sourceRoutes = from === "codex"
+    ? { primary: source.primary, compact: source.compact }
+    : { primary: source.claude.primary, compact: source.claude.compact };
+  const target = cloneRuntimeConfig(DEFAULT_CONFIG);
+
+  return extractScopedProfileConfig(
+    to === "codex"
+      ? {
+          ...target,
+          primary: { ...target.primary, ...carriedRouteFields(sourceRoutes.primary) },
+          compact: {
+            ...target.compact,
+            ...carriedRouteFields(sourceRoutes.compact),
+            upstream_mode: sourceRoutes.compact.upstream_mode
+          }
+        }
+      : {
+          ...target,
+          claude: {
+            ...target.claude,
+            primary: { ...target.claude.primary, ...carriedRouteFields(sourceRoutes.primary) },
+            compact: {
+              ...target.claude.compact,
+              ...carriedRouteFields(sourceRoutes.compact),
+              upstream_mode: sourceRoutes.compact.upstream_mode
+            }
+          }
+        },
+    to
+  );
+}
+
+function carriedRouteFields(route: PrimaryUpstreamConfig | CompactConfig | ClaudePrimaryConfig | ClaudeCompactConfig) {
+  return {
+    base_url: route.base_url,
+    api_key: route.api_key,
+    extra_headers: { ...route.extra_headers },
+    proxy_url: route.proxy_url,
+    // An absent pool must stay absent: materializing `api_keys: []` would read as
+    // "the pool was cleared" and shadow the single `api_key` beside it.
+    ...(route.api_keys && route.api_keys.length > 0
+      ? { api_keys: route.api_keys.map((entry) => ({ ...entry })) }
+      : {}),
+    ...("key_strategy" in route ? { key_strategy: route.key_strategy } : {}),
+    ...("rotation_opt_out" in route ? { rotation_opt_out: route.rotation_opt_out } : {}),
+    ...("sticky_reserve_seconds" in route
+      ? { sticky_reserve_seconds: route.sticky_reserve_seconds }
+      : {})
   };
 }
 

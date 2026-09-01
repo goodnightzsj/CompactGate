@@ -32,8 +32,7 @@ export function createConfigProfilePersistenceActions({
 }) {
   async function saveConfigProfile(
     scope: ConfigProfileScope = "codex",
-    nameOverride?: string,
-    formOverride?: ConfigFormState
+    nameOverride?: string
   ): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
     const trimmedName = (nameOverride ?? accessors.name).trim();
@@ -56,7 +55,7 @@ export function createConfigProfilePersistenceActions({
           // PATCH /api/config. `applySelectedProfile` deliberately omits it:
           // it sends no draft, only a profile id.
           revision: formRevision,
-          config: formToPatch(formOverride ?? form)
+          config: formToPatch(form)
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);

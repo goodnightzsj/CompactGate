@@ -16,6 +16,7 @@ import {
   getProfileScopeState,
   mergeRuntimeForProfileScope,
   profileConfigToRuntime,
+  reScopeProfileConfig,
   validateProfileConfig,
   withProfileScope
 } from "./config-profile-scope.js";
@@ -144,14 +145,25 @@ export function updateProfile(
     return recordProfileRouteUrls(updatedConfig, profileConfig, scope);
 }
 
+/**
+ * `targetScope` re-files the copy under the other scope. Cross-scope copying runs
+ * here rather than through a Studio form draft because the credential has to come
+ * along: keys are never returned to a client, so a draft assembled in the browser
+ * can only ever send a blank key field, which `saveProfile` then fills from
+ * whichever key the *destination* route happens to be running — the source's URL
+ * beside an unrelated secret. Reading the stored profile server-side is the only
+ * place both halves are in hand at once.
+ */
 export function duplicateProfile(
   current: CompactGateConfig,
   scope: ConfigProfileScope,
   profileId: string,
-  name: string | undefined
+  name: string | undefined,
+  targetScope: ConfigProfileScope = scope
 ): CompactGateConfig {
-    const { scopeState, profile } = requireProfile(current, scope, profileId);
-    const existingProfiles = scopeState.profiles ?? [];
+    const { profile } = requireProfile(current, scope, profileId);
+    const destination = getProfileScopeState(current, targetScope);
+    const existingProfiles = destination.profiles ?? [];
     const now = new Date().toISOString();
     const trimmedName = requireProfileName(name?.trim() || `${profile.name} copy`);
 
@@ -159,18 +171,36 @@ export function duplicateProfile(
       throw new ConfigError("Profile name already exists.");
     }
 
+    let config: SavedConfigProfileConfig;
+    if (targetScope === scope) {
+      config = cloneProfileConfig(profile.config);
+    } else {
+      // Only the cross-scope copy is validated: it synthesizes a config shape that
+      // has never been through a save, while a same-scope copy reproduces bytes
+      // that were already validated when they were written.
+      config = reScopeProfileConfig(profile.config, scope, targetScope);
+      validateProfileConfig(config, targetScope);
+    }
+
     const nextProfile: SavedConfigProfile = {
-      id: createProfileId(`${scope}-${trimmedName}`, now),
+      id: createProfileId(`${targetScope}-${trimmedName}`, now),
       name: trimmedName,
       created_at: now,
       updated_at: now,
-      config: cloneProfileConfig(profile.config)
+      config: cloneProfileConfig(config)
     };
 
-    return withProfileScope(current, scope, {
+    const nextConfig = withProfileScope(current, targetScope, {
       profiles: [...existingProfiles.map(cloneProfile), nextProfile],
-      active_profile_id: scopeState.active_profile_id ?? null
+      // A copy is never activated: leaving the destination's active profile alone
+      // keeps a running session on the credential it started with.
+      active_profile_id: destination.active_profile_id ?? null
     });
+    // A cross-scope copy introduces a base_url the destination kind has not seen,
+    // so its URL suggestions have to learn it the same way a save does.
+    return targetScope === scope
+      ? nextConfig
+      : recordProfileRouteUrls(nextConfig, config, targetScope);
 }
 
 /**
