@@ -9,6 +9,8 @@ import {
 } from "../src/server/protocol-stream.js";
 import {
   anthropicUsageToResponses,
+  decodeCompactGateState,
+  openAiResponseToAnthropic,
   responsesRequestToAnthropic,
   responsesRequestToChat
 } from "../src/server/protocol-conversion.js";
@@ -473,5 +475,64 @@ describe("a 2xx whose body fails translation is not scored as a healthy profile"
     // The hazard is real if the raw upstream body is ever substituted here.
     expect(extractResponseUsage(Buffer.from(upstreamRaw), headers).inputTokens).toBe(4321);
     expect(classify(Buffer.from(upstreamRaw), headers)).toBe("success");
+  });
+});
+
+describe("a custom tool call survives the non-streaming response leg", () => {
+  it("translates custom_tool_call the way the request and streaming legs already do", () => {
+    const anthropic = JSON.parse(openAiResponseToAnthropic(Buffer.from(JSON.stringify({
+      id: "resp_1",
+      object: "response",
+      model: "gpt-5-codex",
+      output: [{
+        id: "ctc_1",
+        type: "custom_tool_call",
+        status: "completed",
+        call_id: "call_1",
+        name: "shell",
+        // Freeform text, not JSON: the shape that used to 502 here.
+        input: "ls -la"
+      }]
+    })), 200).toString("utf8")) as Record<string, unknown>;
+
+    expect(anthropic.content).toEqual([{
+      type: "tool_use",
+      id: "call_1",
+      name: "shell",
+      input: { input: "ls -la" }
+    }]);
+  });
+});
+
+describe("a redacted thinking block survives the streaming response leg", () => {
+  it("carries the opaque payload out as a reasoning item instead of dropping it", async () => {
+    const text = await drain(createAnthropicToResponsesStream(), [
+      sse("message_start", {
+        type: "message_start",
+        message: { id: "msg_1", model: "claude-sonnet-4-6", usage: { input_tokens: 10 } }
+      }),
+      sse("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "redacted_thinking", data: "opaque-payload" }
+      }),
+      sse("content_block_stop", { type: "content_block_stop", index: 0 }),
+      sse("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn" } }),
+      sse("message_stop", { type: "message_stop" })
+    ]);
+
+    const done = parsed(text).find((event) => event.type === "response.output_item.done");
+    const item = done?.item as Record<string, unknown> | undefined;
+    expect(item?.type).toBe("reasoning");
+    // Anthropic wants this back verbatim next turn, so the data has to round-trip.
+    expect(decodeCompactGateState(item?.encrypted_content)).toMatchObject({
+      kind: "anthropic_redacted_thinking",
+      data: "opaque-payload"
+    });
+
+    // It also has to reach the terminal response, not just the per-item event.
+    const completed = parsed(text).find((event) => event.type === "response.completed");
+    const output = (completed?.response as Record<string, unknown> | undefined)?.output;
+    expect(Array.isArray(output) ? output.length : 0).toBe(1);
   });
 });

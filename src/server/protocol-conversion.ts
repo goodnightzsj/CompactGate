@@ -13,7 +13,22 @@ const MAX_COMPACT_GATE_STATE_BYTES = 1024 * 1024;
 const ANTHROPIC_COMPACTION_TRIGGER_TOKENS = 50_000;
 
 export function encodeCompactGateState(value: Record<string, unknown>): string {
-  return `${COMPACT_GATE_STATE_PREFIX}${Buffer.from(JSON.stringify({ v: 1, ...value })).toString("base64url")}`;
+  const serialized = JSON.stringify({ v: 1, ...value });
+  const encoded = Buffer.from(serialized);
+  // decodeCompactGateState rejects > 1MB, and an over-size state would cause
+  // *every subsequent request in that session* to fail at decode time with no way
+  // to recover without clearing the conversation. No existing gate state mechanism
+  // can produce payloads anywhere near this size (the largest is a few KB), but
+  // bounding here stops a hypothetical bug from burning a session.
+  if (encoded.byteLength > MAX_COMPACT_GATE_STATE_BYTES) {
+    // 502, not the default: every caller encodes state while translating an
+    // upstream response, so an over-size payload is an upstream-shaped fault.
+    throw new ProtocolConversionError(
+      `CompactGate state payload exceeds ${MAX_COMPACT_GATE_STATE_BYTES} bytes.`,
+      502
+    );
+  }
+  return `${COMPACT_GATE_STATE_PREFIX}${encoded.toString("base64url")}`;
 }
 
 export function decodeCompactGateState(value: unknown): Record<string, unknown> | null {
@@ -1486,17 +1501,30 @@ function openAiOutputItemToAnthropic(value: unknown): Array<Record<string, unkno
       throw new ProtocolConversionError(`Unsupported OpenAI output content type: ${String(part.type)}.`, 502);
     });
   }
-  if (value.type === "function_call" && typeof value.call_id === "string" && typeof value.name === "string") {
+  if (
+    (value.type === "function_call" || value.type === "custom_tool_call") &&
+    typeof value.call_id === "string" &&
+    typeof value.name === "string"
+  ) {
+    // A custom tool names its payload `input` and carries freeform text, where a
+    // function names it `arguments` and carries JSON. The request direction and the
+    // streaming response have always translated both; only this non-streaming leg
+    // still 502'd on the custom shape, so an upstream that answered a Codex tool
+    // call without streaming failed here instead of reaching the client.
     return [{
       type: "tool_use",
       id: value.call_id,
       name: value.name,
-      input: parseToolArguments(
-        value.arguments,
-        502,
-        "OpenAI function call arguments were not valid JSON.",
-        "OpenAI function call arguments were not a JSON object."
-      )
+      input: value.type === "custom_tool_call"
+        ? typeof value.input === "string"
+          ? { input: value.input }
+          : parseToolArguments(value.input, 502, "OpenAI custom tool call input was not text or a JSON object.")
+        : parseToolArguments(
+            value.arguments,
+            502,
+            "OpenAI function call arguments were not valid JSON.",
+            "OpenAI function call arguments were not a JSON object."
+          )
     }];
   }
   if (value.type === "reasoning") {
@@ -1755,6 +1783,14 @@ function responsesThinkingToAnthropic(value: unknown): Record<string, unknown> |
     return null;
   }
   const budgetByEffort: Record<string, number> = {
+    // 1024 is Anthropic's floor for an enabled thinking budget, which is the
+    // closest thing to OpenAI's `minimal`. Without this entry `minimal` fell to
+    // the `?? 4096` default — the same budget as `medium` — and because
+    // `responsesRecordToAnthropic` raises `max_tokens` to `budget + 1024`, a client
+    // asking for the least reasoning was billed for a mid-tier request. `minimal`
+    // is not in `PrimaryReasoningEffort`, so CompactGate's own config cannot emit
+    // it, but a Codex-compatible client posting to /v1/responses can.
+    minimal: 1024,
     low: 2048,
     medium: 4096,
     high: 8192,

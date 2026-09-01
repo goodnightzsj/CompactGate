@@ -33,7 +33,7 @@ import type { UpstreamResponseTransform } from "./upstream-client.js";
 interface StreamBlock {
   itemId: string;
   outputIndex: number;
-  type: "text" | "thinking" | "tool_use";
+  type: "text" | "thinking" | "redacted_thinking" | "tool_use";
   callId?: string;
   name?: string;
   arguments: string;
@@ -175,6 +175,25 @@ export function createAnthropicToResponsesStream(): Transform {
           summary_index: 0,
           part: { type: "summary_text", text: "" }
         });
+      } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
+        // No summary to stream — the payload is opaque and arrives whole on the
+        // start event. It still needs an output item, because Anthropic expects the
+        // data back verbatim next turn; the non-streaming leg has always carried it
+        // and dropping it here left the streamed thinking chain incomplete.
+        const state: StreamBlock = {
+          itemId: `rs_${randomUUID()}`,
+          outputIndex: nextOutputIndex++,
+          type: "redacted_thinking",
+          arguments: "",
+          text: block.data,
+          signature: ""
+        };
+        blocks.set(event.index, state);
+        emit(transform, "response.output_item.added", {
+          type: "response.output_item.added",
+          output_index: state.outputIndex,
+          item: { id: state.itemId, type: "reasoning", summary: [] }
+        });
       } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
         const state: StreamBlock = {
           itemId: `fc_${randomUUID()}`,
@@ -313,6 +332,22 @@ export function createAnthropicToResponsesStream(): Transform {
           summary_index: 0,
           part: { type: "summary_text", text: state.text }
         });
+        emit(transform, "response.output_item.done", {
+          type: "response.output_item.done",
+          output_index: state.outputIndex,
+          item
+        });
+      } else if (state.type === "redacted_thinking") {
+        const item = {
+          id: state.itemId,
+          type: "reasoning",
+          summary: [],
+          encrypted_content: encodeCompactGateState({
+            kind: "anthropic_redacted_thinking",
+            data: state.text
+          })
+        };
+        outputItems[state.outputIndex] = item;
         emit(transform, "response.output_item.done", {
           type: "response.output_item.done",
           output_index: state.outputIndex,
