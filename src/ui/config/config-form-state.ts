@@ -215,7 +215,7 @@ export function formToPatch(form: ConfigFormState) {
     state_domain_id: form.primaryStateDomainId,
     key_strategy: form.codexPrimaryKeyStrategy,
     rotation_opt_out: form.codexPrimaryRotationOptOut,
-    sticky_reserve_seconds: form.codexPrimaryStickyReserveSeconds,
+    sticky_reserve_seconds: boundedStickyReserve(form.codexPrimaryStickyReserveSeconds),
     // A typed secret travels; an empty one means "keep the stored value", which
     // the server inherits by id. Deleting every row clears the pool outright.
     api_keys: form.codexPrimaryApiKeys.map((entry) => ({
@@ -244,7 +244,7 @@ export function formToPatch(form: ConfigFormState) {
       upstream_protocol: form.claudePrimaryUpstreamProtocol,
       key_strategy: form.claudePrimaryKeyStrategy,
       rotation_opt_out: form.claudePrimaryRotationOptOut,
-      sticky_reserve_seconds: form.claudePrimaryStickyReserveSeconds,
+      sticky_reserve_seconds: boundedStickyReserve(form.claudePrimaryStickyReserveSeconds),
       api_keys: form.claudePrimaryApiKeys.map((entry) => ({
         id: entry.id,
         label: entry.label,
@@ -304,7 +304,10 @@ export function applyDraftToConfigExport(
       state_domain_id: form.primaryStateDomainId,
       key_strategy: form.codexPrimaryKeyStrategy,
       rotation_opt_out: form.codexPrimaryRotationOptOut,
-      sticky_reserve_seconds: form.codexPrimaryStickyReserveSeconds,
+      // The export needs a concrete number, so a blank or out-of-range box falls
+      // back to what is stored rather than being omitted.
+      sticky_reserve_seconds: boundedStickyReserve(form.codexPrimaryStickyReserveSeconds)
+        ?? config.primary.sticky_reserve_seconds,
       api_keys: form.codexPrimaryApiKeys.map((entry) => {
         // The export baseline is the full plaintext config, so an untouched
         // entry keeps its stored secret here — unlike the patch path, which has
@@ -335,7 +338,8 @@ export function applyDraftToConfigExport(
         model_override: claudeModelMap.default,
         key_strategy: form.claudePrimaryKeyStrategy,
         rotation_opt_out: form.claudePrimaryRotationOptOut,
-        sticky_reserve_seconds: form.claudePrimaryStickyReserveSeconds,
+        sticky_reserve_seconds: boundedStickyReserve(form.claudePrimaryStickyReserveSeconds)
+          ?? config.claude.primary.sticky_reserve_seconds,
         api_keys: form.claudePrimaryApiKeys.map((entry) => {
           const stored = config.claude.primary.api_keys?.find((candidate) => candidate.id === entry.id);
           return {
@@ -570,6 +574,23 @@ function bytesFromUnit(value: number, unitBytes: number): number | undefined {
 function boundedKeepRecent(value: number): number | undefined {
   return Number.isFinite(value) && value >= 1
     ? Math.min(2_000, Math.round(value))
+    : undefined;
+}
+
+/**
+ * Same reasoning as `boundedKeepRecent`, for the same reason: the number input
+ * advertises `min={0} max={86400}` that nothing enforces, and the server rejects
+ * the *whole* PATCH on a bad value, so one stray digit here discarded every other
+ * edit in the draft with an error naming a field the user may have forgotten
+ * touching. Clamping keeps the rest of the save.
+ *
+ * `undefined` for a blank box rather than 0: `Number("")` is 0, and 0 disables the
+ * sticky zone outright. Silently turning a feature off is not what clearing a box
+ * means, so the field is omitted and the stored value stands.
+ */
+function boundedStickyReserve(value: number): number | undefined {
+  return Number.isFinite(value) && value >= 0
+    ? Math.min(86_400, Math.round(value))
     : undefined;
 }
 
