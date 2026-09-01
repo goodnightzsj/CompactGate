@@ -40,7 +40,7 @@ export function healthForConfig(
     listen: config.listen,
     logger: logger.getPersistenceHealth(),
     codex: codexVersionMonitor.snapshot(
-      logger.page({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT, offset: 0 }).logs
+      logger.recentLogs({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT })
     ),
     primary: routeState("primary", config.primary),
     compact: routeState("compact", config.compact),

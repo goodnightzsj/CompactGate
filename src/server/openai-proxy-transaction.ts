@@ -344,7 +344,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
   });
   const codexStatus = input.compactionMode && input.codexVersionMonitor
     ? input.codexVersionMonitor.snapshot(
-        input.logger.page({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT, offset: 0 }).logs
+        input.logger.recentLogs({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT })
       )
     : undefined;
   input.studioEvents.broadcastLog(logEntry, "insert", codexStatus);

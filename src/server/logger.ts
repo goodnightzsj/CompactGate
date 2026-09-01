@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   HostLogCount,
   LogBodyPurgeResult,
@@ -113,6 +113,10 @@ export class RequestLogger {
   private lastProviderStateSweepAt = 0;
 
   private lastDatabaseSizeCheckAt = 0;
+
+  private cachedAddStatement: StatementSync | null = null;
+
+  private cachedPortabilityStatement: StatementSync | null = null;
 
   constructor(
     private keepRecent: number,
@@ -337,74 +341,11 @@ export class RequestLogger {
 
   add(entry: RequestLogEntry): void {
     try {
-      this.db
-        .prepare(
-          `
-            INSERT INTO request_logs (
-              time,
-              completed_at,
-              route,
-              compaction_mode,
-              compaction_detection_source,
-              method,
-              path,
-              endpoint,
-              request_type,
-              reasoning_effort,
-              request_summary,
-              incoming_request_body,
-              upstream_request_body,
-              upstream_response_body,
-              client_response_body,
-              body_status,
-              compact_response_normalized,
-              compact_response_normalize_reason,
-              compact_response_synthetic_source,
-              compaction_diagnostics,
-              source_model,
-              target_model,
-              response_model,
-              response_model_source,
-              status,
-              upstream_status,
-              stream_terminal_event,
-              client_disconnect_phase,
-              stream_outcome,
-              stream_oversized_event_count,
-              upstream_response_truncated,
-              duration_ms,
-              first_token_ms,
-              input_tokens,
-              output_tokens,
-              cached_input_tokens,
-              cached_output_tokens,
-              cache_read_input_tokens,
-              cache_creation_input_tokens,
-              reasoning_tokens,
-              additive_cached_input_tokens,
-              additive_cached_output_tokens,
-              total_tokens,
-              upstream_host,
-              user_agent,
-              request_id,
-              error_summary,
-              capture_path,
-              capture_status
-            ) VALUES (
-              ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?,
-              ?, ?
-            )
-          `
-        )
+      // One transaction for both statements: the UPDATE below targets
+      // `last_insert_rowid()`, so a failure between them would leave a row whose
+      // portability payload is silently missing rather than absent-by-design.
+      this.db.exec("BEGIN IMMEDIATE;");
+      this.addStatement()
         .run(
           entry.time,
           entry.completed_at,
@@ -457,35 +398,135 @@ export class RequestLogger {
           entry.capture_status
       );
       if (entry.provider_state_portability) {
-        this.db.prepare(`
-          UPDATE request_logs
-          SET provider_state_portability = ?
-          WHERE id = last_insert_rowid()
-        `).run(JSON.stringify(entry.provider_state_portability));
+        this.portabilityStatement()
+          .run(JSON.stringify(entry.provider_state_portability));
       }
+      this.db.exec("COMMIT;");
+      // Both prunes open their own write transactions, so they must run after the
+      // commit above rather than nested inside it.
       this.requestStoragePrune();
       this.checkDatabaseSize();
     } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // Preserve the original SQLite failure.
+      }
       this.recordPersistenceFailure("persist request log", error);
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
   }
 
-  recent(route?: RouteKind): RequestLogEntry[] {
-    return this.page({
-      route,
-      limit: this.keepRecent,
-      offset: 0
-    }).logs;
+  /**
+   * Prepared once and reused: `add` runs on every proxied request, and re-parsing
+   * a 51-column INSERT per call is pure overhead on the hot path. Cached lazily so
+   * constructing a logger still costs nothing until the first write, and because
+   * `migratePersistedSchema` must have added its columns before the statement is
+   * compiled against them.
+   */
+  private addStatement(): StatementSync {
+    this.cachedAddStatement ??= this.db.prepare(`
+      INSERT INTO request_logs (
+        time,
+        completed_at,
+        route,
+        compaction_mode,
+        compaction_detection_source,
+        method,
+        path,
+        endpoint,
+        request_type,
+        reasoning_effort,
+        request_summary,
+        incoming_request_body,
+        upstream_request_body,
+        upstream_response_body,
+        client_response_body,
+        body_status,
+        compact_response_normalized,
+        compact_response_normalize_reason,
+        compact_response_synthetic_source,
+        compaction_diagnostics,
+        source_model,
+        target_model,
+        response_model,
+        response_model_source,
+        status,
+        upstream_status,
+        stream_terminal_event,
+        client_disconnect_phase,
+        stream_outcome,
+        stream_oversized_event_count,
+        upstream_response_truncated,
+        duration_ms,
+        first_token_ms,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cached_output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        reasoning_tokens,
+        additive_cached_input_tokens,
+        additive_cached_output_tokens,
+        total_tokens,
+        upstream_host,
+        user_agent,
+        request_id,
+        error_summary,
+        capture_path,
+        capture_status
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?
+      )
+    `);
+    return this.cachedAddStatement;
   }
 
-  page(options: LogPageOptions): RequestLogPage {
-    const limit = Math.max(1, Math.floor(options.limit));
-    const offset = Number.isSafeInteger(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
-      : 0;
+  private portabilityStatement(): StatementSync {
+    this.cachedPortabilityStatement ??= this.db.prepare(`
+      UPDATE request_logs
+      SET provider_state_portability = ?
+      WHERE id = last_insert_rowid()
+    `);
+    return this.cachedPortabilityStatement;
+  }
+
+  recent(route?: RouteKind): RequestLogEntry[] {
+    return this.recentLogs({ route, limit: this.keepRecent });
+  }
+
+  /**
+   * The rows without the facet counts. `page()` runs five extra count queries to
+   * build the Studio's filter sidebar; a caller that only reads `.logs` paid for
+   * all five and discarded them — including the per-compaction protocol lookup and
+   * the health probe, which run far more often than anyone opens the log table.
+   */
+  recentLogs(options: { route?: RouteKind; limit: number; offset?: number }): RequestLogEntry[] {
+    return this.queryLogRows(
+      { route: options.route },
+      Math.max(1, Math.floor(options.limit)),
+      options.offset ?? 0
+    );
+  }
+
+  private queryLogRows(
+    options: Omit<LogPageOptions, "limit" | "offset">,
+    limit: number,
+    offset: number
+  ): RequestLogEntry[] {
     const where = buildWhereClause(options);
-    const logs = (
+    return (
       this.db
         .prepare(
           `
@@ -498,6 +539,14 @@ export class RequestLogger {
         )
         .all(...where.params, limit, offset) as Array<Record<string, unknown>>
     ).map(rowToLogEntry);
+  }
+
+  page(options: LogPageOptions): RequestLogPage {
+    const limit = Math.max(1, Math.floor(options.limit));
+    const offset = Number.isSafeInteger(options.offset)
+      ? Math.max(0, Math.floor(options.offset))
+      : 0;
+    const logs = this.queryLogRows(options, limit, offset);
     const total = this.facetTotal(options);
     const allTotal = this.facetTotal({});
     const counts = this.routeCounts(options);
