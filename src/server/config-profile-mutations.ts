@@ -171,6 +171,9 @@ export function duplicateProfile(
       throw new ConfigError("Profile name already exists.");
     }
 
+    // Either branch yields a config already detached from the stored source — one
+    // by cloning it, the other by building fresh objects — so nothing below needs
+    // to clone it again.
     let config: SavedConfigProfileConfig;
     if (targetScope === scope) {
       config = cloneProfileConfig(profile.config);
@@ -187,7 +190,7 @@ export function duplicateProfile(
       name: trimmedName,
       created_at: now,
       updated_at: now,
-      config: cloneProfileConfig(config)
+      config
     };
 
     const nextConfig = withProfileScope(current, targetScope, {

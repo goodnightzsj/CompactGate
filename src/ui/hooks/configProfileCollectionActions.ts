@@ -83,9 +83,10 @@ export function createConfigProfileCollectionActions({
     options: { targetScope?: ConfigProfileScope; name?: string } = {}
   ): Promise<boolean> {
     const targetScope = options.targetScope ?? scope;
+    const sourceAccessors = scopedProfileAccessors(scope);
     const sourceState = config ? profileScopeState(config, scope) : null;
-    const targetProfileId = profileId ?? scopedProfileAccessors(scope).selectedId;
-    const sourceProfile = sourceState?.profiles.find((profile) => profile.id === targetProfileId) ?? null;
+    const sourceProfileId = profileId ?? sourceAccessors.selectedId;
+    const sourceProfile = sourceState?.profiles.find((profile) => profile.id === sourceProfileId) ?? null;
     // Progress and failure belong to the scope the copy lands in, which is the
     // panel the user is watching.
     const accessors = scopedProfileAccessors(targetScope);
@@ -95,9 +96,11 @@ export function createConfigProfileCollectionActions({
       return false;
     }
 
+    // Named after the source, so the in-progress rename it defers to is the source
+    // panel's — the destination's name field is about a different profile.
     const copyName = options.name?.trim() || nextDuplicateProfileName({
       profiles: sourceState?.profiles ?? [],
-      selectedName: targetProfileId === accessors.selectedId ? accessors.name : "",
+      selectedName: sourceProfileId === sourceAccessors.selectedId ? sourceAccessors.name : "",
       sourceName: sourceProfile.name
     });
     accessors.setState("duplicating");
@@ -108,7 +111,7 @@ export function createConfigProfileCollectionActions({
         method: "POST",
         body: JSON.stringify({
           scope,
-          profile_id: targetProfileId,
+          profile_id: sourceProfileId,
           name: copyName,
           ...(targetScope === scope ? {} : { target_scope: targetScope })
         })
@@ -121,7 +124,7 @@ export function createConfigProfileCollectionActions({
       setConfig(nextConfig);
       // The source id is only a sane fallback within its own scope; across scopes
       // it names nothing the destination panel can select, so hold its selection.
-      const fallbackId = targetScope === scope ? targetProfileId : accessors.selectedId;
+      const fallbackId = targetScope === scope ? sourceProfileId : accessors.selectedId;
       accessors.setSelectedId(copiedProfile?.id ?? fallbackId);
       // The name follows the new selection through the sync effect; calling
       // setName here would also drop an unrelated in-progress rename.
