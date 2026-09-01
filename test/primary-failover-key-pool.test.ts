@@ -108,6 +108,37 @@ describe("primary key pool isolation", () => {
     expect(selection.candidateId).toBe("codex-a#k2");
   });
 
+  it("sends the key each candidate was built for, not the pool's first", () => {
+    const config = configWithKeyPool("codex-a", "Codex A", [
+      key("key-1", "主号", "sk-first"),
+      key("key-2", "备用", "sk-second"),
+      key("key-3", "第三", "sk-third")
+    ]);
+
+    const candidates = codexPrimaryCandidates(config);
+
+    // The assertion has to go through the resolver the request path uses.
+    // `candidate.config.primary.api_key` was always correct; what shipped wrong
+    // was that the pool sat beside it and `resolveRouteCredential` reads the
+    // pool first, so all three candidates resolved to "sk-first".
+    expect(candidates.map((candidate) => resolveRouteCredential("primary", candidate.config).apiKey))
+      .toEqual(["sk-first", "sk-second", "sk-third"]);
+
+    // Same resolver backs the signature, so a non-first key's value must move
+    // its own candidate's signature and no one else's.
+    const rotated = cloneConfig(config);
+    apiKeyEntry(rotated, "key-2").api_key = "sk-second-rotated";
+    const signatures = (source: CompactGateConfig) =>
+      codexPrimaryCandidates(source).map((candidate) => candidateSignature([candidate]));
+    const before = signatures(config);
+    const after = signatures(rotated);
+    expect(after.map((signature, index) => signature !== before[index])).toEqual([
+      false,
+      true,
+      false
+    ]);
+  });
+
   it("forgets only the rotated key's health, not its siblings'", () => {
     const config = configWithCodexProfiles([
       pooledProfile("codex-a", "A", [key("k1", "", "sk-1"), key("k2", "", "sk-2")])
@@ -129,10 +160,15 @@ describe("primary key pool isolation", () => {
       candidateSignature(codexPrimaryCandidates(config))
     );
 
-    // k1 is forgotten (selectable again), k2 keeps its quarantine.
+    // k1 is forgotten and selectable again; k2's quarantine survives.
     expect(state.preview(rotated, { model: "gpt-5.5" }).keyId).toBe("k1");
+    // k1 fails again, so nothing is eligible and the soonest-to-unblock fallback
+    // runs. It must not hand the turn to k2, whose 401 still stands. This is the
+    // assertion that separates the two implementations: while every candidate
+    // hashed pool[0], rotating k1 cleared k2's quarantine too and k2 was picked
+    // here.
     recordRequests(state, rotated, 1, 401);
-    expect(state.preview(rotated, { model: "gpt-5.5" }).keyId).toBe("k2");
+    expect(state.preview(rotated, { model: "gpt-5.5" }).keyId).toBe("k1");
   });
 
   it("drops a deleted key cleanly and forgets only its pins", () => {

@@ -127,7 +127,18 @@ function withPrimaryConfig(
     primary: {
       ...config.primary,
       ...profilePrimary,
-      ...(key ? { api_key: key.api_key } : {})
+      // The pool has to be emptied alongside, or the selection is inert:
+      // `resolveRouteCredential` reads the pool's first enabled entry *before*
+      // `api_key`, so every candidate resolved to pool[0] no matter which key it
+      // was built for. A pool of three then sent one key three times and, once
+      // that key hit a 429, burned all three candidates into isolation — worse
+      // than configuring no pool at all. `primaryCredentialSignature` reads the
+      // same resolver, so every candidate was also hashing pool[0]: rotating a
+      // non-first key moved no signature at all, while rotating the first moved
+      // its siblings' too. This copy is per-candidate and in memory only, so
+      // emptying the array here can never reach the file, where an empty pool
+      // does mean "cleared".
+      ...(key ? { api_key: key.api_key, api_keys: [] } : {})
     }
   };
 }
