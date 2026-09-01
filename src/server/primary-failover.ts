@@ -34,6 +34,11 @@ const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
 const TOP_K_SCORE_WINDOW = 100;
+/** Worst-case penalty for a 100%-failure history. Deliberately under
+ * TOP_K_SCORE_WINDOW so lifetime counters can rank candidates but never exile
+ * one that has since recovered — the blocks and streak counters are what gate
+ * a broken profile, and those do reset on a success. */
+const ERROR_RATE_PENALTY = 60;
 /** How many near-tied candidates the weighted pick draws from. sub2api's
  * `lb_top_k` is 7; at 3, a spread pool's fourth key could never win a slot. */
 const TOP_K_CANDIDATES = 7;
@@ -320,11 +325,19 @@ export class PrimaryFailoverState {
       }
     }
     this.signatures = signatures;
-    if (changedProfileIds.size > 0) {
-      // The generation still moves for everyone: an in-flight selection was
-      // computed against the old candidate set, so its result can no longer be
-      // attributed safely. Only the profiles that actually changed lose their
-      // health record and their pins.
+    if (changedProfileIds.size > 0 || removedProfileIds.size > 0) {
+      // The generation moves for everyone: an in-flight selection was computed
+      // against the old candidate set, so its result can no longer be attributed
+      // safely. Only the profiles that actually changed lose their health record
+      // and their pins.
+      //
+      // Removals bump it too. Relying on "the health record is gone, so
+      // `recordResult` no-ops" held only while the id stayed gone: disabling a
+      // key drops it from the candidate list, re-enabling it re-adds an id that
+      // `this.signatures` no longer knows, so `previous === undefined` and it is
+      // never counted as *changed* either. With no bump on either edit, a request
+      // still open across both had a generation matching the rebuilt record, and
+      // its verdict landed on the fresh one as if earned there.
       this.generation += 1;
       this.health.forgetProfiles(changedProfileIds);
       this.stickiness.forgetProfiles(changedProfileIds);
@@ -332,8 +345,7 @@ export class PrimaryFailoverState {
     if (removedProfileIds.size > 0) {
       // `reconcile` drops a deleted profile's health, but its pins would
       // otherwise sit in the sticky maps until their 30 minute / 2 hour TTL,
-      // occupying LRU slots and evicting live pins. No generation bump: with
-      // the health record gone, `recordResult` already no-ops for them.
+      // occupying LRU slots and evicting live pins.
       this.stickiness.forgetProfiles(removedProfileIds);
     }
 
@@ -484,7 +496,12 @@ export class PrimaryFailoverState {
       candidate.order * 500 -
       health.inFlight * 80 -
       health.transientFailures * 40 -
-      Math.round(errorRate * 250) -
+      // Capped below TOP_K_SCORE_WINDOW on purpose. At the old 250 a bad history
+      // alone put a candidate further from the leader than the window is wide,
+      // so a key that had recovered — every live counter cleared, no block left —
+      // still never re-entered the draw. The rate belongs in the ranking as a
+      // tiebreak, not as a second, undecayable quarantine.
+      Math.round(errorRate * ERROR_RATE_PENALTY) -
       latencyPenalty +
       (candidate.active ? 1_000 : 0)
     );

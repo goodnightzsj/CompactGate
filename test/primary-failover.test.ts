@@ -130,6 +130,31 @@ describe("PrimaryFailoverState", () => {
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
   });
 
+  it("discards a verdict earned before the profile was disabled and re-enabled", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+    const selection = selectAndReserve(state, config, { model: "gpt-5.5" });
+    expect(selection.profileId).toBe("codex-a");
+
+    // A drops out, then returns. Removal used to skip the generation bump on the
+    // reasoning that a missing health record makes `recordResult` no-op, and the
+    // return was not a *change* either, because `signatures` had forgotten the id.
+    const withoutA = configWithCodexProfiles(
+      [codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")],
+      "codex-b"
+    );
+    state.preview(withoutA, { model: "gpt-5.5" });
+    state.preview(config, { model: "gpt-5.5" });
+
+    state.recordResult(selection, 403, "Upstream returned HTTP 403: insufficient balance.");
+
+    // The stale 403 must not quarantine the rebuilt record, so A still wins.
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-a");
+  });
+
   it("quarantines a credential on its first auth or balance failure", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),

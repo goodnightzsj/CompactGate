@@ -43,9 +43,14 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
   const rotation = eligible
     .map((profile, index) => ({ profile, index }))
     .sort((left, right) => profileOrder(left.index) - profileOrder(right.index));
+  // One counter for both strategies. Strategy is per profile, so a spread profile
+  // taking `profileOrder(index)` while its fill_first neighbours counted keys
+  // drew from two independent numbering spaces over the same field — with a mixed
+  // pool that collided different profiles' keys on one order, and `scoreCandidate`
+  // weights order at 500 points, so the profile priority silently blended.
   let sequentialOrder = 0;
 
-  for (const { profile, index } of rotation) {
+  for (const { profile } of rotation) {
     const profilePrimary = readProfilePrimary(profile) as Partial<UpstreamConfig>;
     const mergedPrimary = { ...config.primary, ...profilePrimary };
     // Strategy is a per-profile choice with the runtime primary as its default.
@@ -54,7 +59,11 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
       runtimeStrategy
     ) === "spread";
     const pool = enabledApiKeyPool(mergedPrimary);
-    const sharedOrder = profileOrder(index);
+    // spread: every key of this profile shares one slot, so they land in the same
+    // top-K score window and the weighted pick distributes across them. The slot
+    // still comes from the shared counter, which keeps it distinct from any other
+    // profile's keys.
+    const sharedOrder = sequentialOrder;
 
     // Every key of the active profile carries the active bonus. Marking only
     // the first key gave it +1000, which pushed its spread siblings out of the
@@ -75,7 +84,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         keyId: single?.id ?? null,
         keyLabel: single?.label ?? null,
         name: single?.label ? `${profile.name} · ${single.label}` : profile.name,
-        order: spread ? sharedOrder : sequentialOrder++,
+        order: sequentialOrder++,
         active: profileIsActive,
         rotationOptOut,
         config: withPrimaryConfig(config, profilePrimary, single)
@@ -98,6 +107,11 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         config: withPrimaryConfig(config, profilePrimary, key)
       });
     });
+
+    if (spread) {
+      // Consume the shared slot so the next profile cannot be numbered onto it.
+      sequentialOrder += 1;
+    }
   }
 
   return candidates;

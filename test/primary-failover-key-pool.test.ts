@@ -90,6 +90,31 @@ describe("primary key pool candidates", () => {
 
     expect(candidates.map((candidate) => candidate.order)).toEqual([0, 0, 0]);
   });
+
+  it("keeps orders monotonic when spread and fill_first profiles are mixed", () => {
+    const config = configWithCodexProfiles([
+      pooledProfile("codex-a", "A", [key("a1", "", "sk-a1"), key("a2", "", "sk-a2")]),
+      pooledProfile("codex-b", "B", [key("b1", "", "sk-b1"), key("b2", "", "sk-b2")]),
+      pooledProfile("codex-c", "C", [key("c1", "", "sk-c1")])
+    ]);
+    const profiles = config.profile_scopes!.codex!.profiles!;
+    for (const profile of profiles) {
+      if (!("primary" in profile.config)) {
+        throw new Error("Expected Codex profile primary config.");
+      }
+    }
+    // Only the middle profile spreads. Both strategies used to draw from
+    // separate counters, so B's shared slot could collide with A's or C's keys
+    // and blend two profiles' priority at 500 points per order step.
+    (profiles[1].config as { primary: { key_strategy: PrimaryKeyStrategy } })
+      .primary.key_strategy = "spread";
+
+    const candidates = codexPrimaryCandidates(config);
+
+    // A burns keys one at a time, B's two keys share one slot, C follows after.
+    expect(candidates.map((candidate) => candidate.order)).toEqual([0, 1, 2, 2, 3]);
+    expect(new Set(candidates.map((candidate) => candidate.order)).size).toBe(4);
+  });
 });
 
 describe("primary key pool isolation", () => {
@@ -137,6 +162,48 @@ describe("primary key pool isolation", () => {
       true,
       false
     ]);
+  });
+
+  it("lets a recovered key back into the draw despite a losing lifetime record", () => {
+    const config = configWithCodexProfiles([
+      pooledProfile("codex-a", "A", [key("k1", "", "sk-1"), key("k2", "", "sk-2")])
+    ]);
+    const primary = config.profile_scopes!.codex!.profiles![0].config;
+    if (!("primary" in primary)) {
+      throw new Error("Expected Codex profile primary config.");
+    }
+    // Spread gives both keys the same order, so `order * 500` cannot separate
+    // them and health alone decides the draw — the only arrangement where the
+    // lifetime error rate is what picks the winner.
+    primary.primary.key_strategy = "spread";
+    // k2 sits out the failure phase so every verdict lands on k1. Selecting
+    // through `preview` each time would rotate to k2 as soon as k1's score dipped
+    // and split the record across both keys, and reusing one held selection makes
+    // each later success stale, which skips the streak reset that keeps k1 unblocked.
+    primary.primary.api_keys![1].enabled = false;
+    // A roll near 1 lands on the last candidate still inside TOP_K_SCORE_WINDOW,
+    // which is precisely the question: is the recovered key eligible at all. The
+    // usual `() => 0` always returns the leader, so it reports k2 whether k1 is
+    // ranked second or exiled from the draw entirely.
+    const state = new PrimaryFailoverState({ now: () => 0, random: () => 0.999 });
+
+    // Ten transient failures then a success, twice. The threshold to cool a key
+    // is eleven in a row, and each success resets the streak, so k1 finishes with
+    // 20 of 22 attempts failed while every live counter reads zero and nothing
+    // blocks it. Only the undecayable lifetime rate still holds anything against it.
+    recordRequests(state, config, 10, 500);
+    state.recordResult(selectAndReserve(state, config, { model: "gpt-5.5" }), 200, null);
+    recordRequests(state, config, 10, 500);
+    state.recordResult(selectAndReserve(state, config, { model: "gpt-5.5" }), 200, null);
+
+    primary.primary.api_keys![1].enabled = true;
+
+    // k1 is demonstrably alive: unblocked, no streaks, a success as its last word.
+    // At the old 250-point weighting its ~91% lifetime rate alone sat it 227 below
+    // its untouched sibling — past TOP_K_SCORE_WINDOW, so it was exiled from the
+    // draw for good, since fresh successes can never outrun accumulated failures.
+    // Capped at 60 the gap is 55, and the rate ranks k1 second instead of erasing it.
+    expect(state.preview(config, { model: "gpt-5.5" }).keyId).toBe("k1");
   });
 
   it("forgets only the rotated key's health, not its siblings'", () => {
