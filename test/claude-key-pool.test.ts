@@ -133,6 +133,50 @@ describe("Claude key pool selection", () => {
     // earlier deadline, which is k1.
     expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
   });
+
+  it("honours rotation_opt_out, which the Claude scope stored but never read", () => {
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+    config.claude.primary.rotation_opt_out = true;
+
+    // A verdict against k1 would rotate a normal pool; opted out, the first
+    // enabled key keeps carrying everything.
+    state.recordResult("claude-a", "k1", { status: 401, responseHeaders: {} }, HEADERS, config);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
+  it("reserves a recovered key for its own sessions for sticky_reserve_seconds", () => {
+    const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+    config.claude.primary.sticky_reserve_seconds = 60;
+    const otherSession = { "x-claude-code-session-id": "session-2" };
+
+    // Pin session-1 to k1, then rate-limit it.
+    state.recordResult("claude-a", "k1", { status: 200, responseHeaders: {} }, HEADERS, config);
+    state.recordResult("claude-a", "k1", {
+      status: 429,
+      responseHeaders: { "retry-after": "2" }
+    }, HEADERS, config);
+
+    advance(2_100);
+    // Cooldown over, reserve still running: the pinned session returns to k1
+    // while a different session is kept off it.
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+    expect(state.select(config, "claude-a", otherSession)?.keyId).toBe("k2");
+
+    advance(60_000);
+    expect(state.select(config, "claude-a", otherSession)?.keyId).toBe("k1");
+  });
+
+  it("evicts expired session pins instead of holding them for the process life", () => {
+    const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", { status: 200, responseHeaders: {} }, HEADERS, config);
+    expect(state.stickinessSize()).toBe(1);
+
+    // Past SESSION_STICKY_TTL_MS the pin is dropped on the next selection.
+    advance(31 * 60 * 1000);
+    state.select(config, "claude-a", { "x-claude-code-session-id": "session-9" });
+    expect(state.stickinessSize()).toBe(0);
+  });
 });
 
 function key(id: string, apiKey: string): UpstreamApiKey {

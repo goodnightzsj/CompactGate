@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import type { CompactGateConfig } from "../shared/types.js";
 import { enabledApiKeyPool } from "./credentials.js";
 import { readTrimmedString } from "./http-utils.js";
+import { enforceMaxEntries, rememberMapEntry } from "./primary-failover-limits.js";
 
 /**
  * Claude-scope key pool selection. Codex gets its rotation from
@@ -21,6 +22,8 @@ const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
 const RATE_LIMIT_FALLBACK_MS = 60 * 1000;
 const SESSION_STICKY_TTL_MS = 30 * 60 * 1000;
 const UNBLOCK_JITTER_MS = 2_000;
+/** Same bound the codex stickiness store uses; sessions arrive from clients. */
+const MAX_STICKY_ENTRIES = 2_048;
 
 interface ClaudeKeyHealth {
   inFlight: number;
@@ -28,6 +31,11 @@ interface ClaudeKeyHealth {
   quarantineUntil: number;
   rateLimitUntil: number;
   cooldownUntil: number;
+  /**
+   * Past the cooldown but not yet trusted: `sticky_reserve_seconds` after a 429
+   * clears, the key still serves its own pinned sessions and takes no new ones.
+   */
+  stickyOnlyUntil: number;
   lastSelectedAt: number;
 }
 
@@ -72,6 +80,7 @@ export class ClaudeKeyPoolState {
     }
 
     const now = this.now();
+    this.cleanupStickiness(now);
     const sessionKey = extractClaudeSessionKey(headers);
     if (sessionKey) {
       const pin = this.sessionStickiness.get(sessionKey);
@@ -81,6 +90,19 @@ export class ClaudeKeyPoolState {
           return { keyId: pinned.id, apiKey: pinned.api_key };
         }
       }
+    }
+
+    // The pinned key above is the only traffic a reserved key accepts, so this
+    // has to come after that lookup and before the general pick.
+    if (config.claude.primary.rotation_opt_out === true) {
+      // Opted out of rotation: the first enabled key carries everything, and the
+      // pool exists only as a manual fallback list. The UI has offered this
+      // toggle for the Claude scope all along while only the codex side read it.
+      const first = entries[0];
+      const health = this.healthFor(`${profileId}#${first.id}`);
+      health.inFlight += 1;
+      health.lastSelectedAt = now;
+      return { keyId: first.id, apiKey: first.api_key };
     }
 
     const spread = config.claude.primary.key_strategy === "spread";
@@ -93,10 +115,11 @@ export class ClaudeKeyPoolState {
     // fill_first: the earliest eligible key wins; concurrent requests see the
     // same pin until its quarantine lands. spread: siblings share one slot and
     // the pick rolls across them so new sessions spread without any key's
-    // quota being the single hot spot.
+    // quota being the single hot spot. A key inside its post-429 reserve window
+    // is skipped here — it only serves the session already pinned to it above.
     const eligible = candidates
       .map((candidate) => ({ ...candidate, blockedUntil: this.blockedUntil(candidate.id, now) }))
-      .filter((candidate) => candidate.blockedUntil <= now)
+      .filter((candidate) => candidate.blockedUntil <= now && !this.isStickyOnly(candidate.id, now))
       .sort((left, right) =>
         left.blockedUntil !== right.blockedUntil
           ? left.blockedUntil - right.blockedUntil
@@ -135,11 +158,17 @@ export class ClaudeKeyPoolState {
     }
   }
 
+  /**
+   * `config` is the routed config the matching `select` ran against — it supplies
+   * `sticky_reserve_seconds`. Optional so a caller that never configured a
+   * reserve, and every existing test, keeps working unchanged.
+   */
   recordResult(
     profileId: string | null,
     keyId: string | null,
     result: ClaudeKeyPoolResult,
-    headers: IncomingHttpHeaders
+    headers: IncomingHttpHeaders,
+    config?: CompactGateConfig
   ): void {
     if (!profileId || !keyId) {
       return;
@@ -157,9 +186,10 @@ export class ClaudeKeyPoolState {
       health.quarantineUntil = 0;
       health.rateLimitUntil = 0;
       health.cooldownUntil = 0;
+      health.stickyOnlyUntil = 0;
       const sessionKey = extractClaudeSessionKey(headers);
       if (sessionKey) {
-        this.sessionStickiness.set(sessionKey, { keyId, expiresAt: now + SESSION_STICKY_TTL_MS });
+        this.rememberSessionPin(sessionKey, keyId, now);
       }
       return;
     }
@@ -178,6 +208,13 @@ export class ClaudeKeyPoolState {
         health.rateLimitUntil,
         now + retryAfterCooldownMs(result.responseHeaders, now)
       );
+      // Same reasoning as the codex route: when the cooldown expires the upstream
+      // has only said "try me later", not "I am whole again", so the key stays
+      // sticky-only for the configured reserve. A success ends the zone early.
+      const reserveMs = (config?.claude.primary.sticky_reserve_seconds ?? 0) * 1000;
+      if (reserveMs > 0) {
+        health.stickyOnlyUntil = Math.max(health.stickyOnlyUntil, health.rateLimitUntil + reserveMs);
+      }
       return;
     }
 
@@ -201,6 +238,11 @@ export class ClaudeKeyPoolState {
     return this.blockedUntil(composite, now) + Math.round(this.random() * UNBLOCK_JITTER_MS);
   }
 
+  /** Test seam: proves expired pins are evicted rather than accumulating. */
+  stickinessSize(): number {
+    return this.sessionStickiness.size;
+  }
+
   blockState(profileId: string, keyId: string): number | null {
     const health = this.health.get(`${profileId}#${keyId}`);
     if (!health) {
@@ -221,14 +263,37 @@ export class ClaudeKeyPoolState {
       quarantineUntil: 0,
       rateLimitUntil: 0,
       cooldownUntil: 0,
+      stickyOnlyUntil: 0,
       lastSelectedAt: 0
     };
     this.health.set(composite, created);
     return created;
   }
 
+  private rememberSessionPin(sessionKey: string, keyId: string, now: number): void {
+    // Bounded and re-inserted on touch, so the map evicts least-recently-used
+    // rather than growing once per client session for the process's lifetime.
+    rememberMapEntry(this.sessionStickiness, sessionKey, {
+      keyId,
+      expiresAt: now + SESSION_STICKY_TTL_MS
+    });
+    enforceMaxEntries(this.sessionStickiness, MAX_STICKY_ENTRIES);
+  }
+
+  private cleanupStickiness(now: number): void {
+    for (const [sessionKey, pin] of this.sessionStickiness.entries()) {
+      if (pin.expiresAt <= now) {
+        this.sessionStickiness.delete(sessionKey);
+      }
+    }
+  }
+
   private isBlocked(composite: string, now: number): boolean {
     return this.blockedUntil(composite, now) > now;
+  }
+
+  private isStickyOnly(composite: string, now: number): boolean {
+    return (this.health.get(composite)?.stickyOnlyUntil ?? 0) > now;
   }
 
   private blockedUntil(composite: string, _now: number): number {
