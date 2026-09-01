@@ -1121,9 +1121,16 @@ function anthropicMessagesToResponsesInput(
     throw new ProtocolConversionError("Anthropic messages must be an array.", 400);
   }
 
+  // `system` is accepted inside `messages` because the `mid-conversation-system`
+  // beta puts it there — Claude Code sends hook output as a positional system
+  // message, and it has to stay at its position rather than be folded into the
+  // top-level `system` field. Responses input takes a system message anywhere.
   for (const message of messages) {
-    if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
-      throw new ProtocolConversionError("Anthropic messages require user or assistant roles.", 400);
+    if (
+      !isRecord(message) ||
+      (message.role !== "user" && message.role !== "assistant" && message.role !== "system")
+    ) {
+      throw new ProtocolConversionError("Anthropic messages require user, assistant, or system roles.", 400);
     }
     appendAnthropicMessageToResponses(input, message.role, message.content, includeCompaction);
   }
@@ -1150,7 +1157,7 @@ function anthropicSystemToResponsesContent(value: unknown): Array<Record<string,
 
 function appendAnthropicMessageToResponses(
   input: unknown[],
-  role: "user" | "assistant",
+  role: "user" | "assistant" | "system",
   content: unknown,
   includeCompaction: boolean
 ): void {
@@ -1180,14 +1187,14 @@ function appendAnthropicMessageToResponses(
     }
     if (block.type === "image") {
       if (role !== "user") {
-        throw new ProtocolConversionError("Assistant image blocks cannot be translated to Responses input.");
+        throw new ProtocolConversionError(`${role} image blocks cannot be translated to Responses input.`);
       }
       messageContent.push(anthropicImageToResponses(block));
       continue;
     }
     if (block.type === "document") {
       if (role !== "user") {
-        throw new ProtocolConversionError("Assistant document blocks cannot be translated to Responses input.");
+        throw new ProtocolConversionError(`${role} document blocks cannot be translated to Responses input.`);
       }
       messageContent.push(anthropicDocumentToResponses(block));
       continue;

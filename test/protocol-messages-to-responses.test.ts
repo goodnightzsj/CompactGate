@@ -106,6 +106,29 @@ describe("Anthropic Messages to OpenAI Responses conversion", () => {
     ]);
   });
 
+  it("keeps a mid-conversation system message at its position", () => {
+    const converted = JSON.parse(anthropicRequestToResponses(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      system: "Top-level.",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "system", content: [{ type: "text", text: "Hook fired." }] },
+        { role: "assistant", content: "ok" }
+      ]
+    }))).toString("utf8"));
+    expect(converted.input).toEqual([
+      { type: "message", role: "system", content: [{ type: "input_text", text: "Top-level." }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      { type: "message", role: "system", content: [{ type: "input_text", text: "Hook fired." }] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }
+    ]);
+
+    expect(() => anthropicRequestToResponses(Buffer.from(JSON.stringify({
+      model: "gpt-5.5",
+      messages: [{ role: "developer", content: "hi" }]
+    })))).toThrow("Anthropic messages require user, assistant, or system roles.");
+  });
+
   it("rejects provider-owned thinking and server-only request features", () => {
     expect(() => anthropicRequestToResponses(Buffer.from(JSON.stringify({
       model: "gpt-5.5",
