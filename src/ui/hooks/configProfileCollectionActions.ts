@@ -64,7 +64,12 @@ export function createConfigProfileCollectionActions({
       // to the stored one. The name sync effect adopts the stored name on its own
       // and keeps a dirty draft that still belongs to the selected profile.
       accessors.setState("reordered");
-      window.setTimeout(() => accessors.setState("idle"), 1600);
+      // Only clear the badge this call set. An unconditional reset belonging to an
+      // earlier action would land mid-flight on the next one and drop its spinner.
+      window.setTimeout(
+        () => accessors.setState((current) => current === "reordered" ? "idle" : current),
+        1600
+      );
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
@@ -99,7 +104,9 @@ export function createConfigProfileCollectionActions({
     // Named after the source, so the in-progress rename it defers to is the source
     // panel's — the destination's name field is about a different profile.
     const copyName = options.name?.trim() || nextDuplicateProfileName({
-      profiles: sourceState?.profiles ?? [],
+      profiles: (targetScope === scope ? sourceState?.profiles : config
+        ? profileScopeState(config, targetScope)?.profiles
+        : null) ?? [],
       selectedName: sourceProfileId === sourceAccessors.selectedId ? sourceAccessors.name : "",
       sourceName: sourceProfile.name
     });
@@ -129,7 +136,10 @@ export function createConfigProfileCollectionActions({
       // The name follows the new selection through the sync effect; calling
       // setName here would also drop an unrelated in-progress rename.
       accessors.setState("duplicated");
-      window.setTimeout(() => accessors.setState("idle"), 1600);
+      window.setTimeout(
+        () => accessors.setState((current) => current === "duplicated" ? "idle" : current),
+        1600
+      );
       return true;
     } catch (error) {
       accessors.setState("error");
@@ -185,7 +195,10 @@ export function createConfigProfileCollectionActions({
       accessors.setName(nextScope.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? "");
       setProfileDeleteCandidate(null);
       accessors.setState("deleted");
-      window.setTimeout(() => accessors.setState("idle"), 1600);
+      window.setTimeout(
+        () => accessors.setState((current) => current === "deleted" ? "idle" : current),
+        1600
+      );
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));

@@ -81,12 +81,18 @@ export function createConfigProfilePersistenceActions({
         setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
         setSaveError(null);
         setSaveState("saved");
-        window.setTimeout(() => setSaveState("idle"), 1600);
+        window.setTimeout(
+          () => setSaveState((current) => current === "saved" ? "idle" : current),
+          1600
+        );
       }
       accessors.setSelectedId(savedProfile?.id ?? nextScope.active_profile_id ?? "");
       accessors.setName(savedProfile?.name ?? trimmedName);
       accessors.setState("saved");
-      window.setTimeout(() => accessors.setState("idle"), 1600);
+      window.setTimeout(
+        () => accessors.setState((current) => current === "saved" ? "idle" : current),
+        1600
+      );
       return true;
     } catch (error) {
       accessors.setState("error");
@@ -131,9 +137,11 @@ export function createConfigProfilePersistenceActions({
       setSaveError(null);
       setSaveState("saved");
       accessors.setState("applied");
+      // Each reset only clears the badge this call set, so a timer from an earlier
+      // action cannot land mid-flight on the next one and drop its spinner.
       window.setTimeout(() => {
-        setSaveState("idle");
-        accessors.setState("idle");
+        setSaveState((current) => current === "saved" ? "idle" : current);
+        accessors.setState((current) => current === "applied" ? "idle" : current);
       }, 1600);
     } catch (error) {
       accessors.setState("error");
@@ -185,12 +193,18 @@ export function createConfigProfilePersistenceActions({
         setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
         setSaveError(null);
         setSaveState("saved");
-        window.setTimeout(() => setSaveState("idle"), 1600);
+        window.setTimeout(
+          () => setSaveState((current) => current === "saved" ? "idle" : current),
+          1600
+        );
       }
       accessors.setSelectedId(targetProfileId);
       accessors.setName(nextScope.profiles.find((profile) => profile.id === targetProfileId)?.name ?? trimmedName);
       accessors.setState("updated");
-      window.setTimeout(() => accessors.setState("idle"), 1600);
+      window.setTimeout(
+        () => accessors.setState((current) => current === "updated" ? "idle" : current),
+        1600
+      );
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
