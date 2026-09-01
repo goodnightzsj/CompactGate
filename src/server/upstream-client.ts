@@ -12,6 +12,7 @@ import {
   createOpenAiStreamObserver,
   type OpenAiStreamSummary
 } from "./upstream-openai-stream.js";
+import { parseRetryAfterMs } from "./primary-failover-result.js";
 import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
 import {
   appendBufferedResponseChunk,
@@ -97,6 +98,11 @@ export class UpstreamRequestError extends Error {
     this.name = "UpstreamRequestError";
   }
 }
+
+const RETRY_BACKOFF_BASE_MS = 250;
+// Well under any sane per-request timeout: this delay is spent inside the caller's
+// budget, so a long one just converts a retryable status into a timeout.
+const RETRY_BACKOFF_MAX_MS = 8000;
 
 const DEFERRED_RESPONSE_BUFFER_LIMIT_ERROR =
   "Upstream response exceeded the internal buffer limit before it could be forwarded.";
@@ -471,6 +477,10 @@ export async function sendOpenAiUpstreamRequest(
         deferRetryableStreamErrors: true
       });
       if (retryStatuses.has(result.status) && !result.responseBodyTruncated) {
+        // Retrying with no delay hammered a rate-limited upstream up to four times
+        // inside a few milliseconds, which is what a 429 explicitly asks us not to
+        // do. Honour Retry-After when the upstream sent one, back off otherwise.
+        await delayBeforeRetry(result.responseHeaders, retry, remainingTimeoutMs(), options.res);
         continue;
       }
 
@@ -522,6 +532,52 @@ export async function sendOpenAiUpstreamRequest(
   }
 
   return retryResult;
+}
+
+/**
+ * Waits before the next HTTP-status retry. Two bounds matter as much as the delay
+ * itself: it never outlives the request's remaining timeout budget, and a client
+ * that hangs up ends the wait immediately rather than holding a socket for a
+ * response nobody will read.
+ */
+async function delayBeforeRetry(
+  headers: IncomingHttpHeaders,
+  retry: number,
+  remainingMs: number,
+  res: ServerResponse
+): Promise<void> {
+  // Wall-clock, not `performance.now()`: a Retry-After can be an HTTP-date, which
+  // is only comparable against the epoch.
+  const retryAfterMs = parseRetryAfterMs(headers, Date.now());
+  // A Retry-After the upstream actually sent wins outright, including `0` — that
+  // means "retry now", and substituting our own backoff would ignore an explicit
+  // instruction. Only its absence falls back to exponential.
+  const backoffMs = retryAfterMs === null
+    ? RETRY_BACKOFF_BASE_MS * 2 ** retry
+    : Math.max(0, retryAfterMs);
+  // Two separate ceilings. RETRY_BACKOFF_MAX_MS caps what a Retry-After can ask of
+  // us: an upstream is free to say 3600 s, and honouring that literally would sit
+  // on the connection until the request budget ran out instead of retrying. The
+  // budget bound then leaves the attempt itself room to run, since sleeping away
+  // the whole remainder only guarantees the retry times out.
+  const waitMs = Math.min(
+    backoffMs,
+    RETRY_BACKOFF_MAX_MS,
+    Math.max(0, remainingMs - RETRY_BACKOFF_BASE_MS)
+  );
+  if (waitMs <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(finish, waitMs);
+    function finish() {
+      clearTimeout(timer);
+      res.off("close", finish);
+      resolve();
+    }
+    res.once("close", finish);
+  });
 }
 
 function buildDeferredBufferLimitResult(result: BufferedUpstreamResult): BufferedUpstreamResult {

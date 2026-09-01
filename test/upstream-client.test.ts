@@ -55,6 +55,63 @@ describe("sendBufferedUpstreamRequest", () => {
     expect(attempts).toBe(4);
   });
 
+  it("waits between status retries and honours Retry-After over its own backoff", async () => {
+    const gaps: number[] = [];
+    let lastAttemptAt = 0;
+    let attempts = 0;
+    const upstream = await startUpstream((_req, res) => {
+      const now = performance.now();
+      if (attempts > 0) {
+        gaps.push(now - lastAttemptAt);
+      }
+      lastAttemptAt = now;
+      attempts += 1;
+      if (attempts < 3) {
+        // Integer seconds, which is all RFC 9110 allows in the delay form. 1 s is
+        // longer than both backoff steps this test would otherwise see (250 ms then
+        // 500 ms), so a delay that ignored the header comes in measurably short.
+        res.writeHead(503, { "content-type": "application/json", "retry-after": "1" });
+        res.end(JSON.stringify({ error: "retry" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    const proxy = http.createServer(async (req, res) => {
+      await sendOpenAiUpstreamRequest({
+        req,
+        res,
+        upstream: new URL(upstream.url),
+        startedAt: performance.now(),
+        timeoutMs: 10_000,
+        timeoutMessage: "test upstream timed out",
+        requestHeaders: {},
+        body: Buffer.alloc(0),
+        extraResponseHeaders: {},
+        retryHttpStatuses: [502, 503, 504],
+        maxHttpStatusRetries: 3
+      });
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected TCP server address.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(response.status).toBe(200);
+    expect(attempts).toBe(3);
+    expect(gaps).toHaveLength(2);
+    // Both waits follow the header rather than the doubling backoff, which would
+    // have produced 250 ms then 500 ms. Lower bound only: a loaded CI box can
+    // stretch a timer but never fire it early.
+    for (const gap of gaps) {
+      expect(gap).toBeGreaterThanOrEqual(900);
+    }
+  });
+
   it("does not retry an unlisted 500 response", async () => {
     let attempts = 0;
     const upstream = await startUpstream((_req, res) => {

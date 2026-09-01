@@ -126,7 +126,11 @@ export function readResponseId(result: PrimaryRouteResult): string | null {
   return readJsonResponseId(text);
 }
 
-function parseRetryAfterMs(headers: IncomingHttpHeaders | undefined, now: number): number | null {
+/**
+ * Exported for the HTTP-status retry loop in `upstream-client.ts`, which needs the
+ * same Retry-After reading but has only headers, not a `PrimaryRouteResult`.
+ */
+export function parseRetryAfterMs(headers: IncomingHttpHeaders | undefined, now: number): number | null {
   const value = readHeader(headers?.["retry-after"]);
   if (!value) {
     return null;
