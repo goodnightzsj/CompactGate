@@ -24,6 +24,17 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "clearCodexPrimaryApiKey",
     "codexPrimaryCredentialPresetId",
     "codexPrimaryUpstreamProtocol",
+    // The key pool round-trips like everything else here: `extractScopedProfileConfig`
+    // spreads the whole `primary` object, so a profile stores its pool, its strategy,
+    // and its reserve. Leaving these out meant a switch kept the *previous* profile's
+    // rows in the draft, the save bar stayed dirty forever because the dirty check
+    // compares tails, and the next plain save forwarded the old ids with no secret —
+    // `mergeApiKeys` resolves plaintext by id, so unknown ids collapsed to "" and the
+    // activated profile's real credentials were replaced by empty entries.
+    "codexPrimaryApiKeys",
+    "codexPrimaryKeyStrategy",
+    "codexPrimaryRotationOptOut",
+    "codexPrimaryStickyReserveSeconds",
     "primaryModelOverride",
     "primaryReasoningEffort",
     "primaryStateDomainId",
@@ -43,6 +54,10 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "clearClaudePrimaryApiKey",
     "claudePrimaryCredentialPresetId",
     "claudePrimaryUpstreamProtocol",
+    "claudePrimaryApiKeys",
+    "claudePrimaryKeyStrategy",
+    "claudePrimaryRotationOptOut",
+    "claudePrimaryStickyReserveSeconds",
     "claudeModelMap",
     "claudeCompactBaseUrl",
     "claudeCompactApiKey",
