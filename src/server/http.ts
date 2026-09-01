@@ -25,6 +25,57 @@ import { serveStatic } from "./static-assets.js";
 import { createStudioSnapshot, StudioEventBroadcaster } from "./studio-events.js";
 import { CodexVersionMonitor } from "./codex-version.js";
 
+/**
+ * Why a rejection reason rather than a boolean: the two headers fail for different
+ * reasons and the operator needs to know which. A foreign `Origin` is a page
+ * driving the API; a foreign `Host` is DNS rebinding, where a name the attacker
+ * controls resolves to loopback so the request looks local. An absent header is
+ * not suspicious — no browser omits `Origin` on a cross-origin write, and CLI
+ * callers omit both.
+ */
+export function crossSiteApiRejection(req: IncomingMessage): string | null {
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && origin.length > 0 && origin !== "null") {
+    let originHost: string;
+    try {
+      originHost = new URL(origin).hostname;
+    } catch {
+      return "Admin API rejected a request with an unparsable Origin.";
+    }
+    if (!isLoopbackHostname(originHost)) {
+      return "Admin API is reachable from this machine only; cross-site Origin refused.";
+    }
+  }
+
+  const host = req.headers.host;
+  if (typeof host === "string" && host.length > 0 && !isLoopbackHostname(hostnameOf(host))) {
+    return "Admin API is reachable through a loopback address only; Host refused.";
+  }
+
+  return null;
+}
+
+function hostnameOf(hostHeader: string): string {
+  // `Host` carries no scheme, and an IPv6 literal keeps its brackets, so the port
+  // cannot be split off with a plain lastIndexOf(":").
+  const trimmed = hostHeader.trim();
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    return end === -1 ? trimmed : trimmed.slice(1, end);
+  }
+  const colon = trimmed.indexOf(":");
+  return colon === -1 ? trimmed : trimmed.slice(0, colon);
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const name = hostname.toLowerCase();
+  return name === "localhost" ||
+    name === "::1" ||
+    name === "0:0:0:0:0:0:0:1" ||
+    // The whole 127/8 block is loopback, not just 127.0.0.1.
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(name);
+}
+
 export function createRequestLogger(configStore: ConfigStore): RequestLogger {
   const config = configStore.get();
   return new RequestLogger(
@@ -133,6 +184,20 @@ async function routeRequest(
     const url = parseRequestUrl(req.url);
 
     if (url.pathname.startsWith("/api/")) {
+      // The admin API has no credential of its own, so a browser page the user
+      // happens to visit was able to drive it: `readJsonBody` ignores
+      // Content-Type, which makes a `text/plain` POST a CORS "simple request"
+      // that needs no preflight, and the write lands before any response is read.
+      // Pointing `primary.base_url` at an attacker that way hands over every key
+      // and conversation that follows. Both headers below are set by browsers and
+      // omitted by CLI callers, so loopback-only checks close the hole without
+      // touching curl, the e2e script, or the agent launchers.
+      const forbidden = crossSiteApiRejection(req);
+      if (forbidden) {
+        sendJson(res, 403, { error: forbidden });
+        return;
+      }
+
       const handled =
         await handleConfigApi(
           req, res, url, configStore, logger, captureWriter, studioEvents,
