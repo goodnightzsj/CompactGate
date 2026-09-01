@@ -398,8 +398,13 @@ function hasReadableTextContent(text: string): boolean {
   return Array.from(text).filter((character) => /[\p{L}\p{N}]/u.test(character)).length >= 8;
 }
 
+// `-` and `_` are deliberately absent: they are the two non-alphanumeric members
+// of the base64url alphabet, so counting them as "structure" let an opaque state
+// blob pass for prose. `looksLikeEncodedBlob` only rejects blobs of 80 characters
+// or more, which left 24-79 character states — the band no check covered — being
+// trimmed and replayed to the model as the conversation's recovered memory.
 function hasNaturalTextStructure(text: string): boolean {
-  return /[\s`:\-.,;!?()[\]{}#*_>，。；：、（）【】《》？！]/u.test(text);
+  return /[\s`:.,;!?()[\]{}#*>，。；：、（）【】《》？！]/u.test(text);
 }
 
 function looksLikeEncodedBlob(text: string): boolean {
