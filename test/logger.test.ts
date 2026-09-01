@@ -417,6 +417,58 @@ describe("RequestLogger", () => {
     }
   });
 
+  it("truncates persisted bodies so one oversized request cannot flood the database", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(2, databasePath);
+    // The Claude route accepts 100 MiB, well past the 8 MiB persistence cap.
+    const oversizedBody = Buffer.from("a".repeat(9 * 1024 * 1024));
+
+    try {
+      const entry = addLog(logger, {
+        route: "primary",
+        req: {
+          method: "POST",
+          headers: { "user-agent": "CompactGateTest/1.0" }
+        } as IncomingMessage,
+        url: new URL("http://compactgate.local/v1/messages"),
+        status: 200,
+        startedAt: performance.now(),
+        startedAtIso: "2026-06-12T04:04:52.000Z",
+        completedAtIso: "2026-06-12T04:05:03.000Z",
+        endpoint: "/messages",
+        requestType: "http",
+        reasoningEffort: null,
+        requestSummary: null,
+        incomingRequestBody: oversizedBody,
+        upstreamRequestBody: Buffer.alloc(0),
+        upstreamResponseBody: Buffer.from("{}"),
+        clientResponseBody: null,
+        persistBody: true,
+        upstreamHost: "primary.example",
+        requestId: "oversized-body",
+        sourceModel: null,
+        targetModel: null,
+        firstTokenMs: null,
+        usage: emptyUsageMetrics(),
+        errorSummary: null,
+        compactResponseNormalized: false,
+        compactResponseNormalizeReason: null,
+        compactResponseSyntheticSource: null,
+        capturePath: null,
+        captureStatus: "none"
+      });
+
+      expect(entry.incoming_request_body?.length).toBeLessThan(oversizedBody.byteLength);
+      expect(entry.incoming_request_body).toContain("body truncated at");
+      // Small bodies stay byte-for-byte intact — the cap must not rewrite them.
+      expect(entry.upstream_response_body).toBe("{}");
+    } finally {
+      logger.close();
+    }
+  });
+
   it("extracts response model from streamed Responses API events", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -1152,6 +1204,45 @@ describe("capture recovery", () => {
       expect(byHost.logs).toHaveLength(2);
       expect(byHost.host_counts.map((entry) => entry.host).sort())
         .toEqual(["compact.example", "primary.example"]);
+    } finally {
+      logger.close();
+    }
+  });
+
+  it("reads rows without the facet counts when only the logs are needed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-logger-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "compactgate-logs.sqlite");
+    const logger = new RequestLogger(10, databasePath);
+
+    try {
+      for (let index = 1; index <= 3; index += 1) {
+        logger.add(logEntry(index));
+      }
+
+      // The health probe and the per-compaction protocol lookup call this on every
+      // request, so it must not pay for the five sidebar count queries `page()`
+      // runs. Counting prepares is what distinguishes the two paths: reading
+      // `page().logs` would still issue them and quietly pass a rows-only check.
+      const database = (logger as unknown as { db: { prepare: (sql: string) => unknown } }).db;
+      const originalPrepare = database.prepare.bind(database);
+      let prepareCount = 0;
+      database.prepare = (sql: string) => {
+        prepareCount += 1;
+        return originalPrepare(sql);
+      };
+
+      const rows = logger.recentLogs({ route: "compact", limit: 2 });
+      const rowsOnlyPrepares = prepareCount;
+      prepareCount = 0;
+      const page = logger.page({ route: "compact", limit: 2, offset: 0 });
+      const fullPagePrepares = prepareCount;
+      database.prepare = originalPrepare;
+
+      expect(rows).toHaveLength(2);
+      expect(rows.map((entry) => entry.source_model)).toEqual(page.logs.map((entry) => entry.source_model));
+      expect(rowsOnlyPrepares).toBe(1);
+      expect(fullPagePrepares).toBeGreaterThan(rowsOnlyPrepares);
     } finally {
       logger.close();
     }

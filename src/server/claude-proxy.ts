@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { RouteKind } from "../shared/types.js";
 import type { ConfigStore } from "./config.js";
+import { MAX_CLAUDE_LONG_CONTEXT_BYTES } from "./config-internals.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl,
@@ -82,7 +83,9 @@ export async function proxyClaudeRequest(
   let claudeKeySelection: { keyId: string; apiKey: string } | null = null;
 
   try {
-    transaction.rawBody = await readRawBody(req, 100 * 1024 * 1024);
+    // Above `readRawBody`'s 10 MiB default because long-context routing keys off the
+    // body size: a body large enough to route must still be readable.
+    transaction.rawBody = await readRawBody(req, MAX_CLAUDE_LONG_CONTEXT_BYTES);
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
@@ -287,7 +290,8 @@ export async function proxyClaudeRequest(
           responseHeaders: transaction.responseHeaders ?? {},
           firstTokenMs: transaction.firstTokenMs ?? null
         },
-        req.headers
+        req.headers,
+        config
       );
     }
     const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");

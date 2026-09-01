@@ -9,6 +9,15 @@ import type {
 
 export { isRecord };
 
+/**
+ * Upper bound for `claude.long_context_bytes`, and therefore the floor for the
+ * Claude route's raw-body read limit: long-context routing is decided from the
+ * body size, so refusing to read a body the operator configured as routable
+ * would make the threshold unreachable. Shared so the two cannot drift apart —
+ * raising this alone widens what a single request can buffer in memory.
+ */
+export const MAX_CLAUDE_LONG_CONTEXT_BYTES = 100 * 1024 * 1024;
+
 export class ConfigError extends Error {
   /**
    * HTTP status this error should surface as, when 400 is wrong. Clients could

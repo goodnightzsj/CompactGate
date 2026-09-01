@@ -18,6 +18,7 @@ import {
   ConfigError,
   isRecord,
   isValidBaseUrl,
+  MAX_CLAUDE_LONG_CONTEXT_BYTES,
   readBoolean,
   readChild,
   readNullableString,
@@ -78,9 +79,11 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
   if (
     !Number.isInteger(config.claude.long_context_bytes) ||
     config.claude.long_context_bytes < 0 ||
-    config.claude.long_context_bytes > 100 * 1024 * 1024
+    config.claude.long_context_bytes > MAX_CLAUDE_LONG_CONTEXT_BYTES
   ) {
-    throw new ConfigError("claude.long_context_bytes must be between 0 and 104857600.");
+    throw new ConfigError(
+      `claude.long_context_bytes must be between 0 and ${MAX_CLAUDE_LONG_CONTEXT_BYTES}.`
+    );
   }
   validateUpstreamMode(config.compact.upstream_mode, "compact.upstream_mode");
   validateUpstreamMode(config.claude.compact.upstream_mode, "claude.compact.upstream_mode");

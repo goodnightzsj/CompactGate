@@ -23,6 +23,28 @@ import { parseCodexClientUserAgent } from "./codex-version.js";
 
 export { emptyUsageMetrics } from "./usage.js";
 
+/**
+ * Matches the capture writer's per-body cap. `decodeBodyText` stays unbounded
+ * because the normalizer and the failover evidence matchers need the whole text,
+ * so the bound belongs here, at the point the text becomes a stored row.
+ */
+const MAX_PERSISTED_BODY_CHARS = 8 * 1024 * 1024;
+
+/**
+ * The Claude route accepts a 100 MiB request body and every log row holds four
+ * body columns, so an unbounded copy let a single request write hundreds of MiB
+ * into SQLite — blowing past the storage cap in one insert and forcing the prune
+ * to VACUUM the whole file back down. The marker keeps a truncated row honest
+ * rather than looking like a body that legitimately ended there.
+ */
+function persistedBodyText(body: Buffer): string {
+  const text = decodeBodyText(body);
+  if (text.length <= MAX_PERSISTED_BODY_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, MAX_PERSISTED_BODY_CHARS)}\n[CompactGate] body truncated at ${MAX_PERSISTED_BODY_CHARS} characters for storage.`;
+}
+
 const SENSITIVE_QUERY_KEYS = new Set([
   "api_key",
   "api-key",
@@ -111,10 +133,10 @@ export function addLog(
     request_type: input.requestType,
     reasoning_effort: input.reasoningEffort,
     request_summary: input.requestSummary,
-    incoming_request_body: input.persistBody ? decodeBodyText(input.incomingRequestBody) : null,
-    upstream_request_body: input.persistBody ? decodeBodyText(input.upstreamRequestBody) : null,
-    upstream_response_body: input.persistBody ? decodeBodyText(input.upstreamResponseBody) : null,
-    client_response_body: input.persistBody && input.clientResponseBody ? decodeBodyText(input.clientResponseBody) : null,
+    incoming_request_body: input.persistBody ? persistedBodyText(input.incomingRequestBody) : null,
+    upstream_request_body: input.persistBody ? persistedBodyText(input.upstreamRequestBody) : null,
+    upstream_response_body: input.persistBody ? persistedBodyText(input.upstreamResponseBody) : null,
+    client_response_body: input.persistBody && input.clientResponseBody ? persistedBodyText(input.clientResponseBody) : null,
     body_status: input.persistBody ? "present" : "none",
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,

@@ -167,19 +167,19 @@ export class DebugCaptureWriter {
     const filename = captureFilename(this.sequence, record);
     const absolutePath = path.join(captureDir, filename);
     this.protectedCapturePaths.add(absolutePath);
+    // Serialized once and reused for both the write and the size estimate: a record
+    // carries up to four bodies, so a second `JSON.stringify` duplicated tens of MiB
+    // of string work per capture.
+    const serialized = `${JSON.stringify(record, null, 2)}\n`;
     try {
       await mkdir(captureDir, { recursive: true });
-      await writeFile(
-        absolutePath,
-        `${JSON.stringify(record, null, 2)}\n`,
-        "utf8"
-      );
+      await writeFile(absolutePath, serialized, "utf8");
       onWritten?.(absolutePath);
       return absolutePath;
     } finally {
       this.protectedCapturePaths.delete(absolutePath);
       const effectiveMaxDirBytes = this.maxDirBytesByCaptureDir.get(captureDir) ?? this.maxDirBytes;
-      this.addToDirectoryByteEstimate(captureDir, Buffer.byteLength(JSON.stringify(record, null, 2)) + 1);
+      this.addToDirectoryByteEstimate(captureDir, Buffer.byteLength(serialized));
       void this.requestPrune(captureDir, effectiveMaxDirBytes);
     }
   }
