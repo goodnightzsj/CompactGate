@@ -124,8 +124,10 @@ export function RouteCredentialFields({
   const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const [suggestionsStyle, setSuggestionsStyle] = useState<CSSProperties | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const baseUrlInputRef = useRef<HTMLInputElement | null>(null);
   const repositionFrameRef = useRef<number | null>(null);
+  const blurCloseTimerRef = useRef<number | null>(null);
   const suggestionsId = useId();
   const visibleSuggestions = routeUrlSuggestions.slice(0, 8);
   const showSuggestions = urlSuggestionsOpen && visibleSuggestions.length > 0;
@@ -210,6 +212,15 @@ export function RouteCredentialFields({
     };
   }, [showSuggestions, visibleSuggestions.length]);
 
+  // Unmount only — the effect above re-runs on its deps, so clearing the blur timer
+  // there would cancel a close that is still legitimately pending.
+  useEffect(() => () => {
+    if (blurCloseTimerRef.current !== null) {
+      window.clearTimeout(blurCloseTimerRef.current);
+      blurCloseTimerRef.current = null;
+    }
+  }, []);
+
   function selectSuggestion(suggestion: RouteUrlSuggestion) {
     if (onSuggestionSelect) {
       onSuggestionSelect(suggestion);
@@ -247,9 +258,18 @@ export function RouteCredentialFields({
             aria-expanded={showSuggestions}
             aria-haspopup="listbox"
             value={baseUrl}
-            onFocus={() => setUrlSuggestionsOpen(true)}
+            onFocus={() => {
+              // Cancel a close still pending from a blur a moment ago, or it fires
+              // and collapses the list the user has just come back to.
+              if (blurCloseTimerRef.current !== null) {
+                window.clearTimeout(blurCloseTimerRef.current);
+                blurCloseTimerRef.current = null;
+              }
+              setUrlSuggestionsOpen(true);
+            }}
             onBlur={() => {
-              window.setTimeout(() => {
+              blurCloseTimerRef.current = window.setTimeout(() => {
+                blurCloseTimerRef.current = null;
                 setUrlSuggestionsOpen(false);
                 setActiveSuggestionIndex(-1);
               }, 100);
@@ -410,12 +430,31 @@ export function RouteCredentialFields({
                     </span>
                     <span className="key-pool-toggle-text">启用</span>
                   </label>
+                  {/*
+                    Two-step for a row that is already saved. Its secret lives only
+                    on the server — the pool never sends plaintext back, only a tail
+                    — so a misclick costs a trip to wherever the key came from. A row
+                    with no tail was added in this draft and has nothing to lose, so
+                    it goes on the first click.
+                  */}
                   <button
                     className="field-inline-button is-danger"
                     type="button"
-                    onClick={() => onKeyPoolChange?.(keyPool.filter((item) => item.id !== entry.id))}
+                    aria-label={pendingDeleteId === entry.id
+                      ? `确认删除密钥 ${entry.label || entry.tail || entry.id}`
+                      : `删除密钥 ${entry.label || entry.tail || entry.id}`}
+                    onClick={() => {
+                      if (!entry.tail || pendingDeleteId === entry.id) {
+                        setPendingDeleteId(null);
+                        onKeyPoolChange?.(keyPool.filter((item) => item.id !== entry.id));
+                        return;
+                      }
+                      setPendingDeleteId(entry.id);
+                    }}
+                    onBlur={() => setPendingDeleteId((current) =>
+                      current === entry.id ? null : current)}
                   >
-                    删除
+                    {pendingDeleteId === entry.id ? "确认删除" : "删除"}
                   </button>
                 </div>
               ))}
@@ -427,7 +466,7 @@ export function RouteCredentialFields({
               className="ghost-button key-pool-add"
               type="button"
               onClick={() => onKeyPoolChange?.([...keyPool, {
-                id: crypto.randomUUID(),
+                id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
                 label: "",
                 apiKey: "",
                 enabled: true,
