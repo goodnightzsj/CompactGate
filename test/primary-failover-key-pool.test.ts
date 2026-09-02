@@ -136,6 +136,21 @@ describe("primary key pool candidates", () => {
     expect(candidates.map((candidate) => candidate.order)).toEqual([0, 1, 2, 2, 3]);
     expect(new Set(candidates.map((candidate) => candidate.order)).size).toBe(4);
   });
+
+  it("carries the pooled key label onto the selection for logging", () => {
+    const config = configWithKeyPool("codex-a", "Codex A", [
+      key("key-1", "主号", "sk-first"),
+      key("key-2", "备用", "sk-second")
+    ]);
+    const { state } = createState();
+
+    // fill_first starts on the first labelled key…
+    expect(state.preview(config, { model: "gpt-5.5" }).keyLabel).toBe("主号");
+
+    // …and rotation onto its sibling keeps the sibling's name.
+    recordRequests(state, config, 1, 401);
+    expect(state.preview(config, { model: "gpt-5.5" }).keyLabel).toBe("备用");
+  });
 });
 
 describe("primary key pool isolation", () => {

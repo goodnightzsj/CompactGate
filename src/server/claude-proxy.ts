@@ -13,6 +13,7 @@ import {
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { ClaudeKeyPoolState } from "./claude-key-pool.js";
+import { DIRECT_API_KEY_ID } from "./credentials.js";
 import { applyHostQuirks, resolveHostShortCircuit } from "./host-quirks.js";
 import {
   buildUpstreamHeaders,
@@ -81,6 +82,9 @@ export async function proxyClaudeRequest(
   let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
   let claudeKeySelection: { keyId: string; apiKey: string } | null = null;
+  // Resolved after the key selection below; must live at function scope so the
+  // finalizer in `finally` can read it.
+  let keyName: string | null = null;
 
   try {
     // Above `readRawBody`'s 10 MiB default because long-context routing keys off the
@@ -118,6 +122,22 @@ export async function proxyClaudeRequest(
           }
         }
       };
+    }
+
+    // The log shows which key carried the request, by the only stable handle —
+    // its name. The route's own `api_key` is the profile's name; a pooled entry
+    // shows its label. Read from `routing.config` (not the mutated `config`):
+    // the injection above empties `api_keys` in the copy that resolved the
+    // credential, while the label lookup still needs the pool.
+    if (routing.profileId) {
+      if (claudeKeySelection && claudeKeySelection.keyId !== DIRECT_API_KEY_ID) {
+        keyName = (routing.config.claude.primary.api_keys ?? [])
+          .find((candidate) => candidate.id === claudeKeySelection?.keyId)
+          ?.label ?? null;
+      } else {
+        // No pool — or the pool's own key — means the profile's key carried it.
+        keyName = routing.profileName ?? routing.profileId;
+      }
     }
     transaction.targetModel = routing.sceneModel ??
       resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ??
@@ -319,7 +339,8 @@ export async function proxyClaudeRequest(
       upstreamBody: transaction.upstreamBody.byteLength > 0
         ? transaction.upstreamBody
         : transaction.rawBody,
-      persistBody: config.logging.persist_body
+      persistBody: config.logging.persist_body,
+      keyName
     });
   }
 }

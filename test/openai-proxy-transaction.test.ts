@@ -112,6 +112,7 @@ describe("finalizeOpenAiProxyTransaction", () => {
         clientResponseBody: null,
         clientResponseHeaders: null,
         persistBody: false,
+        keyName: null,
         compactResponseNormalized: false,
         compactResponseNormalizeReason: null,
         compactResponseSyntheticSource: null
@@ -182,6 +183,7 @@ describe("finalizeOpenAiProxyTransaction", () => {
         clientResponseBody: null,
         clientResponseHeaders: null,
         persistBody: false,
+        keyName: null,
         compactResponseNormalized: false,
         compactResponseNormalizeReason: null,
         compactResponseSyntheticSource: null
@@ -266,6 +268,7 @@ describe("finalizeOpenAiProxyTransaction", () => {
         clientResponseBody: null,
         clientResponseHeaders: null,
         persistBody: false,
+        keyName: null,
         compactResponseNormalized: false,
         compactResponseNormalizeReason: null,
         compactResponseSyntheticSource: null

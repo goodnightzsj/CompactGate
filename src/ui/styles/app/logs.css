@@ -749,14 +749,15 @@
    short sum, and any shortfall becomes dead space past the last column. The
    duration and first-token columns carry values like `132.9s`, so they need real
    room — at the original 5% the duration text was clipped at every viewport. */
-.log-table-full .log-col-started { width: 13%; }
-.log-table-full .log-col-status { width: 6%; }
-.log-table-full .log-col-model-route { width: 13%; }
-.log-table-full .log-col-reasoning { width: 7%; }
-.log-table-full .log-col-response-model { width: 8%; }
-.log-table-full .log-col-host { width: 11%; }
-.log-table-full .log-col-endpoint { width: 11%; }
-.log-table-full .log-col-type { width: 7%; }
+.log-table-full .log-col-started { width: 12%; }
+.log-table-full .log-col-status { width: 5%; }
+.log-table-full .log-col-model-route { width: 12%; }
+.log-table-full .log-col-reasoning { width: 6%; }
+.log-table-full .log-col-response-model { width: 7%; }
+.log-table-full .log-col-host { width: 10%; }
+.log-table-full .log-col-key { width: 8%; }
+.log-table-full .log-col-endpoint { width: 10%; }
+.log-table-full .log-col-type { width: 6%; }
 .log-table-full .log-col-token { width: 8%; }
 .log-table-full .log-col-first-token { width: 8%; }
 .log-table-full .log-col-duration { width: 8%; }
@@ -1254,6 +1255,7 @@
 
 .log-mobile-model,
 .log-mobile-host,
+.log-mobile-key,
 .log-mobile-endpoint {
   max-width: calc(100% - 52px);
   overflow: hidden;
@@ -1267,6 +1269,7 @@
 }
 
 .log-mobile-host,
+.log-mobile-key,
 .log-mobile-endpoint {
   color: var(--muted);
   font-family: var(--font-mono);

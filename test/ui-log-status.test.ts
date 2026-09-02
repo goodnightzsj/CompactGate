@@ -195,6 +195,7 @@ function requestLog(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     total_tokens: null,
     upstream_host: "muyuan.do",
     user_agent: null,
+    key_name: null,
     request_id: "request-id",
     error_summary: null,
     capture_path: null,

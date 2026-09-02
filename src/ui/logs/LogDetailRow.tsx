@@ -126,6 +126,10 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value">{entry.upstream_host}</span>
               </div>
               <div className="log-detail-item">
+                <span className="log-detail-label">使用密钥</span>
+                <span className="log-detail-value">{entry.key_name ?? "—"}</span>
+              </div>
+              <div className="log-detail-item">
                 <span className="log-detail-label">端点</span>
                 <span className="log-detail-value">{entry.endpoint}</span>
               </div>

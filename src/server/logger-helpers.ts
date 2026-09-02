@@ -151,6 +151,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
   const responseModel = readNullableString(row.response_model);
   const responseModelSource = readResponseModelSource(row.response_model_source);
   const userAgent = readNullableString(row.user_agent);
+  const keyName = readNullableString(row.key_name);
   return {
     time: String(row.time),
     completed_at: readCompletedAt(row.completed_at, row.time),
@@ -207,6 +208,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     total_tokens: readNullableNumber(row.total_tokens),
     upstream_host: String(row.upstream_host),
     user_agent: userAgent,
+    key_name: keyName,
     request_id: String(row.request_id),
     error_summary: readNullableString(row.error_summary),
     provider_state_portability: readProviderStatePortability(row.provider_state_portability),

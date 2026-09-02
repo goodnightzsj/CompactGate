@@ -297,6 +297,7 @@ export function LogsPage({
                 <col className="log-col-reasoning" />
                 <col className="log-col-response-model" />
                 <col className="log-col-host" />
+                <col className="log-col-key" />
                 <col className="log-col-endpoint" />
                 <col className="log-col-type" />
                 <col className="log-col-token" />
@@ -311,6 +312,7 @@ export function LogsPage({
                   <th scope="col">思考</th>
                   <th scope="col">响应模型</th>
                   <th scope="col">上游 Host</th>
+                  <th scope="col">密钥</th>
                   <th scope="col">端点</th>
                   <th scope="col">类型</th>
                   <th scope="col">Token</th>
@@ -356,7 +358,7 @@ export function LogsPage({
                           className="log-detail-row"
                           id={detailId}
                         >
-                          <td colSpan={11}>
+                          <td colSpan={12}>
                             <LogDetailPanel entry={entry} />
                           </td>
                         </MotionTr>

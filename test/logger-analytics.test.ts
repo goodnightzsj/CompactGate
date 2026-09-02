@@ -315,6 +315,7 @@ function logEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {
     total_tokens: null,
     upstream_host: "upstream.example",
     user_agent: null,
+    key_name: null,
     request_id: "request",
     error_summary: null,
     capture_path: null,

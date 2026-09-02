@@ -247,6 +247,7 @@ async function proxyPrimaryRequest(
           config,
           profileId: requestProfile.profileId,
           keyId: null,
+          keyLabel: null,
           candidateId: requestProfile.profileId,
           profileName: requestProfile.profileName,
           generation: 0,
@@ -510,7 +511,8 @@ async function proxyPrimaryRequest(
         upstream,
         requestId,
         providerStatePortability,
-        persistBody: config.logging.persist_body
+        persistBody: config.logging.persist_body,
+        keyName: primarySelection?.keyLabel ?? primarySelection?.profileName ?? null
       });
     }
   }
@@ -923,7 +925,8 @@ async function proxyCompactRequest(
       startedAtIso,
       upstream,
       requestId,
-      persistBody: config.logging.persist_body
+      persistBody: config.logging.persist_body,
+      keyName: null
     });
   }
 }

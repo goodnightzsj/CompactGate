@@ -4,7 +4,6 @@ import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs } from "../shared/format.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
-  logStatusKind,
   logStatusToneClass,
   reasoningEffortLabel,
   responseModelDisplay,
@@ -25,7 +24,6 @@ export const LogRowCells = memo(function LogRowCells({
 }) {
   const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
   const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
-  const hasError = logStatusKind(entry) === "error";
 
   return (
     <>
@@ -44,6 +42,7 @@ export const LogRowCells = memo(function LogRowCells({
       <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
       <td><LogTextTooltip className="log-cell-code" value={responseModelDisplay(entry)} /></td>
       <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
+      <td><LogTextTooltip className="log-cell-code" value={entry.key_name ?? "—"} /></td>
       <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
       <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
       <td><TokenTooltip entry={entry} /></td>

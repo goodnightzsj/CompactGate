@@ -392,6 +392,7 @@ export class RequestLogger {
           entry.total_tokens,
           entry.upstream_host,
           entry.user_agent,
+          entry.key_name,
           entry.request_id,
           entry.error_summary,
           entry.capture_path,
@@ -472,6 +473,7 @@ export class RequestLogger {
         total_tokens,
         upstream_host,
         user_agent,
+        key_name,
         request_id,
         error_summary,
         capture_path,
@@ -487,7 +489,7 @@ export class RequestLogger {
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?
+        ?, ?, ?
       )
     `);
     return this.cachedAddStatement;

@@ -114,6 +114,7 @@ export interface OpenAiProxyTransactionInput {
   clientResponseBody: Buffer | null;
   clientResponseHeaders: IncomingHttpHeaders | null;
   persistBody: boolean;
+  keyName: string | null;
   compactResponseNormalized: boolean;
   compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
   compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
@@ -327,6 +328,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     clientResponseHeaders: input.clientResponseHeaders,
     persistBody: input.persistBody,
     upstreamHost: input.upstream.host,
+    keyName: input.keyName ?? null,
     requestId: input.requestId,
     sourceModel: input.sourceModel,
     targetModel: input.targetModel,

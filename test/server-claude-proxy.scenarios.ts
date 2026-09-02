@@ -384,5 +384,18 @@ describe("CompactGate Claude routing", () => {
     });
     expect(second.status).toBe(200);
     expect(captured[1].headers["x-api-key"]).toBe("sk-added");
+
+    // The log names the key that carried each request: the profile's name for
+    // the route's own key, the pooled entry's label for the rotated one.
+    const firstLog = await waitForLogEntry(
+      app.url,
+      (candidate) => candidate.route === "claude" && candidate.status === 401
+    );
+    expect(firstLog.key_name).toBe("pooled");
+    const secondLog = await waitForLogEntry(
+      app.url,
+      (candidate) => candidate.route === "claude" && candidate.status === 200
+    );
+    expect(secondLog.key_name).toBe("备用");
   });
 });

@@ -27,6 +27,8 @@ export interface PrimaryRouteSelection {
   profileId: string | null;
   /** The selected key within a pooled profile, null when the profile has no pool. */
   keyId: string | null;
+  /** The selected key's label from the pool; null for the profile's own key. */
+  keyLabel: string | null;
   /** Composite `profileId#keyId` that health and stickiness are keyed by. */
   candidateId: string | null;
   profileName: string | null;

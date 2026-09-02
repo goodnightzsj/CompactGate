@@ -464,6 +464,12 @@ export interface RequestLogEntry {
   total_tokens: number | null;
   upstream_host: string;
   user_agent: string | null;
+  /**
+   * The name of the key that carried the request: a pooled entry's label, or
+   * the owning profile's name for the route's own `api_key`. Null when no
+   * profile (and therefore no key identity) applies.
+   */
+  key_name: string | null;
   request_id: string;
   error_summary: string | null;
   provider_state_portability?: ProviderStatePortabilityLog | null;

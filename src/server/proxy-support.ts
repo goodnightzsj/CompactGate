@@ -90,6 +90,7 @@ export function addLog(
     clientResponseHeaders?: IncomingHttpHeaders | null;
     persistBody: boolean;
     upstreamHost: string;
+    keyName: string | null;
     requestId: string;
     sourceModel: string | null;
     targetModel: string | null;
@@ -169,6 +170,7 @@ export function addLog(
     total_tokens: input.usage.totalTokens,
     upstream_host: input.upstreamHost,
     user_agent: userAgent,
+    key_name: input.keyName,
     request_id: input.requestId,
     error_summary: input.errorSummary,
     provider_state_portability: input.providerStatePortability ?? null,

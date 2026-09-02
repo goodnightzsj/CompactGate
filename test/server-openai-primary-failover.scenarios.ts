@@ -262,6 +262,9 @@ describe("CompactGate OpenAI routing", () => {
       upstream_host: new URL(compact.url).host,
       error_summary: null
     });
+    // A profile's own key carries the request, so the log names the profile.
+    expect(logs.find((entry) => entry.upstream_host === new URL(firstPrimary.url).host)?.key_name).toBe("primary-a");
+    expect(logs.find((entry) => entry.upstream_host === new URL(secondPrimary.url).host)?.key_name).toBe("primary-b");
   });
 
   it("fails over Codex primary streams after more than ten output-only 200 responses without completion", async () => {

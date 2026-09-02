@@ -51,6 +51,7 @@ export const LOG_TABLE_SQL = `
     total_tokens INTEGER,
     upstream_host TEXT NOT NULL,
     user_agent TEXT,
+    key_name TEXT,
     request_id TEXT NOT NULL,
     error_summary TEXT,
     provider_state_portability TEXT,
@@ -192,6 +193,7 @@ export const RECENT_LOG_FIELDS = `
   total_tokens,
   upstream_host,
   user_agent,
+  key_name,
   request_id,
   error_summary,
   provider_state_portability,
@@ -238,6 +240,7 @@ export const MIGRATION_COLUMNS: Record<string, string> = {
   additive_cached_output_tokens: "INTEGER NOT NULL DEFAULT 0",
   total_tokens: "INTEGER",
   user_agent: "TEXT",
+  key_name: "TEXT",
   capture_path: "TEXT",
   capture_status: "TEXT NOT NULL DEFAULT 'none'"
 };

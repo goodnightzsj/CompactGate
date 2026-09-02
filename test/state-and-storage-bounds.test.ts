@@ -196,6 +196,7 @@ function logEntryWithCapture(requestId: string, capturePath: string | null): Req
     total_tokens: null,
     upstream_host: "primary.example",
     user_agent: null,
+    key_name: null,
     request_id: requestId,
     error_summary: null,
     capture_path: capturePath,

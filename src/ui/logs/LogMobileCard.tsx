@@ -49,6 +49,7 @@ export const LogMobileCard = memo(function LogMobileCard({
         </span>
         <strong className="log-mobile-model">{modelLabel}</strong>
         <span className="log-mobile-host">{entry.upstream_host}</span>
+        {entry.key_name && <span className="log-mobile-key">{entry.key_name}</span>}
         <span className="log-mobile-endpoint">{entry.endpoint}</span>
         <span className="log-mobile-metrics">
           <span>{entry.request_type}</span>
