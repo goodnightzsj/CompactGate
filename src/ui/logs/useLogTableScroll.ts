@@ -4,6 +4,13 @@ import type { RequestLogEntry } from "../../shared/types.js";
 
 const LOG_LAZY_LOAD_THRESHOLD_PX = 220;
 const LOG_STICKY_TOP_THRESHOLD_PX = 24;
+// How long a row's enter spring keeps moving: with the current tuning the
+// height part (the only one that shifts later rows) carries its visible
+// animation through ~180ms and any residual motion is at most a pixel by 50ms
+// more. The settle delay must therefore sit above that, so the anchor is
+// measured against the row's final geometry — this is the wait that makes the
+// offsetTop read race-free, not the rAF alone.
+const SETTLE_WAIT_MS = 50;
 
 export function countPrependedLogs(
   previousLogs: RequestLogEntry[],
@@ -103,17 +110,26 @@ export function useLogTableScroll({
       : 0;
 
     if (prependedCount > 0) {
-      const plan = planPrependedLogScroll(
-        previous.scrollTop,
-        logOffset(body, previous.logs[0]?.request_id) - previous.firstLogOffset,
-        prependedCount
-      );
-      body.scrollTop = plan.scrollTop;
-      if (plan.unseenIncrement > 0) {
-        setUnseenLogCount((count) => count + plan.unseenIncrement);
-      } else {
-        setUnseenLogCount(0);
-      }
+      // Wait for framer-motion to settle before measuring layout: a row enters
+      // through a y-20/height-0 spring, and reading offsetTop mid-animation — a
+      // frame later is still mid-animation, springs run ~250ms — yields a
+      // shifted anchor and scroll jitter. The animation is part of the spec, so
+      // the measurement belongs in the frame after it completes.
+      window.requestAnimationFrame(() => {
+        setTimeout(() => {
+          const plan = planPrependedLogScroll(
+            previous.scrollTop,
+            logOffset(body, previous.logs[0]?.request_id) - previous.firstLogOffset,
+            prependedCount
+          );
+          body.scrollTop = plan.scrollTop;
+          if (plan.unseenIncrement > 0) {
+            setUnseenLogCount((count) => count + plan.unseenIncrement);
+          } else {
+            setUnseenLogCount(0);
+          }
+        }, SETTLE_WAIT_MS);
+      });
     }
 
     scrollSnapshotRef.current = {

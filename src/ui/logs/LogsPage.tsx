@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
@@ -13,6 +13,7 @@ import { CustomSelect } from "../shared/CustomSelect.js";
 import { formatDateTime, formatDurationMs } from "../shared/format.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import { LogMobileCard } from "./LogMobileCard.js";
+import { useNarrowViewport } from "./useNarrowViewport.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
@@ -26,15 +27,38 @@ import {
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 
+// Natural breaks in a log-key stream stay deterministic and remain stable when
+// the log feed prepends or appends rows. React uses them as reconciliation
+// hints only — animations keep running, the key never shows up in the DOM.
+// Written as an ASCII escape: a literal control character in the source trips
+// git's binary detection, and neither base64url request ids nor RFC 3339
+// timestamps can contain U+001E either.
+const LOG_KEY_DELIMITER = "\u001E";
+
+function logEntryKey(entry: RequestLogEntry): string {
+  return `${entry.request_id}${LOG_KEY_DELIMITER}${entry.time}`;
+}
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
+// Tuned so a row settles in ~250ms rather than ~350ms: at a 150ms stagger a
+// backlog of ten still has the previous row bouncing when the next one lands,
+// and the tail is what reads as lag. Stiffness and damping move together — the
+// extra stiffness alone would overshoot.
 const logRowTransition = {
   type: "spring" as const,
-  stiffness: 500,
-  damping: 30,
-  mass: 1,
-  opacity: { duration: 0.2 }
+  stiffness: 600,
+  damping: 35,
+  mass: 0.8,
+  opacity: { duration: 0.16 }
+};
+
+// Phones run this list on weaker hardware and with the cards stacked, where a
+// spring per card is the most expensive thing on screen. A short eased tween
+// lands in about the same time without the physics.
+const mobileRowTransition = {
+  duration: 0.18,
+  ease: [0.16, 1, 0.3, 1] as const
 };
 
 const detailTransition = {
@@ -42,18 +66,15 @@ const detailTransition = {
   ease: [0.16, 1, 0.3, 1] as const
 };
 
-function logEntryKey(entry: RequestLogEntry): string {
-  return `${entry.request_id}-${entry.time}`;
-}
-
 export function LogsPage({
-  logs,
+  logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
   routeFilter, statusFilter, hostFilter, searchFilter,
   onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, error
 }: {
   logs: RequestLogEntry[];
+  pendingLogCount?: number;
   logCounts: Record<"all" | RouteKind, number>;
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
@@ -66,6 +87,9 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
+  const narrowViewport = useNarrowViewport();
+  const reduceMotion = useReducedMotion();
+  const rowTransition = narrowViewport ? mobileRowTransition : logRowTransition;
   const {
     handleLogScroll,
     handleMobileLogScroll,
@@ -82,7 +106,11 @@ export function LogsPage({
   });
   const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
 
-  function toggleLog(logKey: string) {
+  // useCallback not for this function's own sake: LogMobileCard is memoized, so
+  // a fresh onToggle identity on every render would defeat the memo and rerender
+  // every collapsed card at each 150ms stagger tick. Only refs and the stable
+  // setState are read here, so the empty deps are exact.
+  const toggleLog = useCallback((logKey: string) => {
     // 记录移动列表当前滚动位置,展开详情后恢复,避免内容下推导致视口跑掉。
     const previousScrollTop = mobileListRef.current?.scrollTop ?? null;
     setExpandedLogKey((currentKey) => currentKey === logKey ? null : logKey);
@@ -94,7 +122,7 @@ export function LogsPage({
         }
       });
     }
-  }
+  }, []);
 
   function handleRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, logKey: string) {
     if (event.key !== "Enter" && event.key !== " ") {
@@ -140,6 +168,23 @@ export function LogsPage({
               )}
             </AnimatePresence>
           </span>
+          {/* Only worth showing once the drain is long enough to read as a wait:
+              at 150ms a row, five is under a second and the rows themselves are
+              the better feedback. */}
+          <AnimatePresence initial={false}>
+            {pendingLogCount > 5 && (
+              <MotionSpan
+                className="logs-queue-indicator"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -3 }}
+                transition={detailTransition}
+              >
+                <span className="logs-queue-dot" aria-hidden="true" />
+                {pendingLogCount} 条待显示
+              </MotionSpan>
+            )}
+          </AnimatePresence>
           <span className="status-pill">
             显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
           </span>
@@ -247,10 +292,9 @@ export function LogsPage({
       ) : null}
 
       <div className="log-table log-table-full" hidden={logs.length === 0}>
-          <MotionDiv
+          <div
             ref={tableBodyRef}
             className="log-table-body"
-            layoutScroll
             onScroll={handleLogScroll}
             aria-busy={isLoadingLogs || isLoadingMoreLogs}
           >
@@ -284,7 +328,7 @@ export function LogsPage({
                 </tr>
               </thead>
               <tbody>
-                <AnimatePresence initial={false} mode="popLayout">
+                <AnimatePresence initial={false}>
                   {logs.flatMap((entry, index) => {
                     const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
                     const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
@@ -295,11 +339,10 @@ export function LogsPage({
                     const rows = [
                       <MotionTr
                         key={logKey}
-                        layout
                         initial={{ opacity: 0, y: -20, height: 0 }}
                         animate={{ opacity: 1, y: 0, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
-                        transition={logRowTransition}
+                        transition={reduceMotion ? { duration: 0.01 } : rowTransition}
                         data-log-id={entry.request_id}
                         className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
                         tabIndex={0}
@@ -336,11 +379,10 @@ export function LogsPage({
                       rows.push(
                         <MotionTr
                           key={`${logKey}-detail`}
-                          layout
-                          initial={{ opacity: 0, y: -6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -4 }}
-                          transition={detailTransition}
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={reduceMotion ? { duration: 0.01 } : detailTransition}
                           className="log-detail-row"
                           id={detailId}
                         >
@@ -356,31 +398,29 @@ export function LogsPage({
                 </AnimatePresence>
               </tbody>
             </table>
-          </MotionDiv>
+          </div>
       </div>
 
       {/* Rendered conditionally rather than with `hidden`: the narrow-screen rule
           sets `display: grid`, which outranks the UA rule for [hidden]. */}
       {logs.length > 0 && (
-        <MotionDiv
+        <div
           ref={mobileListRef}
           className="logs-mobile-list"
           aria-label="请求日志摘要"
-          layoutScroll
           onScroll={handleMobileLogScroll}
         >
-          <AnimatePresence initial={false} mode="popLayout">
+          <AnimatePresence initial={false}>
             {logs.map((entry, index) => {
               const logKey = logEntryKey(entry);
               return (
                 <MotionDiv
                   key={`mobile-${logKey}`}
                   className="log-mobile-motion-item"
-                  layout
                   initial={{ opacity: 0, y: -20, height: 0 }}
                   animate={{ opacity: 1, y: 0, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
-                  transition={logRowTransition}
+                  transition={reduceMotion ? { duration: 0.01 } : rowTransition}
                   data-log-id={entry.request_id}
                 >
                   <LogMobileCard
@@ -393,7 +433,7 @@ export function LogsPage({
               );
             })}
           </AnimatePresence>
-        </MotionDiv>
+        </div>
       )}
 
       {hasMoreLogs && (

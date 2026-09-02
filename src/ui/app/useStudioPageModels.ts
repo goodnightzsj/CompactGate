@@ -71,13 +71,14 @@ export function useStudioPageModels({
     readDocumentVisibility,
     readServerVisibility
   );
-  const displayedLogs = useStaggeredLogs(
+  const staggeredLogs = useStaggeredLogs(
     logs,
     logFeed.pageQueryKey,
     logFeed.logSyncVersion,
     logFeed.liveInsertIds,
     currentPage === "logs" && !healthMode && documentVisible
   );
+  const displayedLogs = staggeredLogs.logs;
   const latestLog = logs[0] ?? null;
   const linkedCompactModel = renderLinkedModel(form.primaryModelOverride, form.modelTemplate);
   const configActions = useConfigActions({
@@ -162,6 +163,7 @@ export function useStudioPageModels({
       },
       logsPage: {
         logs: displayedLogs,
+        pendingLogCount: staggeredLogs.pendingCount,
         logCounts: logFeed.logPage.counts,
         providerCounts: logFeed.logPage.provider_counts,
         statusCounts: logFeed.logPage.status_counts,

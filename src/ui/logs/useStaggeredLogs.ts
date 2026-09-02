@@ -4,7 +4,8 @@ import type { RequestLogEntry } from "../../shared/types.js";
 export const STAGGER_MS = 150;
 
 /**
- * Returns a displayed list that gradually catches up to the live `logs` array.
+ * Returns a displayed list that gradually catches up to the live `logs` array,
+ * plus the number of rows still queued behind it.
  *
  * - Initial load / filter reset: all logs appear immediately (no stagger).
  * - SSE live push (new logs at head): released one-by-one every STAGGER_MS.
@@ -19,8 +20,9 @@ export function useStaggeredLogs(
   syncVersion = 0,
   liveInsertIds: readonly string[] = [],
   active = true
-): RequestLogEntry[] {
+): { logs: RequestLogEntry[]; pendingCount: number } {
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
+  const [pendingCount, setPendingCount] = useState(0);
   const state = useRef({
     displayed,
     queue: [] as RequestLogEntry[],
@@ -80,6 +82,7 @@ export function useStaggeredLogs(
       }
     }
 
+    setPendingCount(state.queue.length);
     state.prevLogs = logs;
     state.prevQueryKey = queryKey;
     state.prevSyncVersion = syncVersion;
@@ -101,6 +104,7 @@ export function useStaggeredLogs(
       state.timer = null;
       const item = state.queue.shift();
       if (item) {
+        setPendingCount(state.queue.length);
         setDisplayed((previous) => {
           const next = revealStaggeredLog(previous, state.latestLogs, item);
           state.displayed = next;
@@ -112,7 +116,7 @@ export function useStaggeredLogs(
 
   useEffect(() => () => clearTimer(), []);
 
-  return displayed;
+  return { logs: displayed, pendingCount };
 }
 
 export function shouldResetStaggeredLogs(

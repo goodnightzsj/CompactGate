@@ -160,6 +160,38 @@
   color: var(--accent);
 }
 
+.logs-queue-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hairline));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.logs-queue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: logs-queue-pulse 1.1s var(--ease) infinite;
+}
+
+/* No 0%/100% stops: an omitted endpoint uses the element's own opacity, which
+   keeps the rest state in one place and leaves `50%` as the only selector this
+   file claims — the percentage stops are already owned by dashboard.css. */
+@keyframes logs-queue-pulse {
+  50% { opacity: 1; }
+}
+
 .logs-mobile-list {
   display: none;
 }

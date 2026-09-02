@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { memo } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
@@ -11,7 +12,7 @@ import {
   logStatusToneClass
 } from "./log-utils.js";
 
-export function LogMobileCard({
+export const LogMobileCard = memo(function LogMobileCard({
   entry,
   detailId,
   expanded,
@@ -27,6 +28,7 @@ export function LogMobileCard({
     ? `${entry.source_model} → ${targetModel}`
     : targetModel;
   const hasError = logStatusKind(entry) === "error";
+  const reduceMotion = useReducedMotion();
 
   return (
     <article className={`log-mobile-card ${hasError ? "has-error" : ""}`}>
@@ -62,7 +64,7 @@ export function LogMobileCard({
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            transition={reduceMotion ? { duration: 0.01 } : { duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           >
             <LogDetailPanel entry={entry} />
           </motion.div>
@@ -70,4 +72,4 @@ export function LogMobileCard({
       </AnimatePresence>
     </article>
   );
-}
+});
