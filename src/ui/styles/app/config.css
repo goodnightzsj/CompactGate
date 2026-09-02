@@ -1987,6 +1987,38 @@
   opacity: 0.55;
 }
 
+/* The direct key's row carries no inputs, so it opts out of the five-column
+   grid the editable rows share and reads as a fixed leading entry. */
+.key-pool-rows-direct {
+  margin-bottom: 8px;
+}
+
+.key-pool-row.is-direct {
+  grid-template-columns: 22px minmax(90px, auto) 1fr;
+  border-style: dashed;
+}
+
+.key-pool-direct-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.key-pool-direct-label small {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.key-pool-direct-note {
+  font-size: 0.66rem;
+  color: var(--muted);
+  text-align: right;
+}
+
 .key-pool-index {
   font-family: var(--font-mono);
   font-size: 0.68rem;

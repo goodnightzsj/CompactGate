@@ -14,6 +14,7 @@ import type {
   UpstreamProtocol
 } from "../shared/types.js";
 import { CLAUDE_MODEL_MAP_ROLES, CLAUDE_SCENES } from "./config-defaults.js";
+import { DIRECT_API_KEY_ID } from "./credentials.js";
 import {
   ConfigError,
   isRecord,
@@ -287,6 +288,12 @@ function validateApiKeys(value: UpstreamApiKey[] | undefined, field: string): vo
     // duplicated one would either orphan or conflate two credentials.
     if (key.id.trim().length === 0) {
       throw new ConfigError(`${field}[${index}].id must be a non-empty string.`);
+    }
+    // The route's own `api_key` joins the pool under this id, so an explicit
+    // entry claiming it would share one `profileId#keyId` health record with a
+    // different credential — quarantining one would cool the other.
+    if (key.id === DIRECT_API_KEY_ID) {
+      throw new ConfigError(`${field}[${index}].id must not be the reserved id ${DIRECT_API_KEY_ID}.`);
     }
     if (seen.has(key.id)) {
       throw new ConfigError(`${field} contains a duplicate key id: ${key.id}.`);

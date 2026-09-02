@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import { mergeRuntimeConfig, validateRuntimeConfig } from "../src/server/config-runtime.js";
-import { resolveRouteCredential } from "../src/server/credentials.js";
+import { resolveRouteCredential, DIRECT_API_KEY_ID } from "../src/server/credentials.js";
 import { PrimaryFailoverState } from "../src/server/primary-failover.js";
 import {
   candidateSignature,
@@ -57,6 +57,27 @@ describe("primary key pool candidates", () => {
     expect(candidates[0].id).toBe("codex-a");
     expect(candidates[0].profileId).toBe("codex-a");
     expect(candidates[0].keyId).toBeNull();
+  });
+
+  it("expands the profile's own key alongside the added ones, leading them", () => {
+    // The regression: adding keys in the Studio used to *replace* the key already
+    // configured, because the candidate list read `api_keys` and stopped there.
+    // The direct key leads, and each candidate must send the key it was built for.
+    const profile = pooledProfile("codex-a", "A", [key("k1", "备用", "sk-added")]);
+    if (!("primary" in profile.config)) {
+      throw new Error("Expected Codex profile primary config.");
+    }
+    profile.config.primary.api_key = "sk-original";
+    const config = configWithCodexProfiles([profile]);
+
+    const candidates = codexPrimaryCandidates(config);
+
+    expect(candidates.map((candidate) => candidate.id))
+      .toEqual([`codex-a#${DIRECT_API_KEY_ID}`, "codex-a#k1"]);
+    // Through the resolver the request path uses, not the raw field.
+    expect(candidates.map((candidate) => resolveRouteCredential("primary", candidate.config).apiKey))
+      .toEqual(["sk-original", "sk-added"]);
+    expect(candidates.map((candidate) => candidate.order)).toEqual([0, 1]);
   });
 
   it("gives every fill_first key a unique order, grouped after its profile", () => {
@@ -464,6 +485,14 @@ describe("key pool config merge and validation", () => {
     const blank = cloneConfig(DEFAULT_CONFIG);
     blank.primary.api_keys = [key(" ", "", "sk-1")];
     expect(() => validateRuntimeConfig(blank)).toThrow("must be a non-empty string");
+  });
+
+  it("rejects an explicit entry claiming the direct key's reserved id", () => {
+    // Sharing that id would put two different credentials on one
+    // `profileId#keyId` health record, so quarantining one would cool the other.
+    const config = cloneConfig(DEFAULT_CONFIG);
+    config.primary.api_keys = [key(DIRECT_API_KEY_ID, "", "sk-1")];
+    expect(() => validateRuntimeConfig(config)).toThrow("reserved id");
   });
 
   it("rejects an oversized pool and an unknown key strategy", () => {

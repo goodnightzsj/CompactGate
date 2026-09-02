@@ -64,6 +64,7 @@ export function RouteCredentialFields({
   baseUrl,
   apiKey,
   storedApiKey,
+  storedApiKeyTail = "",
   clearApiKey,
   routeUrlSuggestions = [],
   keyPool,
@@ -91,6 +92,8 @@ export function RouteCredentialFields({
   baseUrl: string;
   apiKey: string;
   storedApiKey: boolean;
+  /** Tail of the stored direct key, so the pool can label its leading row. */
+  storedApiKeyTail?: string;
   clearApiKey: boolean;
   routeUrlSuggestions?: RouteUrlSuggestion[];
   keyPool?: FormKeyPoolEntry[];
@@ -383,16 +386,41 @@ export function RouteCredentialFields({
           <div className="key-pool-editor-head">
             <h5>密钥池（同一档案多账号轮转）</h5>
             <span className="route-chip primary">
-              {keyPool.filter((entry) => entry.enabled).length}/{keyPool.length} 可用
+              {keyPool.filter((entry) => entry.enabled).length + (storedApiKey ? 1 : 0)}/
+              {keyPool.length + (storedApiKey ? 1 : 0)} 可用
             </span>
           </div>
           <p className="key-pool-editor-hint">
             每把密钥是一个独立上游账号：故障转移时按序使用，401/429 单独冷却与隔离，加密会话状态按密钥隔离。
+            上方「{apiKeyLabel}」也是池成员，排在第一位。
           </p>
+
+          {/*
+            The direct `api_key` is pool member #1 on the server, so it is shown
+            as row #1 here — a pool that started at the *added* keys read as
+            "the key I already configured stopped being used", which is exactly
+            what the old projection did. Edited through the field above rather
+            than inline: it is the one credential a route can hold without any
+            pool at all, and a route with no pool has no editor to show it in.
+          */}
+          {storedApiKey && (
+            <div className="key-pool-rows key-pool-rows-direct">
+              <div className="key-pool-row is-direct">
+                <span className="key-pool-index">1</span>
+                <span className="key-pool-direct-label">
+                  {apiKeyLabel}
+                  {storedApiKeyTail ? <small>…{storedApiKeyTail}</small> : null}
+                </span>
+                <span className="key-pool-direct-note">在上方「{apiKeyLabel}」中修改</span>
+              </div>
+            </div>
+          )}
 
           {keyPool.length === 0 ? (
             <p className="key-pool-empty">
-              还没有密钥。添加第二把密钥后，本档案会在它们之间自动轮转 —— 单把密钥就是原有行为。
+              {storedApiKey
+                ? "只有上面这一把密钥。再添加一把后，本档案会在它们之间自动轮转。"
+                : "还没有密钥。添加第二把密钥后，本档案会在它们之间自动轮转 —— 单把密钥就是原有行为。"}
             </p>
           ) : (
             <div className="key-pool-rows">
@@ -401,7 +429,7 @@ export function RouteCredentialFields({
                   key={entry.id}
                   className={`key-pool-row${entry.enabled ? "" : " is-disabled"}`}
                 >
-                  <span className="key-pool-index">{index + 1}</span>
+                  <span className="key-pool-index">{index + 1 + (storedApiKey ? 1 : 0)}</span>
                   <input
                     className="key-pool-label-input"
                     aria-label="密钥标签"

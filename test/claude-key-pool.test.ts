@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import { ClaudeKeyPoolState } from "../src/server/claude-key-pool.js";
+import { DIRECT_API_KEY_ID } from "../src/server/credentials.js";
 import type { CompactGateConfig, UpstreamApiKey } from "../src/shared/types.js";
 
 const HEADERS = { "x-claude-code-session-id": "session-1" };
@@ -10,6 +11,34 @@ describe("Claude key pool selection", () => {
     const { state, config } = setup([]);
 
     expect(state.select(config, "claude-a", HEADERS)).toBeNull();
+  });
+
+  it("leads the pool with the route's own key and rotates onto the added ones", () => {
+    // The regression this pins: adding keys in the Studio used to *replace* the
+    // key already configured, because every scheduler read `api_keys` and
+    // stopped there. The direct key is member #1, so fill_first burns it first.
+    const { state, config } = setup([key("k1", "sk-added-1"), key("k2", "sk-added-2")]);
+    config.claude.primary.api_key = "sk-original";
+
+    const first = state.select(config, "claude-a", HEADERS);
+    expect(first?.keyId).toBe(DIRECT_API_KEY_ID);
+    expect(first?.apiKey).toBe("sk-original");
+
+    state.recordResult("claude-a", DIRECT_API_KEY_ID, { status: 401, responseHeaders: {} }, HEADERS);
+    const second = state.select(config, "claude-a", HEADERS);
+    expect(second?.keyId).toBe("k1");
+    expect(second?.apiKey).toBe("sk-added-1");
+  });
+
+  it("schedules the direct key alone against one added key", () => {
+    // One stored entry plus the direct key is a two-key pool, not the
+    // "pool of one falls through" case.
+    const { state, config } = setup([key("k1", "sk-added")]);
+    config.claude.primary.api_key = "sk-original";
+
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe(DIRECT_API_KEY_ID);
+    state.recordResult("claude-a", DIRECT_API_KEY_ID, { status: 401, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
   });
 
   it("serves the first fill_first key and rotates only on a verdict", () => {

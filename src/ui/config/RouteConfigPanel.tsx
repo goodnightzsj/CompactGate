@@ -36,6 +36,7 @@ export function RouteConfigPanel({
           upstreamProtocol={form.codexPrimaryUpstreamProtocol}
           baseUrl={form.codexPrimaryBaseUrl} apiKey={form.codexPrimaryApiKey}
           storedApiKey={config?.primary.stored_api_key ?? false}
+          storedApiKeyTail={config?.primary.stored_api_key_tail ?? ""}
           clearApiKey={form.clearCodexPrimaryApiKey}
           routeUrlSuggestions={routeUrlSuggestions(config, "codex_primary")}
           onBaseUrlChange={(value) => onFormChange((previous) => ({
@@ -118,6 +119,7 @@ export function RouteConfigPanel({
           upstreamProtocol={form.claudePrimaryUpstreamProtocol}
           baseUrl={form.claudePrimaryBaseUrl} apiKey={form.claudePrimaryApiKey}
           storedApiKey={config?.claude.primary.stored_api_key ?? false}
+          storedApiKeyTail={config?.claude.primary.stored_api_key_tail ?? ""}
           clearApiKey={form.clearClaudePrimaryApiKey}
           routeUrlSuggestions={routeUrlSuggestions(config, "claude_primary")}
           onBaseUrlChange={(value) => onFormChange((previous) => ({

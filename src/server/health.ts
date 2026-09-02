@@ -27,6 +27,7 @@ export function healthForConfig(
       host: hostOrNull(upstream.base_url),
       api_key_env: upstream.api_key_env,
       stored_api_key: upstream.api_key.trim().length > 0,
+      stored_api_key_tail: upstream.api_key.trim().slice(-4),
       api_key_configured: credential.apiKeyConfigured,
       api_key_source: credential.apiKeySource,
       active_api_key_env: credential.activeApiKeyEnv,

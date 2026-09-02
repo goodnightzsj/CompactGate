@@ -6,7 +6,7 @@ import type {
   UpstreamConfig
 } from "../shared/types.js";
 import { cloneConfig } from "./config-internals.js";
-import { enabledApiKeyPool, resolveRouteCredential } from "./credentials.js";
+import { enabledApiKeyPool, DIRECT_API_KEY_ID, resolveRouteCredential } from "./credentials.js";
 import { isRecord } from "./http-utils.js";
 import type { PrimaryCandidate } from "./primary-failover-types.js";
 
@@ -75,9 +75,12 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
     if (pool.length <= 1) {
       // Single key (or none): the profile itself is the candidate, exactly as
       // before pools existed. A one-entry pool keeps its composite id so that
-      // adding a second key later starts the new key's health from zero without
-      // touching the first key's history.
-      const single = pool[0];
+      // adding a second key later starts the new key's history from zero without
+      // touching the first key's. The direct `api_key` alone is the exception —
+      // it is what every pool-free profile has always been, so it keeps the plain
+      // profile id rather than minting `profile#__direct__` and orphaning every
+      // stored state domain and session pin on upgrade.
+      const single = pool[0]?.id === DIRECT_API_KEY_ID ? undefined : pool[0];
       candidates.push({
         id: single ? `${profile.id}#${single.id}` : profile.id,
         profileId: profile.id,

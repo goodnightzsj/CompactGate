@@ -291,6 +291,12 @@ export interface PublicConfigProfile {
 export interface PublicCredentialState {
   api_key_env: string;
   stored_api_key: boolean;
+  /**
+   * Trailing four characters of the route's own `api_key`, empty when none is
+   * stored. The pool editor shows that key as its leading row, so it needs the
+   * same amount to tell it apart as a pool entry's `tail` gives.
+   */
+  stored_api_key_tail: string;
   api_key_configured: boolean;
   api_key_source: CredentialSource;
   active_api_key_env: string | null;

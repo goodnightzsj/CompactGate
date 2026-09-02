@@ -151,6 +151,7 @@ function publicUpstream(
     proxy_authenticated: Boolean(proxy && (proxy.username || proxy.password)),
     upstream_protocol: upstream.upstream_protocol,
     stored_api_key: directApiKeyConfigured(upstream.api_key),
+    stored_api_key_tail: upstream.api_key.trim().slice(-4),
     api_key_configured: credential.apiKeyConfigured,
     api_key_source: credential.apiKeySource,
     active_api_key_env: credential.activeApiKeyEnv,

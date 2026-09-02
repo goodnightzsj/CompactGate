@@ -107,7 +107,14 @@ export async function proxyClaudeRequest(
           ...config.claude,
           primary: {
             ...config.claude.primary,
-            api_key: claudeKeySelection.apiKey
+            api_key: claudeKeySelection.apiKey,
+            // Emptied alongside, or the selection is inert: `resolveRouteCredential`
+            // reads the pool before falling back, so a request that rotated onto the
+            // second key still went out on the first — and the pool's health then
+            // recorded that verdict against the key it never sent. This copy is
+            // per-request and in memory only; an empty pool in the *file* means
+            // "cleared", which is why the array is never emptied there.
+            api_keys: []
           }
         }
       };

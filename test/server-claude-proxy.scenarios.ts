@@ -3,12 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { PublicConfig } from "../src/shared/types.js";
 import {
   assertCaptured,
   captureBody,
   captureRequest,
   type CapturedRequest,
   cleanup,
+  fetchJson,
   setEnv,
   startApp,
   startClaudeUpstream,
@@ -17,6 +19,11 @@ import {
   waitForCaptureRecords,
   waitForLogEntry
 } from "./helpers/server-test-utils.js";
+import {
+  CLAUDE_HEADERS,
+  startCapturedClaudeUpstream,
+  writeJsonResponse
+} from "./server-claude-core-helpers.js";
 
 describe("CompactGate Claude routing", () => {
   it("does not duplicate /v1 when the Claude base URL already includes it", async () => {
@@ -295,5 +302,87 @@ describe("CompactGate Claude routing", () => {
     });
     expect(captures[0].upstream_response.status).toBe(502);
     expect(JSON.stringify(captures[0])).not.toContain("saved-claude-token");
+  });
+
+  it("sends the rotated key, not the pool's first, once the direct key is quarantined", async () => {
+    const captured: CapturedRequest[] = [];
+    let status = 401;
+    const claude = await startCapturedClaudeUpstream(captured, (_req, res) => {
+      writeJsonResponse(res, {
+        type: "message",
+        content: [{ type: "text", text: status === 401 ? "denied" : "ok" }]
+      }, status);
+    });
+    const app = await startApp(undefined, undefined, {
+      claude: {
+        base_url: claude.url,
+        api_key: "sk-original",
+        key_strategy: "fill_first",
+        rotation_opt_out: false
+      }
+    });
+
+    // A pooled profile whose own `api_key` is the direct key: adding the pool
+    // must not silently stop using it — it leads the rotation.
+    const save = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        scope: "claude",
+        name: "pooled",
+        config: {
+          claude: {
+            primary: {
+              base_url: claude.url,
+              api_key: "sk-original",
+              key_strategy: "fill_first",
+              api_keys: [
+                { id: "k1", label: "备用", api_key: "sk-added", enabled: true },
+                { id: "k2", label: "第三", api_key: "sk-third", enabled: true }
+              ]
+            }
+          }
+        }
+      })
+    });
+    expect(save.status).toBe(200);
+    const { body: profiles } = await fetchJson<PublicConfig>(`${app.url}/api/config`, "GET");
+    const profile = profiles.profile_scopes.claude.profiles.find((candidate) => candidate.name === "pooled");
+    if (!profile) {
+      throw new Error("Expected saved pooled profile.");
+    }
+    const activate = await fetch(`${app.url}/api/config`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        profile_scopes: { claude: { active_profile_id: profile.id } }
+      })
+    });
+    expect(activate.status).toBe(200);
+
+    const options: RequestInit = {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4-8",
+        messages: [{ role: "user", content: "rotation" }]
+      }),
+      headers: CLAUDE_HEADERS
+    };
+    const first = await fetch(`${app.url}/anthropic/v1/messages`, options);
+    expect(first.status).toBe(401);
+    expect(captured[0].headers["x-api-key"]).toBe("sk-original");
+
+    // The direct key is quarantined by the 401; the next request must go out
+    // on the added key, not back on the quarantined one via the file's pool.
+    status = 200;
+    const second = await fetch(`${app.url}/anthropic/v1/messages`, {
+      ...options,
+      headers: {
+        ...CLAUDE_HEADERS,
+        "x-claude-code-session-id": "rotation-session-2"
+      }
+    });
+    expect(second.status).toBe(200);
+    expect(captured[1].headers["x-api-key"]).toBe("sk-added");
   });
 });
