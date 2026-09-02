@@ -194,11 +194,15 @@ export class ClaudeKeyPoolState {
       return;
     }
 
-    if (status === 401 || status === 403) {
-      // Self-describing: the upstream says this credential is no good. Cool it
-      // immediately — an 11-failure window would burn that many doomed
-      // requests per dead key. Never disable permanently; recovery is a timer
-      // or a success.
+    if (status === 401 || status === 402 || status === 403) {
+      // Self-describing: the upstream says this credential — or its budget, in
+      // one-api's "Budget pool quota has been exhausted" 402 — is no good.
+      // The codex route classifies 402 as a quota verdict and cools it on the
+      // first failure; leaving it out here pinned every request to the dead
+      // key, because recovery is a timer or a success and no other branch ever
+      // rotated it. Cool it immediately — an 11-failure window would burn that
+      // many doomed requests per dead key. Never disable permanently; recovery
+      // is a timer or a success.
       health.quarantineUntil = Math.max(health.quarantineUntil, now + AUTH_QUARANTINE_MS);
       return;
     }

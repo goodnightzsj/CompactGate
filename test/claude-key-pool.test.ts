@@ -55,6 +55,20 @@ describe("Claude key pool selection", () => {
     expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
   });
 
+  it("cools a budget-exhausted 402 like an auth verdict", () => {
+    // one-api's "Budget pool quota has been exhausted" 402 must rotate the key
+    // off the draw — leaving it out pinned every request to the dead key
+    // because no other branch ever quarantined it.
+    const { state, config } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
+
+    state.recordResult("claude-a", "k1", { status: 402, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+
+    // Recovery is the same as auth: a success proves the budget was refilled.
+    state.recordResult("claude-a", "k1", { status: 200, responseHeaders: {} }, HEADERS);
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+  });
+
   it("cools on 429 per Retry-After and recovers after it", () => {
     const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
 
