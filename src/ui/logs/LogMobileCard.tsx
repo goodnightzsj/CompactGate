@@ -14,14 +14,16 @@ import {
 
 export const LogMobileCard = memo(function LogMobileCard({
   entry,
+  logKey,
   detailId,
   expanded,
   onToggle
 }: {
   entry: RequestLogEntry;
+  logKey: string;
   detailId: string;
   expanded: boolean;
-  onToggle: () => void;
+  onToggle: (logKey: string) => void;
 }) {
   const targetModel = entry.target_model ?? entry.source_model ?? "-";
   const modelLabel = entry.source_model && entry.source_model !== targetModel
@@ -37,7 +39,7 @@ export const LogMobileCard = memo(function LogMobileCard({
         type="button"
         aria-expanded={expanded}
         aria-controls={detailId}
-        onClick={onToggle}
+        onClick={() => onToggle(logKey)}
       >
         <span className="log-mobile-head">
           <span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span>

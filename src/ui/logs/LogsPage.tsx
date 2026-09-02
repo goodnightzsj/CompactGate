@@ -10,33 +10,19 @@ import type {
   StatusLogCounts
 } from "../../shared/types.js";
 import { CustomSelect } from "../shared/CustomSelect.js";
-import { formatDateTime, formatDurationMs } from "../shared/format.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import { LogMobileCard } from "./LogMobileCard.js";
+import { LogRowCells } from "./LogRowCells.js";
 import { useNarrowViewport } from "./useNarrowViewport.js";
-import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   ALL_HOSTS_FILTER,
-  logStatusKind,
   type HostFilterOption,
-  logStatusToneClass,
-  reasoningEffortLabel,
-  responseModelDisplay,
-  compactionModeClass,
-  compactionModeLabel
+  logStatusKind
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 
-// Natural breaks in a log-key stream stay deterministic and remain stable when
-// the log feed prepends or appends rows. React uses them as reconciliation
-// hints only — animations keep running, the key never shows up in the DOM.
-// Written as an ASCII escape: a literal control character in the source trips
-// git's binary detection, and neither base64url request ids nor RFC 3339
-// timestamps can contain U+001E either.
-const LOG_KEY_DELIMITER = "\u001E";
-
 function logEntryKey(entry: RequestLogEntry): string {
-  return `${entry.request_id}${LOG_KEY_DELIMITER}${entry.time}`;
+  return `${entry.request_id}-${entry.time}`;
 }
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
@@ -66,6 +52,10 @@ const detailTransition = {
   ease: [0.16, 1, 0.3, 1] as const
 };
 
+// Module-level so the prop identity is stable across renders — a fresh object
+// every tick would defeat memoization of the row components below.
+const REDUCED_MOTION_TRANSITION = { duration: 0.01 };
+
 export function LogsPage({
   logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
@@ -90,6 +80,7 @@ export function LogsPage({
   const narrowViewport = useNarrowViewport();
   const reduceMotion = useReducedMotion();
   const rowTransition = narrowViewport ? mobileRowTransition : logRowTransition;
+  const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : rowTransition;
   const {
     handleLogScroll,
     handleMobileLogScroll,
@@ -329,20 +320,18 @@ export function LogsPage({
               </thead>
               <tbody>
                 <AnimatePresence initial={false}>
-                  {logs.flatMap((entry, index) => {
-                    const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
-                    const hasRewrite = Boolean(entry.source_model && entry.target_model && entry.source_model !== entry.target_model);
-                    const hasError = logStatusKind(entry) === "error";
+                  {logs.flatMap((entry) => {
                     const logKey = logEntryKey(entry);
-                    const detailId = `desktop-log-detail-${index}`;
+                    const detailId = `desktop-log-detail-${entry.request_id}`;
                     const expanded = expandedLogKey === logKey;
+                    const hasError = logStatusKind(entry) === "error";
                     const rows = [
                       <MotionTr
                         key={logKey}
                         initial={{ opacity: 0, y: -20, height: 0 }}
                         animate={{ opacity: 1, y: 0, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
-                        transition={reduceMotion ? { duration: 0.01 } : rowTransition}
+                        transition={effectiveRowTransition}
                         data-log-id={entry.request_id}
                         className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
                         tabIndex={0}
@@ -352,26 +341,7 @@ export function LogsPage({
                         onClick={() => toggleLog(logKey)}
                         onKeyDown={(event) => handleRowKeyDown(event, logKey)}
                       >
-                        <td><LogTextTooltip className="log-cell-time" value={formatDateTime(entry.time)} /></td>
-                        <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
-                        <td>
-                          <LogTextTooltip className="log-model-cell" value={modelMapping}>
-                            <span className="log-model-route-badges">
-                              <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
-                              {entry.compaction_mode && <span className={`protocol-chip ${compactionModeClass(entry.compaction_mode)}`}>{compactionModeLabel(entry.compaction_mode)}</span>}
-                            </span>
-                            <strong>{entry.source_model ?? "-"}</strong>
-                            {hasRewrite && <small>→ {entry.target_model}</small>}
-                          </LogTextTooltip>
-                        </td>
-                        <td><LogTextTooltip className="log-cell-code" value={reasoningEffortLabel(entry)} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={responseModelDisplay(entry)} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
-                        <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
-                        <td><span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span></td>
-                        <td><TokenTooltip entry={entry} /></td>
-                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.first_token_ms)} /></td>
-                        <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
+                        <LogRowCells entry={entry} />
                       </MotionTr>
                     ];
 
@@ -382,7 +352,7 @@ export function LogsPage({
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: "auto" }}
                           exit={{ opacity: 0, height: 0 }}
-                          transition={reduceMotion ? { duration: 0.01 } : detailTransition}
+                          transition={reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition}
                           className="log-detail-row"
                           id={detailId}
                         >
@@ -411,7 +381,7 @@ export function LogsPage({
           onScroll={handleMobileLogScroll}
         >
           <AnimatePresence initial={false}>
-            {logs.map((entry, index) => {
+            {logs.map((entry) => {
               const logKey = logEntryKey(entry);
               return (
                 <MotionDiv
@@ -420,14 +390,15 @@ export function LogsPage({
                   initial={{ opacity: 0, y: -20, height: 0 }}
                   animate={{ opacity: 1, y: 0, height: "auto" }}
                   exit={{ opacity: 0, height: 0 }}
-                  transition={reduceMotion ? { duration: 0.01 } : rowTransition}
+                  transition={effectiveRowTransition}
                   data-log-id={entry.request_id}
                 >
                   <LogMobileCard
                     entry={entry}
-                    detailId={`mobile-log-detail-${index}`}
+                    logKey={logKey}
+                    detailId={`mobile-log-detail-${entry.request_id}`}
                     expanded={expandedLogKey === logKey}
-                    onToggle={() => toggleLog(logKey)}
+                    onToggle={toggleLog}
                   />
                 </MotionDiv>
               );
