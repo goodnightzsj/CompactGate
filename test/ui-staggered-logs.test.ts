@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RequestLogEntry } from "../src/shared/types.js";
 import {
-  STAGGER_MS,
+  STAGGER_BASE_MS,
   planStaggeredLogCatchUp,
   revealStaggeredLog,
   selectStaggeredLogIds,
@@ -10,8 +10,8 @@ import {
 } from "../src/ui/logs/useStaggeredLogs.js";
 
 describe("staggered log query changes", () => {
-  it("uses a 150ms insertion cadence", () => {
-    expect(STAGGER_MS).toBe(150);
+  it("uses a 150ms base insertion cadence with adaptive acceleration", () => {
+    expect(STAGGER_BASE_MS).toBe(150);
   });
 
   it("resets on a new applied query even when rows overlap", () => {

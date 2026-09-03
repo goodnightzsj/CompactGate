@@ -13,7 +13,6 @@ import { CustomSelect } from "../shared/CustomSelect.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import { LogMobileCard } from "./LogMobileCard.js";
 import { LogRowCells } from "./LogRowCells.js";
-import { useNarrowViewport } from "./useNarrowViewport.js";
 import {
   ALL_HOSTS_FILTER,
   type HostFilterOption,
@@ -27,24 +26,12 @@ function logEntryKey(entry: RequestLogEntry): string {
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
-// Tuned so a row settles in ~250ms rather than ~350ms: at a 150ms stagger a
-// backlog of ten still has the previous row bouncing when the next one lands,
-// and the tail is what reads as lag. Stiffness and damping move together — the
-// extra stiffness alone would overshoot.
-const logRowTransition = {
-  type: "spring" as const,
-  stiffness: 600,
-  damping: 35,
-  mass: 0.8,
+// Desktop and mobile rows use the same tween for consistency and lower CPU cost.
+// A spring's organic bounce isn't needed for data table rows.
+const rowTransition = {
+  duration: 0.2,
+  ease: [0.16, 1, 0.3, 1] as const,
   opacity: { duration: 0.16 }
-};
-
-// Phones run this list on weaker hardware and with the cards stacked, where a
-// spring per card is the most expensive thing on screen. A short eased tween
-// lands in about the same time without the physics.
-const mobileRowTransition = {
-  duration: 0.18,
-  ease: [0.16, 1, 0.3, 1] as const
 };
 
 const detailTransition = {
@@ -77,9 +64,7 @@ export function LogsPage({
   onLoadMore: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
-  const narrowViewport = useNarrowViewport();
   const reduceMotion = useReducedMotion();
-  const rowTransition = narrowViewport ? mobileRowTransition : logRowTransition;
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : rowTransition;
   const {
     handleLogScroll,
@@ -159,11 +144,10 @@ export function LogsPage({
               )}
             </AnimatePresence>
           </span>
-          {/* Only worth showing once the drain is long enough to read as a wait:
-              at 150ms a row, five is under a second and the rows themselves are
-              the better feedback. */}
+          {/* Show the queue indicator once enough rows are pending to feel like a
+              wait: at base speed 3 rows is 450ms, large backlogs drain faster. */}
           <AnimatePresence initial={false}>
-            {pendingLogCount > 5 && (
+            {pendingLogCount > 3 && (
               <MotionSpan
                 className="logs-queue-indicator"
                 initial={{ opacity: 0, y: -4 }}

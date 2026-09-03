@@ -1,14 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
-export const STAGGER_MS = 150;
+export const STAGGER_BASE_MS = 150;
+export const STAGGER_FAST_MS = 60;
+export const FAST_DRAIN_THRESHOLD = 20;
 
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array,
  * plus the number of rows still queued behind it.
  *
  * - Initial load / filter reset: all logs appear immediately (no stagger).
- * - SSE live push (new logs at head): released one-by-one every STAGGER_MS.
+ * - SSE live push (new logs at head): released one-by-one every STAGGER_BASE_MS.
+ * - Large backlogs (>20 pending): accelerated to STAGGER_FAST_MS for faster drain.
  * - Inactive log page: the visible snapshot freezes until the page becomes active.
  * - Page/visibility resume: drains the backlog collected while inactive.
  * - Pagination (older logs at tail): appear immediately.
@@ -100,6 +103,7 @@ export function useStaggeredLogs(
       return;
     }
 
+    const delay = state.queue.length > FAST_DRAIN_THRESHOLD ? STAGGER_FAST_MS : STAGGER_BASE_MS;
     state.timer = setTimeout(() => {
       state.timer = null;
       const item = state.queue.shift();
@@ -111,7 +115,7 @@ export function useStaggeredLogs(
           return next;
         });
       }
-    }, STAGGER_MS);
+    }, delay);
   });
 
   useEffect(() => () => clearTimer(), []);
