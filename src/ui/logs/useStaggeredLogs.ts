@@ -1,19 +1,33 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
-export const STAGGER_BASE_MS = 150;
-export const STAGGER_FAST_MS = 60;
-export const FAST_DRAIN_THRESHOLD = 20;
+export const STAGGER_BASE_MS = 120;
+export const MAX_STAGGER_DURATION_MS = 2000;
+const STAGGER_ROW_CAP = 8;
+
+// Mirrors axonhub's getMaxSequentialAnimatedItems: whichever of the row cap and
+// the wall-clock budget binds first wins, so retuning STAGGER_BASE_MS cannot
+// silently stretch the reveal past MAX_STAGGER_DURATION_MS.
+export const INSTANT_THRESHOLD = Math.min(
+  STAGGER_ROW_CAP,
+  Math.floor(MAX_STAGGER_DURATION_MS / STAGGER_BASE_MS)
+);
 
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array,
  * plus the number of rows still queued behind it.
  *
- * - Initial load / filter reset: all logs appear immediately (no stagger).
- * - SSE live push (new logs at head): released one-by-one every STAGGER_BASE_MS.
- * - Large backlogs (>20 pending): accelerated to STAGGER_FAST_MS for faster drain.
- * - Inactive log page: the visible snapshot freezes until the page becomes active.
- * - Page/visibility resume: drains the backlog collected while inactive.
+ * Routing is by provenance, not by size: only a genuine SSE insert is revealed
+ * one row at a time. Everything that means "here is the current state" rather
+ * than "this just happened" replaces the list outright.
+ *
+ * - SSE live insert (new rows at head): released one-by-one every STAGGER_BASE_MS.
+ * - Initial load / filter change / empty result: immediate.
+ * - Snapshot sync (syncVersion bump: page fetch, SSE reconnect merge): immediate.
+ * - Visibility or page resume: immediate — a backlog banked while hidden is
+ *   state to catch up on, not a sequence worth replaying.
+ * - Inactive log page: the visible snapshot freezes and no queue is banked.
+ * - Live bursts above INSTANT_THRESHOLD: immediate (rail, rarely reached).
  * - Pagination (older logs at tail): appear immediately.
  * - Existing rows are updated in-place when their fields change.
  */
@@ -32,6 +46,7 @@ export function useStaggeredLogs(
     timer: null as ReturnType<typeof setTimeout> | null,
     latestLogs: logs,
     prevLogs: logs,
+    prevActive: active,
     prevQueryKey: queryKey,
     prevSyncVersion: syncVersion
   }).current;
@@ -50,43 +65,51 @@ export function useStaggeredLogs(
     };
 
     state.latestLogs = logs;
-    const syncChanged = state.prevSyncVersion !== syncVersion;
-    const isReset = shouldResetStaggeredLogs(logs, state.prevQueryKey, queryKey);
-    const isInitialSync = shouldApplyInitialStaggeredSync(
-      state.prevSyncVersion,
-      syncVersion,
-      state.prevLogs,
-      state.displayed
+    // Any of these three means the list is being restated rather than appended
+    // to: a query/empty reset, a full snapshot (first fetch, SSE reconnect
+    // merge), or the page coming back into view. Queueing them is what made a
+    // long-frozen tab crawl back one row at a time.
+    const restated = (
+      shouldResetStaggeredLogs(logs, state.prevQueryKey, queryKey) ||
+      state.prevSyncVersion !== syncVersion ||
+      (active && !state.prevActive)
     );
 
-    if (isReset || isInitialSync) {
+    if (restated) {
       state.queue = [];
       clearTimer();
       replaceDisplayed(logs);
+    } else if (!active) {
+      // Drop rather than bank the queue: the resume branch above replaces the
+      // whole list, so a banked queue would only be stale work.
+      state.queue = [];
+      clearTimer();
     } else {
-      const visibleIds = new Set(state.displayed.map((entry) => entry.request_id));
-      const pendingIds = syncChanged
-        ? logs
-          .filter((entry) => !visibleIds.has(entry.request_id))
-          .map((entry) => entry.request_id)
-        : [
-          ...state.queue.map((entry) => entry.request_id),
-          ...selectStaggeredLogIds(state.prevLogs, logs, liveInsertIds)
-        ];
+      const pendingIds = [
+        ...state.queue.map((entry) => entry.request_id),
+        ...selectStaggeredLogIds(state.prevLogs, logs, liveInsertIds)
+      ];
       const plan = planStaggeredLogCatchUp(state.displayed, logs, pendingIds);
-      state.queue = plan.queue;
-      if (active) {
-        replaceDisplayed(plan.displayed);
-      }
-      // A queued backlog is drained by the post-commit effect below; anything
-      // left pending while inactive stays frozen with no timer running.
-      if (!active || plan.queue.length === 0) {
+
+      if (plan.queue.length > INSTANT_THRESHOLD) {
+        // Rail, not the main mechanism — with provenance routing the live queue
+        // is a handful of rows. Falling through with an empty queue also resets
+        // pendingCount below.
+        state.queue = [];
         clearTimer();
+        replaceDisplayed(logs);
+      } else {
+        state.queue = plan.queue;
+        replaceDisplayed(plan.displayed);
+        if (plan.queue.length === 0) {
+          clearTimer();
+        }
       }
     }
 
     setPendingCount(state.queue.length);
     state.prevLogs = logs;
+    state.prevActive = active;
     state.prevQueryKey = queryKey;
     state.prevSyncVersion = syncVersion;
   }, [active, liveInsertIds, logs, queryKey, syncVersion]);
@@ -103,7 +126,6 @@ export function useStaggeredLogs(
       return;
     }
 
-    const delay = state.queue.length > FAST_DRAIN_THRESHOLD ? STAGGER_FAST_MS : STAGGER_BASE_MS;
     state.timer = setTimeout(() => {
       state.timer = null;
       const item = state.queue.shift();
@@ -115,12 +137,17 @@ export function useStaggeredLogs(
           return next;
         });
       }
-    }, delay);
+    }, STAGGER_BASE_MS);
   });
 
   useEffect(() => () => clearTimer(), []);
 
   return { logs: displayed, pendingCount };
+}
+
+/** Estimated ms to reveal `length` queued rows at the fixed cadence. */
+export function estimateStaggerDuration(length: number): number {
+  return length * STAGGER_BASE_MS;
 }
 
 export function shouldResetStaggeredLogs(
@@ -131,20 +158,6 @@ export function shouldResetStaggeredLogs(
   return (
     previousQueryKey !== nextQueryKey ||
     nextLogs.length === 0
-  );
-}
-
-export function shouldApplyInitialStaggeredSync(
-  previousSyncVersion: number,
-  nextSyncVersion: number,
-  previousLogs: RequestLogEntry[],
-  displayed: RequestLogEntry[]
-): boolean {
-  return (
-    previousSyncVersion === 0 &&
-    previousSyncVersion !== nextSyncVersion &&
-    previousLogs.length === 0 &&
-    displayed.length === 0
   );
 }
 

@@ -29,9 +29,9 @@ const MotionTr = motion.tr;
 // Desktop and mobile rows use the same tween for consistency and lower CPU cost.
 // A spring's organic bounce isn't needed for data table rows.
 const rowTransition = {
-  duration: 0.2,
-  ease: [0.16, 1, 0.3, 1] as const,
-  opacity: { duration: 0.16 }
+  duration: 0.15,
+  ease: [0.2, 1, 0.3, 1] as const,
+  opacity: { duration: 0.12 }
 };
 
 const detailTransition = {
@@ -144,8 +144,9 @@ export function LogsPage({
               )}
             </AnimatePresence>
           </span>
-          {/* Show the queue indicator once enough rows are pending to feel like a
-              wait: at base speed 3 rows is 450ms, large backlogs drain faster. */}
+          {/* Only a live burst can queue rows now (snapshot syncs and resumes
+              replace outright), so the queue tops out at INSTANT_THRESHOLD and
+              this is a short-lived hint at 4+ rows — roughly half a second. */}
           <AnimatePresence initial={false}>
             {pendingLogCount > 3 && (
               <MotionSpan

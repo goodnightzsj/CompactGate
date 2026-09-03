@@ -1,17 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { RequestLogEntry } from "../src/shared/types.js";
 import {
+  INSTANT_THRESHOLD,
+  MAX_STAGGER_DURATION_MS,
   STAGGER_BASE_MS,
+  estimateStaggerDuration,
   planStaggeredLogCatchUp,
   revealStaggeredLog,
   selectStaggeredLogIds,
-  shouldApplyInitialStaggeredSync,
   shouldResetStaggeredLogs
 } from "../src/ui/logs/useStaggeredLogs.js";
 
 describe("staggered log query changes", () => {
-  it("uses a 150ms base insertion cadence with adaptive acceleration", () => {
-    expect(STAGGER_BASE_MS).toBe(150);
+  it("uses a 120ms fixed insertion cadence", () => {
+    expect(STAGGER_BASE_MS).toBe(120);
+  });
+
+  it("caps the reveal so a full queue stays inside the duration budget", () => {
+    // Guards the cadence constant itself: raising STAGGER_BASE_MS far enough
+    // that a full queue outlasts the budget has to fail here.
+    expect(INSTANT_THRESHOLD).toBeGreaterThan(0);
+    expect(estimateStaggerDuration(INSTANT_THRESHOLD))
+      .toBeLessThanOrEqual(MAX_STAGGER_DURATION_MS);
   });
 
   it("resets on a new applied query even when rows overlap", () => {
@@ -46,11 +56,6 @@ describe("staggered log query changes", () => {
     )).toEqual(["newer", "newest"]);
   });
 
-  it("only treats the first feed synchronization as an immediate initial load", () => {
-    expect(shouldApplyInitialStaggeredSync(0, 1, [], [])).toBe(true);
-    expect(shouldApplyInitialStaggeredSync(1, 2, [], [])).toBe(false);
-  });
-
   it("queues foreground live inserts oldest-first without replacing the visible list", () => {
     const displayed = [log("old-3"), log("old-2"), log("old-1")];
     const latest = [log("new-2"), log("new-1"), log("old-3")];
@@ -65,7 +70,7 @@ describe("staggered log query changes", () => {
     expect(ids(drain(plan.displayed, latest, plan.queue))).toEqual(ids(latest));
   });
 
-  it("keeps a hidden backlog queued for resume playback", () => {
+  it("queues every pending id the caller marks, leaving the cap to the caller", () => {
     const displayed = [log("old-3"), log("old-2"), log("old-1")];
     const latest = [log("new-2"), log("new-1"), log("old-3")];
     const plan = planStaggeredLogCatchUp(
@@ -78,7 +83,7 @@ describe("staggered log query changes", () => {
     expect(ids(plan.queue)).toEqual(["new-1", "new-2"]);
   });
 
-  it("still drains a large foreground batch one row at a time", () => {
+  it("plans a full-window replacement as a drainable queue", () => {
     const displayed = Array.from({ length: 10 }, (_, index) => log(`old-${10 - index}`));
     const latest = Array.from({ length: 48 }, (_, index) => log(`new-${48 - index}`));
     const plan = planStaggeredLogCatchUp(
