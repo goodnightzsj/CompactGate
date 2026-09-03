@@ -135,6 +135,14 @@
   min-width: 0;
 }
 
+/* The expand/collapse spring animates this wrapper rather than the <tr> around
+   it: a table row's specified height is only a minimum, so collapsing the row
+   never had any effect and the panel popped open instantly. Clipping is required
+   because .log-detail-panel's own margin does not shrink with the height. */
+.log-detail-collapse {
+  overflow: hidden;
+}
+
 .logs-clear-filters-motion {
   display: inline-flex;
 }

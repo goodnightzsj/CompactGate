@@ -26,12 +26,19 @@ function logEntryKey(entry: RequestLogEntry): string {
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
-// Desktop and mobile rows use the same tween for consistency and lower CPU cost.
-// A spring's organic bounce isn't needed for data table rows.
+// Spring taken from axonhub — the organic deceleration reads better than a tween
+// for row insertion. Underdamped on purpose (zeta 0.671); the slight overshoot is
+// the point. STAGGER_BASE_MS is pinned to this spring's settle time, so changing
+// stiffness or damping means recomputing ROW_SPRING_SETTLE_MS in useStaggeredLogs.
+//
+// Deliberately NOT copied from axonhub: `mode='popLayout'`. It depends on a
+// precondition this page does not meet — see the AnimatePresence below.
 const rowTransition = {
-  duration: 0.15,
-  ease: [0.2, 1, 0.3, 1] as const,
-  opacity: { duration: 0.12 }
+  type: 'spring' as const,
+  stiffness: 500,
+  damping: 30,
+  mass: 1,
+  opacity: { duration: 0.2 }
 };
 
 const detailTransition = {
@@ -66,6 +73,7 @@ export function LogsPage({
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const reduceMotion = useReducedMotion();
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : rowTransition;
+  const effectiveDetailTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition;
   const {
     handleLogScroll,
     handleMobileLogScroll,
@@ -84,7 +92,7 @@ export function LogsPage({
 
   // useCallback not for this function's own sake: LogMobileCard is memoized, so
   // a fresh onToggle identity on every render would defeat the memo and rerender
-  // every collapsed card at each 150ms stagger tick. Only refs and the stable
+  // every collapsed card at each stagger tick. Only refs and the stable
   // setState are read here, so the empty deps are exact.
   const toggleLog = useCallback((logKey: string) => {
     // 记录移动列表当前滚动位置,展开详情后恢复,避免内容下推导致视口跑掉。
@@ -146,7 +154,7 @@ export function LogsPage({
           </span>
           {/* Only a live burst can queue rows now (snapshot syncs and resumes
               replace outright), so the queue tops out at INSTANT_THRESHOLD and
-              this is a short-lived hint at 4+ rows — roughly half a second. */}
+              this is a short-lived hint at 4+ rows — about three ticks. */}
           <AnimatePresence initial={false}>
             {pendingLogCount > 3 && (
               <MotionSpan
@@ -268,8 +276,13 @@ export function LogsPage({
       ) : null}
 
       <div className="log-table log-table-full" hidden={logs.length === 0}>
-          <div
+          {/* layoutScroll: this is a scrollable ancestor of `layout` rows, so
+              Motion has to be told to re-read its scroll offset — otherwise the
+              FLIP measurements are off by scrollTop, and off again by whatever
+              useLogTableScroll writes there. */}
+          <MotionDiv
             ref={tableBodyRef}
+            layoutScroll
             className="log-table-body"
             onScroll={handleLogScroll}
             aria-busy={isLoadingLogs || isLoadingMoreLogs}
@@ -306,6 +319,20 @@ export function LogsPage({
                 </tr>
               </thead>
               <tbody>
+                {/* `layout` is load-bearing here, not decorative. Animating a
+                    <tr>'s height is inert — CSS table layout treats a row's
+                    specified height as a *minimum*, so content height always
+                    wins (measured: 34px natural, 34px at height:0, even with
+                    overflow:hidden). That leaves transform-based FLIP as the only
+                    way to smooth the displacement when a row enters or leaves.
+                    It coexists with useLogTableScroll's scrollTop write because
+                    the container carries `layoutScroll`, so Motion re-reads the
+                    scroll offset instead of folding it into the FLIP delta.
+                    Still no mode='popLayout': it sets `position: absolute
+                    !important` on the exiting child, which drops a <tr> out of
+                    table layout entirely and into the corner of the positioned
+                    .log-table-body. axonhub gets away with it; a list that trims
+                    one row per insert does not. */}
                 <AnimatePresence initial={false}>
                   {logs.flatMap((entry) => {
                     const logKey = logEntryKey(entry);
@@ -315,10 +342,11 @@ export function LogsPage({
                     const rows = [
                       <MotionTr
                         key={logKey}
-                        initial={{ opacity: 0, y: -20, height: 0 }}
-                        animate={{ opacity: 1, y: 0, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
                         transition={effectiveRowTransition}
+                        layout
                         data-log-id={entry.request_id}
                         className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
                         tabIndex={0}
@@ -336,15 +364,30 @@ export function LogsPage({
                       rows.push(
                         <MotionTr
                           key={`${logKey}-detail`}
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          exit={{ opacity: 0, height: 0 }}
-                          transition={reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={effectiveDetailTransition}
                           className="log-detail-row"
                           id={detailId}
                         >
                           <td colSpan={12}>
-                            <LogDetailPanel entry={entry} />
+                            {/* Height animates on this wrapper, not on the <tr>:
+                                a row's specified height is only a minimum in
+                                table layout, so the old collapse on the row did
+                                nothing and the panel popped open. The rows below
+                                are pushed by this div growing, which is real
+                                layout motion — no `layout` on the <tr> above,
+                                which would only fight it. */}
+                            <MotionDiv
+                              className="log-detail-collapse"
+                              initial={{ height: 0 }}
+                              animate={{ height: "auto" }}
+                              exit={{ height: 0 }}
+                              transition={effectiveDetailTransition}
+                            >
+                              <LogDetailPanel entry={entry} />
+                            </MotionDiv>
                           </td>
                         </MotionTr>
                       );
@@ -355,18 +398,24 @@ export function LogsPage({
                 </AnimatePresence>
               </tbody>
             </table>
-          </div>
+          </MotionDiv>
       </div>
 
       {/* Rendered conditionally rather than with `hidden`: the narrow-screen rule
           sets `display: grid`, which outranks the UA rule for [hidden]. */}
       {logs.length > 0 && (
-        <div
+        <MotionDiv
           ref={mobileListRef}
+          layoutScroll
           className="logs-mobile-list"
           aria-label="请求日志摘要"
           onScroll={handleMobileLogScroll}
         >
+          {/* Rows animate opacity + y only, matching the table: with no height
+              animation anywhere, every layout position is final at commit, which
+              is what lets useLogTableScroll compensate scroll synchronously
+              instead of waiting out the spring. `layout` carries the
+              displacement. */}
           <AnimatePresence initial={false}>
             {logs.map((entry) => {
               const logKey = logEntryKey(entry);
@@ -374,10 +423,11 @@ export function LogsPage({
                 <MotionDiv
                   key={`mobile-${logKey}`}
                   className="log-mobile-motion-item"
-                  initial={{ opacity: 0, y: -20, height: 0 }}
-                  animate={{ opacity: 1, y: 0, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
                   transition={effectiveRowTransition}
+                  layout
                   data-log-id={entry.request_id}
                 >
                   <LogMobileCard
@@ -391,7 +441,7 @@ export function LogsPage({
               );
             })}
           </AnimatePresence>
-        </div>
+        </MotionDiv>
       )}
 
       {hasMoreLogs && (

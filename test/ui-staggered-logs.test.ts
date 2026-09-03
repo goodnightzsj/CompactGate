@@ -3,6 +3,7 @@ import type { RequestLogEntry } from "../src/shared/types.js";
 import {
   INSTANT_THRESHOLD,
   MAX_STAGGER_DURATION_MS,
+  ROW_SPRING_SETTLE_MS,
   STAGGER_BASE_MS,
   estimateStaggerDuration,
   planStaggeredLogCatchUp,
@@ -12,8 +13,11 @@ import {
 } from "../src/ui/logs/useStaggeredLogs.js";
 
 describe("staggered log query changes", () => {
-  it("uses a 120ms fixed insertion cadence", () => {
-    expect(STAGGER_BASE_MS).toBe(120);
+  it("keeps the insertion cadence at or above the row spring's settle time", () => {
+    // The mush this guards against: inserting faster than the LogsPage row
+    // spring settles leaves several springs plus their layout FLIPs in flight at
+    // once. Retuning either side without the other has to fail here.
+    expect(STAGGER_BASE_MS).toBeGreaterThanOrEqual(ROW_SPRING_SETTLE_MS);
   });
 
   it("caps the reveal so a full queue stays inside the duration budget", () => {

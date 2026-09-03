@@ -1,7 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 
-export const STAGGER_BASE_MS = 120;
+// Settle time of the row-entry spring in LogsPage (stiffness 500, damping 30,
+// mass 1 → zeta 0.671, underdamped): a 20px offset takes ~260ms to fall inside
+// 0.5px and stay there. Retuning that spring means recomputing this.
+export const ROW_SPRING_SETTLE_MS = 260;
+
+// Held invariant, copied from axonhub: cadence >= ROW_SPRING_SETTLE_MS, so each
+// row lands before the next is inserted. That discrete rhythm is what its
+// animation actually reads as; axonhub's 500ms is ~2x its settle time. A cadence
+// under the settle time keeps 2+ springs in flight at once, each also driving a
+// layout FLIP of every row below it, and the burst turns to mush.
+export const STAGGER_BASE_MS = 300;
 export const MAX_STAGGER_DURATION_MS = 2000;
 const STAGGER_ROW_CAP = 8;
 
