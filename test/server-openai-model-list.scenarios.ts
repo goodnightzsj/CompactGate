@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { factoryClientUserAgent } from "../src/server/config-defaults.js";
 import {
   setEnv,
   startApp,
@@ -154,7 +155,9 @@ describe("CompactGate OpenAI model list", () => {
     expect(payload).toMatchObject({ models: ["gated-model"], error: null });
     // Without a product token a client-whitelisting relay answers 401, so the
     // probe must carry one where proxied traffic would have forwarded the CLI's.
-    expect(seen["user-agent"]).toBe("codex_cli_rs/0.56.0");
+    // The value now comes from the client-identity store, which on a fresh state
+    // file serves the factory Codex UA.
+    expect(seen["user-agent"]).toBe(factoryClientUserAgent("codex"));
     expect(seen.originator).toBe("operator-override");
   });
 });

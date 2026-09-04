@@ -3,7 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ConfigStore } from "../../src/server/config.js";
+import { CompactionBridgeStore } from "../../src/server/compaction-bridge.js";
+import { CodexVersionMonitor } from "../../src/server/codex-version.js";
+import { ClientIdentityStore } from "../../src/server/client-identity-store.js";
 import { createCompactGateServer } from "../../src/server/http.js";
+import { StudioEventBroadcaster } from "../../src/server/studio-events.js";
 
 export const cleanup: Array<() => Promise<void>> = [];
 export const cleanupEnvKeys = new Set<string>();
@@ -27,7 +31,6 @@ export async function startAppInDir(
   const primaryPatch = isRecord(patch?.primary) ? patch.primary : {};
   const compactPatch = isRecord(patch?.compact) ? patch.compact : {};
   const config = await ConfigStore.load(path.join(dir, "compactgate.json"));
-
   await config.patch({
     ...patch,
     primary: {
@@ -40,9 +43,39 @@ export async function startAppInDir(
     }
   });
 
-  const server = createCompactGateServer(config);
+  // The identity store writes on its own schedule, so its state file lives in a
+  // directory this helper owns and tears down itself. Tests that manage their own
+  // app directory (and remove it concurrently with the server close) would
+  // otherwise race that write and fail with ENOTEMPTY.
+  const identityDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-identity-"));
+  const clientIdentity = new ClientIdentityStore({
+    statePath: path.join(identityDir, "client-identity.json"),
+    // No network: the registry lookup is the only outbound call the server makes
+    // on its own schedule, and a test suite must not depend on npm being reachable.
+    fetchLatestVersion: async () => null
+  });
+  const server = createCompactGateServer(
+    config,
+    undefined,
+    undefined,
+    new CompactionBridgeStore(),
+    new StudioEventBroadcaster(),
+    new CodexVersionMonitor({ probe: () => null }),
+    clientIdentity
+  );
   await listen(server);
   const closeServer = trackServer(server);
+  const closeApp = async () => {
+    await closeServer();
+    // `close()` blocks new writes; `flush()` drains the one that may be in flight,
+    // so the directory is safe to remove afterwards.
+    clientIdentity.close();
+    await clientIdentity.flush();
+  };
+  cleanup.push(async () => {
+    await closeApp();
+    await rm(identityDir, { recursive: true, force: true });
+  });
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -52,7 +85,7 @@ export async function startAppInDir(
   return {
     dir,
     url: `http://127.0.0.1:${address.port}`,
-    close: closeServer
+    close: closeApp
   };
 }
 

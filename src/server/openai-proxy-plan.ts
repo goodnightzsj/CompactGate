@@ -8,6 +8,8 @@ import {
 import { resolveRouteCredential } from "./credentials.js";
 import { appendHeaderToken, buildUpstreamHeaders, parseJsonRecord } from "./http-utils.js";
 import { applyHostQuirks } from "./host-quirks.js";
+import { applyClientIdentityUserAgent, isNativeCliRequest } from "./client-identity.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl
@@ -63,7 +65,8 @@ export function buildPrimaryOpenAiProxyPlan({
   preserveRemoteV2State = false,
   primarySelectionOverride,
   reservePrimarySelection = true,
-  synthesizeRemoteV2Compaction = false
+  synthesizeRemoteV2Compaction = false,
+  clientIdentity
 }: {
   config: CompactGateConfig;
   url: URL;
@@ -76,6 +79,7 @@ export function buildPrimaryOpenAiProxyPlan({
   primarySelectionOverride?: PrimaryRouteSelection;
   reservePrimarySelection?: boolean;
   synthesizeRemoteV2Compaction?: boolean;
+  clientIdentity?: ClientIdentityStore;
 }): OpenAiProxyPlan {
   const primarySelection = primarySelectionOverride ?? primaryFailover.preview(
     config,
@@ -147,7 +151,8 @@ export function buildPrimaryOpenAiProxyPlan({
       upstreamProtocol,
       proxyUrl: selectedPrimaryConfig.primary.proxy_url,
       compactionFallback: chatCompactionFallback ? "chat_synthesis" : null
-    }
+    },
+    clientIdentity
   );
   if (reservePrimarySelection) {
     primaryFailover.reserveSelection(primarySelection, config.primary_failover.auto_schedule);
@@ -160,13 +165,15 @@ export function buildCompactOpenAiProxyPlan({
   url,
   headers,
   rawBody,
-  nativeCompaction
+  nativeCompaction,
+  clientIdentity
 }: {
   config: CompactGateConfig;
   url: URL;
   headers: IncomingHttpHeaders;
   rawBody: Buffer;
   nativeCompaction: boolean;
+  clientIdentity?: ClientIdentityStore;
 }): OpenAiProxyPlan {
   const rewrite = rewriteCompactBody(rawBody, config);
   const upstreamProtocol = config.compact.upstream_mode === "split"
@@ -196,7 +203,7 @@ export function buildCompactOpenAiProxyPlan({
     upstreamProtocol,
     proxyUrl: upstreamConfig.proxy_url,
     compactionFallback: null
-  });
+  }, clientIdentity);
   if (config.compact.upstream_mode === "split" && !credential.apiKeyConfigured) {
     delete plan.requestHeaders.authorization;
   }
@@ -208,7 +215,8 @@ function withRequestHeaders(
   apiKey: string | null,
   extraHeaders: Record<string, string>,
   rawBody: Buffer,
-  plan: Omit<OpenAiProxyPlan, "requestHeaders" | "sensitiveHeaderNames">
+  plan: Omit<OpenAiProxyPlan, "requestHeaders" | "sensitiveHeaderNames">,
+  clientIdentity?: ClientIdentityStore
 ): OpenAiProxyPlan {
   const requestHeaders = plan.upstreamProtocol === "anthropic_messages"
     ? buildAnthropicRequestHeaders(
@@ -223,6 +231,12 @@ function withRequestHeaders(
   if (plan.upstreamBody !== rawBody) {
     delete requestHeaders["content-encoding"];
   }
+  // The wire protocol decides which CLI to impersonate, not the ingress path: a
+  // Responses request that a profile points at an Anthropic upstream leaves here
+  // as Messages and must introduce itself as Claude Code. Placed after the
+  // protocol-specific header cleanup above so neither strips what this writes,
+  // and before host quirks so a quirk can still have the last word.
+  applyClientIdentity(requestHeaders, headers, plan.upstreamProtocol, extraHeaders, clientIdentity);
   applyHostQuirks({
     host: plan.upstream.hostname,
     sourceModel: plan.sourceModel,
@@ -235,6 +249,35 @@ function withRequestHeaders(
     requestHeaders,
     sensitiveHeaderNames: Object.keys(extraHeaders)
   };
+}
+
+/**
+ * Rewrites `user-agent` for clients that are not themselves a CLI. A real CLI
+ * request is already the identity we would synthesize, so it passes through
+ * untouched — including its version, which the log and the protocol baseline both
+ * read back off the inbound header.
+ */
+function applyClientIdentity(
+  requestHeaders: Record<string, string>,
+  inboundHeaders: IncomingHttpHeaders,
+  upstreamProtocol: UpstreamProtocol,
+  extraHeaders: Record<string, string>,
+  clientIdentity: ClientIdentityStore | undefined
+): void {
+  if (!clientIdentity) {
+    return;
+  }
+
+  const kind = upstreamProtocol === "anthropic_messages" ? "claude" : "codex";
+  if (isNativeCliRequest(kind, inboundHeaders)) {
+    return;
+  }
+
+  applyClientIdentityUserAgent(
+    requestHeaders,
+    clientIdentity.userAgentFor(kind),
+    Object.keys(extraHeaders)
+  );
 }
 
 function translateOpenAiRequest(body: Buffer, protocol: UpstreamProtocol): Buffer {

@@ -9,12 +9,14 @@ import { resolveRouteCredential } from "./credentials.js";
 import type { RequestLogger } from "./logger.js";
 import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
 import { isValidBaseUrl } from "./config-internals.js";
 
 export function healthForConfig(
   config: CompactGateConfig,
   logger: RequestLogger,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore
 ): HealthResponse {
   const routeState = (
     scope: CredentialScope,
@@ -43,6 +45,7 @@ export function healthForConfig(
     codex: codexVersionMonitor.snapshot(
       logger.recentLogs({ route: "compact", limit: CODEX_PROTOCOL_LOG_LIMIT })
     ),
+    client_identity: clientIdentity.status(),
     primary: routeState("primary", config.primary),
     compact: routeState("compact", config.compact),
     claude: {

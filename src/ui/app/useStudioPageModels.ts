@@ -149,7 +149,8 @@ export function useStudioPageModels({
           : latestLog?.compaction_mode ?? null,
         activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
         latestLog,
-        codexStatus: health?.codex ?? null
+        codexStatus: health?.codex ?? null,
+        clientIdentity: health?.client_identity ?? null
       },
       configPage: {
         actions: configActions,

@@ -17,6 +17,10 @@ import {
   summaryForError
 } from "./http-utils.js";
 import { RequestLogger, resolveLogDatabasePath } from "./logger.js";
+import {
+  ClientIdentityStore,
+  resolveClientIdentityStatePath
+} from "./client-identity-store.js";
 import { proxyOpenAiRequest } from "./openai-proxy.js";
 import { PrimaryFailoverState } from "./primary-failover.js";
 import { ClaudeKeyPoolState } from "./claude-key-pool.js";
@@ -96,11 +100,18 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
  */
 const CAPTURE_PURGE_SNAPSHOT_THRESHOLD = 50;
 
+export function createClientIdentityStore(configStore: ConfigStore): ClientIdentityStore {
+  return new ClientIdentityStore({
+    statePath: resolveClientIdentityStatePath(configStore.getConfigPath())
+  });
+}
+
 function createDebugCaptureWriter(
   configStore: ConfigStore,
   logger: RequestLogger,
   studioEvents: StudioEventBroadcaster,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore
 ): DebugCaptureWriter {
   const config = configStore.get();
   return DebugCaptureWriter.fromConfig(
@@ -110,7 +121,9 @@ function createDebugCaptureWriter(
     (capturePaths) => {
       const entries = logger.markCapturesPurged(capturePaths, CAPTURE_PURGE_SNAPSHOT_THRESHOLD);
       if (capturePaths.length > CAPTURE_PURGE_SNAPSHOT_THRESHOLD) {
-        studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
+        studioEvents.broadcastSnapshot(
+          createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
+        );
         return;
       }
       if (entries.length === 0) {
@@ -130,15 +143,25 @@ export function createCompactGateServer(
   captureWriter?: DebugCaptureWriter,
   compactionBridge = new CompactionBridgeStore(),
   studioEvents = new StudioEventBroadcaster(),
-  codexVersionMonitor = new CodexVersionMonitor()
+  codexVersionMonitor = new CodexVersionMonitor(),
+  clientIdentity = createClientIdentityStore(configStore)
 ): http.Server {
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
     captureWriter ??
-    createDebugCaptureWriter(configStore, actualLogger, studioEvents, codexVersionMonitor);
+    createDebugCaptureWriter(
+      configStore,
+      actualLogger,
+      studioEvents,
+      codexVersionMonitor,
+      clientIdentity
+    );
   const primaryFailover = new PrimaryFailoverState();
   const claudeKeyPool = new ClaudeKeyPoolState();
   codexVersionMonitor.start();
+  // Reads the persisted UAs and schedules the daily registry refresh. Rewriting
+  // stays on the factory values until this resolves, so startup does not wait.
+  void clientIdentity.start();
   const server = http.createServer((req, res) => {
     void routeRequest(
       req,
@@ -150,7 +173,8 @@ export function createCompactGateServer(
       studioEvents,
       primaryFailover,
       codexVersionMonitor,
-      claudeKeyPool
+      claudeKeyPool,
+      clientIdentity
     );
   });
   server.on("upgrade", (_req, socket) => {
@@ -164,6 +188,7 @@ export function createCompactGateServer(
     actualLogger.close();
     studioEvents.close();
     codexVersionMonitor.close();
+    clientIdentity.close();
   });
   return server;
 }
@@ -178,7 +203,8 @@ async function routeRequest(
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor,
-  claudeKeyPool: ClaudeKeyPoolState
+  claudeKeyPool: ClaudeKeyPoolState,
+  clientIdentity: ClientIdentityStore
 ): Promise<void> {
   try {
     const url = parseRequestUrl(req.url);
@@ -201,11 +227,11 @@ async function routeRequest(
       const handled =
         await handleConfigApi(
           req, res, url, configStore, logger, captureWriter, studioEvents,
-          codexVersionMonitor, primaryFailover
+          codexVersionMonitor, primaryFailover, clientIdentity
         ) ||
         await handleRuntimeApi(
           req, res, url, configStore, logger, captureWriter, studioEvents,
-          primaryFailover, codexVersionMonitor
+          primaryFailover, codexVersionMonitor, clientIdentity
         );
       if (!handled) {
         sendJson(res, 404, { error: "API endpoint not found." });
@@ -222,7 +248,8 @@ async function routeRequest(
         logger,
         captureWriter,
         studioEvents,
-        claudeKeyPool
+        claudeKeyPool,
+        clientIdentity
       );
       return;
     }
@@ -238,7 +265,8 @@ async function routeRequest(
         compactionBridge,
         studioEvents,
         primaryFailover,
-        codexVersionMonitor
+        codexVersionMonitor,
+        clientIdentity
       );
       return;
     }

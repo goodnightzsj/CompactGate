@@ -674,12 +674,84 @@ export interface LogStatsSnapshot {
   } | null;
 }
 
+/** Which agent family an outbound request is impersonating. */
+export type ClientIdentityKind = "codex" | "claude";
+
+/**
+ * Where a stored User-Agent came from. `extracted` is a real CLI request seen by
+ * the proxy; `version_tracked` is a stored UA whose semver was replaced with the
+ * version the package registry reports as latest.
+ */
+export type ClientIdentitySourceKind = "extracted" | "version_tracked";
+
+export interface ClientIdentityUaState {
+  /** Empty means nothing has been observed yet and this source cannot serve. */
+  user_agent: string;
+  /** Set once the operator edits the value by hand; stops automatic updates. */
+  manual: boolean;
+  updated_at: string | null;
+  /** Last date (YYYY-MM-DD, local) an automatic refresh succeeded. */
+  last_success_date: string | null;
+  last_attempt_at: string | null;
+  last_error: string | null;
+}
+
+export interface ClientIdentityKindState {
+  extracted: ClientIdentityUaState;
+  version_tracked: ClientIdentityUaState;
+  /** Operator's choice of which source to serve; falls back when it is empty. */
+  preferred: ClientIdentitySourceKind;
+  /** The version the registry last reported, and when — subject to the 7-day TTL. */
+  remote_version: string | null;
+  remote_version_at: string | null;
+}
+
+export interface ClientIdentityState {
+  enabled: boolean;
+  codex: ClientIdentityKindState;
+  claude: ClientIdentityKindState;
+}
+
+/** One family's resolved outcome, including which source actually won. */
+export interface ClientIdentityResolved {
+  user_agent: string | null;
+  source: ClientIdentitySourceKind | null;
+  /** True when `preferred` could not serve because its value is empty. */
+  fell_back: boolean;
+  remote_version_stale: boolean;
+}
+
+/**
+ * A stored source plus what it would actually put on the wire — `user_agent` with
+ * the registry version applied, or empty when the source cannot serve. The two
+ * differ precisely when a version is being tracked, which is the case an operator
+ * most needs spelled out rather than inferred.
+ */
+export interface ClientIdentityUaStatus extends ClientIdentityUaState {
+  outbound_user_agent: string;
+}
+
+export interface ClientIdentityKindStatus extends ClientIdentityKindState {
+  extracted: ClientIdentityUaStatus;
+  version_tracked: ClientIdentityUaStatus;
+}
+
+export interface ClientIdentityStatus extends ClientIdentityState {
+  codex: ClientIdentityKindStatus;
+  claude: ClientIdentityKindStatus;
+  resolved: {
+    codex: ClientIdentityResolved;
+    claude: ClientIdentityResolved;
+  };
+}
+
 export interface HealthResponse {
   status: "ok";
   time: string;
   listen: string;
   logger: LogPersistenceHealth;
   codex: CodexVersionStatus;
+  client_identity: ClientIdentityStatus;
   primary: {
     status: "configured" | "invalid";
     base_url: string;

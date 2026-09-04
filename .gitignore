@@ -16,6 +16,7 @@ compactgate.json
 /compactgate-logs.sqlite*
 /compactgate-claude-summaries.sqlite*
 /compactgate-captures/
+/compactgate-client-identity.json
 
 # Local task and agent state
 .codex-tasks/

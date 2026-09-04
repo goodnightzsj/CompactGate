@@ -72,6 +72,12 @@
   .routes-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* Two identity cards each hold a full-form Codex agent (~95 chars of mono),
+     so they need the whole content width well before the page grids do. */
+  .identity-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (min-width: 761px) and (max-width: 1180px) {
@@ -430,6 +436,17 @@
   .protocol-status-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .identity-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .identity-card-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .protocol-status-metrics {

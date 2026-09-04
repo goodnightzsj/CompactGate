@@ -5,6 +5,8 @@ import type {
   ClaudeModelMapRole,
   CompactGateConfig
 } from "../shared/types.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
+import { factoryClientUserAgent } from "./config-defaults.js";
 import { resolveRouteCredential } from "./credentials.js";
 import {
   buildUpstreamHeaders,
@@ -58,14 +60,20 @@ export interface ClaudeRequestRouting {
 const CLAUDE_CLIENT_IDENTITY: Record<string, string> = {
   accept: "application/json",
   "anthropic-version": "2023-06-01",
-  "user-agent": "claude-cli/2.1.234 (external, cli)",
+  "user-agent": factoryClientUserAgent("claude"),
   "x-app": "cli"
 };
 
-export async function fetchClaudeModels(config: CompactGateConfig): Promise<UpstreamModelsResponse> {
+export async function fetchClaudeModels(
+  config: CompactGateConfig,
+  clientIdentity?: ClientIdentityStore
+): Promise<UpstreamModelsResponse> {
   const auth = resolveClaudeCredential(config);
   const headers = buildAnthropicUpstreamHeaders(
-    CLAUDE_CLIENT_IDENTITY,
+    {
+      ...CLAUDE_CLIENT_IDENTITY,
+      "user-agent": clientIdentity?.userAgentFor("claude") ?? CLAUDE_CLIENT_IDENTITY["user-agent"]
+    },
     auth.apiKey,
     config.claude.primary.extra_headers
   );

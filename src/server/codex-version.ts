@@ -20,6 +20,16 @@ const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 export type CodexObservedProtocol = OpenAiCompactionMode;
 export type CodexProtocolSummary = CodexVersionStatus["observed_protocol"];
 
+/**
+ * Every product token Codex has been observed sending, longest alternative first
+ * so `codex_cli_rs` is not truncated to `codex_cli`. `codex_exec` and
+ * `codex_cli_rs` were missing until the identity work needed them: both appear in
+ * the request log, and treating them as unrecognised clients meant the protocol
+ * baseline and the CLI-passthrough check both misread real Codex traffic.
+ */
+const CODEX_CLIENT_USER_AGENT =
+  /(?:^|\s)(codex(?:_cli_rs|-tui|_tui|-cli|_cli|_exec|-exec)?)[\/: ]([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?)/i;
+
 interface CodexVersionMonitorOptions {
   intervalMs?: number;
   probeTimeoutMs?: number;
@@ -39,7 +49,7 @@ export function parseCodexClientUserAgent(value: string | null | undefined): Cod
     return null;
   }
 
-  const match = value.match(/(?:^|\s)(codex(?:-tui|-cli)?)[\/: ]([0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?)/i);
+  const match = value.match(CODEX_CLIENT_USER_AGENT);
   if (!match) {
     return null;
   }

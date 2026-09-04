@@ -5,6 +5,7 @@ import { healthForConfig } from "./health.js";
 import type { RequestLogger } from "./logger.js";
 import { stripLogEntryBodies } from "./logger-helpers.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
 import type { CodexVersionStatus } from "../shared/types.js";
 
 interface StudioSseClient {
@@ -123,7 +124,8 @@ export class StudioEventBroadcaster {
 export function createStudioSnapshot(
   configStore: ConfigStore,
   logger: RequestLogger,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore
 ): StudioSnapshotEvent {
   const logPage = logger.page({
     limit: configStore.get().logging.keep_recent,
@@ -132,7 +134,7 @@ export function createStudioSnapshot(
 
   return {
     config: configStore.toPublicConfig(),
-    health: healthForConfig(configStore.get(), logger, codexVersionMonitor),
+    health: healthForConfig(configStore.get(), logger, codexVersionMonitor, clientIdentity),
     logs: logPage.logs,
     log_page: logPage
   };

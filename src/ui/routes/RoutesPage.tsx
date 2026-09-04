@@ -1,11 +1,13 @@
 import { routeLabel } from "../../shared/route-meta.js";
 import type {
+  ClientIdentityStatus,
   CodexVersionStatus,
   OpenAiCompactionMode,
   PublicConfig,
   RequestLogEntry,
   RouteKind
 } from "../../shared/types.js";
+import { ClientIdentityPanel } from "./ClientIdentityPanel.js";
 import { CodexProtocolStatus } from "./CodexProtocolStatus.js";
 import { RouteRulesGrid } from "./RouteRulesGrid.js";
 import type { RouteHitSource } from "./RouteRulesGrid.js";
@@ -20,7 +22,8 @@ export function RoutesPage({
   activeCompactionMode,
   activeRouteSource,
   latestLog,
-  codexStatus
+  codexStatus,
+  clientIdentity
 }: {
   config: PublicConfig | null;
   currentModel: string;
@@ -32,6 +35,7 @@ export function RoutesPage({
   activeRouteSource: RouteHitSource;
   latestLog: RequestLogEntry | null;
   codexStatus: CodexVersionStatus | null;
+  clientIdentity: ClientIdentityStatus | null;
 }) {
   const listen = config?.listen ?? "127.0.0.1:7865";
   const primaryHost = config?.primary.host ?? "primary.example";
@@ -57,6 +61,8 @@ export function RoutesPage({
       )}
 
       <CodexProtocolStatus status={codexStatus} />
+
+      <ClientIdentityPanel status={clientIdentity} />
 
       <RouteRulesGrid
         listen={listen}

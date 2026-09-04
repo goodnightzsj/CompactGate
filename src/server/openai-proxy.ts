@@ -15,6 +15,7 @@ import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
   parseJsonRecord,
   RequestBodyTooLargeError,
+  readHeaderString,
   readRawBody,
   sendJson,
   summaryForError
@@ -105,6 +106,8 @@ import {
   type ProviderStateTargetScope
 } from "./provider-state-evidence.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
+import { isNativeCodexUserAgent } from "./client-identity.js";
 
 export async function proxyOpenAiRequest(
   req: IncomingMessage,
@@ -116,10 +119,15 @@ export async function proxyOpenAiRequest(
   compactionBridge: CompactionBridgeStore,
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
+  // Observed here rather than inside the plan builders: those also run for the
+  // capability probe, which supplies synthesized headers that would poison the
+  // extracted UA with a value no real client ever sent.
+  observeCodexCliUserAgent(clientIdentity, readHeaderString(req.headers["user-agent"]));
   const baseConfig = configStore.get();
   const requestProfile = resolveRequestScopedProfile(
     baseConfig,
@@ -144,6 +152,7 @@ export async function proxyOpenAiRequest(
       studioEvents,
       primaryFailover,
       codexVersionMonitor,
+      clientIdentity,
       requestId,
       startedAtIso,
       startedAt,
@@ -165,6 +174,7 @@ export async function proxyOpenAiRequest(
     studioEvents,
     primaryFailover,
     codexVersionMonitor,
+    clientIdentity,
     requestId,
     startedAtIso,
     startedAt,
@@ -184,6 +194,7 @@ async function proxyPrimaryRequest(
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore,
   requestId: string,
   startedAtIso: string,
   startedAt: number,
@@ -221,6 +232,7 @@ async function proxyPrimaryRequest(
         studioEvents,
         primaryFailover,
         codexVersionMonitor,
+        clientIdentity,
         requestId,
         startedAtIso,
         startedAt,
@@ -268,7 +280,8 @@ async function proxyPrimaryRequest(
       primarySelectionOverride,
       reservePrimarySelection: !requestProfile,
       synthesizeRemoteV2Compaction: classification.route === "compact" &&
-        classification.compactionMode === "remote_v2"
+        classification.compactionMode === "remote_v2",
+      clientIdentity
     });
     route = classification.route;
     upstream = plan.upstream;
@@ -280,7 +293,8 @@ async function proxyPrimaryRequest(
         logger,
         primarySelection,
         studioEvents,
-        codexVersionMonitor
+        codexVersionMonitor,
+        clientIdentity
       });
     }
     transaction.sourceModel = plan.sourceModel;
@@ -638,13 +652,29 @@ function buildProviderStatePortabilityLog(input: {
   };
 }
 
+/**
+ * Feeds a real Codex CLI request's UA into the extracted source. Only a native
+ * CLI qualifies — recording a third-party client would make the proxy impersonate
+ * whatever last called it, and once rewriting is on it would then re-record its
+ * own synthesized value.
+ */
+function observeCodexCliUserAgent(
+  clientIdentity: ClientIdentityStore,
+  userAgent: string | null
+): void {
+  if (isNativeCodexUserAgent(userAgent)) {
+    clientIdentity.observeCliUserAgent("codex", userAgent);
+  }
+}
+
 async function syncScheduledPrimaryProfile({
   configRevision,
   configStore,
   logger,
   primarySelection,
   studioEvents,
-  codexVersionMonitor
+  codexVersionMonitor,
+  clientIdentity
 }: {
   configRevision: string;
   configStore: ConfigStore;
@@ -652,6 +682,7 @@ async function syncScheduledPrimaryProfile({
   primarySelection: PrimaryRouteSelection | null;
   studioEvents: StudioEventBroadcaster;
   codexVersionMonitor: CodexVersionMonitor;
+  clientIdentity: ClientIdentityStore;
 }): Promise<void> {
   const selectedProfileId = primarySelection?.profileId;
   if (!selectedProfileId) {
@@ -679,7 +710,9 @@ async function syncScheduledPrimaryProfile({
   }
 
   await configStore.applyProfile("codex", selectedProfileId);
-  studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
+  studioEvents.broadcastSnapshot(
+    createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
+  );
 }
 
 async function proxyCompactRequest(
@@ -694,6 +727,7 @@ async function proxyCompactRequest(
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
   codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore,
   requestId: string,
   startedAtIso: string,
   startedAt: number,
@@ -730,7 +764,8 @@ async function proxyCompactRequest(
       url,
       headers: req.headers,
       rawBody: transaction.rawBody,
-      nativeCompaction: classification.compactionMode === "remote_v1"
+      nativeCompaction: classification.compactionMode === "remote_v1",
+      clientIdentity
     });
     if (selectedPrimary) {
       primaryFailover.reserveSelection(selectedPrimary, config.primary_failover.auto_schedule);
@@ -741,7 +776,8 @@ async function proxyCompactRequest(
         logger,
         primarySelection,
         studioEvents,
-        codexVersionMonitor
+        codexVersionMonitor,
+        clientIdentity
       });
     }
     upstream = plan.upstream;

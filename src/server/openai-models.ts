@@ -1,4 +1,6 @@
 import type { CompactGateConfig } from "../shared/types.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
+import { factoryClientUserAgent } from "./config-defaults.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { buildUpstreamHeaders } from "./http-utils.js";
 import {
@@ -16,23 +18,33 @@ export type OpenAiModelsResponse = UpstreamModelsResponse;
  * catalogue. A generic agent is still rejected, so the product token — not
  * merely the header's presence — is what the gate reads.
  *
- * ponytail: the version is a fixed stand-in rather than the caller's real build,
- * because every gate observed so far keys on the product token alone. Pin a real
- * one through `extra_headers` if some upstream starts checking it.
+ * The `user-agent` is filled from the identity store when one is supplied, which
+ * keeps the probe on the same value real traffic carries. The literal below is
+ * only the last resort for callers without a store.
  */
 const CODEX_CLIENT_IDENTITY: Record<string, string> = {
   accept: "application/json",
   originator: "codex_cli_rs",
-  "user-agent": "codex_cli_rs/0.56.0"
+  "user-agent": factoryClientUserAgent("codex")
 };
 
-export async function fetchOpenAiModels(config: CompactGateConfig): Promise<OpenAiModelsResponse> {
+export async function fetchOpenAiModels(
+  config: CompactGateConfig,
+  clientIdentity?: ClientIdentityStore
+): Promise<OpenAiModelsResponse> {
   const credential = resolveRouteCredential("primary", config);
   return fetchUpstreamModels({
     baseUrl: config.primary.base_url,
     // Identity rides in as the request baseline, which `extra_headers` overwrites,
     // so an operator can still correct any of it per route.
-    headers: buildUpstreamHeaders(CODEX_CLIENT_IDENTITY, credential.apiKey, config.primary.extra_headers),
+    headers: buildUpstreamHeaders(
+      {
+        ...CODEX_CLIENT_IDENTITY,
+        "user-agent": clientIdentity?.userAgentFor("codex") ?? CODEX_CLIENT_IDENTITY["user-agent"]
+      },
+      credential.apiKey,
+      config.primary.extra_headers
+    ),
     proxyUrl: config.primary.proxy_url,
     timeoutMs: config.timeouts.primary_ms
   });

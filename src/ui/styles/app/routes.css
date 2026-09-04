@@ -258,3 +258,269 @@
   font-size: 0.76rem;
   line-height: 1.6;
 }
+
+/* ── Outbound identity ── */
+.identity-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--jade);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Rewriting off: the values stay legible and editable, but the panel reads as
+   inert so nobody debugs a header that is not being sent. */
+.identity-panel.is-off {
+  border-left-color: var(--hairline-strong);
+}
+
+.identity-panel.is-off .identity-grid {
+  opacity: 0.62;
+}
+
+.identity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.identity-head h3 {
+  margin: 2px 0 3px;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+}
+
+.identity-subtitle {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.55;
+}
+
+.identity-subtitle code {
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.71rem;
+}
+
+.identity-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  transition:
+    border-color 140ms var(--ease),
+    background 140ms var(--ease),
+    color 140ms var(--ease);
+}
+
+.identity-switch.is-on {
+  border-color: color-mix(in srgb, var(--jade) 42%, var(--hairline));
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+
+.identity-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.identity-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.identity-switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--hairline-strong);
+  transition: background 140ms var(--ease);
+}
+
+.identity-switch.is-on .identity-switch-track {
+  background: var(--jade);
+}
+
+.identity-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+  transition: transform 140ms var(--ease-out);
+}
+
+.identity-switch.is-on .identity-switch-knob {
+  transform: translateX(12px);
+}
+
+.identity-error {
+  margin: 0;
+  padding: 8px 11px;
+  background: var(--brick-soft);
+  border: 1px solid color-mix(in srgb, var(--brick) 24%, var(--hairline));
+  border-radius: var(--radius-sm);
+  color: var(--brick);
+  font-size: 0.74rem;
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  transition: opacity 140ms var(--ease);
+}
+
+.identity-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 13px;
+  background: var(--paper-warm);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.identity-card.codex { border-top: 2px solid var(--accent); }
+.identity-card.claude { border-top: 2px solid var(--jade); }
+
+.identity-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.identity-card-protocol {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.identity-sources {
+  display: grid;
+  gap: 8px;
+}
+
+.identity-source {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
+}
+
+/* Two distinct states worth telling apart: `is-selected` is the operator's
+   choice, `is-active` is what actually goes on the wire. They diverge whenever
+   the preferred source has no value yet. */
+.identity-source.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+}
+
+.identity-source.is-active {
+  box-shadow: inset 3px 0 0 var(--jade);
+}
+
+.identity-source.is-empty .identity-source-value {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.identity-source-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.identity-source-head input[type="radio"] {
+  width: 14px;
+  min-height: 0;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.identity-source-name {
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.identity-source-live {
+  margin-left: auto;
+  color: var(--jade);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.identity-source-value {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-source-input {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 0.72rem;
+}
+
+.identity-source-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.identity-source-actions,
+.identity-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.identity-card-actions {
+  justify-content: space-between;
+  padding-top: 2px;
+  border-top: 1px solid var(--hairline);
+}
+
+.identity-card-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

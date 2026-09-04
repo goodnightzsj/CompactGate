@@ -3,8 +3,35 @@ import type {
   ClaudeModelMapRole,
   ClaudeSceneMap,
   ClaudeScene,
+  ClientIdentityKind,
   CompactGateConfig
 } from "../shared/types.js";
+
+/**
+ * Factory User-Agents for the version-tracked source, used until a real CLI
+ * request is observed. Both are real UAs taken from the request log, with the
+ * fork's `-cometix` build tag stripped.
+ *
+ * These carry the OS and terminal of the machine they were captured on, which is
+ * the cost of the full form: a Linux operator introduces itself as macOS + iTerm
+ * until the first native CLI request replaces this with their own. The trade was
+ * deliberate — the full form matches what real TUI traffic looks like, and the
+ * bare `codex-cli/x.y.z` form is comparatively rare in observed traffic.
+ */
+const FACTORY_USER_AGENTS: Record<ClientIdentityKind, string> = {
+  codex: "codex-tui/0.144.3 (Mac OS 15.0.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.144.3)",
+  claude: "claude-cli/2.1.234 (external, cli)"
+};
+
+export function factoryClientUserAgent(kind: ClientIdentityKind): string {
+  return FACTORY_USER_AGENTS[kind];
+}
+
+/** npm packages whose `latest` version each CLI's UA tracks. */
+export const CLIENT_IDENTITY_REGISTRY_PACKAGES: Record<ClientIdentityKind, string> = {
+  codex: "@openai/codex",
+  claude: "@anthropic-ai/claude-code"
+};
 
 export const CLAUDE_MODEL_MAP_ROLES: ClaudeModelMapRole[] = [
   "default",

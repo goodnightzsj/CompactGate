@@ -13,12 +13,19 @@ import {
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { ClaudeKeyPoolState } from "./claude-key-pool.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
+import {
+  applyClientIdentityUserAgent,
+  isNativeClaudeUserAgent,
+  isNativeCliRequest
+} from "./client-identity.js";
 import { DIRECT_API_KEY_ID } from "./credentials.js";
 import { applyHostQuirks, resolveHostShortCircuit } from "./host-quirks.js";
 import {
   buildUpstreamHeaders,
   copyResponseHeaders,
   RequestBodyTooLargeError,
+  readHeaderString,
   readRawBody,
   sendJson,
   summaryForError
@@ -68,10 +75,18 @@ export async function proxyClaudeRequest(
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
-  claudeKeyPool?: ClaudeKeyPoolState
+  claudeKeyPool?: ClaudeKeyPoolState,
+  clientIdentity?: ClientIdentityStore
 ): Promise<void> {
   const startedAtIso = new Date().toISOString();
   const startedAt = performance.now();
+  // Only a real Claude Code request feeds the extracted UA. Recording anything
+  // else would make the proxy impersonate whatever last called it — and once
+  // rewriting is on, re-record its own synthesized value.
+  const inboundUserAgent = readHeaderString(req.headers["user-agent"]);
+  if (clientIdentity && isNativeClaudeUserAgent(inboundUserAgent)) {
+    clientIdentity.observeCliUserAgent("claude", inboundUserAgent);
+  }
   const baseConfig = configStore.get();
   let config = baseConfig;
   const route: RouteKind = "claude";
@@ -183,6 +198,21 @@ export async function proxyClaudeRequest(
         auth.apiKey,
         config.claude.primary.extra_headers
       );
+    }
+    // The outbound protocol decides which CLI to impersonate, not the ingress
+    // path: a Messages request routed to an OpenAI-protocol upstream leaves here
+    // as Responses or Chat and must introduce itself as Codex. Runs after the
+    // protocol-specific header cleanup above and before host quirks, so neither
+    // undoes it.
+    if (clientIdentity) {
+      const identityKind = openAiUpstream ? "codex" : "claude";
+      if (!isNativeCliRequest(identityKind, req.headers)) {
+        applyClientIdentityUserAgent(
+          transaction.requestHeaders,
+          clientIdentity.userAgentFor(identityKind),
+          Object.keys(config.claude.primary.extra_headers)
+        );
+      }
     }
     applyHostQuirks({
       host: upstream.hostname,

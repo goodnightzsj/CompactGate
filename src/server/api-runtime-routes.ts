@@ -27,6 +27,13 @@ import {
 } from "./routing.js";
 import { createStudioSnapshot, type StudioEventBroadcaster } from "./studio-events.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
+import {
+  ClientIdentityValueError,
+  type ClientIdentityKindPatch,
+  type ClientIdentityPatch,
+  type ClientIdentityStore
+} from "./client-identity-store.js";
+import type { ClientIdentityKind } from "../shared/types.js";
 import { resolveRequestScopedProfile } from "./request-profile.js";
 import { probeCompactCapability } from "./compact-capability-probe.js";
 
@@ -39,8 +46,33 @@ export async function handleRuntimeApi(
   captureWriter: DebugCaptureWriter,
   studioEvents: StudioEventBroadcaster,
   primaryFailover: PrimaryFailoverState,
-  codexVersionMonitor: CodexVersionMonitor
+  codexVersionMonitor: CodexVersionMonitor,
+  clientIdentity: ClientIdentityStore
 ): Promise<boolean> {
+  if (req.method === "GET" && url.pathname === "/api/client-identity") {
+    sendJson(res, 200, clientIdentity.status());
+    return true;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/client-identity") {
+    const body = requireRecord(await readJsonBody(req), "client-identity body must be a JSON object.");
+    try {
+      const status = body.refresh === true
+        ? await clientIdentity.refreshNow(readIdentityKind(body.kind))
+        : await clientIdentity.update(readClientIdentityPatch(body));
+      studioEvents.broadcastSnapshot(
+        createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
+      );
+      sendJson(res, 200, status);
+    } catch (error) {
+      if (error instanceof ClientIdentityValueError) {
+        throw new ConfigError(error.message);
+      }
+      throw error;
+    }
+    return true;
+  }
+
   if (req.method === "POST" && url.pathname === "/api/compact/capability-probe") {
     const body = await readJsonBody(req);
     if (!isRecord(body)) {
@@ -121,17 +153,17 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, healthForConfig(configStore.get(), logger, codexVersionMonitor));
+    sendJson(res, 200, healthForConfig(configStore.get(), logger, codexVersionMonitor, clientIdentity));
     return true;
   }
 
   if (req.method === "GET" && url.pathname === "/api/claude/models") {
-    sendJson(res, 200, await fetchClaudeModels(configStore.get()));
+    sendJson(res, 200, await fetchClaudeModels(configStore.get(), clientIdentity));
     return true;
   }
 
   if (req.method === "GET" && url.pathname === "/api/openai/models") {
-    sendJson(res, 200, await fetchOpenAiModels(configStore.get()));
+    sendJson(res, 200, await fetchOpenAiModels(configStore.get(), clientIdentity));
     return true;
   }
 
@@ -155,7 +187,7 @@ export async function handleRuntimeApi(
     }
 
     const result = logger.purgeStoredBodies();
-    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor));
+    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity));
     sendJson(res, 200, result);
     return true;
   }
@@ -198,7 +230,7 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/events") {
-    studioEvents.subscribe(req, res, createStudioSnapshot(configStore, logger, codexVersionMonitor));
+    studioEvents.subscribe(req, res, createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity));
     return true;
   }
 
@@ -283,6 +315,77 @@ async function sendCaptureResponse(
   );
   res.setHeader("content-length", String(capture.content.byteLength));
   res.end(capture.content);
+}
+
+function requireRecord(body: unknown, message: string): Record<string, unknown> {
+  if (!isRecord(body)) {
+    throw new ConfigError(message);
+  }
+
+  return body;
+}
+
+function readIdentityKind(value: unknown): ClientIdentityKind | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "codex" || value === "claude") {
+    return value;
+  }
+
+  throw new ConfigError("client-identity kind must be codex or claude.");
+}
+
+function readClientIdentityPatch(body: Record<string, unknown>): ClientIdentityPatch {
+  const patch: ClientIdentityPatch = {};
+  if (Object.hasOwn(body, "enabled")) {
+    if (typeof body.enabled !== "boolean") {
+      throw new ConfigError("client-identity enabled must be a boolean.");
+    }
+    patch.enabled = body.enabled;
+  }
+
+  for (const kind of ["codex", "claude"] as const) {
+    if (!Object.hasOwn(body, kind)) {
+      continue;
+    }
+    patch[kind] = readClientIdentityKindPatch(
+      requireRecord(body[kind], `client-identity ${kind} must be a JSON object.`),
+      kind
+    );
+  }
+
+  return patch;
+}
+
+function readClientIdentityKindPatch(
+  body: Record<string, unknown>,
+  kind: ClientIdentityKind
+): ClientIdentityKindPatch {
+  const patch: ClientIdentityKindPatch = {};
+  if (Object.hasOwn(body, "preferred")) {
+    if (body.preferred !== "extracted" && body.preferred !== "version_tracked") {
+      throw new ConfigError(
+        `client-identity ${kind} preferred must be extracted or version_tracked.`
+      );
+    }
+    patch.preferred = body.preferred;
+  }
+
+  // `null` is meaningful here — it clears the manual flag and resumes automatic
+  // updates — so presence is what decides, never truthiness.
+  for (const field of ["extracted_user_agent", "version_tracked_user_agent"] as const) {
+    if (!Object.hasOwn(body, field)) {
+      continue;
+    }
+    const value = body[field];
+    if (value !== null && typeof value !== "string") {
+      throw new ConfigError(`client-identity ${kind} ${field} must be a string or null.`);
+    }
+    patch[field] = value;
+  }
+
+  return patch;
 }
 
 function readLogPageQuery(url: URL, configStore: ConfigStore) {
