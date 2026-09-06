@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
 import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
 import { mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
+import { useNarrowViewport } from "../src/ui/logs/useNarrowViewport.js";
 import {
   ALL_HOSTS_FILTER,
   mergeLiveLogPage,
@@ -14,6 +15,10 @@ import {
   isCurrentLogRequest,
   logPageQueryKey
 } from "../src/ui/logs/log-feed-query.js";
+
+vi.mock("../src/ui/logs/useNarrowViewport.js", () => ({
+  useNarrowViewport: vi.fn(() => false)
+}));
 
 describe("log request generations", () => {
   it("rejects stale pagination responses after the applied query changes", () => {
@@ -162,6 +167,14 @@ describe("live log page updates", () => {
 });
 
 describe("LogsPage loaded rows", () => {
+  it.each([false, true])("mounts only the visible log tree when narrow=%s", (narrow) => {
+    vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
+    const markup = renderLogsPage([requestLog("viewport-row")]);
+    expect(markup.includes('class="log-table log-table-full"')).toBe(!narrow);
+    expect(markup.includes('class="logs-mobile-list"')).toBe(narrow);
+    expect(markup.match(/data-log-id="viewport-row"/g)).toHaveLength(1);
+  });
+
   it("keeps the empty table shell mounted for the first live-row animation", () => {
     const markup = renderLogsPage([]);
 

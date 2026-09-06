@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ClientIdentityKind,
   ClientIdentityKindStatus,
@@ -28,21 +28,33 @@ const KIND_META: Record<ClientIdentityKind, { name: string; protocol: string; ch
 export function ClientIdentityPanel({ status }: { status: ClientIdentityStatus | null }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [local, setLocal] = useState<ClientIdentityStatus | null>(null);
-  const current = local ?? status;
+  const [local, setLocal] = useState<{
+    baseline: ClientIdentityStatus | null;
+    status: ClientIdentityStatus;
+  } | null>(null);
+  const current = local?.baseline === status ? local.status : status;
 
-  const submit = async (patch: unknown) => {
+  useEffect(() => {
+    if (local && local.baseline !== status) {
+      setLocal(null);
+    }
+  }, [local, status]);
+
+  const submit = async (patch: unknown): Promise<boolean> => {
     setPending(true);
     setError(null);
     try {
-      // The SSE snapshot carries the same state a moment later; holding the
-      // response locally keeps the radio and switch from flicking back first.
-      setLocal(await api<ClientIdentityStatus>("/api/client-identity", {
+      // Keep the response only until a newer remote snapshot arrives, including
+      // one delivered by SSE while this request was still in flight.
+      const next = await api<ClientIdentityStatus>("/api/client-identity", {
         method: "POST",
         body: JSON.stringify(patch)
-      }));
+      });
+      setLocal({ baseline: status, status: next });
+      return true;
     } catch (cause) {
       setError(errorSummary(cause));
+      return false;
     } finally {
       setPending(false);
     }
@@ -124,7 +136,7 @@ function IdentityCard({
   resolved: ClientIdentityResolved;
   enabled: boolean;
   disabled: boolean;
-  onSubmit: (patch: unknown) => Promise<void>;
+  onSubmit: (patch: unknown) => Promise<boolean>;
 }) {
   const meta = KIND_META[kind];
 
@@ -195,7 +207,7 @@ function IdentitySource({
   active: boolean;
   selected: boolean;
   disabled: boolean;
-  onSubmit: (patch: unknown) => Promise<void>;
+  onSubmit: (patch: unknown) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const empty = state.user_agent.length === 0;
@@ -205,11 +217,12 @@ function IdentitySource({
   const outbound = state.outbound_user_agent || state.user_agent;
 
   const save = async () => {
-    if (draft === null) {
+    if (draft === null || disabled) {
       return;
     }
-    await onSubmit({ [kind]: { [field]: draft } });
-    setDraft(null);
+    if (await onSubmit({ [kind]: { [field]: draft } })) {
+      setDraft(null);
+    }
   };
 
   return (
@@ -244,6 +257,7 @@ function IdentitySource({
         <input
           className="identity-source-input"
           value={draft}
+          disabled={disabled}
           spellCheck={false}
           aria-label={`${SOURCE_LABEL[source]} User-Agent`}
           onChange={(event) => setDraft(event.target.value)}

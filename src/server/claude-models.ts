@@ -60,7 +60,6 @@ export interface ClaudeRequestRouting {
 const CLAUDE_CLIENT_IDENTITY: Record<string, string> = {
   accept: "application/json",
   "anthropic-version": "2023-06-01",
-  "user-agent": factoryClientUserAgent("claude"),
   "x-app": "cli"
 };
 
@@ -69,10 +68,14 @@ export async function fetchClaudeModels(
   clientIdentity?: ClientIdentityStore
 ): Promise<UpstreamModelsResponse> {
   const auth = resolveClaudeCredential(config);
+  const identityKind = config.claude.primary.upstream_protocol === "anthropic_messages" ? "claude" : "codex";
+  const userAgent = clientIdentity
+    ? clientIdentity.userAgentFor(identityKind)
+    : factoryClientUserAgent(identityKind);
   const headers = buildAnthropicUpstreamHeaders(
     {
       ...CLAUDE_CLIENT_IDENTITY,
-      "user-agent": clientIdentity?.userAgentFor("claude") ?? CLAUDE_CLIENT_IDENTITY["user-agent"]
+      ...(userAgent ? { "user-agent": userAgent } : {})
     },
     auth.apiKey,
     config.claude.primary.extra_headers

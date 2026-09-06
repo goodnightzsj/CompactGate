@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { validateHeaderValue } from "node:http";
 import path from "node:path";
 import type {
   ClientIdentityKind,
@@ -70,13 +71,19 @@ export class ClientIdentityStore {
 
   private state: ClientIdentityState = factoryState();
 
+  private committedState: ClientIdentityState = this.state;
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   private writing: Promise<void> = Promise.resolve();
 
   private refreshing = false;
 
-  private loaded = false;
+  private loading: Promise<void> | null = null;
+
+  private starting: Promise<void> | null = null;
+
+  private readonly changeListeners = new Set<() => void>();
 
   private closed = false;
 
@@ -88,21 +95,28 @@ export class ClientIdentityStore {
   }
 
   /**
-   * Reads persisted state, runs whatever refresh is owed, then starts the loop.
+   * Reads persisted state, starts the loop, and runs whatever refresh is owed.
    * The loop ticks far more often than it acts: `refreshDue` decides per source
    * whether anything is owed, so a long-running process refreshes shortly after
    * midnight instead of 24 hours after it happened to start.
    *
-   * Callers must not await this on a hot path — it makes a network request.
-   * Rewriting serves the persisted or factory agent until it resolves.
+   * Callers that need only local readiness can await `load`; `start` additionally
+   * waits for the initial registry refresh.
    */
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    this.starting ??= this.startInternal();
+    return this.starting;
+  }
+
+  private async startInternal(): Promise<void> {
     await this.load();
     if (this.closed) {
       return;
     }
     if (!this.timer) {
-      this.timer = setInterval(() => void this.refreshDue(), this.tickIntervalMs);
+      this.timer = setInterval(() => {
+        void this.refreshDue().catch(reportBackgroundIdentityError);
+      }, this.tickIntervalMs);
       this.timer.unref?.();
     }
 
@@ -116,6 +130,7 @@ export class ClientIdentityStore {
    */
   close(): void {
     this.closed = true;
+    this.changeListeners.clear();
     if (!this.timer) {
       return;
     }
@@ -127,6 +142,11 @@ export class ClientIdentityStore {
   /** Awaits any in-flight write so a test or shutdown sees a settled file. */
   async flush(): Promise<void> {
     await this.writing;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => { this.changeListeners.delete(listener); };
   }
 
   /**
@@ -148,7 +168,7 @@ export class ClientIdentityStore {
    */
   observeCliUserAgent(kind: ClientIdentityKind, userAgent: string | null): void {
     const trimmed = readTrimmedString(userAgent);
-    if (!trimmed || trimmed.length > MAX_USER_AGENT_LENGTH) {
+    if (!trimmed || trimmed.length > MAX_USER_AGENT_LENGTH || !isValidHeaderValue(trimmed)) {
       return;
     }
 
@@ -159,15 +179,33 @@ export class ClientIdentityStore {
 
     const normalized = stripUserAgentVariants(trimmed);
     const at = this.now().toISOString();
-    this.state = withSource(this.state, kind, "extracted", {
+    const today = this.today();
+    const next = withSource(this.state, kind, "extracted", {
       user_agent: normalized,
       manual: false,
       updated_at: at,
-      last_success_date: this.today(),
+      last_success_date: today,
       last_attempt_at: at,
       last_error: null
     });
-    this.persist();
+    this.state = next;
+    void this.persist((state) => {
+      const current = state[kind].extracted;
+      if (current.manual || current.last_success_date === today) {
+        return state;
+      }
+      return withSource(state, kind, "extracted", {
+        user_agent: normalized,
+        manual: false,
+        updated_at: at,
+        last_success_date: today,
+        last_attempt_at: at,
+        last_error: null
+      });
+    }, true).catch((error) => {
+      this.state = this.committedState;
+      reportBackgroundIdentityError(error);
+    });
   }
 
   status(): ClientIdentityStatus {
@@ -205,38 +243,50 @@ export class ClientIdentityStore {
    * panel untrustworthy. Passing null reverts to automatic.
    */
   async update(patch: ClientIdentityPatch): Promise<ClientIdentityStatus> {
-    let next = this.state;
-    if (typeof patch.enabled === "boolean") {
-      next = { ...next, enabled: patch.enabled };
-    }
-
+    await this.load();
+    const validated: ClientIdentityPatch = { enabled: patch.enabled };
     for (const kind of CLIENT_IDENTITY_KINDS) {
-      const kindPatch = patch[kind];
-      if (!kindPatch) {
-        continue;
+      const value = patch[kind];
+      if (value) {
+        validated[kind] = {
+          ...value,
+          extracted_user_agent: validateManualUserAgent(value.extracted_user_agent),
+          version_tracked_user_agent: validateManualUserAgent(value.version_tracked_user_agent)
+        };
       }
-
-      if (kindPatch.preferred) {
-        next = { ...next, [kind]: { ...next[kind], preferred: kindPatch.preferred } };
-      }
-      next = applyManualPatch(next, kind, "extracted", kindPatch.extracted_user_agent, this.now());
-      next = applyManualPatch(
-        next,
-        kind,
-        "version_tracked",
-        kindPatch.version_tracked_user_agent,
-        this.now()
-      );
     }
+    await this.persist((state) => {
+      let next = state;
+      if (typeof validated.enabled === "boolean") {
+        next = { ...next, enabled: validated.enabled };
+      }
 
-    this.state = next;
-    this.persist();
-    await this.flush();
+      for (const kind of CLIENT_IDENTITY_KINDS) {
+        const kindPatch = validated[kind];
+        if (!kindPatch) {
+          continue;
+        }
+
+        if (kindPatch.preferred) {
+          next = { ...next, [kind]: { ...next[kind], preferred: kindPatch.preferred } };
+        }
+        next = applyManualPatch(next, kind, "extracted", kindPatch.extracted_user_agent, this.now());
+        next = applyManualPatch(
+          next,
+          kind,
+          "version_tracked",
+          kindPatch.version_tracked_user_agent,
+          this.now()
+        );
+      }
+      return next;
+    });
     return this.status();
   }
 
   /** Operator-triggered refresh; bypasses the once-a-day gate. */
   async refreshNow(kind?: ClientIdentityKind): Promise<ClientIdentityStatus> {
+    await this.load();
     const kinds = kind ? [kind] : CLIENT_IDENTITY_KINDS;
     for (const target of kinds) {
       await this.refreshVersionTracked(target, true);
@@ -355,32 +405,33 @@ export class ClientIdentityStore {
       error = cause instanceof Error ? cause.message : "Registry request failed.";
     }
 
-    if (!version) {
-      this.state = withSource(this.state, kind, "version_tracked", {
-        ...this.state[kind].version_tracked,
-        last_attempt_at: attemptedAt,
-        last_error: error
-      });
-      this.persist();
-      return;
-    }
-
-    this.state = {
-      ...this.state,
-      [kind]: {
-        ...this.state[kind],
-        remote_version: version,
-        remote_version_at: attemptedAt,
-        version_tracked: {
-          ...this.state[kind].version_tracked,
-          updated_at: attemptedAt,
-          last_success_date: this.today(),
-          last_attempt_at: attemptedAt,
-          last_error: null
-        }
+    await this.persist((state) => {
+      if (state[kind].version_tracked !== source) {
+        return state;
       }
-    };
-    this.persist();
+      if (!version) {
+        return withSource(state, kind, "version_tracked", {
+          ...source,
+          last_attempt_at: attemptedAt,
+          last_error: error
+        });
+      }
+      return {
+        ...state,
+        [kind]: {
+          ...state[kind],
+          remote_version: version,
+          remote_version_at: attemptedAt,
+          version_tracked: {
+            ...source,
+            updated_at: attemptedAt,
+            last_success_date: this.today(),
+            last_attempt_at: attemptedAt,
+            last_error: null
+          }
+        }
+      };
+    }, !force);
   }
 
   /**
@@ -404,39 +455,68 @@ export class ClientIdentityStore {
     return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
   }
 
-  private async load(): Promise<void> {
-    if (this.loaded) {
-      // Re-reading would discard in-memory updates that have not been flushed yet,
-      // so the file is authoritative exactly once.
-      return;
-    }
-
-    this.loaded = true;
-    try {
-      const raw = await fs.readFile(this.statePath, "utf8");
-      this.state = normalizeState(JSON.parse(raw) as unknown);
-    } catch {
-      // A missing or unreadable file is the first-run case: keep the factory
-      // state rather than failing startup over an optional cache.
-      this.state = factoryState();
-    }
+  /** One shared local-read barrier; a concurrent start must not bypass it. */
+  load(): Promise<void> {
+    this.loading ??= fs.readFile(this.statePath, "utf8")
+      .then((raw) => {
+        this.state = normalizeState(JSON.parse(raw) as unknown);
+        this.committedState = this.state;
+      })
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          // The first run has no state file yet; factory values are the contract.
+          this.state = factoryState();
+          this.committedState = this.state;
+          return;
+        }
+        throw new Error(`Could not load client identity state from ${this.statePath}.`, { cause: error });
+      });
+    return this.loading;
   }
 
   /**
-   * Serializes writes through a promise chain so two rapid updates cannot
-   * interleave their temp-file rename. Failures are swallowed on purpose: this is
-   * a cache beside the log database, and losing it costs one re-fetch.
+   * Apply each change to the last committed state inside the write queue. A
+   * failed write never becomes the baseline of a later update or observation.
    */
-  private persist(): void {
+  private persist(
+    update: (state: ClientIdentityState) => ClientIdentityState,
+    notify = false
+  ): Promise<void> {
     if (this.closed) {
-      return;
+      return Promise.resolve();
     }
 
-    const snapshot = this.state;
     this.writing = this.writing
-      .then(() => writeJsonAtomically(this.statePath, snapshot))
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.closed) {
+          return;
+        }
+        const next = update(this.committedState);
+        if (next === this.committedState) {
+          return;
+        }
+        await writeJsonAtomically(this.statePath, next);
+        this.committedState = next;
+        this.state = next;
+        if (notify) {
+          this.emitChange();
+        }
+      });
+    return this.writing;
   }
+
+  private emitChange(): void {
+    if (!this.closed) {
+      for (const listener of this.changeListeners) {
+        listener();
+      }
+    }
+  }
+}
+
+function reportBackgroundIdentityError(error: unknown): void {
+  console.error("Failed to persist automatic client identity state.", error);
 }
 
 export function resolveClientIdentityStatePath(configPath: string): string {
@@ -493,18 +573,8 @@ function applyManualPatch(
     });
   }
 
-  const userAgent = readTrimmedString(value) ?? "";
-  if (userAgent.length > MAX_USER_AGENT_LENGTH) {
-    throw new ClientIdentityValueError(
-      `user-agent must be at most ${MAX_USER_AGENT_LENGTH} characters.`
-    );
-  }
-  if (!isValidHeaderValue(userAgent)) {
-    throw new ClientIdentityValueError("user-agent must not contain control characters.");
-  }
-
   return withSource(state, kind, source, {
-    user_agent: userAgent,
+    user_agent: value,
     manual: true,
     updated_at: at.toISOString(),
     last_success_date: state[kind][source].last_success_date,
@@ -515,12 +585,29 @@ function applyManualPatch(
 
 export class ClientIdentityValueError extends Error {}
 
-/**
- * A newline or NUL in a header value is header injection, and the value reaches
- * here straight from an operator-facing text input.
- */
+function validateManualUserAgent(value: string | null | undefined): string | null | undefined {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const userAgent = value.trim();
+  if (userAgent.length > MAX_USER_AGENT_LENGTH) {
+    throw new ClientIdentityValueError(
+      `user-agent must be at most ${MAX_USER_AGENT_LENGTH} characters.`
+    );
+  }
+  if (!isValidHeaderValue(value)) {
+    throw new ClientIdentityValueError("user-agent must be a valid HTTP header value.");
+  }
+  return userAgent;
+}
+
 function isValidHeaderValue(value: string): boolean {
-  return value.length === 0 || !/[\u0000-\u001f]/.test(value);
+  try {
+    validateHeaderValue("user-agent", value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function withSource(
@@ -568,13 +655,15 @@ function emptyUaState(): ClientIdentityUaState {
 }
 
 /**
- * Rebuilds state from whatever the file holds, field by field. The file is a
- * cache that older or newer builds may have written, so a shape mismatch has to
- * degrade to the factory default for that field rather than reject the load.
+ * Missing fields keep their defaults, but malformed operator settings must not
+ * turn a saved disabled/manual policy into the factory policy.
  */
 function normalizeState(value: unknown): ClientIdentityState {
   if (!isRecord(value)) {
-    return factoryState();
+    throw new Error("Client identity state must be an object.");
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") {
+    throw new Error("Client identity enabled must be a boolean.");
   }
 
   return {
@@ -586,8 +675,14 @@ function normalizeState(value: unknown): ClientIdentityState {
 
 function normalizeKindState(value: unknown, kind: ClientIdentityKind): ClientIdentityKindState {
   const fallback = factoryKindState(kind);
-  if (!isRecord(value)) {
+  if (value === undefined) {
     return fallback;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`Client identity ${kind} must be an object.`);
+  }
+  if (value.preferred !== undefined && value.preferred !== "extracted" && value.preferred !== "version_tracked") {
+    throw new Error(`Client identity ${kind} has an invalid preferred source.`);
   }
 
   const remoteVersion = readTrimmedString(value.remote_version);
@@ -601,15 +696,18 @@ function normalizeKindState(value: unknown, kind: ClientIdentityKind): ClientIde
 }
 
 function normalizeUaState(value: unknown, fallbackUserAgent: string): ClientIdentityUaState {
-  if (!isRecord(value)) {
+  if (value === undefined) {
     return { ...emptyUaState(), user_agent: fallbackUserAgent };
   }
-
-  const userAgent = readTrimmedString(value.user_agent);
+  if (!isRecord(value) || (value.manual !== undefined && typeof value.manual !== "boolean")) {
+    throw new Error("Client identity source must be an object with a boolean manual flag.");
+  }
+  const userAgent = value.user_agent === undefined ? fallbackUserAgent : value.user_agent;
+  if (typeof userAgent !== "string" || userAgent.trim().length > MAX_USER_AGENT_LENGTH || !isValidHeaderValue(userAgent)) {
+    throw new Error("Stored user-agent must be a valid HTTP header value of at most 512 characters.");
+  }
   return {
-    user_agent: userAgent && userAgent.length <= MAX_USER_AGENT_LENGTH && isValidHeaderValue(userAgent)
-      ? userAgent
-      : fallbackUserAgent,
+    user_agent: userAgent.trim(),
     manual: value.manual === true,
     updated_at: readTrimmedString(value.updated_at),
     last_success_date: readTrimmedString(value.last_success_date),

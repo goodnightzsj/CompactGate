@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { factoryClientUserAgent } from "../src/server/config-defaults.js";
 import {
   captureRequest,
   postJson,
@@ -41,6 +42,7 @@ describe("compact capability probe", () => {
     });
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toBe("/v1/responses/compact");
+    expect(requests[0].headers["user-agent"]).toBe(factoryClientUserAgent("codex"));
     expect(JSON.parse(requests[0].body)).toMatchObject({
       model: "gpt-probe-openai-compact",
       stream: true,
@@ -51,6 +53,23 @@ describe("compact capability probe", () => {
       logs: unknown[];
     };
     expect(logs.logs).toHaveLength(0);
+  });
+
+  it("leaves the capability probe identity untouched when rewriting is disabled", async () => {
+    const requests: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(requests, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ output: [{ type: "compaction", encrypted_content: "state" }] }));
+    });
+    const app = await startApp("http://127.0.0.1:1/v1", upstream.url);
+    const disabled = await postJson(app.url, "/api/client-identity", { enabled: false });
+    expect(disabled.status).toBe(200);
+    await disabled.text();
+
+    const response = await postJson(app.url, "/api/compact/capability-probe", { model: "gpt-probe" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(requests[0].headers["user-agent"]).toBeUndefined();
   });
 
   it("returns unsupported details for upstream errors and rejects a missing model", async () => {
@@ -183,6 +202,7 @@ describe("compact capability probe", () => {
       usage: { inputTokens: 5 }
     });
     expect(anthropicRequests[0].url).toBe("/v1/messages");
+    expect(anthropicRequests[0].headers["user-agent"]).toBe(factoryClientUserAgent("claude"));
     expect(anthropicRequests[0].headers["anthropic-beta"]).toContain("compact-2026-01-12");
     expect(JSON.parse(anthropicRequests[0].body)).toHaveProperty("context_management");
 

@@ -1,7 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import type { ClientIdentityKind } from "../shared/types.js";
 import { readHeaderString } from "./http-utils.js";
-import { parseCodexClientUserAgent } from "./codex-version.js";
 
 /**
  * Outbound User-Agent rewriting for non-CLI clients.
@@ -22,13 +21,16 @@ import { parseCodexClientUserAgent } from "./codex-version.js";
  * SDK's own agent and third-party clients that merely mention Claude are not the
  * CLI and must still be rewritten.
  */
-const CLAUDE_CLI_USER_AGENT = /(?:^|\s)claude-cli\/(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?)/i;
+const CLAUDE_CLI_USER_AGENT = /^claude-cli\/\d+\.\d+\.\d+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?(?=\s|$|\()/i;
+
+/** Native detection is stricter than the log parser: only a real CLI product token may lead. */
+const CODEX_CLI_USER_AGENT = /^codex(?:_cli_rs|-tui|_tui|-cli|_cli|_exec|-exec)?\/\d+\.\d+\.\d+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?(?=\s|$|\()/i;
 
 /** A semver, with an optional prerelease/build variant such as `-cometix`. */
 const SEMVER_SOURCE = String.raw`\d+\.\d+\.\d+(?:[-+][A-Za-z0-9][A-Za-z0-9.-]*)?`;
 
 export function isNativeCodexUserAgent(userAgent: string | null): boolean {
-  return parseCodexClientUserAgent(userAgent) !== null;
+  return userAgent !== null && CODEX_CLI_USER_AGENT.test(userAgent);
 }
 
 export function isNativeClaudeUserAgent(userAgent: string | null): boolean {

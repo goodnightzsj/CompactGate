@@ -54,7 +54,8 @@ export async function startAppInDir(
     // on its own schedule, and a test suite must not depend on npm being reachable.
     fetchLatestVersion: async () => null
   });
-  const server = createCompactGateServer(
+  await clientIdentity.start();
+  const server = await createCompactGateServer(
     config,
     undefined,
     undefined,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { factoryClientUserAgent } from "../src/server/config-defaults.js";
 import {
+  postJson,
   setEnv,
   startApp,
   startConnectProxy,
@@ -159,5 +160,47 @@ describe("CompactGate OpenAI model list", () => {
     // file serves the factory Codex UA.
     expect(seen["user-agent"]).toBe(factoryClientUserAgent("codex"));
     expect(seen.originator).toBe("operator-override");
+  });
+
+  it("uses the configured wire-protocol identity and respects disabled rewriting", async () => {
+    const agents: Array<string | undefined> = [];
+    const primary = await startUpstream((req, res) => {
+      agents.push(req.headers["user-agent"]);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "model-probe" }] }));
+    });
+    const app = await startApp(primary.url, undefined, {
+      primary: { upstream_protocol: "anthropic_messages" }
+    });
+    const identity = await postJson(app.url, "/api/client-identity", {
+      claude: { extracted_user_agent: "claude-cli/8.8.8 (external, cli)" }
+    });
+    expect(identity.status).toBe(200);
+    await identity.text();
+    expect((await fetch(`${app.url}/api/openai/models`)).status).toBe(200);
+
+    const disabled = await postJson(app.url, "/api/client-identity", { enabled: false });
+    expect(disabled.status).toBe(200);
+    await disabled.text();
+    expect((await fetch(`${app.url}/api/openai/models`)).status).toBe(200);
+
+    expect(agents).toEqual(["claude-cli/8.8.8 (external, cli)", undefined]);
+  });
+
+  it("keeps a configured user-agent even with identity rewriting disabled", async () => {
+    let agent: string | undefined;
+    const primary = await startUpstream((req, res) => {
+      agent = req.headers["user-agent"];
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    });
+    const app = await startApp(primary.url, undefined, {
+      primary: { extra_headers: { "User-Agent": "operator-agent/1.0.0" } }
+    });
+    const disabled = await postJson(app.url, "/api/client-identity", { enabled: false });
+    expect(disabled.status).toBe(200);
+    await disabled.text();
+    expect((await fetch(`${app.url}/api/openai/models`)).status).toBe(200);
+    expect(agent).toBe("operator-agent/1.0.0");
   });
 });

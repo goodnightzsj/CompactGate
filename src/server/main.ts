@@ -8,7 +8,7 @@ const configPath = process.env.COMPACTGATE_CONFIG ?? "compactgate.json";
 const configStore = await loadConfigStore(configPath);
 const { host, port } = parseListenAddress(configStore.get().listen);
 const logger = createRequestLogger(configStore);
-const server = createCompactGateServer(configStore, logger);
+const server = await createCompactGateServer(configStore, logger);
 
 server.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {

@@ -44,12 +44,14 @@ export function useLogTableScroll({
   isLoadingLogs,
   isLoadingMoreLogs,
   logs,
+  narrowViewport,
   onLoadMore
 }: {
   hasMoreLogs: boolean;
   isLoadingLogs: boolean;
   isLoadingMoreLogs: boolean;
   logs: RequestLogEntry[];
+  narrowViewport: boolean;
   onLoadMore: () => void;
 }) {
   const tableBodyRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +100,9 @@ export function useLogTableScroll({
     }
 
     const previous = scrollSnapshotRef.current;
+    if (previous.body !== body) {
+      setUnseenLogCount(0);
+    }
     const prependedCount = previous.body === body
       ? countPrependedLogs(previous.logs, logs)
       : 0;
@@ -130,7 +135,7 @@ export function useLogTableScroll({
       firstLogOffset: firstLogOffset(body, logs),
       scrollTop: body.scrollTop
     };
-  }, [logs]);
+  }, [logs, narrowViewport]);
 
   function handleLogScroll(event: UIEvent<HTMLDivElement>) {
     const body = event.currentTarget;

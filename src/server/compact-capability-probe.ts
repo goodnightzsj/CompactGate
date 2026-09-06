@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CompactGateConfig, UpstreamProtocol } from "../shared/types.js";
+import type { ClientIdentityStore } from "./client-identity-store.js";
 import { countCompactResponseItems } from "./compact-response-normalizer.js";
 import { ConfigError } from "./config.js";
 import {
@@ -33,6 +34,7 @@ export async function probeCompactCapability(input: {
   res: ServerResponse;
   config: CompactGateConfig;
   model?: unknown;
+  clientIdentity?: ClientIdentityStore;
 }): Promise<CompactCapabilityProbeResult> {
   const model = resolveProbeModel(input.config, input.model);
   const rawBody = Buffer.from(JSON.stringify({
@@ -66,7 +68,8 @@ export async function probeCompactCapability(input: {
         "accept-encoding": "identity"
       },
       rawBody,
-      nativeCompaction: true
+      nativeCompaction: true,
+      clientIdentity: input.clientIdentity
     });
     plan.requestHeaders["accept-encoding"] = "identity";
     const result = await sendBufferedUpstreamRequest({

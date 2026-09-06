@@ -89,7 +89,8 @@ export async function handleRuntimeApi(
       req,
       res,
       config: requestProfile?.config ?? baseConfig,
-      model: body.model
+      model: body.model,
+      clientIdentity
     }));
     return true;
   }

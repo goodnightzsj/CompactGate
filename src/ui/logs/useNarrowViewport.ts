@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react";
 
 // Matches the breakpoint at which logs.css swaps the desktop table for the
 // stacked cards. Read reactively so a resize across the boundary switches the
-// transition instead of keeping whichever one the first render happened to pick.
+// mounted view instead of keeping whichever one the first render picked.
 const NARROW_VIEWPORT_QUERY = "(max-width: 720px)";
 
 export function useNarrowViewport(): boolean {

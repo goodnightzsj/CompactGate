@@ -19,6 +19,8 @@ import {
   logStatusKind
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
+import { useNarrowViewport } from "./useNarrowViewport.js";
+import { ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
 
 function logEntryKey(entry: RequestLogEntry): string {
   return `${entry.request_id}-${entry.time}`;
@@ -26,20 +28,6 @@ function logEntryKey(entry: RequestLogEntry): string {
 const MotionDiv = motion.div;
 const MotionSpan = motion.span;
 const MotionTr = motion.tr;
-// Spring taken from axonhub — the organic deceleration reads better than a tween
-// for row insertion. Underdamped on purpose (zeta 0.671); the slight overshoot is
-// the point. STAGGER_BASE_MS is pinned to this spring's settle time, so changing
-// stiffness or damping means recomputing ROW_SPRING_SETTLE_MS in useStaggeredLogs.
-//
-// Deliberately NOT copied from axonhub: `mode='popLayout'`. It depends on a
-// precondition this page does not meet — see the AnimatePresence below.
-const rowTransition = {
-  type: 'spring' as const,
-  stiffness: 500,
-  damping: 30,
-  mass: 1,
-  opacity: { duration: 0.2 }
-};
 
 const detailTransition = {
   duration: 0.2,
@@ -72,7 +60,8 @@ export function LogsPage({
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const reduceMotion = useReducedMotion();
-  const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : rowTransition;
+  const narrowViewport = useNarrowViewport();
+  const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : ROW_SPRING_TRANSITION;
   const effectiveDetailTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition;
   const {
     handleLogScroll,
@@ -86,6 +75,7 @@ export function LogsPage({
     isLoadingLogs,
     isLoadingMoreLogs,
     logs,
+    narrowViewport,
     onLoadMore
   });
   const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
@@ -275,7 +265,8 @@ export function LogsPage({
         )
       ) : null}
 
-      <div className="log-table log-table-full" hidden={logs.length === 0}>
+      {!narrowViewport && (
+        <div className="log-table log-table-full" hidden={logs.length === 0}>
           {/* layoutScroll: this is a scrollable ancestor of `layout` rows, so
               Motion has to be told to re-read its scroll offset — otherwise the
               FLIP measurements are off by scrollTop, and off again by whatever
@@ -399,11 +390,12 @@ export function LogsPage({
               </tbody>
             </table>
           </MotionDiv>
-      </div>
+        </div>
+      )}
 
       {/* Rendered conditionally rather than with `hidden`: the narrow-screen rule
           sets `display: grid`, which outranks the UA rule for [hidden]. */}
-      {logs.length > 0 && (
+      {narrowViewport && logs.length > 0 && (
         <MotionDiv
           ref={mobileListRef}
           layoutScroll

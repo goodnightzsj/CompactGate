@@ -4,6 +4,7 @@ import {
   INSTANT_THRESHOLD,
   MAX_STAGGER_DURATION_MS,
   ROW_SPRING_SETTLE_MS,
+  ROW_SPRING_TRANSITION,
   STAGGER_BASE_MS,
   estimateStaggerDuration,
   planStaggeredLogCatchUp,
@@ -18,6 +19,8 @@ describe("staggered log query changes", () => {
     // spring settles leaves several springs plus their layout FLIPs in flight at
     // once. Retuning either side without the other has to fail here.
     expect(STAGGER_BASE_MS).toBeGreaterThanOrEqual(ROW_SPRING_SETTLE_MS);
+    expect(ROW_SPRING_TRANSITION.stiffness).toBe(500);
+    expect(ROW_SPRING_TRANSITION.damping).toBe(30);
   });
 
   it("caps the reveal so a full queue stays inside the duration budget", () => {

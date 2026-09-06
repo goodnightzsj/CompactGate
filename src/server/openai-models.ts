@@ -24,8 +24,7 @@ export type OpenAiModelsResponse = UpstreamModelsResponse;
  */
 const CODEX_CLIENT_IDENTITY: Record<string, string> = {
   accept: "application/json",
-  originator: "codex_cli_rs",
-  "user-agent": factoryClientUserAgent("codex")
+  originator: "codex_cli_rs"
 };
 
 export async function fetchOpenAiModels(
@@ -33,6 +32,10 @@ export async function fetchOpenAiModels(
   clientIdentity?: ClientIdentityStore
 ): Promise<OpenAiModelsResponse> {
   const credential = resolveRouteCredential("primary", config);
+  const identityKind = config.primary.upstream_protocol === "anthropic_messages" ? "claude" : "codex";
+  const userAgent = clientIdentity
+    ? clientIdentity.userAgentFor(identityKind)
+    : factoryClientUserAgent(identityKind);
   return fetchUpstreamModels({
     baseUrl: config.primary.base_url,
     // Identity rides in as the request baseline, which `extra_headers` overwrites,
@@ -40,7 +43,7 @@ export async function fetchOpenAiModels(
     headers: buildUpstreamHeaders(
       {
         ...CODEX_CLIENT_IDENTITY,
-        "user-agent": clientIdentity?.userAgentFor("codex") ?? CODEX_CLIENT_IDENTITY["user-agent"]
+        ...(userAgent ? { "user-agent": userAgent } : {})
       },
       credential.apiKey,
       config.primary.extra_headers

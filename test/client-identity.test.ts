@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyClientIdentityUserAgent,
   isNativeClaudeUserAgent,
@@ -19,6 +19,14 @@ import { factoryClientUserAgent } from "../src/server/config-defaults.js";
 
 const temporaryDirectories: string[] = [];
 const openStores: ClientIdentityStore[] = [];
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 afterEach(async () => {
   // Close before removing: a store still running would re-create its state file
@@ -144,6 +152,7 @@ describe("client identity store", () => {
     const store = await createStore({ now: () => now });
 
     store.observeCliUserAgent("codex", OBSERVED_CODEX_AGENTS[0]);
+    await store.flush();
     expect(store.userAgentFor("codex")).toBe(
       "codex-tui/0.144.1 (Mac OS 15.0.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.144.1)"
     );
@@ -155,12 +164,13 @@ describe("client identity store", () => {
     // Same day: a newer CLI build must not displace today's successful extraction.
     now = localTime(2026, 9, 4, 23);
     store.observeCliUserAgent("codex", "codex-cli/0.150.0");
+    await store.flush();
     expect(store.userAgentFor("codex")).toContain("0.144.1");
 
     now = localTime(2026, 9, 5, 1);
     store.observeCliUserAgent("codex", "codex-cli/0.150.0");
-    expect(store.userAgentFor("codex")).toBe("codex-cli/0.150.0");
     await store.flush();
+    expect(store.userAgentFor("codex")).toBe("codex-cli/0.150.0");
   });
 
   it("applies the registry version to the version-tracked agent only", async () => {
@@ -241,9 +251,9 @@ describe("client identity store", () => {
     expect(store.userAgentFor("codex")).toBe(factoryClientUserAgent("codex"));
 
     store.observeCliUserAgent("codex", "codex-cli/0.144.3");
+    await store.flush();
     expect(store.userAgentFor("codex")).toBe("codex-cli/0.144.3");
     expect(store.status().resolved.codex.fell_back).toBe(true);
-    await store.flush();
   });
 
   it("freezes a hand-edited agent against both observation and the registry", async () => {
@@ -269,17 +279,22 @@ describe("client identity store", () => {
     await store.update({ codex: { extracted_user_agent: null } });
     now = localTime(2026, 9, 6, 1);
     store.observeCliUserAgent("codex", "codex-cli/0.151.0");
-    expect(store.status().codex.extracted.user_agent).toBe("codex-cli/0.151.0");
     await store.flush();
+    expect(store.status().codex.extracted.user_agent).toBe("codex-cli/0.151.0");
   });
 
   it("rejects an agent that could inject a header or blow up the request", async () => {
     const store = await createStore();
-    await expect(store.update({ codex: { extracted_user_agent: "evil\r\nx-admin: 1" } }))
-      .rejects.toBeInstanceOf(ClientIdentityValueError);
+    for (const value of ["evil\r\nx-admin: 1", "codex-cli/1.0.0\n", "bad\u0000", "bad\u007f", "bad\u0100"]) {
+      await expect(store.update({ codex: { extracted_user_agent: value } }))
+        .rejects.toBeInstanceOf(ClientIdentityValueError);
+    }
     await expect(store.update({ codex: { extracted_user_agent: "a".repeat(600) } }))
       .rejects.toBeInstanceOf(ClientIdentityValueError);
     expect(store.status().codex.extracted.user_agent).toBe("");
+
+    await store.update({ codex: { extracted_user_agent: "codex-cli/1.0.0\t(caf\u00e9)" } });
+    expect(store.userAgentFor("codex")).toBe("codex-cli/1.0.0\t(caf\u00e9)");
   });
 
   it("stops rewriting entirely when disabled", async () => {
@@ -289,7 +304,7 @@ describe("client identity store", () => {
     expect(store.userAgentFor("claude")).toBeNull();
   });
 
-  it("round-trips through the state file and ignores a corrupt one", async () => {
+  it("round-trips through the state file and rejects a corrupt one", async () => {
     const dir = await temporaryDir();
     const statePath = resolveClientIdentityStatePath(path.join(dir, "compactgate.json"));
     const store = new ClientIdentityStore({
@@ -309,13 +324,145 @@ describe("client identity store", () => {
     reloaded.close();
     store.close();
 
-    // The file is a cache, so a truncated or foreign shape must not fail startup.
-    const { writeFile } = await import("node:fs/promises");
+    // Operator settings must not be reset or overwritten when the file is damaged.
     await writeFile(statePath, "{ not json");
     const recovered = new ClientIdentityStore({ statePath, fetchLatestVersion: async () => null });
-    await recovered.start();
-    expect(recovered.userAgentFor("claude")).toBe(factoryClientUserAgent("claude"));
+    await expect(recovered.start()).rejects.toThrow("Could not load client identity state");
+    expect(await readFile(statePath, "utf8")).toBe("{ not json");
     recovered.close();
+  });
+
+  it("preserves manual empty sources and pinned versions after reload", async () => {
+    const dir = await temporaryDir();
+    const statePath = path.join(dir, "client-identity.json");
+    const options = { statePath, fetchLatestVersion: async () => "9.9.9" };
+    const store = new ClientIdentityStore(options);
+    openStores.push(store);
+    await store.start();
+    await store.update({
+      codex: { extracted_user_agent: "", version_tracked_user_agent: "" },
+      claude: { preferred: "version_tracked", version_tracked_user_agent: "claude-cli/2.0.0" }
+    });
+    store.close();
+
+    const reloaded = new ClientIdentityStore(options);
+    openStores.push(reloaded);
+    await reloaded.start();
+    expect(reloaded.status()).toEqual(store.status());
+    expect(reloaded.userAgentFor("codex")).toBeNull();
+    expect(reloaded.userAgentFor("claude")).toBe("claude-cli/2.0.0");
+  });
+
+  it.each(["null", '{"enabled":"false"}', '{"codex":{"preferred":"other"}}',
+    '{"codex":{"extracted":{"manual":true,"user_agent":"bad\\u007f"}}}'])
+  ("rejects malformed stored settings without replacing them: %s", async (raw) => {
+    const statePath = path.join(await temporaryDir(), "client-identity.json");
+    await writeFile(statePath, raw);
+    const store = new ClientIdentityStore({ statePath, fetchLatestVersion: async () => null });
+    openStores.push(store);
+    await expect(store.start()).rejects.toThrow("Could not load client identity state");
+    expect(await readFile(statePath, "utf8")).toBe(raw);
+  });
+
+  it("rejects unreadable state paths rather than resetting settings", async () => {
+    const store = new ClientIdentityStore({ statePath: await temporaryDir() });
+    openStores.push(store);
+    await expect(store.load()).rejects.toMatchObject({ cause: { code: "EISDIR" } });
+  });
+
+  it("does not let an in-flight registry response overwrite a newer manual edit", async () => {
+    const pending = deferred<string | null>();
+    const next = new ClientIdentityStore({
+      statePath: path.join(await temporaryDir(), "client-identity.json"),
+      fetchLatestVersion: () => pending.promise
+    });
+    openStores.push(next);
+    await next.load();
+    const refresh = next.refreshNow("codex");
+    await next.update({ codex: { version_tracked_user_agent: "codex-cli/2.0.0" } });
+    const before = next.status();
+    pending.resolve("9.9.9");
+    await refresh;
+    expect(next.status()).toEqual(before);
+  });
+
+  it("rejects failed writes and allows the next update to retry", async () => {
+    const dir = await temporaryDir();
+    const statePath = path.join(dir, "client-identity.json");
+    const store = new ClientIdentityStore({ statePath, fetchLatestVersion: async () => "9.9.9" });
+    openStores.push(store);
+    await store.start();
+    const saved = await readFile(statePath, "utf8");
+    const before = store.status();
+    const temporaryPath = `${statePath}.${process.pid}.tmp`;
+    await mkdir(temporaryPath);
+    try {
+      await expect(store.update({ enabled: false })).rejects.toMatchObject({ code: "EISDIR" });
+      await expect(store.flush()).rejects.toMatchObject({ code: "EISDIR" });
+      await expect(store.refreshNow("codex")).rejects.toMatchObject({ code: "EISDIR" });
+      const failed = await Promise.allSettled([
+        store.update({ enabled: false }),
+        store.update({ codex: { extracted_user_agent: "codex-cli/8.8.8" } })
+      ]);
+      expect(failed.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+      expect(store.status()).toEqual(before);
+      expect(await readFile(statePath, "utf8")).toBe(saved);
+    } finally {
+      await rm(temporaryPath, { recursive: true, force: true });
+      await store.update({ enabled: true });
+    }
+    expect(JSON.parse(await readFile(statePath, "utf8"))).toMatchObject({ enabled: true });
+  });
+
+  it("merges concurrent successful updates with automatic observations", async () => {
+    const store = await createStore();
+    const updates = Promise.all([
+      store.update({ enabled: false }),
+      store.update({ codex: { extracted_user_agent: "codex-cli/2.3.4" } })
+    ]);
+    store.observeCliUserAgent("claude", "claude-cli/3.4.5");
+    await updates;
+    await store.flush();
+    expect(store.status()).toMatchObject({
+      enabled: false,
+      codex: { extracted: { user_agent: "codex-cli/2.3.4", manual: true } },
+      claude: { extracted: { user_agent: "claude-cli/3.4.5", manual: false } }
+    });
+  });
+
+  it("notifies subscribers when automatic state changes are persisted", async () => {
+    let now = localTime(2026, 9, 4, 1);
+    const store = await createStore({ now: () => now, fetchLatestVersion: async () => "9.9.9" });
+    const updates: string[] = [];
+    const unsubscribe = store.subscribe(() => updates.push(store.status().codex.extracted.user_agent));
+    store.observeCliUserAgent("codex", "codex-cli/1.2.3");
+    await store.flush();
+    expect(updates).toEqual(["codex-cli/1.2.3"]);
+
+    now = localTime(2026, 9, 5, 1);
+    await store.refreshDue();
+    expect(updates).toHaveLength(3);
+    unsubscribe();
+    store.observeCliUserAgent("codex", "codex-cli/1.2.4");
+    await store.flush();
+    expect(updates).toHaveLength(3);
+  });
+
+  it("reports background write failures without an unhandled rejection", async () => {
+    const dir = await temporaryDir();
+    const store = new ClientIdentityStore({ statePath: path.join(dir, "missing", "state.json") });
+    openStores.push(store);
+    await store.load();
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      store.observeCliUserAgent("codex", "codex-cli/1.2.3");
+      await expect(store.flush()).rejects.toMatchObject({ code: "ENOENT" });
+      await vi.waitFor(() => expect(report).toHaveBeenCalled());
+      await mkdir(path.join(dir, "missing"));
+      await store.update({ enabled: false });
+    } finally {
+      report.mockRestore();
+    }
   });
 
   it("writes no state file after close", async () => {

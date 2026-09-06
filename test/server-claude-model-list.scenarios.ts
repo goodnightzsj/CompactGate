@@ -1,6 +1,7 @@
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
+  postJson,
   startApp,
   startClaudeUpstream
 } from "./helpers/server-test-utils.js";
@@ -222,4 +223,31 @@ describe("CompactGate Claude routing", () => {
     expect(seen["user-agent"]).toBe("claude-cli/2.1.234 (external, cli)");
     expect(seen["x-app"]).toBe("operator-override");
   });
+
+  it.each(["openai_responses", "openai_chat"])(
+    "uses Codex identity for a %s upstream and respects disabled rewriting",
+    async (upstreamProtocol) => {
+      const agents: Array<string | undefined> = [];
+      const claude = await startClaudeUpstream((req, res) => {
+        agents.push(req.headers["user-agent"]);
+        writeJsonResponse(res, { data: [{ id: "model-probe" }] });
+      });
+      const app = await startApp(undefined, undefined, {
+        claude: { primary: { base_url: claude.url, upstream_protocol: upstreamProtocol } }
+      });
+      const identity = await postJson(app.url, "/api/client-identity", {
+        codex: { extracted_user_agent: "codex-cli/8.8.8" }
+      });
+      expect(identity.status).toBe(200);
+      await identity.text();
+      expect((await fetch(`${app.url}/api/claude/models`)).status).toBe(200);
+
+      const disabled = await postJson(app.url, "/api/client-identity", { enabled: false });
+      expect(disabled.status).toBe(200);
+      await disabled.text();
+      expect((await fetch(`${app.url}/api/claude/models`)).status).toBe(200);
+
+      expect(agents).toEqual(["codex-cli/8.8.8", undefined]);
+    }
+  );
 });

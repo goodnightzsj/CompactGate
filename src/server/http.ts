@@ -137,7 +137,7 @@ function createDebugCaptureWriter(
   );
 }
 
-export function createCompactGateServer(
+export async function createCompactGateServer(
   configStore: ConfigStore,
   logger?: RequestLogger,
   captureWriter?: DebugCaptureWriter,
@@ -145,7 +145,8 @@ export function createCompactGateServer(
   studioEvents = new StudioEventBroadcaster(),
   codexVersionMonitor = new CodexVersionMonitor(),
   clientIdentity = createClientIdentityStore(configStore)
-): http.Server {
+): Promise<http.Server> {
+  await clientIdentity.load();
   const actualLogger = logger ?? createRequestLogger(configStore);
   const actualCaptureWriter =
     captureWriter ??
@@ -159,9 +160,14 @@ export function createCompactGateServer(
   const primaryFailover = new PrimaryFailoverState();
   const claudeKeyPool = new ClaudeKeyPoolState();
   codexVersionMonitor.start();
-  // Reads the persisted UAs and schedules the daily registry refresh. Rewriting
-  // stays on the factory values until this resolves, so startup does not wait.
-  void clientIdentity.start();
+  const stopIdentityUpdates = clientIdentity.subscribe(() => {
+    studioEvents.broadcastSnapshot(
+      createStudioSnapshot(configStore, actualLogger, codexVersionMonitor, clientIdentity)
+    );
+  });
+  void clientIdentity.start().catch((error) => {
+    console.error("Client identity startup refresh failed.", error);
+  });
   const server = http.createServer((req, res) => {
     void routeRequest(
       req,
@@ -185,6 +191,7 @@ export function createCompactGateServer(
     );
   });
   server.once("close", () => {
+    stopIdentityUpdates();
     actualLogger.close();
     studioEvents.close();
     codexVersionMonitor.close();

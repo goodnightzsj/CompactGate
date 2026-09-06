@@ -6,6 +6,16 @@ import type { RequestLogEntry } from "../../shared/types.js";
 // 0.5px and stay there. Retuning that spring means recomputing this.
 export const ROW_SPRING_SETTLE_MS = 260;
 
+// Keep the animation parameters beside the cadence contract. LogsPage imports
+// this object so changing the spring cannot silently leave a stale duplicate.
+export const ROW_SPRING_TRANSITION = {
+  type: "spring" as const,
+  stiffness: 500,
+  damping: 30,
+  mass: 1,
+  opacity: { duration: 0.2 }
+};
+
 // Held invariant, copied from axonhub: cadence >= ROW_SPRING_SETTLE_MS, so each
 // row lands before the next is inserted. That discrete rhythm is what its
 // animation actually reads as; axonhub's 500ms is ~2x its settle time. A cadence
