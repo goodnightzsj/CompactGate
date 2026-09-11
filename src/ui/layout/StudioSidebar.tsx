@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { HealthResponse } from "../../shared/types.js";
 import type { StudioPage, ThemeMode } from "../app-types.js";
 import { upstreamHealthBadge } from "../health/health-status.js";
@@ -105,6 +105,23 @@ export function StudioSidebar({
   themeMode: ThemeMode;
   onThemeModeChange: (mode: ThemeMode) => void;
 }) {
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const revealCurrentPage = () => {
+      const active = nav.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!active || nav.scrollWidth <= nav.clientWidth) return;
+      const bounds = nav.getBoundingClientRect();
+      const item = active.getBoundingClientRect();
+      nav.scrollLeft += item.left - bounds.left - (nav.clientWidth - item.width) / 2;
+    };
+    revealCurrentPage();
+    const observer = new ResizeObserver(revealCurrentPage);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [currentPage]);
+
   const primaryStatus = upstreamHealthBadge(health?.primary);
   const compactStatus = upstreamHealthBadge(health?.compact);
   const claudePrimaryStatus = upstreamHealthBadge(health?.claude?.primary);
@@ -126,7 +143,7 @@ export function StudioSidebar({
         <h1>CompactGate</h1>
       </div>
 
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="主导航" ref={navRef}>
         {navItems.map((item) => (
           <button
             key={item.page}

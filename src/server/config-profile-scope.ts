@@ -72,6 +72,8 @@ export function extractScopedProfileConfig(
  * does not survive a change of provider family; and `reasoning_effort`,
  * `state_domain_id`, `model_mode`, `model_template`, `scene_map`,
  * `long_context_bytes` because they exist on one side only.
+ * OAuth routes retain their account reference and provider-bound protocol and
+ * clear the destination environment credential instead of changing providers.
  *
  * Pool entry ids are kept as they are. Key health is tracked per
  * `profileId#keyId`, so a fresh profile id already separates the copy's
@@ -125,6 +127,11 @@ function carriedRouteFields(route: PrimaryUpstreamConfig | CompactConfig | Claud
     api_key: route.api_key,
     extra_headers: { ...route.extra_headers },
     proxy_url: route.proxy_url,
+    ...(route.oauth_account_id ? {
+      oauth_account_id: route.oauth_account_id,
+      api_key_env: "",
+      upstream_protocol: route.upstream_protocol
+    } : {}),
     // An absent pool must stay absent: materializing `api_keys: []` would read as
     // "the pool was cleared" and shadow the single `api_key` beside it.
     ...(route.api_keys && route.api_keys.length > 0

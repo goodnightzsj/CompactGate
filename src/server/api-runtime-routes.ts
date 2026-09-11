@@ -90,7 +90,8 @@ export async function handleRuntimeApi(
       res,
       config: requestProfile?.config ?? baseConfig,
       model: body.model,
-      clientIdentity
+      clientIdentity,
+      oauth: configStore.oauth
     }));
     return true;
   }
@@ -154,17 +155,17 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/health") {
-    sendJson(res, 200, healthForConfig(configStore.get(), logger, codexVersionMonitor, clientIdentity));
+    sendJson(res, 200, healthForConfig(configStore.get(), logger, codexVersionMonitor, clientIdentity, configStore.oauth));
     return true;
   }
 
   if (req.method === "GET" && url.pathname === "/api/claude/models") {
-    sendJson(res, 200, await fetchClaudeModels(configStore.get(), clientIdentity));
+    sendJson(res, 200, await fetchClaudeModels(configStore.get(), clientIdentity, configStore.oauth));
     return true;
   }
 
   if (req.method === "GET" && url.pathname === "/api/openai/models") {
-    sendJson(res, 200, await fetchOpenAiModels(configStore.get(), clientIdentity));
+    sendJson(res, 200, await fetchOpenAiModels(configStore.get(), clientIdentity, configStore.oauth));
     return true;
   }
 

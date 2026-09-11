@@ -234,6 +234,26 @@ describe("Studio config ownership", () => {
     });
     expect(viaProfileWrite.formRevision).toBe("r-profile-write");
   });
+
+  it.each([false, true])("applies one scope without blocking unrelated drafts when its snapshot arrives first=%s", async (snapshotFirst) => {
+    const store = await loadStore();
+    const current = store.toPublicConfig();
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: current });
+    state = reduceStudioConfigState(state, { type: "set_form", value: (form) => ({
+      ...form, primaryModelOverride: "discard-on-explicit-apply", claudePrimaryBaseUrl: "https://kept-draft.example", loggingKeepRecent: 999
+    }) });
+    const applied = structuredClone(current);
+    applied.revision = "r-applied-profile";
+    applied.primary.model_override = "applied-model";
+    if (snapshotFirst) state = reduceStudioConfigState(state, { type: "remote_config", config: applied });
+    state = reduceStudioConfigState(state, { type: "apply_profile", config: applied, scope: "codex", baselineConfig: current, baselineRevision: current.revision });
+
+    expect(state.form.primaryModelOverride).toBe("applied-model");
+    expect(state.form.claudePrimaryBaseUrl).toBe("https://kept-draft.example");
+    expect(state.form.loggingKeepRecent).toBe(999);
+    expect(state.formRevision).toBe(applied.revision);
+    expect(isFormDirty(applied, state.form)).toBe(true);
+  });
 });
 
 async function loadStore(): Promise<ConfigStore> {

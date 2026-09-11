@@ -11,6 +11,7 @@ export function useRoutePreviewAction() {
   const [previewHeaders, setPreviewHeaders] = useState(DEFAULT_PREVIEW_HEADERS);
   const [preview, setPreview] = useState<RoutePreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
   const requestIdRef = useRef(0);
 
   async function previewRoute(event: FormEvent) {
@@ -18,6 +19,7 @@ export function useRoutePreviewAction() {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
     setPreviewError(null);
+    setIsPreviewing(true);
 
     try {
       const parsedBody = previewBody.trim().length > 0 ? JSON.parse(previewBody) : {};
@@ -39,6 +41,10 @@ export function useRoutePreviewAction() {
         setPreview(null);
         setPreviewError(errorSummary(error));
       }
+    } finally {
+      if (isLatestPreviewRequest(requestId, requestIdRef.current)) {
+        setIsPreviewing(false);
+      }
     }
   }
 
@@ -51,9 +57,11 @@ export function useRoutePreviewAction() {
     requestIdRef.current += 1;
     setPreview(null);
     setPreviewError(null);
+    setIsPreviewing(false);
   }
 
   return {
+    isPreviewing,
     preview,
     previewBody,
     previewError,

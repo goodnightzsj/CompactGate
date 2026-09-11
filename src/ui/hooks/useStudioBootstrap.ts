@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
-import type { HealthResponse, PublicConfig } from "../../shared/types.js";
+import type { ConfigProfileScope, HealthResponse, PublicConfig } from "../../shared/types.js";
 import type { PageMode } from "../app-types.js";
 import {
   INITIAL_STUDIO_CONFIG_STATE,
@@ -47,6 +47,9 @@ export function useStudioBootstrap(pageMode: PageMode) {
   const applyRemoteConfig = useCallback((config: PublicConfig) => {
     dispatchConfig({ type: "remote_config", config });
   }, []);
+  const applyProfileConfig = useCallback((config: PublicConfig, scope: ConfigProfileScope) => {
+    dispatchConfig({ type: "apply_profile", config, scope, baselineConfig: configState.config, baselineRevision: configState.formRevision });
+  }, [configState.config, configState.formRevision]);
   const commitConfig = useCallback((config: PublicConfig, submittedRevision: number) => {
     dispatchConfig({ type: "commit_config", config, submittedRevision });
   }, []);
@@ -108,6 +111,7 @@ export function useStudioBootstrap(pageMode: PageMode) {
     draftRevision: configState.draftRevision,
     formRevision: configState.formRevision,
     applyRemoteConfig,
+    applyProfileConfig,
     commitConfig,
     notifyServerRecovered,
     pageError: configState.pageError,

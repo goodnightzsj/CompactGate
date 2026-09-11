@@ -52,7 +52,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
 
   for (const { profile } of rotation) {
     const profilePrimary = readProfilePrimary(profile) as Partial<UpstreamConfig>;
-    const mergedPrimary = { ...config.primary, ...profilePrimary };
+    const mergedPrimary = { ...config.primary, ...profilePrimary, oauth_account_id: profilePrimary.oauth_account_id };
     // Strategy is a per-profile choice with the runtime primary as its default.
     const spread = (
       (profilePrimary as Partial<{ key_strategy: string }>).key_strategy ??
@@ -144,6 +144,8 @@ function withPrimaryConfig(
     primary: {
       ...config.primary,
       ...profilePrimary,
+      // An API-key profile must not inherit the active profile's OAuth binding.
+      oauth_account_id: profilePrimary.oauth_account_id,
       // The pool has to be emptied alongside, or the selection is inert:
       // `resolveRouteCredential` reads the pool's first enabled entry *before*
       // `api_key`, so every candidate resolved to pool[0] no matter which key it
@@ -186,6 +188,7 @@ function primaryCredentialSignature(config: CompactGateConfig): string {
   return [
     credential.apiKeySource,
     credential.activeApiKeyEnv ?? "",
+    credential.oauthAccountId ?? "",
     credential.apiKey ? createHash("sha256").update(credential.apiKey).digest("hex") : ""
   ].join(":");
 }

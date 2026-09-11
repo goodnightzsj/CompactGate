@@ -40,10 +40,8 @@ export function isRouteUrlPresetKind(value: string): value is RouteUrlPresetKind
 
 export function routeUrlEntriesFromRuntime(config: CompactGateRuntimeConfig): RouteUrlPresetEntry[] {
   return [
-    routeUrlEntry("codex_primary", config.primary),
-    routeUrlEntry("codex_compact", config.compact),
-    routeUrlEntry("claude_primary", config.claude.primary),
-    routeUrlEntry("claude_compact", config.claude.compact)
+    ...routeUrlEntriesFromProfileRuntime(config, "codex"),
+    ...routeUrlEntriesFromProfileRuntime(config, "claude")
   ];
 }
 
@@ -51,17 +49,14 @@ export function routeUrlEntriesFromProfileRuntime(
   runtime: CompactGateRuntimeConfig,
   scope: ConfigProfileScope
 ): RouteUrlPresetEntry[] {
-  if (scope === "codex") {
-    return [
-      routeUrlEntry("codex_primary", runtime.primary),
-      routeUrlEntry("codex_compact", runtime.compact)
-    ];
+  const routes = scope === "codex" ? runtime : runtime.claude;
+  const entries: RouteUrlPresetEntry[] = [];
+  // OAuth credentials belong to the connection store, not manual URL presets.
+  if (!routes.primary.oauth_account_id) entries.push(routeUrlEntry(`${scope}_primary`, routes.primary));
+  if (!routes.compact.oauth_account_id && !(routes.compact.upstream_mode === "primary" && routes.primary.oauth_account_id)) {
+    entries.push(routeUrlEntry(`${scope}_compact`, routes.compact));
   }
-
-  return [
-    routeUrlEntry("claude_primary", runtime.claude.primary),
-    routeUrlEntry("claude_compact", runtime.claude.compact)
-  ];
+  return entries;
 }
 
 export function publicRouteUrlPreset(preset: RouteUrlPreset): PublicRouteUrlPreset {

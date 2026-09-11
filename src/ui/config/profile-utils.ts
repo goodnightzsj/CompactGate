@@ -16,6 +16,10 @@ export function profileScopeState(config: PublicConfig, scope: ConfigProfileScop
   };
 }
 
+export function profileItemId(scope: ConfigProfileScope, profileId: string): string {
+  return `profile-${scope}-${encodeURIComponent(profileId)}`;
+}
+
 export function profileSummary(profile: PublicConfig["profiles"][number]): string {
   const secretCopy =
     profile.stored_api_key_count > 0

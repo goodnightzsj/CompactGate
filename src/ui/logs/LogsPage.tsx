@@ -41,9 +41,9 @@ const REDUCED_MOTION_TRANSITION = { duration: 0.01 };
 export function LogsPage({
   logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
-  hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs,
+  hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs, hasStaleLogs,
   routeFilter, statusFilter, hostFilter, searchFilter,
-  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, error
+  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, onRetryLogs, error
 }: {
   logs: RequestLogEntry[];
   pendingLogCount?: number;
@@ -51,14 +51,16 @@ export function LogsPage({
   providerCounts: ProviderLogCounts; statusCounts: StatusLogCounts;
   totalLogCount: number; allLogCount: number; hostOptions: HostFilterOption[];
   hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
+  hasStaleLogs: boolean;
   routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string; searchFilter: string;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
   onStatusFilterChange: (status: "all" | LogStatusKind) => void;
   onHostFilterChange: (host: string) => void;
   onSearchFilterChange: (search: string) => void;
-  onLoadMore: () => void; error: string | null;
+  onLoadMore: () => void; onRetryLogs: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
   const narrowViewport = useNarrowViewport();
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : ROW_SPRING_TRANSITION;
@@ -130,10 +132,10 @@ export function LogsPage({
               {unseenLogCount > 0 && (
                 <MotionSpan
                   className="logs-new-entries-motion"
-                  initial={{ opacity: 0, y: -4 }}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
                   animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -3 }}
-                  transition={detailTransition}
+                  exit={{ opacity: 0, y: reduceMotion ? 0 : -3 }}
+                  transition={effectiveDetailTransition}
                 >
                   <button className="btn btn-sm logs-new-entries" type="button" onClick={scrollToLatest}>
                     新增 {unseenLogCount} 条 · 回到最新
@@ -149,10 +151,10 @@ export function LogsPage({
             {pendingLogCount > 3 && (
               <MotionSpan
                 className="logs-queue-indicator"
-                initial={{ opacity: 0, y: -4 }}
+                initial={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -3 }}
-                transition={detailTransition}
+                exit={{ opacity: 0, y: reduceMotion ? 0 : -3 }}
+                transition={effectiveDetailTransition}
               >
                 <span className="logs-queue-dot" aria-hidden="true" />
                 {pendingLogCount} 条待显示
@@ -160,46 +162,65 @@ export function LogsPage({
             )}
           </AnimatePresence>
           <span className="status-pill">
+            {isLoadingLogs ? "更新中 · " : hasStaleLogs ? "上次结果 · " : ""}
             显示 {logs.length} / 共 {totalLogCount} 条 · 已存储 {allLogCount} 条
           </span>
         </div>
       </div>
 
       <div className="logs-toolbar">
-        <CustomSelect
-          label="通道"
-          value={routeFilter}
-          options={[
-            { value: "all", label: "全部通道", count: logCounts.all },
-            { value: "primary", label: "Codex 主路由", count: logCounts.primary, meta: "primary", tone: "codex" },
-            { value: "compact", label: "Compact 压缩", count: logCounts.compact, meta: "compact", tone: "compact" },
-            { value: "claude", label: "Claude 路由", count: logCounts.claude, meta: "claude", tone: "claude" }
-          ]}
-          onChange={(value) => onRouteFilterChange(value as "all" | RouteKind)}
-        />
-        <CustomSelect
-          label="状态"
-          value={statusFilter}
-          options={[
-            { value: "all", label: "全部", count: statusCounts.all },
-            { value: "normal", label: "正常", count: statusCounts.normal, tone: "ok" },
-            { value: "error", label: "错误", count: statusCounts.error, tone: "err" }
-          ]}
-          onChange={(value) => onStatusFilterChange(value as "all" | LogStatusKind)}
-        />
-        <CustomSelect
-          label="上游 Host"
-          value={hostFilter}
-          options={[
-            // The host rows come from the filtered host facet, so the "all"
-            // entry has to be their sum. allLogCount is the whole-database
-            // count and belongs in the stored-rows line, not here.
-            { value: ALL_HOSTS_FILTER, label: "全部上游", count: hostOptions.reduce((total, host) => total + host.total, 0) },
-            ...hostOptions.map((host) => ({ value: host.host, label: host.host, count: host.total }))
-          ]}
-          onChange={onHostFilterChange}
-          wide
-        />
+        <details
+          className="logs-filter-options"
+          open={!narrowViewport || filtersExpanded}
+          onToggle={(event) => {
+            if (narrowViewport) setFiltersExpanded(event.currentTarget.open);
+          }}
+        >
+          <summary>
+            筛选
+            <span>{[
+              routeFilter !== "all" ? routeLabel(routeFilter) : null,
+              statusFilter !== "all" ? (statusFilter === "error" ? "错误" : "正常") : null,
+              hostFilter !== ALL_HOSTS_FILTER ? hostFilter : null
+            ].filter(Boolean).join(" · ") || "通道 / 状态 / 上游"}</span>
+          </summary>
+          <div className="logs-filter-fields">
+            <CustomSelect
+              label="通道"
+              value={routeFilter}
+              options={[
+                { value: "all", label: "全部通道", count: logCounts.all },
+                { value: "primary", label: "Codex 主路由", count: logCounts.primary, meta: "primary", tone: "codex" },
+                { value: "compact", label: "Compact 压缩", count: logCounts.compact, meta: "compact", tone: "compact" },
+                { value: "claude", label: "Claude 路由", count: logCounts.claude, meta: "claude", tone: "claude" }
+              ]}
+              onChange={(value) => onRouteFilterChange(value as "all" | RouteKind)}
+            />
+            <CustomSelect
+              label="状态"
+              value={statusFilter}
+              options={[
+                { value: "all", label: "全部", count: statusCounts.all },
+                { value: "normal", label: "正常", count: statusCounts.normal, tone: "ok" },
+                { value: "error", label: "错误", count: statusCounts.error, tone: "err" }
+              ]}
+              onChange={(value) => onStatusFilterChange(value as "all" | LogStatusKind)}
+            />
+            <CustomSelect
+              label="上游 Host"
+              value={hostFilter}
+              options={[
+                // The host rows come from the filtered host facet, so the "all"
+                // entry has to be their sum. allLogCount is the whole-database
+                // count and belongs in the stored-rows line, not here.
+                { value: ALL_HOSTS_FILTER, label: "全部上游", count: hostOptions.reduce((total, host) => total + host.total, 0) },
+                ...hostOptions.map((host) => ({ value: host.host, label: host.host, count: host.total }))
+              ]}
+              onChange={onHostFilterChange}
+              wide
+            />
+          </div>
+        </details>
         <label className="logs-search">
           <span className="logs-search-label">搜索</span>
           <input
@@ -227,10 +248,10 @@ export function LogsPage({
           {hasActiveFilters && (
             <MotionSpan
               className="logs-clear-filters-motion"
-              initial={{ opacity: 0, scale: 0.96, x: -4 }}
+              initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.96, x: reduceMotion ? 0 : -4 }}
               animate={{ opacity: 1, scale: 1, x: 0 }}
-              exit={{ opacity: 0, scale: 0.98, x: -3 }}
-              transition={detailTransition}
+              exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.98, x: reduceMotion ? 0 : -3 }}
+              transition={effectiveDetailTransition}
             >
               <button className="btn btn-sm logs-clear-filters" type="button" onClick={clearFilters}>
                 清除筛选
@@ -244,10 +265,22 @@ export function LogsPage({
         </div>
       </div>
 
-      {error && <div className="error-banner">{error}</div>}
+      {error && (
+        <div className="error-banner page-error-banner" role="alert">
+          <span>
+            {error}
+            {hasStaleLogs && " 筛选尚未应用，下面保留上次成功加载的结果。"}
+          </span>
+          <button className="btn btn-sm" type="button" disabled={isLoadingLogs} onClick={onRetryLogs}>
+            {isLoadingLogs ? "重试中..." : "重试日志"}
+          </button>
+        </div>
+      )}
 
       {isLoadingLogs && logs.length === 0 ? (
-        <div className="empty-state"><strong>正在加载日志...</strong></div>
+        <div className="empty-state" role="status"><strong>正在加载日志...</strong></div>
+      ) : error && logs.length === 0 ? (
+        <div className="empty-state"><strong>尚无可显示的日志</strong><span>可重试加载，已选筛选条件会保留。</span></div>
       ) : logs.length === 0 ? (
         hasActiveFilters ? (
           <div className="empty-state">
@@ -333,7 +366,7 @@ export function LogsPage({
                     const rows = [
                       <MotionTr
                         key={logKey}
-                        initial={{ opacity: 0, y: -20 }}
+                        initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0 }}
                         transition={effectiveRowTransition}
@@ -401,6 +434,7 @@ export function LogsPage({
           layoutScroll
           className="logs-mobile-list"
           aria-label="请求日志摘要"
+          aria-busy={isLoadingLogs || isLoadingMoreLogs}
           onScroll={handleMobileLogScroll}
         >
           {/* Rows animate opacity + y only, matching the table: with no height
@@ -415,7 +449,7 @@ export function LogsPage({
                 <MotionDiv
                   key={`mobile-${logKey}`}
                   className="log-mobile-motion-item"
-                  initial={{ opacity: 0, y: -20 }}
+                  initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   transition={effectiveRowTransition}
@@ -438,7 +472,7 @@ export function LogsPage({
 
       {hasMoreLogs && (
         <div className="log-load-more">
-          <button className="btn" onClick={onLoadMore} disabled={isLoadingLogs || isLoadingMoreLogs}>
+          <button className="btn" onClick={onLoadMore} disabled={hasStaleLogs || isLoadingLogs || isLoadingMoreLogs}>
             {isLoadingMoreLogs ? "加载中..." : `加载更早日志 (${logs.length}/${totalLogCount})`}
           </button>
         </div>

@@ -68,6 +68,14 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
     validateExtraHeaders(upstream.extra_headers, `${field}.extra_headers`);
     validateProxyUrl(upstream.proxy_url, upstream.base_url, `${field}.proxy_url`);
     validateApiKeys(upstream.api_keys, `${field}.api_keys`);
+    if (upstream.oauth_account_id !== undefined) {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(upstream.oauth_account_id)) {
+        throw new ConfigError(`${field}.oauth_account_id must reference an OAuth connection.`);
+      }
+      if (upstream.api_key.trim() || upstream.api_key_env.trim() || upstream.api_keys?.length) {
+        throw new ConfigError(`${field}: OAuth and manual API credentials are mutually exclusive.`);
+      }
+    }
   }
   validateOptionalModelName(config.primary.model_override ?? "", "primary.model_override");
   validatePrimaryReasoningEffort(config.primary.reasoning_effort);
@@ -407,10 +415,17 @@ function mergeUpstreamConfig(
   patch: Record<string, unknown>
 ): UpstreamConfig & { model_override: string } {
   const apiKeys = mergeApiKeys(patch.api_keys, base.api_keys);
+  const oauthId = patch.oauth_account_id === undefined ? base.oauth_account_id
+    : patch.oauth_account_id === null || patch.oauth_account_id === "" ? undefined
+      : patch.oauth_account_id;
+  if (oauthId !== undefined && (typeof oauthId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(oauthId))) {
+    throw new ConfigError("oauth_account_id must be a connection ID or null to clear it.");
+  }
   return {
     base_url: readString(patch.base_url, base.base_url),
     api_key: readString(patch.api_key, base.api_key),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
+    ...(oauthId ? { oauth_account_id: oauthId } : {}),
     // An absent pool must not materialize as an `api_keys: undefined` key —
     // persisted files and deep-equality expectations stay byte-identical to a
     // pool-free configuration.

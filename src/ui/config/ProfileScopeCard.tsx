@@ -7,6 +7,7 @@ import {
   isProfileActionBusy,
   nextUniqueProfileName,
   profileActionLabel,
+  profileItemId,
   profileScopeState,
   profileSummary
 } from "./profile-utils.js";
@@ -33,7 +34,8 @@ export function ProfileScopeCard({
   onReorderProfiles,
   onDuplicateProfile,
   onCreateProfileForOtherScope,
-  onDeleteProfile
+  onDeleteProfile,
+  hidden = false
 }: {
   scope: ConfigProfileScope;
   title: string;
@@ -55,6 +57,7 @@ export function ProfileScopeCard({
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<unknown>;
   onCreateProfileForOtherScope: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  hidden?: boolean;
 }) {
   const titleId = `${scope}-profile-card-title`;
   const nameInputRef = useRef<HTMLInputElement | null>(null);
@@ -185,7 +188,7 @@ export function ProfileScopeCard({
   });
 
   return (
-    <section className={`profile-card profile-card-${scope}`} aria-labelledby={titleId}>
+    <section className={`profile-card profile-card-${scope}`} aria-labelledby={titleId} hidden={hidden}>
       <div className="profile-card-copy">
         <p className="eyebrow">{eyebrow}</p>
         <h3 id={titleId}>{title}</h3>
@@ -266,6 +269,9 @@ export function ProfileScopeCard({
             return (
               <article
                 key={profile.id}
+                id={profileItemId(scope, profile.id)}
+                tabIndex={-1}
+                aria-label={`${scopeLabel} 档案 ${profile.name}`}
                 className={cardClassName}
                 onDragOver={(event) => handleProfileDragOver(event, profile.id)}
                 onDragLeave={(event) => handleProfileDragLeave(event, profile.id)}
@@ -319,6 +325,7 @@ export function ProfileScopeCard({
                     </span>
                     <strong>{profile.name}</strong>
                     <small>{profileSummary(profile)}</small>
+                    {(profile.oauth_account_id || profile.compact_oauth_account_id) && <small>OAuth 连接</small>}
                     <span>更新于 {formatClock(profile.updated_at)}</span>
                   </span>
                 </button>
@@ -360,7 +367,9 @@ export function ProfileScopeCard({
                         className="ghost-button"
                         type="button"
                         disabled={profileBusy}
-                        title={`用这组 URL、上游协议和压缩模式创建 ${destinationScopeLabel} 档案；目标端专属设置及凭据保持不变。`}
+                        title={profile.oauth_account_id || profile.compact_oauth_account_id
+                          ? `用这组 OAuth 连接创建 ${destinationScopeLabel} 档案；模型设置采用目标端默认值。`
+                          : `用这组 URL、上游协议和压缩模式创建 ${destinationScopeLabel} 档案；目标端专属设置及凭据保持不变。`}
                         onClick={() => onCreateProfileForOtherScope(profile)}
                       >
                         创建为 {destinationScopeLabel} 档案
@@ -425,6 +434,7 @@ export function ProfileScopeCard({
           profile={overwriteCandidate.profile}
           suggestedName={overwriteCandidate.suggestedName}
           existingNames={profiles.map((profile) => profile.name)}
+          error={profileError}
           onCancel={() => setOverwriteCandidate(null)}
           onOverwrite={() => handleOverwriteConfirm()}
           onSaveAsNew={(name) => handleSaveAsNewConfirm(name)}

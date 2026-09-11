@@ -12,6 +12,7 @@ export interface ResolvedCredential {
   apiKeySource: CredentialSource;
   activeApiKeyEnv: string | null;
   activeCredentialScope: CredentialScope;
+  oauthAccountId?: string;
 }
 
 /**
@@ -34,6 +35,7 @@ export const DIRECT_API_KEY_ID = "__direct__";
  * unmaterialized in the file so a legacy config cannot lose its stored key.
  */
 export function enabledApiKeyPool(route: UpstreamConfig): UpstreamApiKey[] {
+  if (route.oauth_account_id) return [];
   const direct = route.api_key.trim();
   const stored = (route.api_keys ?? []).filter(
     (key) => key.enabled && key.api_key.trim().length > 0
@@ -54,6 +56,13 @@ export function resolveRouteCredential(
         ? "claude_primary"
         : route;
   const activeConfig = configForCredentialScope(activeCredentialScope, config);
+  if (activeConfig.oauth_account_id) {
+    return {
+      apiKey: null, apiKeyConfigured: true, apiKeySource: "oauth",
+      activeApiKeyEnv: null, activeCredentialScope,
+      oauthAccountId: activeConfig.oauth_account_id
+    };
+  }
   // Outside the failover scheduler (compact routing, health, model probes) a
   // pool is served by its first enabled key, which is the direct `api_key`
   // whenever one is configured. Per-request rotation lives in the candidate

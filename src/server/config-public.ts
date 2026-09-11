@@ -14,24 +14,27 @@ import {
 import { resolveRouteCredential, type ResolvedCredential } from "./credentials.js";
 import { publicRouteUrlPreset } from "./config-route-presets.js";
 import { safeHost } from "./config-internals.js";
+import type { OAuthStore } from "./oauth-store.js";
 
 export function buildPublicConfig({
   config,
   configPath,
   lastSavedAt,
-  revision
+  revision,
+  oauth
 }: {
   config: CompactGateConfig;
   configPath: string;
   lastSavedAt: string | null;
   revision: string;
+  oauth?: OAuthStore;
 }): PublicConfig {
   const codexProfileScope = publicProfileScope(config, "codex");
   const claudeProfileScope = publicProfileScope(config, "claude");
 
   return {
     primary: {
-      ...publicUpstream(config.primary, resolveRouteCredential("primary", config)),
+      ...publicUpstream(config.primary, resolveRouteCredential("primary", config), oauth),
       model_override: config.primary.model_override ?? "",
       reasoning_effort: config.primary.reasoning_effort,
       state_domain_id: config.primary.state_domain_id,
@@ -40,7 +43,7 @@ export function buildPublicConfig({
       sticky_reserve_seconds: config.primary.sticky_reserve_seconds ?? 0
     },
     compact: {
-      ...publicUpstream(config.compact, resolveRouteCredential("compact", config)),
+      ...publicUpstream(config.compact, resolveRouteCredential("compact", config), oauth),
       upstream_mode: config.compact.upstream_mode,
       model_mode: config.compact.model_mode,
       model_template: config.compact.model_template,
@@ -48,14 +51,14 @@ export function buildPublicConfig({
     },
     claude: {
       primary: {
-        ...publicUpstream(config.claude.primary, resolveRouteCredential("claude_primary", config)),
+        ...publicUpstream(config.claude.primary, resolveRouteCredential("claude_primary", config), oauth),
         model_override: config.claude.primary.model_override,
         key_strategy: config.claude.primary.key_strategy ?? "fill_first",
         rotation_opt_out: config.claude.primary.rotation_opt_out === true,
         sticky_reserve_seconds: config.claude.primary.sticky_reserve_seconds ?? 0
       },
       compact: {
-        ...publicUpstream(config.claude.compact, resolveRouteCredential("claude_compact", config)),
+        ...publicUpstream(config.claude.compact, resolveRouteCredential("claude_compact", config), oauth),
         upstream_mode: config.claude.compact.upstream_mode,
         model_override: config.claude.compact.model_override
       },
@@ -128,7 +131,13 @@ function toPublicProfile(
     compact_upstream_protocol: codexProfile ? runtime.compact.upstream_protocol : null,
     claude_primary_upstream_protocol: codexProfile ? null : runtime.claude.primary.upstream_protocol,
     claude_compact_upstream_protocol: codexProfile ? null : runtime.claude.compact.upstream_protocol,
-    stored_api_key_count: storedApiKeys.filter(directApiKeyConfigured).length
+    stored_api_key_count: storedApiKeys.filter(directApiKeyConfigured).length,
+    ...((codexProfile ? runtime.primary : runtime.claude.primary).oauth_account_id ? {
+      oauth_account_id: (codexProfile ? runtime.primary : runtime.claude.primary).oauth_account_id
+    } : {}),
+    ...((codexProfile ? runtime.compact : runtime.claude.compact).oauth_account_id ? {
+      compact_oauth_account_id: (codexProfile ? runtime.compact : runtime.claude.compact).oauth_account_id
+    } : {})
   };
 }
 
@@ -138,7 +147,8 @@ function directApiKeyConfigured(value: string): boolean {
 
 function publicUpstream(
   upstream: UpstreamConfig,
-  credential: ResolvedCredential
+  credential: ResolvedCredential,
+  oauth?: OAuthStore
 ): Omit<PublicUpstreamConfig, "model_override"> {
   const proxy = URL.parse(upstream.proxy_url);
   return {
@@ -152,10 +162,14 @@ function publicUpstream(
     upstream_protocol: upstream.upstream_protocol,
     stored_api_key: directApiKeyConfigured(upstream.api_key),
     stored_api_key_tail: upstream.api_key.trim().slice(-4),
-    api_key_configured: credential.apiKeyConfigured,
+    api_key_configured: credential.oauthAccountId
+      ? ["connected", "expired"].includes(oauth?.status(credential.oauthAccountId) ?? "missing")
+      : credential.apiKeyConfigured,
     api_key_source: credential.apiKeySource,
     active_api_key_env: credential.activeApiKeyEnv,
     active_credential_scope: credential.activeCredentialScope,
+    ...(upstream.oauth_account_id ? { oauth_account_id: upstream.oauth_account_id } : {}),
+    ...(credential.oauthAccountId ? { oauth_status: oauth?.status(credential.oauthAccountId) ?? "missing" } : {}),
     api_keys: upstream.api_keys && upstream.api_keys.length > 0
       ? upstream.api_keys.map((key) => ({
           id: key.id,

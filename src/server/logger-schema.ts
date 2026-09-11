@@ -145,7 +145,7 @@ export const LOG_INTERNAL_STATE_SCHEMA_SQL = `
   ) WITHOUT ROWID;
 `;
 
-export const LOG_FACET_CLASSIFICATION_VERSION = "2";
+export const LOG_FACET_CLASSIFICATION_VERSION = "4";
 
 export const RECENT_LOG_FIELDS = `
   time,

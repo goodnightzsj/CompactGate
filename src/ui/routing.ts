@@ -27,6 +27,8 @@ export function detectStudioLocation(): StudioLocation {
 
 export function detectPageFromLocation(location: LocationLike): PageMode {
   if (location.pathname === "/health") return "health";
+  // Bookmarked preview tabs now open the routes workspace; no duplicate editor.
+  if (location.pathname === "/config/preview" || location.pathname === "/config/preview/") return "routes";
   if (location.pathname === "/config" || location.pathname.startsWith("/config/")) {
     return "config";
   }

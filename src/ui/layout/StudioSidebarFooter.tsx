@@ -21,11 +21,12 @@ export function StudioSidebarFooter({
         <SidebarHealthRow status={claudePrimaryStatus} label="Claude 主路由" />
       </div>
 
-      <div className="theme-switch">
+      <div className="theme-switch" role="group" aria-label="主题">
         {(["auto", "light", "dark"] as ThemeMode[]).map((mode) => (
           <button
             key={mode}
             className={themeMode === mode ? "is-active" : ""}
+            aria-pressed={themeMode === mode}
             onClick={() => onThemeModeChange(mode)}
           >
             {mode === "auto" ? "自动" : mode === "light" ? "浅色" : "深色"}
@@ -38,9 +39,10 @@ export function StudioSidebarFooter({
 
 function SidebarHealthRow({ status, label }: { status: HealthBadge; label: string }) {
   return (
-    <div className="sidebar-health-row">
+    <div className="sidebar-health-row" title={`${label}：${status.label}`}>
       <span className={`sidebar-health-dot is-${status.tone}`} />
       {label}
+      <span className="visually-hidden">：{status.label}</span>
     </div>
   );
 }

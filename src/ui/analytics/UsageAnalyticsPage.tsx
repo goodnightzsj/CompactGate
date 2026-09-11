@@ -5,6 +5,7 @@ import {
   AnalyticsLoadState,
   AnalyticsMetricGrid,
   AnalyticsPanel,
+  AnalyticsRefreshStatus,
   AnalyticsSegmented,
   AnalyticsTokenBreakdownChart,
   RetainedRange,
@@ -63,7 +64,7 @@ export function UsageAnalyticsPage() {
           >
             导出 CSV
           </button>
-          <button type="button" className="btn btn-sm" onClick={stats.refresh}>刷新</button>
+          <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={stats.refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
         </div>
       </div>
 
@@ -71,7 +72,7 @@ export function UsageAnalyticsPage() {
         <DateRangePicker from={fromDate} to={toDate} onApply={applyRange} />
         <div className="usage-granularity-field">
           <span>粒度</span>
-          <div className="analytics-segmented" aria-label="用量粒度">
+          <div className="analytics-segmented" role="group" aria-label="用量粒度">
             <button
               type="button"
               className={granularity === "hour" ? "is-active" : ""}
@@ -94,10 +95,11 @@ export function UsageAnalyticsPage() {
 
       {formError && <div className="error-banner" role="alert">{formError}</div>}
       <AnalyticsLoadState loading={stats.loading && !stats.data} error={stats.error} />
+      <AnalyticsRefreshStatus loading={stats.loading} error={stats.error} generatedAt={stats.data?.generated_at ?? null} />
 
       {stats.data && (
         <>
-          <div className="usage-metric-grid">
+          <section className="usage-metric-grid" aria-label="用量摘要">
             <AnalyticsMetricGrid items={[
             {
               label: "总 Token",
@@ -107,17 +109,32 @@ export function UsageAnalyticsPage() {
               tone: "is-token"
             },
             {
-              label: "总输入",
-              value: formatCompactMetricNumber(stats.data.summary.input_tokens),
-              exactValue: formatMetricNumber(stats.data.summary.input_tokens),
-              meta: "含缓存输入",
-              tone: "is-request"
-            },
-            {
               label: "缓存率",
               value: cacheRate(stats.data),
               meta: `${formatCompactMetricNumber(stats.data.summary.cache_read_tokens)} 读取`,
               tone: "is-cache"
+            },
+            {
+              label: "请求",
+              value: formatCompactMetricNumber(stats.data.summary.requests),
+              exactValue: formatMetricNumber(stats.data.summary.requests),
+              meta: `${formatCompactMetricNumber(stats.data.summary.error_requests)} 错误`,
+              tone: "is-request"
+            }
+            ]} />
+          </section>
+
+          <section className="analytics-metric-section usage-token-metrics" aria-labelledby="usage-token-heading">
+            <div className="analytics-metric-section-header">
+              <h3 id="usage-token-heading">Token 构成</h3>
+              <span>输入、输出与缓存</span>
+            </div>
+            <AnalyticsMetricGrid items={[
+            {
+              label: "总输入",
+              value: formatCompactMetricNumber(stats.data.summary.input_tokens),
+              exactValue: formatMetricNumber(stats.data.summary.input_tokens),
+              meta: "含缓存输入"
             },
             {
               label: "输出",
@@ -129,23 +146,16 @@ export function UsageAnalyticsPage() {
               label: "缓存读取",
               value: formatCompactMetricNumber(stats.data.summary.cache_read_tokens),
               exactValue: formatMetricNumber(stats.data.summary.cache_read_tokens),
-              meta: "已复用输入",
-              tone: "is-cache"
+              meta: "已复用输入"
             },
             {
               label: "缓存创建",
               value: formatCompactMetricNumber(stats.data.summary.cache_creation_tokens),
               exactValue: formatMetricNumber(stats.data.summary.cache_creation_tokens),
               meta: "新增缓存输入"
-            },
-            {
-              label: "请求",
-              value: formatCompactMetricNumber(stats.data.summary.requests),
-              exactValue: formatMetricNumber(stats.data.summary.requests),
-              meta: `${formatCompactMetricNumber(stats.data.summary.error_requests)} 错误`
             }
             ]} />
-          </div>
+          </section>
 
           <AnalyticsPanel title="Token 趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
             <AnalyticsTokenBreakdownChart points={trend} />

@@ -13,6 +13,7 @@ describe("route preview request ordering", () => {
   it("shows friendly protocol and translation labels", () => {
     const markup = renderToStaticMarkup(
       createElement(ConfigPreviewPanel, {
+        isPreviewing: false,
         previewPath: "/anthropic/v1/messages",
         previewBody: "{}",
         previewHeaders: "{}",
@@ -37,7 +38,7 @@ describe("route preview request ordering", () => {
         onBodyChange: () => undefined,
         onHeadersChange: () => undefined,
         onPreviewSubmit: () => undefined,
-    onPreviewClear: () => undefined
+        onPreviewClear: () => undefined
       })
     );
 

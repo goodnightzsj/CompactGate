@@ -27,24 +27,19 @@ export function HealthHeroSection({
       <div className="health-status-board">
         <span className={`health-state-badge is-${overallStatus.tone}`}>总体</span>
         <strong id="health-title">{overallStatus.label}</strong>
-        <small>{refreshedAt ? `刷新于 ${refreshLabel}` : "等待首次健康采样"}</small>
+        <small>{refreshedAt ? `刷新于 ${refreshLabel}` : "等待首次健康采样"} · {isRefreshing ? "正在采样" : "自动轮询"}</small>
       </div>
 
       <div className="health-hero-readout">
         <div className="health-mini-card">
-          <span>可用上游</span>
+          <span>配置就绪</span>
           <strong aria-live="polite">{readyRoutes}/{totalRoutes}</strong>
-          <small aria-live="polite">{failedRoutes > 0 ? `${failedRoutes} 条异常` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全` : "所有路由已就绪"}</small>
+          <small aria-live="polite">{failedRoutes > 0 ? `${failedRoutes} 条异常；` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全；` : "地址与凭据已装配；"}未验证连通性</small>
         </div>
         <div className="health-mini-card">
           <span>监听地址</span>
           <strong>{listenUrl}</strong>
           <small>本地代理绑定入口</small>
-        </div>
-        <div className="health-mini-card">
-          <span>最近刷新</span>
-          <strong>{refreshLabel}</strong>
-          <small>{isRefreshing ? "正在重新采样" : "自动轮询中"}</small>
         </div>
       </div>
     </section>

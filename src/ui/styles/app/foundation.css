@@ -6,8 +6,9 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.5;
+  font-kerning: normal;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -20,6 +21,18 @@ body::before, body::after { display: none; }
 
 button, input, textarea, select { font: inherit; }
 
+input::placeholder, textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 button { cursor: pointer; }
+
+:where(button, a, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled { cursor: not-allowed; }
 
 a { color: var(--accent); text-decoration: none; }

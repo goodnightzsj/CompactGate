@@ -438,13 +438,7 @@ describe("content block indices follow start order with no gaps", () => {
 });
 
 describe("a 2xx whose body fails translation is not scored as a healthy profile", () => {
-  it("leaves no usage on the body failover reads, so the profile is marked failed", async () => {
-    // `classifyPrimaryRouteResult` short-circuits to "success" on usage before it
-    // ever looks at the error summary, so the out-of-band translation error only
-    // demotes the result while usage is absent too. What keeps that true is that
-    // the proxy extracts usage from the *client* body — the error envelope, which
-    // carries none — and not from the raw upstream body, which here carries a
-    // perfectly good usage block. Nothing else pins which body is read.
+  it("keeps translation failures unhealthy even when the upstream reports usage", async () => {
     const upstreamRaw = JSON.stringify({
       id: "msg_1",
       type: "message",
@@ -472,9 +466,9 @@ describe("a 2xx whose body fails translation is not scored as a healthy profile"
 
     expect(extractResponseUsage(clientBody, transform.responseHeaders).inputTokens ?? 0).toBe(0);
     expect(classify(clientBody, transform.responseHeaders)).not.toBe("success");
-    // The hazard is real if the raw upstream body is ever substituted here.
+    // Usage is still billable, but cannot turn a translation failure into success.
     expect(extractResponseUsage(Buffer.from(upstreamRaw), headers).inputTokens).toBe(4321);
-    expect(classify(Buffer.from(upstreamRaw), headers)).toBe("success");
+    expect(classify(Buffer.from(upstreamRaw), headers)).toBe("transient");
   });
 });
 

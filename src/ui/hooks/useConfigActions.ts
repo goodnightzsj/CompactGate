@@ -1,6 +1,7 @@
 import { type Dispatch, type FormEvent, type SetStateAction, useState } from "react";
 import type {
   CompactGateConfig,
+  ConfigProfileScope,
   HealthResponse,
   PublicConfig
 } from "../../shared/types.js";
@@ -24,6 +25,8 @@ export function useConfigActions({
   formRevision,
   commitConfig,
   rebaseFormRevision,
+  applyRemoteConfig,
+  applyProfileConfig,
   setConfig,
   setForm,
   setHealth,
@@ -36,6 +39,8 @@ export function useConfigActions({
   formRevision: string | null;
   commitConfig: (config: PublicConfig, submittedRevision: number) => void;
   rebaseFormRevision: () => void;
+  applyRemoteConfig: (config: PublicConfig) => void;
+  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => void;
   setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
   setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
@@ -69,7 +74,8 @@ export function useConfigActions({
     formRevision,
     setConfig,
     setForm,
-    setHealth,
+    applyProfileConfig,
+    refreshHealthAfterWrite,
     setSaveError,
     setSaveState,
     scopedProfileAccessors
@@ -77,7 +83,7 @@ export function useConfigActions({
   const collectionActions = createConfigProfileCollectionActions({
     config,
     profileDeleteCandidate,
-    setConfig,
+    onConfigChange: applyRemoteConfig,
     setProfileDeleteCandidate,
     scopedProfileAccessors
   });
@@ -109,17 +115,24 @@ export function useConfigActions({
       method: "POST",
       body: JSON.stringify(payload)
     });
-    const nextHealth = await api<HealthResponse>("/api/health", {
-      method: "GET"
-    });
-
     setConfig(nextConfig);
-    setHealth(nextHealth);
     setForm(formFromConfig(nextConfig));
     setSaveError(null);
+    setSaveConflict(false);
     setSaveState("saved");
     setPageError(null);
-    window.setTimeout(() => setSaveState("idle"), 1600);
+    window.setTimeout(() => setSaveState((current) => current === "saved" ? "idle" : current), 1600);
+    await refreshHealthAfterWrite();
+  }
+
+  async function refreshHealthAfterWrite() {
+    try {
+      setHealth(await api<HealthResponse>("/api/health", { method: "GET" }));
+      setPageError(null);
+    } catch (error) {
+      setHealth(null);
+      setPageError(`配置已写入，但健康状态刷新失败：${errorSummary(error)}。请重试状态刷新，无需重复保存。`);
+    }
   }
 
   async function submitConfigPatch(revision: string | null | undefined) {
@@ -133,19 +146,17 @@ export function useConfigActions({
         method: "PATCH",
         body: JSON.stringify({ ...formToPatch(form), revision })
       });
-      const nextHealth = await api<HealthResponse>("/api/health", {
-        method: "GET"
-      });
       commitConfig(nextConfig, submittedRevision);
-      setHealth(nextHealth);
       setSaveState("saved");
-      window.setTimeout(() => setSaveState("idle"), 1400);
+      window.setTimeout(() => setSaveState((current) => current === "saved" ? "idle" : current), 1400);
     } catch (error) {
       const summary = errorSummary(error);
       setSaveState("error");
       setSaveError(summary);
       setSaveConflict(/superseded revision/i.test(summary));
+      return;
     }
+    await refreshHealthAfterWrite();
   }
 
   async function saveConfig(event: FormEvent) {
@@ -197,6 +208,7 @@ export function useConfigActions({
     profileError,
     profileName,
     profileState,
+    receiveOAuthConfig: applyRemoteConfig,
     overrideSaveConflict,
     restoreLinkedMode,
     saveConfig,

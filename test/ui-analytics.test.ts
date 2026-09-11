@@ -16,10 +16,13 @@ import {
 } from "../src/ui/analytics/analytics-data.js";
 import * as analyticsData from "../src/ui/analytics/analytics-data.js";
 import {
+  AnalyticsRefreshStatus,
   AnalyticsTokenBreakdownChart,
+  AnalyticsTrendChart,
   cacheHitRate
 } from "../src/ui/analytics/AnalyticsShared.js";
 import { AnalyticsDashboardPage } from "../src/ui/analytics/AnalyticsDashboardPage.js";
+import { UsageAnalyticsPage } from "../src/ui/analytics/UsageAnalyticsPage.js";
 import { DateRangePicker } from "../src/ui/analytics/DateRangePicker.js";
 import { formatCompactMetricNumber } from "../src/ui/shared/format.js";
 
@@ -84,6 +87,64 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("缓存率");
     expect(markup).toContain("输入 1,000");
     expect(markup).toContain("缓存率 50.0%");
+    expect(markup).toContain('type="range"');
+    expect(markup).toContain('aria-label="Token 明细时段"');
+  });
+
+  it("exposes an exact, keyboard-operable request readout", () => {
+    const stats = snapshot([{ bucket_start: "2026-08-07T02:00:00.000Z", ...metric({ requests: 12, error_requests: 2 }) }]);
+    const markup = renderToStaticMarkup(createElement(AnalyticsTrendChart, { points: groupTrend(stats, "hour"), metric: "requests" }));
+    expect(markup).toContain('aria-label="请求趋势时段"');
+    expect(markup).toContain("12 请求，错误 2");
+    expect(markup).toContain('max="2"');
+  });
+
+  it("keeps existing statistics visible and announces a refresh", () => {
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), loading: true, error: null, refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage));
+    expect(markup).toContain("正在更新，当前显示上次统计");
+    expect(markup).toMatch(/analytics-refresh[^>]*disabled/);
+    expect(markup).toContain('aria-busy="true"');
+  });
+
+  it("shows the actual sample time on both pages without implying live polling", () => {
+    const stats = snapshot([]);
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    for (const Page of [AnalyticsDashboardPage, UsageAnalyticsPage]) {
+      const markup = renderToStaticMarkup(createElement(Page));
+      expect(markup).toContain("采样于");
+      expect(markup).toContain(stats.generated_at);
+      expect(markup).toContain("手动刷新");
+    }
+  });
+
+  it("labels retained data as stale after a failed refresh", () => {
+    const markup = renderToStaticMarkup(createElement(AnalyticsRefreshStatus, {
+      loading: false,
+      error: "synthetic failure",
+      generatedAt: "2026-08-07T03:00:00.000Z"
+    }));
+    expect(markup).toContain("更新失败，保留上次统计");
+    expect(markup).toContain("2026-08-07T03:00:00.000Z");
+    expect(markup).not.toContain("统计已更新");
+  });
+
+  it("keeps all exact token components visible below the three usage metrics", () => {
+    const stats = snapshot([]);
+    stats.summary.total_tokens = 1_900_000;
+    stats.summary.input_tokens = 1_800_000;
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage));
+    const primary = markup.match(/<section class="usage-metric-grid"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
+    const details = markup.match(/<section class="analytics-metric-section usage-token-metrics"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
+    expect(primary.match(/<article /g)).toHaveLength(3);
+    expect(primary).toContain('title="1,900,000"');
+    expect(details.match(/<article /g)).toHaveLength(4);
+    expect(details).toContain('title="1,800,000"');
+    for (const label of ["总输入", "输出", "缓存读取", "缓存创建"]) expect(details).toContain(label);
+    expect(details).toContain('<h3 id="usage-token-heading">Token 构成</h3>');
+    expect(markup).not.toContain("<details");
+    expect(markup).not.toContain("<summary");
   });
 
   it("renders rolling operational metrics independently from range averages", () => {
@@ -136,6 +197,15 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("近 5 分钟首 Token P50 / P95");
     expect(markup).toContain("近 5 分钟总耗时 P50 / P95");
     expect(markup).not.toContain("99.00 RPM");
+    const latency = markup.match(/<section class="analytics-metric-section analytics-latency-metrics"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
+    expect(latency.match(/<article /g)).toHaveLength(2);
+    expect(latency).toContain("30ms / 80ms");
+    expect(latency).toContain("200ms / 500ms");
+    expect(latency).toContain("平均 40ms");
+    expect(latency).toContain('<h3 id="analytics-latency-heading">响应耗时</h3>');
+    expect(markup.slice(0, markup.indexOf('<section class="analytics-metric-section analytics-latency-metrics"')).match(/<article /g)).toHaveLength(4);
+    expect(markup).not.toContain("<details");
+    expect(markup).not.toContain("<summary");
   });
 
   it("treats date inputs as inclusive local calendar days with a 31-day limit", () => {

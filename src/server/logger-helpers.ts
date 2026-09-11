@@ -43,23 +43,12 @@ export const LOG_SEARCH_COLUMNS = [
 
 export function logStandaloneErrorSql(columnPrefix = ""): string {
   const column = (name: string) => `${columnPrefix}${name}`;
-  const tokenDetailsSql = `(
-    ${column("input_tokens")} IS NOT NULL OR
-    ${column("output_tokens")} IS NOT NULL OR
-    ${column("cached_input_tokens")} IS NOT NULL OR
-    ${column("cached_output_tokens")} IS NOT NULL OR
-    ${column("cache_read_input_tokens")} IS NOT NULL OR
-    ${column("cache_creation_input_tokens")} IS NOT NULL OR
-    ${column("reasoning_tokens")} IS NOT NULL OR
-    ${column("total_tokens")} IS NOT NULL
-  )`;
   return `(
-    (
-      ${column("status")} >= 400 OR
-      ${column("error_summary")} IS NOT NULL OR
-      (${column("stream_outcome")} IS NOT NULL AND ${column("stream_outcome")} <> 'success')
-    ) AND
-    NOT (${column("route")} <> 'claude' AND ${tokenDetailsSql})
+    ${column("status")} < 200 OR
+    ${column("status")} >= 300 OR
+    COALESCE(${column("error_summary")}, '') <> '' OR
+    COALESCE(${column("stream_terminal_event")}, '') IN ('response.failed', 'response.incomplete') OR
+    (${column("stream_outcome")} IS NOT NULL AND ${column("stream_outcome")} <> 'success')
   )`;
 }
 

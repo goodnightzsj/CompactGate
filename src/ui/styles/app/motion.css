@@ -3,4 +3,8 @@
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+
+  .main-content > .page-appear:not(.page-appear-logs) > * {
+    animation-delay: 0ms !important;
+  }
 }

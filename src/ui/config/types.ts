@@ -40,6 +40,7 @@ export interface FormKeyPoolEntry {
 
 export type ConfigFormState = {
   codexPrimaryBaseUrl: string;
+  codexPrimaryOAuthAccountId: string;
   codexPrimaryApiKey: string;
   clearCodexPrimaryApiKey: boolean;
   codexPrimaryCredentialPresetId: string;
@@ -53,11 +54,13 @@ export type ConfigFormState = {
   codexPrimaryRotationOptOut: boolean;
   codexPrimaryStickyReserveSeconds: number;
   codexCompactBaseUrl: string;
+  codexCompactOAuthAccountId: string;
   codexCompactApiKey: string;
   clearCodexCompactApiKey: boolean;
   codexCompactCredentialPresetId: string;
   codexCompactUpstreamProtocol: UpstreamProtocol;
   claudePrimaryBaseUrl: string;
+  claudePrimaryOAuthAccountId: string;
   claudePrimaryApiKey: string;
   clearClaudePrimaryApiKey: boolean;
   claudePrimaryCredentialPresetId: string;
@@ -68,6 +71,7 @@ export type ConfigFormState = {
   claudePrimaryStickyReserveSeconds: number;
   claudeModelMap: ClaudeModelMap;
   claudeCompactBaseUrl: string;
+  claudeCompactOAuthAccountId: string;
   claudeCompactApiKey: string;
   clearClaudeCompactApiKey: boolean;
   claudeCompactCredentialPresetId: string;
@@ -92,7 +96,6 @@ export type ConfigTab =
   | "routes"
   | "model"
   | "logging"
-  | "preview"
   | "portable";
 export type PublicConfigProfile = PublicConfig["profiles"][number];
 export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };

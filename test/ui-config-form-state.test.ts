@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
 import {
   applyDraftToConfigExport,
+  changedConfigAreas,
   emptyForm,
   formFromConfig,
   formToPatch,
@@ -11,6 +12,31 @@ import {
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 describe("UI config form state", () => {
+  it("reports changes in both clients and global settings without narrowing the saved payload", async () => {
+    const dir = await makeConfigDir();
+    const store = await ConfigStore.load(path.join(dir, "compactgate.json"));
+    const config = store.toPublicConfig();
+    const form = formFromConfig(config);
+    expect(changedConfigAreas(config, form)).toEqual([]);
+    expect(changedConfigAreas(config, { ...form, codexPrimaryApiKey: "  " })).toEqual([]);
+
+    const draft = {
+      ...form,
+      primaryModelOverride: "codex-draft",
+      claudeModelMap: { ...form.claudeModelMap, sonnet: "claude-draft" },
+      autoSchedulePrimaryFailover: !form.autoSchedulePrimaryFailover,
+      loggingKeepRecent: form.loggingKeepRecent + 1
+    };
+    expect(changedConfigAreas(config, draft)).toEqual(["Codex", "Claude", "路由策略", "日志存储"]);
+    expect(formToPatch(draft)).toMatchObject({
+      primary: { model_override: "codex-draft" },
+      claude: { model_map: { sonnet: "claude-draft" } },
+      primary_failover: { auto_schedule: !form.autoSchedulePrimaryFailover },
+      logging: { keep_recent: form.loggingKeepRecent + 1 }
+    });
+    expect(formToPatch(draft).primary).not.toHaveProperty("api_key");
+  });
+
   it("serializes the primary failover auto scheduling switch", () => {
     const form = {
       ...emptyForm(),

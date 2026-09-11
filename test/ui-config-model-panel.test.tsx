@@ -27,4 +27,24 @@ describe("ConfigModelPanel", () => {
     expect(markup).toContain('<div class="compact-model-control"><input id="compact-model-target"');
     expect(markup.match(/<input id="primary-model-override"[^>]*>/)?.[0]).not.toContain("disabled");
   });
+
+  it("shows Claude model drafts without the Codex controls", () => {
+    const form = emptyForm();
+    form.claudeModelMap.sonnet = "claude-draft-model";
+    const markup = renderToStaticMarkup(
+      <ConfigModelPanel
+        config={null}
+        form={form}
+        scope="claude"
+        linkedCompactModel="codex-compact-model"
+        onFormChange={() => undefined}
+        onUnlockCompactModel={() => undefined}
+        onRestoreLinkedMode={() => undefined}
+      />
+    );
+
+    expect(markup).toContain('value="claude-draft-model"');
+    expect(markup).not.toContain('id="primary-model-override"');
+    expect(markup).not.toContain('id="compact-model-target"');
+  });
 });

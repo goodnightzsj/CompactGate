@@ -21,7 +21,8 @@ export function ConfigProfilesPanel({
   onReorderProfiles,
   onDuplicateProfile,
   onCreateProfileForOtherScope,
-  onDeleteProfile
+  onDeleteProfile,
+  displayScope = "all"
 }: {
   config: PublicConfig | null;
   profileName: string;
@@ -42,6 +43,7 @@ export function ConfigProfilesPanel({
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<unknown>;
   onCreateProfileForOtherScope: (profile: PublicConfig["profiles"][number]) => void;
   onDeleteProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  displayScope?: ConfigProfileScope | "all";
 }) {
   return (
     <div className="profile-scope-grid">
@@ -66,6 +68,7 @@ export function ConfigProfilesPanel({
         onDuplicateProfile={onDuplicateProfile}
         onCreateProfileForOtherScope={onCreateProfileForOtherScope}
         onDeleteProfile={onDeleteProfile}
+        hidden={displayScope !== "all" && displayScope !== "codex"}
       />
       <ProfileScopeCard
         scope="claude"
@@ -88,6 +91,7 @@ export function ConfigProfilesPanel({
         onDuplicateProfile={onDuplicateProfile}
         onCreateProfileForOtherScope={onCreateProfileForOtherScope}
         onDeleteProfile={onDeleteProfile}
+        hidden={displayScope !== "all" && displayScope !== "claude"}
       />
     </div>
   );

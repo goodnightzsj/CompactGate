@@ -1,11 +1,29 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { CodexProtocolStatus } from "../src/ui/routes/CodexProtocolStatus.js";
+import { RouteRulesGrid } from "../src/ui/routes/RouteRulesGrid.js";
 import { ConfigSaveAsNewProfileDialog } from "../src/ui/config/ConfigSaveAsNewProfileDialog.js";
+import { ConfirmProfileOverwriteDialog } from "../src/ui/config/ConfirmProfileOverwriteDialog.js";
+import type { PublicConfigProfile } from "../src/ui/config/types.js";
 import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
 import { saveLabel } from "../src/ui/config/save-state.js";
 
 describe("a failed profile write is visible from wherever it was started", () => {
+  it("shows overwrite failures inside the modal while keeping the suggested name", () => {
+    const markup = renderToStaticMarkup(<ConfirmProfileOverwriteDialog
+      scope="codex"
+      profile={{ name: "Existing" } as PublicConfigProfile}
+      suggestedName="Existing 2"
+      existingNames={["Existing"]}
+      error="Synthetic overwrite failure"
+      onCancel={() => undefined}
+      onOverwrite={async () => false}
+      onSaveAsNew={async () => false}
+    />);
+    expect(markup).toMatch(/<dialog[\s\S]*role="alert"[\s\S]*Synthetic overwrite failure[\s\S]*<\/dialog>/);
+    expect(markup).toContain('value="Existing 2"');
+  });
+
   it("shows the scope's write error inside the dialog that started it", () => {
     // The only renderer used to be inside ProfileScopeCard, mounted solely on the
     // 档案 tab — while 另存为新档案 and the delete dialog are reachable from every
@@ -56,6 +74,24 @@ describe("the routes page protocol chip reaches its CSS", () => {
       expect(markup, observed).toContain(`protocol-chip ${expected}`);
       expect(markup, observed).not.toContain("protocol-chip remote_");
     }
+  });
+});
+
+describe("route model inheritance is explicit", () => {
+  it.each(["", "saved-fixed-model"])("identifies the source model when the saved override is %j", (currentModel) => {
+    const markup = renderToStaticMarkup(<RouteRulesGrid
+      listen="127.0.0.1:7865"
+      primaryHost="primary.example"
+      compactHost="compact.example"
+      claudePrimaryHost="claude.example"
+      currentModel={currentModel}
+      compactModel="compact-model"
+      compactMode="split"
+      activeRoute={null}
+      activeCompactionMode={null}
+      activeRouteSource="none"
+    />);
+    expect(markup).toContain(`Local / Remote V1 模型映射：${currentModel || "请求模型"} → compact-model`);
   });
 });
 

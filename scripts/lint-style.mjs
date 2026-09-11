@@ -10,6 +10,7 @@ const APP_STYLE_MANIFEST = [
   { file: "dashboard.css", role: "dashboard" },
   { file: "routes.css", role: "routes" },
   { file: "config.css", role: "config" },
+  { file: "oauth.css", role: "config" },
   { file: "logs.css", role: "logs" },
   { file: "feedback.css", role: "feedback" },
   { file: "theme-overrides.css", role: "theme-overrides", ownsSelectors: false },

@@ -6,6 +6,7 @@ import type {
 } from "../shared/types.js";
 import { cloneConfig, ConfigError, isRecord } from "./config-internals.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
+import { OAuthStore, type OAuthStoreOptions } from "./oauth-store.js";
 import {
   deleteConfigBackup,
   listConfigBackups,
@@ -67,17 +68,20 @@ export class ConfigStore {
 
   private constructor(
     private readonly configPath: string,
-    initial: CompactGateConfig
+    initial: CompactGateConfig,
+    readonly oauth: OAuthStore
   ) {
     this.current = initial;
   }
 
-  static async load(configPath: string): Promise<ConfigStore> {
+  static async load(configPath: string, oauthOptions: OAuthStoreOptions = {}): Promise<ConfigStore> {
     const loaded = await readConfigFile(configPath);
     const config = loaded.missing ? DEFAULT_CONFIG : mergeConfig(DEFAULT_CONFIG, loaded.value);
 
     validateConfig(config);
-    return new ConfigStore(loaded.resolvedPath, config);
+    const store = new ConfigStore(loaded.resolvedPath, config, await OAuthStore.load(loaded.resolvedPath, oauthOptions));
+    store.validateOAuthBindings(config);
+    return store;
   }
 
   get(): CompactGateConfig {
@@ -153,6 +157,40 @@ export class ConfigStore {
       duplicateConfigProfile(this.current, scope, profileId, name, targetScope ?? scope));
   }
 
+  async saveOAuthProfile(
+    scope: ConfigProfileScope, accountId: string, name: string, model: string, revision: unknown
+  ): Promise<CompactGateConfig> {
+    return this.mutate(() => {
+      const account = this.oauth.get(accountId);
+      if (!account || (account.status !== "connected" && !(account.status === "expired" && account.can_refresh))) {
+        throw new ConfigError("OAuth connection is not ready. Authorize it before creating a profile.", 409);
+      }
+      if (!model.trim() || model.length > 256 || /[\u0000-\u001f\u007f]/.test(model)) {
+        throw new ConfigError("OAuth profile requires a model ID of at most 256 printable characters.");
+      }
+      if (getProfileScopeState(this.current, scope).profiles.some((profile) => profile.name === name.trim())) {
+        throw new ConfigError("Profile name already exists. Choose a new name; OAuth creation never overwrites profiles.", 409);
+      }
+      const route = {
+        base_url: account.base_url, upstream_protocol: account.upstream_protocol,
+        api_key: "", api_key_env: "", api_keys: [], oauth_account_id: accountId,
+        extra_headers: {}, proxy_url: "", model_override: model.trim(), rotation_opt_out: true
+      };
+      const patch = scope === "codex" ? {
+        primary: { ...DEFAULT_CONFIG.primary, ...route },
+        compact: { ...DEFAULT_CONFIG.compact, ...route, oauth_account_id: null, upstream_mode: "primary", model_mode: "custom" }
+      } : {
+        claude: {
+          ...DEFAULT_CONFIG.claude,
+          primary: { ...DEFAULT_CONFIG.claude.primary, ...route },
+          compact: { ...DEFAULT_CONFIG.claude.compact, ...route, oauth_account_id: null, upstream_mode: "primary" },
+          model_map: { ...DEFAULT_CONFIG.claude.model_map, default: model.trim() }
+        }
+      };
+      return saveConfigProfile(this.current, scope, name, patch);
+    }, revision);
+  }
+
   async deleteProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {
     return this.mutate(() => deleteConfigProfile(this.current, scope, profileId));
   }
@@ -184,6 +222,7 @@ export class ConfigStore {
 
       const next = mergeConfig(DEFAULT_CONFIG, value);
       validateConfig(next);
+      this.validateOAuthBindings(next);
       return this.persist(next);
     });
   }
@@ -197,7 +236,8 @@ export class ConfigStore {
       config: this.get(),
       configPath: this.configPath,
       lastSavedAt: this.lastSavedAt,
-      revision: this.revision
+      revision: this.revision,
+      oauth: this.oauth
     });
   }
 
@@ -232,6 +272,7 @@ export class ConfigStore {
       this.assertRevisionCurrent(revision);
       const next = buildNext();
       validateConfig(next);
+      this.validateOAuthBindings(next);
       return this.persist(next);
     });
   }
@@ -240,6 +281,17 @@ export class ConfigStore {
     const mutation = this.mutationQueue.catch(() => undefined).then(operation);
     this.mutationQueue = mutation.then(() => undefined, () => undefined);
     return mutation;
+  }
+
+  private validateOAuthBindings(config: CompactGateConfig): void {
+    const runtimes = [config, ...["codex", "claude"].flatMap((scope) =>
+      getProfileScopeState(config, scope as ConfigProfileScope).profiles.map((profile) => profileConfigToRuntime(profile.config))
+    )];
+    for (const runtime of runtimes) {
+      for (const upstream of [runtime.primary, runtime.compact, runtime.claude.primary, runtime.claude.compact]) {
+        this.oauth.assertBinding(upstream);
+      }
+    }
   }
 
   private async persist(next: CompactGateConfig): Promise<CompactGateConfig> {

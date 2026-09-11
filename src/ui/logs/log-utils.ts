@@ -9,7 +9,6 @@ import type {
   StudioLogEvent
 } from "../../shared/types.js";
 import { api } from "../shared/api.js";
-import { hasTokenDetails } from "./log-token-metrics.js";
 export {
   cacheCreationInputTokens,
   cacheReadInputTokens,
@@ -104,12 +103,13 @@ export function codexClientDisplay(entry: RequestLogEntry): string {
 export function logStatusKind(entry: RequestLogEntry): LogStatusKind {
   const hasOutcomeError = Boolean(entry.stream_outcome && entry.stream_outcome !== "success");
   const hasErrorSignal =
-    entry.status >= 400 ||
+    entry.status < 200 ||
+    entry.status >= 300 ||
     Boolean(entry.error_summary) ||
+    entry.stream_terminal_event === "response.failed" ||
+    entry.stream_terminal_event === "response.incomplete" ||
     hasOutcomeError;
-  const preservesOpenAiDiagnosticCompatibility = entry.route !== "claude" && hasTokenDetails(entry);
-  const hasStandaloneError = hasErrorSignal && !preservesOpenAiDiagnosticCompatibility;
-  return hasStandaloneError ? "error" : "normal";
+  return hasErrorSignal ? "error" : "normal";
 }
 
 export function logStatusToneClass(entry: RequestLogEntry): "is-ok" | "is-err" {

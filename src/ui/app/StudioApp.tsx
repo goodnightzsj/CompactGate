@@ -21,6 +21,16 @@ export function StudioApp() {
 
   return (
     <MotionConfig reducedMotion="user">
+      <a
+        className="skip-link"
+        href="#studio-main"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("studio-main")?.focus();
+        }}
+      >
+        跳到主内容
+      </a>
       <div className="app-shell">
         <StudioSidebar
           currentPage={navigation.currentPage}
@@ -30,7 +40,7 @@ export function StudioApp() {
           onThemeModeChange={setThemeMode}
         />
 
-        <main className="main-content">
+        <main id="studio-main" className="main-content" tabIndex={-1}>
           <StudioPageOutlet {...pageModels.pageOutlet} />
         </main>
 

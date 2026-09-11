@@ -12,6 +12,7 @@ import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import type { PrimaryFailoverState } from "./primary-failover.js";
+import { handleOAuthApi } from "./api-oauth-routes.js";
 
 export async function handleConfigApi(
   req: IncomingMessage,
@@ -25,6 +26,10 @@ export async function handleConfigApi(
   primaryFailover: PrimaryFailoverState,
   clientIdentity: ClientIdentityStore
 ): Promise<boolean> {
+  if (await handleOAuthApi(req, res, url, configStore, () =>
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity)
+  )) return true;
+
   if (req.method === "GET" && url.pathname === "/api/config") {
     sendJson(res, 200, configStore.toPublicConfig());
     return true;

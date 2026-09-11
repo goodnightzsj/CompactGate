@@ -66,10 +66,7 @@ export function LoggingStoragePanel({
       <section className="logging-storage-intro" aria-labelledby="logging-storage-title">
         <div>
           <span className="profile-item-kicker">存储策略</span>
-          <h3 id="logging-storage-title">日志与原始请求分离存储</h3>
-          <p>
-            SQLite 保留可检索的请求元数据，原始请求与响应写入有界抓包目录。目录达到上限时只删除旧抓包，并把日志状态更新为已清理。
-          </p>
+          <h3 id="logging-storage-title">{storageMode === "separated" ? "日志与原始请求分离存储" : storageMode === "metadata" ? "仅保留请求元数据" : "正文存入 SQLite"}</h3>
         </div>
         <div className="logging-storage-summary" aria-label="当前草稿存储状态">
           <span>
@@ -85,11 +82,22 @@ export function LoggingStoragePanel({
 
       <fieldset className="logging-mode-fieldset">
         <legend>存储模式</legend>
-        <div className="logging-mode-grid" role="radiogroup" aria-label="日志存储模式">
+        <div className="logging-mode-grid" role="radiogroup" aria-label="日志存储模式"
+          onKeyDown={(event) => {
+            const delta = ["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : ["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 0;
+            if (!delta) return;
+            event.preventDefault();
+            const modes: StorageMode[] = ["separated", "metadata", "sqlite"];
+            const next = (modes.indexOf(storageMode) + delta + modes.length) % modes.length;
+            selectStorageMode(modes[next]);
+            event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next].focus();
+          }}
+        >
           <button
             type="button"
             role="radio"
             aria-checked={storageMode === "separated"}
+            tabIndex={storageMode === "separated" ? 0 : -1}
             className={`logging-mode-card ${storageMode === "separated" ? "is-active" : ""}`}
             onClick={() => selectStorageMode("separated")}
           >
@@ -103,6 +111,7 @@ export function LoggingStoragePanel({
             type="button"
             role="radio"
             aria-checked={storageMode === "metadata"}
+            tabIndex={storageMode === "metadata" ? 0 : -1}
             className={`logging-mode-card ${storageMode === "metadata" ? "is-active" : ""}`}
             onClick={() => selectStorageMode("metadata")}
           >
@@ -115,6 +124,7 @@ export function LoggingStoragePanel({
             type="button"
             role="radio"
             aria-checked={storageMode === "sqlite"}
+            tabIndex={storageMode === "sqlite" ? 0 : -1}
             className={`logging-mode-card ${storageMode === "sqlite" ? "is-active" : ""}`}
             onClick={() => selectStorageMode("sqlite")}
           >

@@ -12,6 +12,7 @@ export function ConfirmProfileOverwriteDialog({
   profile,
   suggestedName,
   existingNames,
+  error,
   onCancel,
   onOverwrite,
   onSaveAsNew
@@ -20,6 +21,7 @@ export function ConfirmProfileOverwriteDialog({
   profile: PublicConfigProfile;
   suggestedName: string;
   existingNames: string[];
+  error: string | null;
   onCancel: () => void;
   onOverwrite: () => Promise<boolean>;
   onSaveAsNew: (name: string) => Promise<boolean>;
@@ -72,6 +74,7 @@ export function ConfirmProfileOverwriteDialog({
         />
         {nameTaken && <small className="confirm-field-error">已有同名档案，请换个名字。</small>}
       </div>
+      <div role="alert">{error && <p className="error-note">{error}</p>}</div>
       <div className="confirm-actions">
         <button className="ghost-button" type="button" disabled={submitting} onClick={onCancel}>
           取消

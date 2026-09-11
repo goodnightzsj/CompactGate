@@ -50,7 +50,7 @@ export function HealthPage({
         </div>
       </div>
 
-      {error && <p className="error-banner">{error}</p>}
+      {error && <p className="error-banner" role="alert">{error}</p>}
 
       <HealthHeroSection
         overallStatus={overallStatus}
@@ -62,19 +62,6 @@ export function HealthPage({
         refreshedAt={health?.time ?? null}
         isRefreshing={isRefreshing}
       />
-
-      <section className="health-entry-grid" aria-label="代理入口">
-        <div className="health-entry-card">
-          <span>OpenAI 兼容入口</span>
-          <code>{openAiEndpoint}</code>
-          <small>Codex 普通请求和 compact 请求都从这里进入。</small>
-        </div>
-        <div className="health-entry-card is-claude">
-          <span>Anthropic 兼容入口</span>
-          <code>{claudeEndpoint}</code>
-          <small>所有 Claude Messages 请求使用这个入口。</small>
-        </div>
-      </section>
 
       <section className="health-grid">
         <HealthEndpointCard
@@ -101,6 +88,19 @@ export function HealthPage({
           summary="处理所有 Anthropic Messages 请求"
           upstream={health?.claude.primary}
         />
+      </section>
+
+      <section className="health-entry-grid" aria-label="代理入口">
+        <div className="health-entry-card">
+          <span>OpenAI 兼容入口</span>
+          <code>{openAiEndpoint}</code>
+          <small>Codex 普通请求和 compact 请求都从这里进入。</small>
+        </div>
+        <div className="health-entry-card is-claude">
+          <span>Anthropic 兼容入口</span>
+          <code>{claudeEndpoint}</code>
+          <small>所有 Claude Messages 请求使用这个入口。</small>
+        </div>
       </section>
 
       <HealthDetailGrid

@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { RouteKind } from "../shared/types.js";
-import type { ConfigStore } from "./config.js";
+import { ConfigError, type ConfigStore } from "./config.js";
+import { prepareOAuthRequest } from "./oauth-transport.js";
+import { createCodexResponseTransform } from "./oauth-response.js";
 import { MAX_CLAUDE_LONG_CONTEXT_BYTES } from "./config-internals.js";
 import {
   buildAnthropicUpstreamHeaders,
@@ -258,6 +260,10 @@ export async function proxyClaudeRequest(
       return;
     }
 
+    const oauthRequest = { upstream, requestHeaders: transaction.requestHeaders, upstreamBody: transaction.upstreamBody };
+    const oauthProvider = await prepareOAuthRequest(config.claude.primary, configStore.oauth, oauthRequest, req.method);
+    if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
+    transaction.upstreamBody = oauthRequest.upstreamBody;
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,
@@ -272,7 +278,10 @@ export async function proxyClaudeRequest(
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       streamProtocol: upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       writeResponse: true,
-      responseTransform: upstreamProtocol === "openai_responses"
+      responseTransform: oauthProvider === "openai-codex" && !countTokens
+        ? (status, headers) => createCodexResponseTransform(status, headers, transaction.requestType === "stream", true)
+          ?? createResponsesToAnthropicResponseTransform(status, headers)
+        : upstreamProtocol === "openai_responses"
         ? countTokens
           ? createOpenAiInputTokensToAnthropicResponseTransform
           : createResponsesToAnthropicResponseTransform
@@ -305,28 +314,27 @@ export async function proxyClaudeRequest(
     const clientResult = responseWasTransformed
       ? { ...completedResult, streamSummary: completedResult.clientStreamSummary ?? null }
       : completedResult;
-    transaction.streamOutcome = responseWasTransformed
-      ? classifyAnthropicUpstreamResult(clientResult)
-      : upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat"
-        ? classifyOpenAiUpstreamResult(completedResult)
-        : classifyAnthropicUpstreamResult(completedResult);
     const clientResponseBody = completedResult.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = completedResult.clientResponseHeaders ?? transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
     transaction.usage = observedResult.clientStreamSummary?.usage ??
       extractResponseUsage(clientResponseBody, clientResponseHeaders);
-    if (transaction.requestMetadata.requestType === "stream") {
+    if (transaction.requestMetadata.requestType === "stream" || transaction.requestType === "stream") {
       transaction.errorSummary ??= responseWasTransformed
         ? summarizeAnthropicStreamFailure(clientResult)
         : upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat"
           ? summarizeOpenAiStreamFailure(completedResult)
           : summarizeAnthropicStreamFailure(completedResult);
     }
+    const classifiedResult = { ...clientResult, errorSummary: transaction.errorSummary };
+    transaction.streamOutcome = !responseWasTransformed && openAiUpstream
+      ? classifyOpenAiUpstreamResult(classifiedResult)
+      : classifyAnthropicUpstreamResult(classifiedResult);
   } catch (error) {
     if (error instanceof UpstreamRequestError) {
       applyUpstreamFailureToTransaction(transaction, error.details);
     }
-    transaction.status = error instanceof ProtocolConversionError
+    transaction.status = error instanceof ConfigError ? error.status ?? 400 : error instanceof ProtocolConversionError
       ? error.status
       : error instanceof RequestBodyTooLargeError
         ? 413

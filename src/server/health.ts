@@ -11,12 +11,14 @@ import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import { isValidBaseUrl } from "./config-internals.js";
+import type { OAuthStore } from "./oauth-store.js";
 
 export function healthForConfig(
   config: CompactGateConfig,
   logger: RequestLogger,
   codexVersionMonitor: CodexVersionMonitor,
-  clientIdentity: ClientIdentityStore
+  clientIdentity: ClientIdentityStore,
+  oauth?: OAuthStore
 ): HealthResponse {
   const routeState = (
     scope: CredentialScope,
@@ -30,10 +32,14 @@ export function healthForConfig(
       api_key_env: upstream.api_key_env,
       stored_api_key: upstream.api_key.trim().length > 0,
       stored_api_key_tail: upstream.api_key.trim().slice(-4),
-      api_key_configured: credential.apiKeyConfigured,
+      api_key_configured: credential.oauthAccountId
+        ? ["connected", "expired"].includes(oauth?.status(credential.oauthAccountId) ?? "missing")
+        : credential.apiKeyConfigured,
       api_key_source: credential.apiKeySource,
       active_api_key_env: credential.activeApiKeyEnv,
-      active_credential_scope: credential.activeCredentialScope
+      active_credential_scope: credential.activeCredentialScope,
+      ...(upstream.oauth_account_id ? { oauth_account_id: upstream.oauth_account_id } : {}),
+      ...(credential.oauthAccountId ? { oauth_status: oauth?.status(credential.oauthAccountId) ?? "missing" } : {})
     };
   };
 

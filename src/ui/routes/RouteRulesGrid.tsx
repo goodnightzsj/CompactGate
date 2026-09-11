@@ -34,8 +34,10 @@ export function RouteRulesGrid({
   return (
     <div className="routes-layout">
       <div className="route-rule codex">
-        <span className="route-chip codex route-rule-kicker">Codex 通道</span>
-        <h3>OpenAI 兼容入口</h3>
+        <div className="route-rule-head">
+          <span className="route-chip codex route-rule-kicker">Codex 通道</span>
+          <h3>OpenAI 兼容入口</h3>
+        </div>
         <p>请求目标：<code>http://{listen}/v1</code></p>
 
         <div className="route-mapping">
@@ -79,14 +81,16 @@ export function RouteRulesGrid({
         </div>
 
         <div className="route-model-strip">
-          Local / Remote V1 模型映射：{currentModel} → {compactModel}
+          Local / Remote V1 模型映射：{currentModel || "请求模型"} → {compactModel}
         </div>
         <div className="route-note">Remote V2 保留原始模型与 Responses 请求，始终使用 Primary 上游。</div>
       </div>
 
       <div className="route-rule claude">
-        <span className="route-chip claude route-rule-kicker">Claude 通道</span>
-        <h3>Anthropic 兼容入口</h3>
+        <div className="route-rule-head">
+          <span className="route-chip claude route-rule-kicker">Claude 通道</span>
+          <h3>Anthropic 兼容入口</h3>
+        </div>
         <p>请求目标：<code>http://{listen}/anthropic</code></p>
 
         <div className="route-mapping">

@@ -3,6 +3,8 @@ import type { ClientIdentityStore } from "./client-identity-store.js";
 import { factoryClientUserAgent } from "./config-defaults.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { buildUpstreamHeaders } from "./http-utils.js";
+import type { OAuthStore } from "./oauth-store.js";
+import { fetchOAuthModels } from "./oauth-transport.js";
 import {
   fetchUpstreamModels,
   type UpstreamModelsResponse
@@ -29,13 +31,15 @@ const CODEX_CLIENT_IDENTITY: Record<string, string> = {
 
 export async function fetchOpenAiModels(
   config: CompactGateConfig,
-  clientIdentity?: ClientIdentityStore
+  clientIdentity?: ClientIdentityStore,
+  oauth?: OAuthStore
 ): Promise<OpenAiModelsResponse> {
   const credential = resolveRouteCredential("primary", config);
   const identityKind = config.primary.upstream_protocol === "anthropic_messages" ? "claude" : "codex";
   const userAgent = clientIdentity
     ? clientIdentity.userAgentFor(identityKind)
     : factoryClientUserAgent(identityKind);
+  if (config.primary.oauth_account_id) return fetchOAuthModels(config.primary, oauth, config.timeouts.primary_ms, userAgent);
   return fetchUpstreamModels({
     baseUrl: config.primary.base_url,
     // Identity rides in as the request baseline, which `extra_headers` overwrites,

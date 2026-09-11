@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
 import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
@@ -167,6 +168,42 @@ describe("live log page updates", () => {
 });
 
 describe("LogsPage loaded rows", () => {
+  it("keeps failed filter context visible with an accessible retry and blocks stale pagination", () => {
+    const markup = renderLogsPage([requestLog("previous-result")], {
+      statusFilter: "error", hasStaleLogs: true, hasMoreLogs: true, error: "Synthetic filter failure"
+    });
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("筛选尚未应用，下面保留上次成功加载的结果。");
+    expect(markup).toContain("上次结果 · ");
+    expect(markup).toContain("重试日志");
+    expect(markup).toMatch(/<button[^>]+disabled=""[^>]*>加载更早日志/);
+    expect(markup).toContain('data-log-id="previous-result"');
+  });
+
+  it("does not present a failed empty query as a successful no-results search", () => {
+    const markup = renderLogsPage([], { statusFilter: "error", hasStaleLogs: true, error: "Synthetic query failure" });
+    expect(markup).toContain("尚无可显示的日志");
+    expect(markup).not.toContain("当前筛选条件下无记录");
+    expect(markup).toContain("重试日志");
+  });
+
+  it.each([false, true])("announces loading without clearing old results when narrow=%s", (narrow) => {
+    vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
+    const markup = renderLogsPage([requestLog("previous-result")], { isLoadingLogs: true, hasStaleLogs: true });
+    expect(markup).toContain("更新中 · ");
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('data-log-id="previous-result"');
+  });
+
+  it.each([false, true])("collapses secondary filters only when narrow=%s", (narrow) => {
+    vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
+    const markup = renderLogsPage([]);
+    expect(markup.includes('class="logs-filter-options" open=""')).toBe(!narrow);
+    expect(markup).toContain("通道 / 状态 / 上游");
+    expect(markup).toContain('aria-label="搜索日志"');
+    expect(markup).toContain("只看错误");
+  });
+
   it.each([false, true])("mounts only the visible log tree when narrow=%s", (narrow) => {
     vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
     const markup = renderLogsPage([requestLog("viewport-row")]);
@@ -210,6 +247,7 @@ describe("LogsPage loaded rows", () => {
         hasMoreLogs={false}
         isLoadingLogs={false}
         isLoadingMoreLogs={false}
+        hasStaleLogs={false}
         routeFilter="claude"
         statusFilter="all"
         hostFilter={ALL_HOSTS_FILTER}
@@ -219,6 +257,7 @@ describe("LogsPage loaded rows", () => {
         onHostFilterChange={() => undefined}
         onSearchFilterChange={() => undefined}
         onLoadMore={() => undefined}
+        onRetryLogs={() => undefined}
         error={null}
       />
     );
@@ -230,7 +269,7 @@ describe("LogsPage loaded rows", () => {
   });
 });
 
-function renderLogsPage(logs: RequestLogEntry[]): string {
+function renderLogsPage(logs: RequestLogEntry[], overrides: Partial<ComponentProps<typeof LogsPage>> = {}): string {
   const total = logs.length;
   return renderToStaticMarkup(
     <LogsPage
@@ -246,6 +285,7 @@ function renderLogsPage(logs: RequestLogEntry[]): string {
       hasMoreLogs={false}
       isLoadingLogs={false}
       isLoadingMoreLogs={false}
+      hasStaleLogs={false}
       routeFilter="all"
       statusFilter="all"
       hostFilter={ALL_HOSTS_FILTER}
@@ -255,7 +295,9 @@ function renderLogsPage(logs: RequestLogEntry[]): string {
       onHostFilterChange={() => undefined}
       onSearchFilterChange={() => undefined}
       onLoadMore={() => undefined}
+      onRetryLogs={() => undefined}
       error={null}
+      {...overrides}
     />
   );
 }

@@ -37,6 +37,12 @@ export function useLogStats(
 
   useEffect(() => {
     const controller = new AbortController();
+    let transition: ViewTransition | null = null;
+    const reportError = (cause: unknown) => {
+      if (!controller.signal.aborted && !(cause instanceof DOMException && cause.name === "AbortError")) {
+        setError(errorSummary(cause));
+      }
+    };
     const query = new URLSearchParams({ from: range.from, to: range.to });
     if (includeOverview) {
       query.set("overview", "1");
@@ -45,29 +51,36 @@ export function useLogStats(
     setLoading(true);
     void api<LogStatsSnapshot>(`/api/logs/stats?${query.toString()}`, {
       signal: controller.signal
-    }).then((snapshot) => {
+    }).then(async (snapshot) => {
+      if (controller.signal.aborted) return;
       if (
         transitionUpdates &&
         hasData.current &&
         typeof document.startViewTransition === "function" &&
         !window.matchMedia("(prefers-reduced-motion: reduce)").matches
       ) {
-        document.startViewTransition(() => flushSync(() => setData(snapshot)));
+        transition = document.startViewTransition(() => {
+          // Skipping a transition still runs its callback. A newer range may
+          // already own the page by the time the browser invokes this one.
+          if (!controller.signal.aborted) flushSync(() => setData(snapshot));
+        });
+        void transition.ready.catch(reportError);
+        void transition.finished.catch(reportError);
+        await transition.updateCallbackDone;
       } else {
         setData(snapshot);
       }
-      hasData.current = true;
-    }).catch((cause: unknown) => {
-      if (!(cause instanceof DOMException && cause.name === "AbortError")) {
-        setError(errorSummary(cause));
-      }
-    }).finally(() => {
+      if (!controller.signal.aborted) hasData.current = true;
+    }).catch(reportError).finally(() => {
       if (!controller.signal.aborted) {
         setLoading(false);
       }
     });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      transition?.skipTransition();
+    };
   }, [includeOverview, range.from, range.to, revision, transitionUpdates]);
 
   return {

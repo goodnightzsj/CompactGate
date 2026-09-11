@@ -18,6 +18,9 @@ export function stateDomainForPrimary(
     return explicit;
   }
   const origin = new URL(primary.base_url).origin;
+  if (primary.oauth_account_id) {
+    return `oauth:${primary.oauth_account_id}:${origin}`;
+  }
   if (profileId && keyId) {
     return `profile:${profileId}#${keyId}:${origin}`;
   }

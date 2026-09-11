@@ -721,6 +721,24 @@ describe("PrimaryFailoverState", () => {
 });
 
 describe("primary route result classification", () => {
+  it.each([
+    [401, "invalid token", "auth"],
+    [403, "insufficient balance", "quota"],
+    [429, "rate limit", "rate_limit"],
+    [502, "upstream failed", "transient"],
+    [502, "Client disconnected before upstream response completed.", "client_cancel"],
+    [200, null, "success"]
+  ] as const)("does not let usage override HTTP %s classification", (status, errorSummary, expected) => {
+    expect(classifyPrimaryRouteResult({
+      status, errorSummary,
+      usage: {
+        inputTokens: 10, outputTokens: 3, totalTokens: 13,
+        cachedInputTokens: null, cachedOutputTokens: null, cacheReadInputTokens: null,
+        cacheCreationInputTokens: null, reasoningTokens: null
+      }
+    })).toBe(expected);
+  });
+
   it("separates quota, auth, rate-limit, model, request-shape, and client-cancel failures", () => {
     expect(classifyPrimaryRouteResult({
       status: 403,
@@ -763,7 +781,7 @@ describe("primary route result classification", () => {
         reasoningTokens: null,
         totalTokens: 13
       }
-    })).toBe("success");
+    })).toBe("transient");
   });
 });
 

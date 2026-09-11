@@ -5,6 +5,7 @@ import { createConfigProfilePersistenceActions } from "../src/ui/hooks/configPro
 import type { ConfigFormState } from "../src/ui/config/types.js";
 import { ConfigStore } from "../src/server/config.js";
 import type { PublicConfig } from "../src/shared/types.js";
+import { INITIAL_STUDIO_CONFIG_STATE, reduceStudioConfigState } from "../src/ui/config/studio-config-state.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 describe("config profile persistence", () => {
@@ -47,7 +48,8 @@ describe("config profile persistence", () => {
       formRevision: null,
       setConfig: vi.fn(),
       setForm: vi.fn(),
-      setHealth: vi.fn(),
+      applyProfileConfig: vi.fn(),
+      refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
       setSaveState: vi.fn(),
       scopedProfileAccessors: () => accessors
@@ -109,7 +111,8 @@ describe("config profile persistence", () => {
       formRevision: null,
       setConfig: vi.fn(),
       setForm: vi.fn(),
-      setHealth: vi.fn(),
+      applyProfileConfig: vi.fn(),
+      refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
       setSaveState: vi.fn(),
       scopedProfileAccessors: () => accessors
@@ -128,7 +131,7 @@ describe("config profile persistence", () => {
     });
   });
 
-  it("keeps out-of-scope draft edits when the active profile is saved", async () => {
+  it.each(["save", "update", "apply"] as const)("keeps out-of-scope and in-flight draft edits during profile %s", async (operation) => {
     // A profile stores only its own slice, so the config that comes back still
     // carries the pre-save logging values. Rebuilding the whole form from it
     // discards edits the server never received.
@@ -158,6 +161,7 @@ describe("config profile persistence", () => {
     })));
     vi.stubGlobal("window", { setTimeout: vi.fn() });
     const setForm = vi.fn();
+    const applyProfileConfig = vi.fn();
     const accessors = {
       name: "Active",
       selectedId: profileId,
@@ -173,21 +177,41 @@ describe("config profile persistence", () => {
       formRevision: null,
       setConfig: vi.fn(),
       setForm,
-      setHealth: vi.fn(),
+      applyProfileConfig,
+      refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
       setSaveState: vi.fn(),
       scopedProfileAccessors: () => accessors
     });
 
-    await actions.updateSelectedProfile("codex");
+    if (operation === "save") await actions.saveConfigProfile("codex");
+    else if (operation === "apply") await actions.applySelectedProfile("codex");
+    else await actions.updateSelectedProfile("codex");
 
-    expect(setForm).toHaveBeenCalledTimes(1);
-    const updater = setForm.mock.calls[0]?.[0] as (current: ConfigFormState) => ConfigFormState;
+    const updater = operation === "apply"
+      ? (current: ConfigFormState) => reduceStudioConfigState(
+        { ...INITIAL_STUDIO_CONFIG_STATE, config: serverConfig, form: current, formRevision: serverConfig.revision },
+        { type: "apply_profile", config: applyProfileConfig.mock.calls[0][0], scope: applyProfileConfig.mock.calls[0][1], baselineConfig: serverConfig, baselineRevision: serverConfig.revision }
+      ).form
+      : setForm.mock.calls[0]?.[0] as (current: ConfigFormState) => ConfigFormState;
+    if (operation === "apply") expect(applyProfileConfig).toHaveBeenCalledExactlyOnceWith(serverConfig, "codex");
+    else expect(setForm).toHaveBeenCalledTimes(1);
     const nextForm = updater(draft);
     expect(nextForm.loggingKeepRecent).toBe(999);
     expect(nextForm.claudePrimaryBaseUrl).toBe("https://claude-draft.example");
     // The saved scope adopts the server's answer.
     expect(nextForm.codexPrimaryBaseUrl).toBe("https://saved.example/v1");
+
+    // Apply explicitly loads the saved profile; save/update must not erase newer edits.
+    if (operation !== "apply") {
+      const newerDraft = { ...draft, codexPrimaryBaseUrl: "https://newer-draft.example/v1" };
+      expect(updater(newerDraft)).toEqual(newerDraft);
+    }
+
+    const otherScopeEdit = { ...draft, claudePrimaryBaseUrl: "https://newer-claude.example" };
+    const afterOtherScopeEdit = updater(otherScopeEdit);
+    expect(afterOtherScopeEdit.codexPrimaryBaseUrl).toBe("https://saved.example/v1");
+    expect(afterOtherScopeEdit.claudePrimaryBaseUrl).toBe(otherScopeEdit.claudePrimaryBaseUrl);
   });
 });
 

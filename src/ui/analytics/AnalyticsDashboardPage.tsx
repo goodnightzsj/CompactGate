@@ -9,6 +9,7 @@ import {
   AnalyticsLoadState,
   AnalyticsMetricGrid,
   AnalyticsPanel,
+  AnalyticsRefreshStatus,
   AnalyticsSegmented,
   AnalyticsTrendChart,
   cacheHitRate,
@@ -86,7 +87,7 @@ export function AnalyticsDashboardPage() {
           <h2>流量与响应概况</h2>
         </div>
         <div className="analytics-header-actions">
-          <div className="analytics-segmented" aria-label="历史统计范围">
+          <div className="analytics-segmented" role="group" aria-label="历史统计范围">
             {PRESETS.map((item) => (
               <button
                 type="button"
@@ -99,11 +100,12 @@ export function AnalyticsDashboardPage() {
               </button>
             ))}
           </div>
-          <button type="button" className="btn btn-sm" onClick={refresh}>刷新</button>
+          <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
         </div>
       </div>
 
       <AnalyticsLoadState loading={stats.loading && !stats.data} error={stats.error} />
+      <AnalyticsRefreshStatus loading={stats.loading} error={stats.error} generatedAt={stats.data?.generated_at ?? null} />
 
       {stats.data && (
         <div className="analytics-data-shell">
@@ -111,65 +113,84 @@ export function AnalyticsDashboardPage() {
             className="analytics-data-view"
             aria-busy={stats.loading}
           >
-            <AnalyticsMetricGrid items={[
-              {
-                label: `${rangeLabel}请求`,
-                value: formatCompactMetricNumber(stats.data.summary.requests),
-                exactValue: formatMetricNumber(stats.data.summary.requests),
-                meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.requests ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.requests ?? 0)}`,
-                tone: "is-request"
-              },
-              {
-                label: `${rangeLabel} Token`,
-                value: formatCompactMetricNumber(stats.data.summary.total_tokens),
-                exactValue: formatMetricNumber(stats.data.summary.total_tokens),
-                meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.total_tokens ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.total_tokens ?? 0)}`,
-                tone: "is-token"
-              },
-              {
-                label: "近 5 分钟缓存命中",
-                value: cacheHitRate(
-                  fiveMinutes?.input_tokens ?? 0,
-                  fiveMinutes?.cache_read_tokens ?? 0
-                ),
-                meta: `${formatCompactMetricNumber(fiveMinutes?.cache_read_tokens ?? 0)} 读取`,
-                tone: "is-cache"
-              },
-              {
-                label: "近 5 分钟 RPM",
-                value: `${(fiveMinutes?.average_rpm ?? 0).toFixed(2)} RPM`,
-                meta: (
-                  <>
-                    <span>
-                      近 5 分钟 {formatCompactMetricNumber(Math.round(
-                        fiveMinutes?.average_tpm ?? 0
-                      ))} TPM
-                    </span>
-                    <span>
-                      近 1 分钟 {(oneMinute?.requests ?? 0).toFixed(2)} RPM
-                      {" · "}
-                      {formatCompactMetricNumber(oneMinute?.total_tokens ?? 0)} TPM
-                    </span>
-                  </>
-                )
-              },
-              {
-                label: "近 5 分钟首 Token P50 / P95",
-                value: durationPair(
-                  fiveMinutes?.first_token_p50_ms ?? null,
-                  fiveMinutes?.first_token_p95_ms ?? null
-                ),
-                meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_first_token_ms ?? null))}`
-              },
-              {
-                label: "近 5 分钟总耗时 P50 / P95",
-                value: durationPair(
-                  fiveMinutes?.duration_p50_ms ?? null,
-                  fiveMinutes?.duration_p95_ms ?? null
-                ),
-                meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_duration_ms ?? null))}`
-              }
-            ]} />
+            <div className="analytics-overview-metrics">
+              <section className="analytics-history-metrics" aria-label="历史范围统计">
+                <h3 className="analytics-metric-group-label">历史范围 · {rangeLabel}</h3>
+                <AnalyticsMetricGrid items={[
+                  {
+                    label: `${rangeLabel}请求`,
+                    value: formatCompactMetricNumber(stats.data.summary.requests),
+                    exactValue: formatMetricNumber(stats.data.summary.requests),
+                    meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.requests ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.requests ?? 0)}`,
+                    tone: "is-request"
+                  },
+                  {
+                    label: `${rangeLabel} Token`,
+                    value: formatCompactMetricNumber(stats.data.summary.total_tokens),
+                    exactValue: formatMetricNumber(stats.data.summary.total_tokens),
+                    meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.total_tokens ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.total_tokens ?? 0)}`,
+                    tone: "is-token"
+                  }
+                ]} />
+              </section>
+              <section className="analytics-recent-metrics" aria-label="近五分钟运行指标">
+                <h3 className="analytics-metric-group-label">近 5 分钟 · 采样快照</h3>
+                <AnalyticsMetricGrid items={[
+                  {
+                    label: "近 5 分钟缓存命中",
+                    value: cacheHitRate(
+                      fiveMinutes?.input_tokens ?? 0,
+                      fiveMinutes?.cache_read_tokens ?? 0
+                    ),
+                    meta: `${formatCompactMetricNumber(fiveMinutes?.cache_read_tokens ?? 0)} 读取`,
+                    tone: "is-cache"
+                  },
+                  {
+                    label: "近 5 分钟 RPM",
+                    value: `${(fiveMinutes?.average_rpm ?? 0).toFixed(2)} RPM`,
+                    meta: (
+                      <>
+                        <span>
+                          近 5 分钟 {formatCompactMetricNumber(Math.round(
+                            fiveMinutes?.average_tpm ?? 0
+                          ))} TPM
+                        </span>
+                        <span>
+                          近 1 分钟 {(oneMinute?.requests ?? 0).toFixed(2)} RPM
+                          {" · "}
+                          {formatCompactMetricNumber(oneMinute?.total_tokens ?? 0)} TPM
+                        </span>
+                      </>
+                    )
+                  }
+                ]} />
+              </section>
+            </div>
+
+            <section className="analytics-metric-section analytics-latency-metrics" aria-labelledby="analytics-latency-heading">
+              <div className="analytics-metric-section-header">
+                <h3 id="analytics-latency-heading">响应耗时</h3>
+                <span>近 5 分钟 · P50 / P95 与平均值</span>
+              </div>
+              <AnalyticsMetricGrid items={[
+                {
+                  label: "近 5 分钟首 Token P50 / P95",
+                  value: durationPair(
+                    fiveMinutes?.first_token_p50_ms ?? null,
+                    fiveMinutes?.first_token_p95_ms ?? null
+                  ),
+                  meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_first_token_ms ?? null))}`
+                },
+                {
+                  label: "近 5 分钟总耗时 P50 / P95",
+                  value: durationPair(
+                    fiveMinutes?.duration_p50_ms ?? null,
+                    fiveMinutes?.duration_p95_ms ?? null
+                  ),
+                  meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_duration_ms ?? null))}`
+                }
+              ]} />
+            </section>
 
             <div className="analytics-chart-grid">
               <AnalyticsPanel title="请求趋势" meta={granularity === "hour" ? "按小时" : "按天"}>

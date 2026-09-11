@@ -360,7 +360,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("keeps token-bearing failed stream diagnostics on the same primary profile", async () => {
+  it("counts token-bearing failed streams as errors and fails over at the existing threshold", async () => {
     const firstPrimaryRequests: CapturedRequest[] = [];
     const secondPrimaryRequests: CapturedRequest[] = [];
     const firstPrimary = await startCapturedOpenAiUpstream(firstPrimaryRequests, (res) => writeSse(res, [
@@ -394,7 +394,7 @@ describe("CompactGate OpenAI routing", () => {
     });
     expect(applyResponse.status).toBe(200);
 
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 11; index += 1) {
       const response = await fetch(`${app.url}/v1/responses`, {
         method: "POST",
         body: JSON.stringify({ model: "gpt-5.5", stream: true, input: `token failed ${index}` }),
@@ -404,14 +404,14 @@ describe("CompactGate OpenAI routing", () => {
       await response.text();
     }
 
-    expect(firstPrimaryRequests).toHaveLength(5);
+    expect(firstPrimaryRequests).toHaveLength(11);
     expect(secondPrimaryRequests).toHaveLength(0);
 
     const logPage = await fetchLogPage(app.url);
     expect(logPage.status_counts).toEqual({
-      all: 5,
-      normal: 5,
-      error: 0
+      all: 11,
+      normal: 0,
+      error: 11
     });
     expect(logPage.logs[0]).toMatchObject({
       route: "primary",
@@ -429,7 +429,16 @@ describe("CompactGate OpenAI routing", () => {
     });
 
     const errorPage = await fetchLogPage(app.url, "?status=error");
-    expect(errorPage.logs).toHaveLength(0);
+    expect(errorPage.logs).toHaveLength(11);
+
+    const recovered = await fetch(`${app.url}/v1/responses`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "after failed stream" })
+    });
+    expect(recovered.status).toBe(200);
+    expect(await recovered.text()).toContain("second ok");
+    expect(secondPrimaryRequests).toHaveLength(1);
   });
 
   it("avoids a Codex primary profile after more than ten account-level failures without touching compact routing", async () => {

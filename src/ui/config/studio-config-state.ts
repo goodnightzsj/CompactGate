@@ -1,7 +1,8 @@
 import type { SetStateAction } from "react";
-import type { PublicConfig } from "../../shared/types.js";
+import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import {
   emptyForm,
+  formAfterScopedProfileChange,
   formFromConfig,
   isFormDirty
 } from "./config-form-state.js";
@@ -34,6 +35,7 @@ export type StudioConfigAction =
   | { type: "set_config"; value: SetStateAction<PublicConfig | null> }
   | { type: "set_form"; value: SetStateAction<ConfigFormState> }
   | { type: "remote_config"; config: PublicConfig }
+  | { type: "apply_profile"; config: PublicConfig; scope: ConfigProfileScope; baselineConfig: PublicConfig | null; baselineRevision: string | null }
   | { type: "rebase_form_revision" }
   | { type: "commit_config"; config: PublicConfig; submittedRevision: number }
   | { type: "page_load_result"; error: string | null }
@@ -64,9 +66,8 @@ export function reduceStudioConfigState(
 
       return adoptBaselineKeepingDraft(state, action.config);
     case "set_config": {
-      // Every dispatcher of this action is one of this tab's own successful
-      // writes, so the draft it left behind really does sit on top of the
-      // returned config: adopting the revision keeps follow-up saves working.
+      // Only guarded draft writes and full imports use this action. Metadata
+      // operations use remote_config; applying a profile has its own scoped commit.
       const nextConfig = applyStateAction(state.config, action.value);
       return {
         ...state,
@@ -92,6 +93,21 @@ export function reduceStudioConfigState(
       }
 
       return adoptBaselineKeepingDraft(recovered, action.config);
+    }
+    case "apply_profile": {
+      if (!action.baselineConfig) return replaceConfigAndForm(state, action.config);
+      const form = formAfterScopedProfileChange(state.form, action.config, action.scope);
+      // Compare with the baseline captured before the request: its own SSE
+      // snapshot may arrive first, but applying one scope resolves no other edits.
+      const baseline = formAfterScopedProfileChange(formFromConfig(action.baselineConfig), action.config, action.scope);
+      const hasConflict = action.baselineRevision !== action.baselineConfig.revision || isFormDirty(action.config, baseline);
+      return {
+        ...state,
+        config: action.config,
+        form,
+        draftRevision: state.draftRevision + 1,
+        formRevision: hasConflict && isFormDirty(action.config, form) ? action.baselineRevision : action.config.revision
+      };
     }
     case "rebase_form_revision":
       // The operator saw the conflict and chose to keep their draft anyway. Only
@@ -143,6 +159,7 @@ function clearStaleLoadFailure(state: StudioConfigState): StudioConfigState {
  *
  * `formRevision` only stays pinned when the snapshot actually moves something the
  * form covers, because only then could saving the draft clobber someone's edit.
+ * An already conflicted draft remains pinned across later metadata-only updates.
  * Pinning on every snapshot dead-ended the page: `revision` embeds the process
  * boot time, so a proxy restart changes the string wholesale even though the
  * config on disk is byte-identical to what the tab already holds, and the save
@@ -155,10 +172,11 @@ function adoptBaselineKeepingDraft(
   const touchesForm = state.config
     ? isFormDirty(config, formFromConfig(state.config))
     : true;
+  const alreadyConflicted = state.config !== null && state.formRevision !== state.config.revision;
   return {
     ...state,
     config,
-    formRevision: touchesForm ? state.formRevision : config.revision
+    formRevision: touchesForm || alreadyConflicted ? state.formRevision : config.revision
   };
 }
 

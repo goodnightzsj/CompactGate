@@ -144,7 +144,7 @@ async function pruneConfigBackups(configPath: string, keep: number): Promise<voi
   }
 }
 
-async function writeFileAtomically(filePath: string, contents: string | Buffer): Promise<void> {
+export async function writeFileAtomically(filePath: string, contents: string | Buffer): Promise<void> {
   const directory = path.dirname(filePath);
   const temporaryPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   const handle = await fs.open(temporaryPath, "wx", CONFIG_FILE_MODE);

@@ -8,6 +8,7 @@ import { CodexVersionMonitor } from "../../src/server/codex-version.js";
 import { ClientIdentityStore } from "../../src/server/client-identity-store.js";
 import { createCompactGateServer } from "../../src/server/http.js";
 import { StudioEventBroadcaster } from "../../src/server/studio-events.js";
+import type { OAuthStoreOptions } from "../../src/server/oauth-store.js";
 
 export const cleanup: Array<() => Promise<void>> = [];
 export const cleanupEnvKeys = new Set<string>();
@@ -15,22 +16,24 @@ export const cleanupEnvKeys = new Set<string>();
 export async function startApp(
   primaryBaseUrl?: string,
   compactBaseUrl?: string,
-  patch?: Record<string, unknown>
+  patch?: Record<string, unknown>,
+  oauthOptions: OAuthStoreOptions = {}
 ) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-app-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
-  return startAppInDir(dir, primaryBaseUrl, compactBaseUrl, patch);
+  return startAppInDir(dir, primaryBaseUrl, compactBaseUrl, patch, oauthOptions);
 }
 
 export async function startAppInDir(
   dir: string,
   primaryBaseUrl?: string,
   compactBaseUrl?: string,
-  patch?: Record<string, unknown>
+  patch?: Record<string, unknown>,
+  oauthOptions: OAuthStoreOptions = {}
 ) {
   const primaryPatch = isRecord(patch?.primary) ? patch.primary : {};
   const compactPatch = isRecord(patch?.compact) ? patch.compact : {};
-  const config = await ConfigStore.load(path.join(dir, "compactgate.json"));
+  const config = await ConfigStore.load(path.join(dir, "compactgate.json"), oauthOptions);
   await config.patch({
     ...patch,
     primary: {
@@ -85,6 +88,7 @@ export async function startAppInDir(
 
   return {
     dir,
+    config,
     url: `http://127.0.0.1:${address.port}`,
     close: closeApp
   };

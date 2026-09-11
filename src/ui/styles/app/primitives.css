@@ -7,7 +7,7 @@
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
-  padding: 18px 20px;
+  padding: var(--space-lg);
   box-shadow: var(--shadow-sm);
 }
 
@@ -15,13 +15,15 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 14px;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-md);
 }
 
 .card-header h3 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 1.05rem;
+  font-size: var(--text-section);
   font-weight: 700;
   letter-spacing: 0;
   color: var(--ink);
@@ -32,12 +34,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 26px;
-  padding: 0 10px;
+  min-height: 28px;
+  padding: 3px 10px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
-  font-size: 0.72rem;
+  font-size: var(--text-caption);
   color: var(--muted);
 }
 
@@ -98,15 +100,15 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 34px;
-  padding: 0 14px;
+  min-height: 36px;
+  padding: 6px 14px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--ink);
-  font-size: 0.8rem;
+  font-size: var(--text-small);
   font-weight: 600;
-  transition: all 120ms var(--ease);
+  transition: border-color 120ms var(--ease), background-color 120ms var(--ease), color 120ms var(--ease), box-shadow 120ms var(--ease), transform 120ms var(--ease);
   white-space: nowrap;
 }
 
@@ -173,8 +175,10 @@
 }
 
 .btn-sm {
-  height: 28px; padding: 0 10px; font-size: 0.72rem;
+  min-height: 32px; padding: 4px 10px; font-size: var(--text-caption);
 }
+
+.btn:disabled { opacity: 0.55; transform: none; }
 
 .solid-button,
 .ghost-button {
@@ -186,7 +190,7 @@
   padding: 0 14px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: var(--text-small);
   font-weight: 700;
   line-height: 1.2;
   text-align: center;
@@ -245,17 +249,17 @@
 /* ── Form ── */
 .field {
   display: grid;
-  gap: 3px;
+  gap: var(--space-sm);
 }
 
 .field-label {
-  font-size: 0.76rem;
+  font-size: var(--text-small);
   font-weight: 700;
   color: var(--ink);
 }
 
 .field-hint {
-  font-size: 0.7rem;
+  font-size: var(--text-caption);
   color: var(--muted);
   line-height: 1.4;
 }
@@ -271,7 +275,7 @@ textarea,
   border-radius: var(--radius-sm);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--text-small);
   transition: border-color 120ms var(--ease);
 }
 
@@ -298,13 +302,19 @@ textarea:hover,
 
 .field span {
   color: var(--ink);
-  font-size: 0.76rem;
+  font-size: var(--text-small);
   font-weight: 700;
+}
+
+.field > .field-hint {
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: 400;
 }
 
 .field small {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: var(--text-caption);
   line-height: 1.4;
 }
 
@@ -380,15 +390,15 @@ textarea:hover,
 }
 
 .toggle-group button {
-  height: 28px;
+  min-height: 32px;
   padding: 0 12px;
   border: 0;
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: var(--text-caption);
   font-weight: 700;
-  transition: all 120ms var(--ease);
+  transition: background-color 120ms var(--ease), color 120ms var(--ease), box-shadow 120ms var(--ease);
 }
 
 .toggle-group button.is-active {
@@ -411,9 +421,9 @@ textarea:hover,
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: var(--text-small);
   font-weight: 600;
-  transition: all 120ms var(--ease);
+  transition: border-color 120ms var(--ease), color 120ms var(--ease);
   margin-bottom: -1px;
 }
 

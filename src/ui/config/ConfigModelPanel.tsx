@@ -1,6 +1,7 @@
 import type * as React from "react";
 import type {
   ClaudeModelMapRole,
+  ConfigProfileScope,
   PrimaryReasoningEffort,
   PublicConfig
 } from "../../shared/types.js";
@@ -19,7 +20,8 @@ export function ConfigModelPanel({
   linkedCompactModel,
   onFormChange,
   onUnlockCompactModel,
-  onRestoreLinkedMode
+  onRestoreLinkedMode,
+  scope = "codex"
 }: {
   config: PublicConfig | null;
   form: ConfigFormState;
@@ -27,6 +29,7 @@ export function ConfigModelPanel({
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
   onUnlockCompactModel: () => void;
   onRestoreLinkedMode: () => void;
+  scope?: ConfigProfileScope;
 }) {
   // No `last_saved_at`: it changes on *every* save, so editing an unrelated field
   // like the log page size discarded the fetched model catalogue and greyed the
@@ -37,6 +40,7 @@ export function ConfigModelPanel({
     config?.primary.base_url ?? "loading",
     config?.primary.active_api_key_env ?? "",
     config?.primary.api_key_source ?? "missing",
+    config?.primary.oauth_account_id ?? "",
     config?.profile_scopes.codex.active_profile_id ?? ""
   ].join("\n");
   const {
@@ -56,12 +60,9 @@ export function ConfigModelPanel({
     }));
   }
 
-  const effectivePrimaryModel = form.primaryModelOverride.trim() || "跟随请求";
-  const effectiveReasoning = form.primaryReasoningEffort || "跟随请求";
-
   return (
     <div className="model-config-workspace">
-      <div className="model-config-grid">
+      {scope === "codex" && <div className="model-config-grid">
         <section className="model-config-block model-primary-block" aria-labelledby="primary-model-title">
           <div className="model-config-block-head">
             <div>
@@ -137,20 +138,7 @@ export function ConfigModelPanel({
             <span className="field-hint">可直接输入兼容上游的自定义模型；拉取列表不会覆盖旧值。</span>
           </label>
 
-          <dl className="model-effective-grid">
-            <div>
-              <dt>目标模型</dt>
-              <dd>{effectivePrimaryModel}</dd>
-            </div>
-            <div>
-              <dt>reasoning.effort</dt>
-              <dd>{effectiveReasoning}</dd>
-            </div>
-            <div>
-              <dt>目录状态</dt>
-              <dd>{models.includes(form.primaryModelOverride) ? "当前上游模型" : form.primaryModelOverride ? "自定义模型" : "请求决定"}</dd>
-            </div>
-          </dl>
+          <p className="model-catalog-state">目录状态：{models.includes(form.primaryModelOverride) ? "当前上游模型" : form.primaryModelOverride ? "自定义模型" : "请求决定"}</p>
         </section>
 
         <section className="model-config-block model-compact-block" aria-labelledby="compact-model-title">
@@ -164,10 +152,11 @@ export function ConfigModelPanel({
 
           <div className="compact-model-mode">
             <span className="field-label">模型模式</span>
-            <div className="toggle-group">
+            <div className="toggle-group" role="group" aria-label="压缩模型模式">
               <button
                 type="button"
                 className={form.modelMode === "linked" ? "is-active" : ""}
+                aria-pressed={form.modelMode === "linked"}
                 onClick={onRestoreLinkedMode}
               >
                 自动联动
@@ -175,6 +164,7 @@ export function ConfigModelPanel({
               <button
                 type="button"
                 className={form.modelMode === "custom" ? "is-active" : ""}
+                aria-pressed={form.modelMode === "custom"}
                 onClick={onUnlockCompactModel}
               >
                 手动指定
@@ -196,13 +186,6 @@ export function ConfigModelPanel({
                 }))}
                 spellCheck={false}
               />
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={form.modelMode === "linked" ? onUnlockCompactModel : onRestoreLinkedMode}
-              >
-                {form.modelMode === "linked" ? "解锁" : "恢复联动"}
-              </button>
             </div>
           </div>
 
@@ -221,18 +204,19 @@ export function ConfigModelPanel({
             <span className="field-hint">{"{model}"} 替换为 Primary 覆盖模型；Primary 透传时使用请求模型。</span>
           </label>
         </section>
-      </div>
+      </div>}
 
-      <ClaudeModelMapEditor
+      {scope === "claude" && <ClaudeModelMapEditor
         modelMap={form.claudeModelMap}
         sourceKey={[
           config?.claude.primary.base_url ?? "loading",
           config?.claude.primary.active_api_key_env ?? "",
           config?.claude.primary.api_key_source ?? "missing",
+          config?.claude.primary.oauth_account_id ?? "",
           config?.profile_scopes.claude.active_profile_id ?? ""
         ].join("\n")}
         onModelMapChange={updateClaudeModelMap}
-      />
+      />}
     </div>
   );
 }

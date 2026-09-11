@@ -12,16 +12,15 @@
   --surface-raised: #ffffff;
   --ink: #1a1c1e;
   --ink-soft: #3d4044;
-  --muted: #737578;
-  /* Rules, dots and other graphics only. It measures ~2.7:1 on the light
-     surfaces and ~2.6:1 on the dark ones, so text — including 10-11px table
-     headers and kickers — uses --muted, which clears 4.5:1 in both palettes. */
+  --muted: #65676b;
+  /* Graphics only. Text and placeholders use --muted so warm, raised and
+     semantic surfaces retain readable contrast in both palettes. */
   --faint: #9b9d9f;
   --hairline: #e4dfd5;
   --hairline-strong: #cfc8b8;
   --accent: #314e7c;
   --accent-soft: #edf0f6;
-  --amber: #b85c0e;
+  --amber: #a14d08;
   --amber-soft: #fef7ef;
   --jade: #1a6b5e;
   --jade-soft: #edf8f4;
@@ -50,6 +49,15 @@
   --font-ui: "IBM Plex Sans", system-ui, sans-serif;
   --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --text-caption: 0.75rem;
+  --text-small: 0.875rem;
+  --text-body: 1rem;
+  --text-section: 1.125rem;
+  --text-heading: 1.75rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -64,22 +72,23 @@
   --surface-raised: #26282c;
   --ink: #e6e7e9;
   --ink-soft: #bcbdbf;
-  --muted: #8b8d8f;
+  --muted: #a1a3a6;
   --faint: #5f6063;
   --hairline: #333538;
   --hairline-strong: #4a4c50;
   --accent: #7b9fd4;
-  --accent-soft: rgba(123,159,212,0.12);
+  /* Opaque tints keep nested badges from accumulating translucent fills. */
+  --accent-soft: #2a303a;
   --amber: #e09040;
-  --amber-soft: rgba(224,144,64,0.12);
+  --amber-soft: #362e28;
   --jade: #5aada0;
-  --jade-soft: rgba(90,173,160,0.12);
-  --brick: #e06058;
-  --brick-soft: rgba(224,96,88,0.12);
+  --jade-soft: #263234;
+  --brick: #e87870;
+  --brick-soft: #36292b;
   --on-accent: #16181b;
   --on-brick: #16181b;
   --forest: #5aa870;
-  --forest-soft: rgba(90,168,112,0.12);
+  --forest-soft: #26312e;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
   --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
   --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);
@@ -97,22 +106,22 @@
     --surface-raised: #26282c;
     --ink: #e6e7e9;
     --ink-soft: #bcbdbf;
-    --muted: #8b8d8f;
+    --muted: #a1a3a6;
     --faint: #5f6063;
     --hairline: #333538;
     --hairline-strong: #4a4c50;
     --accent: #7b9fd4;
-    --accent-soft: rgba(123,159,212,0.12);
+    --accent-soft: #2a303a;
     --amber: #e09040;
-    --amber-soft: rgba(224,144,64,0.12);
+    --amber-soft: #362e28;
     --jade: #5aada0;
-    --jade-soft: rgba(90,173,160,0.12);
-    --brick: #e06058;
-    --brick-soft: rgba(224,96,88,0.12);
+    --jade-soft: #263234;
+    --brick: #e87870;
+    --brick-soft: #36292b;
     --on-accent: #16181b;
     --on-brick: #16181b;
     --forest: #5aa870;
-    --forest-soft: rgba(90,168,112,0.12);
+    --forest-soft: #26312e;
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.18);
     --shadow-md: 0 2px 8px rgba(0,0,0,0.24);
     --shadow-lg: 0 4px 16px rgba(0,0,0,0.3);

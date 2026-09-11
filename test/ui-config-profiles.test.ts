@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ProfileScopeCard } from "../src/ui/config/ProfileScopeCard.js";
 import { nextDuplicateProfileName } from "../src/ui/hooks/configProfileCollectionActions.js";
 import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
-import { profileSummary } from "../src/ui/config/profile-utils.js";
+import { profileItemId, profileSummary } from "../src/ui/config/profile-utils.js";
 import type { PublicConfig } from "../src/shared/types.js";
 
 describe("UI config profile actions", () => {
@@ -121,6 +121,12 @@ describe("UI config profile actions", () => {
 
     expect(markup).toContain("重命名并应用当前 Codex 档案");
     expect(markup).not.toContain("保存当前 Codex 草稿为新档案");
+    expect(markup).toContain(`id="${profileItemId("codex", current.id)}" tabindex="-1" aria-label="Codex 档案 zzzcoding"`);
+  });
+
+  it("gives profile location targets distinct IDs across scopes and special characters", () => {
+    expect(profileItemId("codex", "same / id")).toBe("profile-codex-same%20%2F%20id");
+    expect(profileItemId("codex", "same")).not.toBe(profileItemId("claude", "same"));
   });
 });
 

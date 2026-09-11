@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   ConfigProfileScope,
   PublicConfig
@@ -7,9 +7,10 @@ import {
   ConfigImportExportPanel
 } from "./ConfigImportExportPanel.js";
 import { CONFIG_TABS } from "./config-tabs.js";
+import { changedConfigAreas } from "./config-form-state.js";
 import { ConfigModelPanel } from "./ConfigModelPanel.js";
-import { ConfigPreviewPanel } from "./ConfigPreviewPanel.js";
 import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
+import { OAuthProfilesPanel } from "./OAuthProfilesPanel.js";
 import { ConfigSaveBar } from "./ConfigSaveBar.js";
 import { ConfigSaveAsNewProfileDialog } from "./ConfigSaveAsNewProfileDialog.js";
 import { LoggingStoragePanel } from "./LoggingStoragePanel.js";
@@ -17,11 +18,14 @@ import { RouteConfigPanel } from "./RouteConfigPanel.js";
 import {
   compactModeLabel,
   nextUniqueProfileName,
+  profileItemId,
   profileScopeState
 } from "./profile-utils.js";
 import type { ConfigFormState, ConfigTab } from "./types.js";
 import type { ConfigActions } from "../hooks/useConfigActions.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
+
+type ConfigDisplayScope = ConfigProfileScope | "all";
 
 export function ConfigPage({
   actions,
@@ -43,6 +47,9 @@ export function ConfigPage({
   onConfigTabChange: (tab: ConfigTab) => void;
 }) {
   const [crossScopeDraft, setCrossScopeDraft] = useState<CrossScopeProfileDraft | null>(null);
+  const [displayScope, setDisplayScope] = useState<ConfigDisplayScope>("codex");
+  const [profileToLocate, setProfileToLocate] = useState<{ scope: ConfigProfileScope; id: string } | null>(null);
+  const visibleScope = configTab === "profiles" || displayScope !== "all" ? displayScope : "codex";
   const importWorkflow = useConfigImportWorkflow({
     onImportConfig: actions.importConfig
   });
@@ -52,6 +59,15 @@ export function ConfigPage({
     codex: actions.profileError,
     claude: actions.claudeProfileError
   };
+
+  useEffect(() => {
+    if (!profileToLocate) return;
+    const target = document.getElementById(profileItemId(profileToLocate.scope, profileToLocate.id));
+    // Locating a card must not select it: selection resets the profile-name draft.
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: "center", behavior: "auto" });
+    setProfileToLocate(null);
+  }, [profileToLocate]);
 
   return (
     <>
@@ -63,7 +79,24 @@ export function ConfigPage({
       </div>
 
       <div className="config-layout">
-        <div className="config-section">
+        <div
+          className="config-section"
+          onFocusCapture={(event) => {
+            const target = event.target;
+            // Pointer focus must not scroll the button between pointerdown and
+            // pointerup, otherwise the user's click lands on a different element.
+            if (!(target instanceof HTMLElement) || !target.matches("input, select, textarea, button, summary, [tabindex]") || !target.matches(":focus-visible")) {
+              return;
+            }
+            const saveBar = document.querySelector<HTMLElement>(".config-save-bar");
+            if (!saveBar || saveBar.contains(target)) return;
+            const field = target.getBoundingClientRect();
+            const bar = saveBar.getBoundingClientRect();
+            if (field.bottom > bar.top - 12 && field.top < bar.bottom) {
+              target.scrollIntoView({ block: "center", behavior: "auto" });
+            }
+          }}
+        >
           <div className="tab-bar config-tab-bar" role="tablist" aria-label="配置分类">
             {/*
               Roving tabindex plus arrow keys: a tablist is one stop in the page's
@@ -104,6 +137,44 @@ export function ConfigPage({
             aria-labelledby={`config-tab-${configTab}`}
           >
             {configTab === "profiles" && (
+              <OAuthProfilesPanel config={config} onConfigChange={actions.receiveOAuthConfig}
+                onProfileLocate={(scope, id) => {
+                  setDisplayScope(scope);
+                  setProfileToLocate({ scope, id });
+                }} />
+            )}
+          {configTab !== "logging" && configTab !== "portable" && (
+            <div className="config-scope-heading">
+              {configTab === "profiles" && <div>
+                <h3>配置档案</h3>
+                <p>按客户端管理；上方授权连接为全局共享。应用档案才会切换运行配置。</p>
+              </div>}
+              <div className="client-scope-switch" role="group" aria-label="配置展示客户端">
+              {(configTab === "profiles"
+                ? ([
+                    ["all", "全部"],
+                    ["codex", "Codex"],
+                    ["claude", "Claude"]
+                  ] as const)
+                : ([
+                    ["codex", "Codex"],
+                    ["claude", "Claude"]
+                  ] as const)
+              ).map(([scope, label]) => (
+                <button
+                  key={scope}
+                  type="button"
+                  className={visibleScope === scope ? "is-active" : ""}
+                  aria-pressed={visibleScope === scope}
+                  onClick={() => setDisplayScope(scope)}
+                >
+                  {label}
+                </button>
+              ))}
+              </div>
+            </div>
+          )}
+            {configTab === "profiles" && (
               <ConfigProfilesPanel
                 config={config}
                 profileName={actions.profileName}
@@ -129,11 +200,18 @@ export function ConfigPage({
                   });
                 }}
                 onDeleteProfile={actions.requestDeleteSelectedProfile}
+                displayScope={displayScope}
               />
             )}
 
             {configTab === "routes" && (
-              <RouteConfigPanel config={config} form={form} onFormChange={onFormChange} />
+              <RouteConfigPanel
+                config={config}
+                form={form}
+                onFormChange={onFormChange}
+                onManageOAuth={() => onConfigTabChange("profiles")}
+                scope={displayScope === "all" ? "codex" : displayScope}
+              />
             )}
 
             {configTab === "model" && (
@@ -144,26 +222,12 @@ export function ConfigPage({
                 onFormChange={onFormChange}
                 onUnlockCompactModel={actions.unlockCompactModel}
                 onRestoreLinkedMode={actions.restoreLinkedMode}
+                scope={displayScope === "all" ? "codex" : displayScope}
               />
             )}
 
             {configTab === "logging" && (
               <LoggingStoragePanel form={form} onFormChange={onFormChange} />
-            )}
-
-            {configTab === "preview" && (
-              <ConfigPreviewPanel
-                previewPath={actions.previewPath}
-                previewBody={actions.previewBody}
-                previewHeaders={actions.previewHeaders}
-                preview={actions.preview}
-                previewError={actions.previewError}
-                onPathChange={actions.setPreviewPath}
-                onBodyChange={actions.setPreviewBody}
-                onHeadersChange={actions.setPreviewHeaders}
-                onPreviewSubmit={actions.previewRoute}
-                onPreviewClear={actions.clearPreview}
-              />
             )}
 
             {configTab === "portable" && (
@@ -181,17 +245,20 @@ export function ConfigPage({
           </div>
         </div>
 
-        <ConfigSaveBar
-          config={config}
-          saveState={actions.saveState}
-          saveError={actions.saveError}
-          saveConflict={actions.saveConflict}
-          hasPendingChanges={hasPendingChanges}
-          profileErrors={profileErrors}
-          onSaveConfig={actions.saveConfig}
-          onOverrideSaveConflict={actions.overrideSaveConflict}
-          onSaveProfileAsNew={actions.saveConfigProfile}
-        />
+        {configTab !== "portable" && (
+          <ConfigSaveBar
+            config={config}
+            saveState={actions.saveState}
+            saveError={actions.saveError}
+            saveConflict={actions.saveConflict}
+            hasPendingChanges={hasPendingChanges}
+            changedAreas={config ? changedConfigAreas(config, form) : []}
+            profileErrors={profileErrors}
+            onSaveConfig={actions.saveConfig}
+            onOverrideSaveConflict={actions.overrideSaveConflict}
+            onSaveProfileAsNew={actions.saveConfigProfile}
+          />
+        )}
       </div>
 
       {crossScopeDraft && (
@@ -250,7 +317,9 @@ function CrossScopeProfileDialog({
       scopeLocked
       profileErrors={profileErrors}
       title={`创建为 ${targetLabel} 档案`}
-      description={`将「${draft.sourceProfile.name}」的地址与凭据复制到 ${targetLabel}。上游协议、模型与环境变量改用 ${targetLabel} 默认值；不会自动应用，目标端现有档案保持不变。`}
+      description={draft.sourceProfile.oauth_account_id || draft.sourceProfile.compact_oauth_account_id
+        ? `将「${draft.sourceProfile.name}」的地址与凭据复制到 ${targetLabel}；OAuth 路由保留连接及厂商协议，模型采用目标端默认值。不会自动应用或覆盖已有档案。`
+        : `将「${draft.sourceProfile.name}」的地址与凭据复制到 ${targetLabel}。上游协议、模型与环境变量改用 ${targetLabel} 默认值；不会自动应用，目标端现有档案保持不变。`}
       submitLabel={`创建 ${targetLabel} 档案`}
       onCancel={onCancel}
       onConfirm={onConfirm}
@@ -274,8 +343,8 @@ function CrossScopeProfileDialog({
 /**
  * Read off the source profile, not a local draft: the server builds the copy, and
  * the only fields it carries across scopes are the URLs and the compact mode shown
- * here. The protocol is deliberately absent — it resets to the destination's
- * default, so quoting the source's value would misreport what gets created.
+ * here. Manual routes reset their protocol to the destination's default; OAuth
+ * routes keep the provider-bound protocol with the account reference.
  */
 function crossScopeRoutePreview(draft: CrossScopeProfileDraft) {
   const source = draft.sourceProfile;

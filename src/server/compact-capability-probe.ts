@@ -13,6 +13,8 @@ import { buildCompactOpenAiProxyPlan } from "./openai-proxy-plan.js";
 import { sendBufferedUpstreamRequest } from "./upstream-client.js";
 import { extractResponseUsage } from "./usage.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
+import type { OAuthStore } from "./oauth-store.js";
+import { prepareOAuthRequest } from "./oauth-transport.js";
 
 const MAX_PROBE_RESPONSE_BYTES = 512 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 30_000;
@@ -35,6 +37,7 @@ export async function probeCompactCapability(input: {
   config: CompactGateConfig;
   model?: unknown;
   clientIdentity?: ClientIdentityStore;
+  oauth?: OAuthStore;
 }): Promise<CompactCapabilityProbeResult> {
   const model = resolveProbeModel(input.config, input.model);
   const rawBody = Buffer.from(JSON.stringify({
@@ -71,6 +74,11 @@ export async function probeCompactCapability(input: {
       nativeCompaction: true,
       clientIdentity: input.clientIdentity
     });
+    await prepareOAuthRequest(
+      input.config.compact.upstream_mode === "primary" ? input.config.primary : input.config.compact,
+      input.oauth, plan, "POST"
+    );
+    if (input.res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     plan.requestHeaders["accept-encoding"] = "identity";
     const result = await sendBufferedUpstreamRequest({
       req: input.req,

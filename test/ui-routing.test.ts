@@ -13,6 +13,7 @@ import { DashboardStatsGrid } from "../src/ui/dashboard/DashboardStatsGrid.js";
 import { planStudioNavigation } from "../src/ui/app/useStudioNavigation.js";
 import type { PageMode } from "../src/ui/app-types.js";
 import type { ConfigTab } from "../src/ui/config/types.js";
+import { CONFIG_TABS } from "../src/ui/config/config-tabs.js";
 
 describe("UI routing helpers", () => {
   it.each([
@@ -26,7 +27,8 @@ describe("UI routing helpers", () => {
     ["/config/routes", "", "config"],
     ["/config/model", "", "config"],
     ["/config/logging", "", "config"],
-    ["/config/preview", "", "config"],
+    ["/config/preview", "", "routes"],
+    ["/config/preview/", "", "routes"],
     ["/config/portable", "", "config"],
     ["/", "", "dashboard"],
     ["/", "#unknown", "dashboard"]
@@ -95,7 +97,6 @@ describe("UI routing helpers", () => {
     ["routes", "/config/routes"],
     ["model", "/config/model"],
     ["logging", "/config/logging"],
-    ["preview", "/config/preview"],
     ["portable", "/config/portable"]
   ] satisfies Array<[ConfigTab, string]>) (
     "maps the %s config tab to its canonical path",
@@ -108,6 +109,20 @@ describe("UI routing helpers", () => {
       });
     }
   );
+
+  it("keeps five config tabs and resolves old preview bookmarks to the routes workspace", () => {
+    expect(CONFIG_TABS.map((tab) => tab.label)).toEqual([
+      "档案", "连接与路由", "模型", "日志存储", "备份与迁移"
+    ]);
+    const location = detectStudioLocationFromLocation({ pathname: "/config/preview", hash: "" });
+    expect(location).toEqual({ pageMode: "routes", configTab: "profiles" });
+    expect(planStudioNavigation({ pageMode: "config", currentPage: "config", configTab: "model" }, {
+      type: "location", ...location
+    })).toEqual({
+      state: { pageMode: "routes", currentPage: "routes", configTab: "model" },
+      pushPath: null
+    });
+  });
 
   it("keeps the legacy config hash and incomplete config paths on the profiles tab", () => {
     expect(detectStudioLocationFromLocation({ pathname: "/", hash: "#config" })).toEqual({
@@ -186,5 +201,9 @@ describe("UI routing helpers", () => {
 
     expect(href).toBe("/health");
     expect(detectPageFromLocation({ pathname: href!, hash: "" })).toBe("health");
+    expect(markup).toContain('aria-label="复制 OpenAI 端点"');
+    expect(markup).toContain('aria-label="复制 Claude 端点"');
+    expect(markup).toContain("http://127.0.0.1:7865/anthropic");
+    expect(markup).not.toContain("全部上游可用");
   });
 });

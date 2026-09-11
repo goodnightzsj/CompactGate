@@ -9,6 +9,8 @@ import { clamp, formatClock } from "../shared/format.js";
 import { CustomSelect, type SelectOption } from "../shared/CustomSelect.js";
 import { Field } from "./Field.js";
 import type { FormKeyPoolEntry } from "./types.js";
+import type { OAuthAccountView } from "../../shared/oauth.js";
+import { oauthStatusLabel } from "./useOAuthAccounts.js";
 
 const KEY_STRATEGY_OPTIONS: SelectOption[] = [
   {
@@ -71,6 +73,10 @@ export function RouteCredentialFields({
   keyStrategy,
   rotationOptOut,
   stickyReserveSeconds,
+  oauthAccountId = "",
+  oauthAccounts = [],
+  onOAuthAccountChange,
+  onManageOAuth,
   onBaseUrlChange,
   onSuggestionSelect,
   onApiKeyChange,
@@ -100,6 +106,10 @@ export function RouteCredentialFields({
   keyStrategy?: PrimaryKeyStrategy;
   rotationOptOut?: boolean;
   stickyReserveSeconds?: number;
+  oauthAccountId?: string;
+  oauthAccounts?: OAuthAccountView[];
+  onOAuthAccountChange?: (account: OAuthAccountView | null) => void;
+  onManageOAuth: () => void;
   onBaseUrlChange: (value: string) => void;
   onSuggestionSelect?: (suggestion: RouteUrlSuggestion) => void;
   onApiKeyChange: (value: string) => void;
@@ -241,6 +251,38 @@ export function RouteCredentialFields({
         <span className={`route-chip ${tone}`}>{badge}</span>
       </div>
 
+      {onOAuthAccountChange && <CustomSelect
+        label={`${title} 认证来源`}
+        value={oauthAccountId}
+        options={[
+          { value: "", label: "手动 API key", meta: "使用下方保存的密钥或密钥池" },
+          ...(oauthAccountId && !oauthAccounts.some((item) => item.id === oauthAccountId)
+            ? [{ value: oauthAccountId, label: "OAuth · 连接待加载或缺失", disabled: true }] : []),
+          ...oauthAccounts.map((account) => ({
+            value: account.id,
+            label: account.label,
+            meta: `OAuth · ${oauthStatusLabel[account.status]}`,
+            disabled: account.status !== "connected" && !(account.status === "expired" && account.can_refresh)
+          }))
+        ]}
+        onChange={(id) => {
+          if (!id) onOAuthAccountChange(null);
+          else {
+            const account = oauthAccounts.find((item) => item.id === id);
+            if (account) onOAuthAccountChange(account);
+          }
+        }}
+        wide
+      />}
+      {oauthAccountId ? <div className="oauth-route-summary">
+        <strong>OAuth · {oauthStatusLabel[oauthAccounts.find((item) => item.id === oauthAccountId)?.status ?? "missing"]}</strong>
+        <span>{upstreamProtocol}</span><code>{baseUrl}</code>
+        <a href="/config/profiles" onClick={(event) => {
+          if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          onManageOAuth();
+        }}>管理授权连接</a>
+      </div> : <>
       <CustomSelect
         label={`${title} 上游格式`}
         value={upstreamProtocol}
@@ -382,14 +424,14 @@ export function RouteCredentialFields({
       </Field>
 
       {showKeyPool && keyPool && (
-        <section className="key-pool-editor" aria-label={`${title} 密钥池`}>
-          <div className="key-pool-editor-head">
+        <details className="key-pool-editor" aria-label={`${title} 密钥池`} open={keyPool.length > 0}>
+          <summary className="key-pool-editor-head">
             <h5>密钥池（同一档案多账号轮转）</h5>
             <span className="route-chip primary">
               {keyPool.filter((entry) => entry.enabled).length + (storedApiKey ? 1 : 0)}/
               {keyPool.length + (storedApiKey ? 1 : 0)} 可用
             </span>
-          </div>
+          </summary>
           <p className="key-pool-editor-hint">
             每把密钥是一个独立上游账号：故障转移时按序使用，401/429 单独冷却与隔离，加密会话状态按密钥隔离。
             上方「{apiKeyLabel}」也是池成员，排在第一位。
@@ -533,8 +575,9 @@ export function RouteCredentialFields({
               <span>不参与自动轮转（账号绑定凭据，如 OAuth；故障转移永不主动使用）</span>
             </label>
           </div>
-        </section>
+        </details>
       )}
+      </>}
     </section>
   );
 }

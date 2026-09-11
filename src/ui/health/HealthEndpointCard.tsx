@@ -28,8 +28,8 @@ export function HealthEndpointCard({
     <section className={`panel health-card route-${route} tone-${status.tone}`} aria-label={`${title} 状态`}>
       <div className="health-card-head">
         <div>
-          <p className="eyebrow">{summary}</p>
           <h2>{title}</h2>
+          <p className="eyebrow">{summary}</p>
         </div>
         <span className={`route-chip ${route}`}>{badgeLabel}</span>
       </div>
@@ -37,18 +37,16 @@ export function HealthEndpointCard({
       <div className="health-card-status">
         <span className={`health-card-led is-${status.tone}`} aria-hidden="true" />
         <strong>{status.label}</strong>
-        <small>{upstream?.host ?? "等待健康数据"}</small>
       </div>
 
+      <div className="health-kv">
+        <span>Base URL</span>
+        <strong>{upstream?.base_url ?? "读取中..."}</strong>
+      </div>
+
+      <details className="health-credential-details" open={status.tone !== "good"}>
+        <summary>凭据详情 <span>{credentialSourceLabel(upstream?.api_key_source)}</span></summary>
       <div className="health-kv-grid">
-        <div className="health-kv">
-          <span>Base URL</span>
-          <strong>{upstream?.base_url ?? "读取中..."}</strong>
-        </div>
-        <div className="health-kv">
-          <span>Host</span>
-          <strong>{upstream?.host ?? "无"}</strong>
-        </div>
         <div className="health-kv">
           <span>密钥来源</span>
           <strong>{credentialSourceLabel(upstream?.api_key_source)}</strong>
@@ -64,10 +62,11 @@ export function HealthEndpointCard({
         <strong>{activeCredentialLabel(credentialScope, upstream)}</strong>
       </div>
 
-      <div className={`health-flag ${upstream?.api_key_configured ? "is-good" : "is-warn"}`}>
+      <div className={`health-flag ${status.tone === "good" ? "is-good" : "is-warn"}`}>
         <span className="health-led" aria-hidden="true" />
         {credentialFlagCopy(credentialScope, upstream)}
       </div>
+      </details>
     </section>
   );
 }

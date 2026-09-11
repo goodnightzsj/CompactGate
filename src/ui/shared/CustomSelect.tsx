@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, KeyboardEvent } from "react";
 import { clamp } from "./format.js";
@@ -9,6 +9,7 @@ export interface SelectOption {
   count?: number;
   meta?: string;
   tone?: string;
+  disabled?: boolean;
 }
 
 export function CustomSelect({
@@ -47,14 +48,14 @@ export function CustomSelect({
     }
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) {
       return;
     }
 
     updateMenuPlacement();
     window.requestAnimationFrame(() => {
-      optionRefs.current[selectedIndex]?.focus();
+      focusOption(selectedIndex);
     });
   }, [open, selectedIndex]);
 
@@ -102,8 +103,15 @@ export function CustomSelect({
     });
   }
 
-  function focusOption(index: number) {
-    optionRefs.current[index]?.focus();
+  function focusOption(index: number, direction = 1) {
+    for (let offset = 0; offset < options.length; offset += 1) {
+      const next = (index + offset * direction + options.length) % options.length;
+      if (!options[next].disabled) {
+        optionRefs.current[next]?.focus();
+        return;
+      }
+    }
+    triggerRef.current?.focus();
   }
 
   function updateMenuPlacement() {
@@ -118,10 +126,12 @@ export function CustomSelect({
     const left = clamp(rect.left, viewportPadding, window.innerWidth - width - viewportPadding);
     const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
     const availableAbove = rect.top - viewportPadding;
-    const maxHeight = Math.max(180, Math.min(320, Math.max(availableBelow, availableAbove)));
-    const top = availableBelow >= 190 || availableBelow >= availableAbove
-      ? rect.bottom + 8
-      : Math.max(viewportPadding, rect.top - maxHeight - 8);
+    const openAbove = availableAbove > availableBelow;
+    const availableSpace = openAbove ? availableAbove : availableBelow;
+    const maxHeight = Math.max(120, Math.min(320, availableSpace));
+    const top = openAbove
+      ? Math.max(viewportPadding, rect.top - maxHeight - 8)
+      : rect.bottom + 8;
 
     setMenuStyle({
       left,
@@ -166,7 +176,7 @@ export function CustomSelect({
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      focusOption((optionIndex - 1 + options.length) % options.length);
+      focusOption((optionIndex - 1 + options.length) % options.length, -1);
       return;
     }
 
@@ -178,7 +188,7 @@ export function CustomSelect({
 
     if (event.key === "End") {
       event.preventDefault();
-      focusOption(options.length - 1);
+      focusOption(options.length - 1, -1);
     }
   }
 
@@ -210,6 +220,7 @@ export function CustomSelect({
           id={listId}
           className={`custom-select-menu ${wide ? "is-wide" : ""} ${compact ? "is-compact" : ""}`}
           role="listbox"
+          aria-label={label}
           style={menuStyle}
         >
           {options.map((option, optionIndex) => (
@@ -223,6 +234,8 @@ export function CustomSelect({
               }`}
               type="button"
               role="option"
+              disabled={option.disabled}
+              aria-disabled={option.disabled || undefined}
               aria-selected={option.value === value}
               onClick={() => {
                 onChange(option.value);

@@ -64,9 +64,9 @@ export const LogMobileCard = memo(function LogMobileCard({
           <motion.div
             className="log-mobile-detail"
             id={detailId}
-            initial={{ opacity: 0, y: -6 }}
+            initial={{ opacity: 0, y: reduceMotion ? 0 : -6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
+            exit={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
             transition={reduceMotion ? { duration: 0.01 } : { duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           >
             <LogDetailPanel entry={entry} />

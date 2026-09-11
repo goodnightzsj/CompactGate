@@ -7,6 +7,7 @@ import type {
 } from "../../shared/types.js";
 import { emptyClaudeModelMap, normalizeClaudeModelMap } from "./model-map.js";
 import type { ConfigFormState } from "./types.js";
+import type { OAuthAccountView } from "../../shared/oauth.js";
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * 1024 * 1024;
@@ -20,6 +21,7 @@ const GIBIBYTE = 1024 * 1024 * 1024;
 const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof ConfigFormState>> = {
   codex: [
     "codexPrimaryBaseUrl",
+    "codexPrimaryOAuthAccountId",
     "codexPrimaryApiKey",
     "clearCodexPrimaryApiKey",
     "codexPrimaryCredentialPresetId",
@@ -39,6 +41,7 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "primaryReasoningEffort",
     "primaryStateDomainId",
     "codexCompactBaseUrl",
+    "codexCompactOAuthAccountId",
     "codexCompactApiKey",
     "clearCodexCompactApiKey",
     "codexCompactCredentialPresetId",
@@ -50,6 +53,7 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
   ],
   claude: [
     "claudePrimaryBaseUrl",
+    "claudePrimaryOAuthAccountId",
     "claudePrimaryApiKey",
     "clearClaudePrimaryApiKey",
     "claudePrimaryCredentialPresetId",
@@ -60,6 +64,7 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "claudePrimaryStickyReserveSeconds",
     "claudeModelMap",
     "claudeCompactBaseUrl",
+    "claudeCompactOAuthAccountId",
     "claudeCompactApiKey",
     "clearClaudeCompactApiKey",
     "claudeCompactCredentialPresetId",
@@ -72,16 +77,24 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
 /**
  * Adopt the server's answer for the slice a profile save just persisted while
  * leaving every other draft field alone. Rebuilding the whole form from the
- * response would silently revert edits that save never carried.
+ * response would silently revert edits that save never carried. A save's captured
+ * draft also protects newer edits in that slice. Keep the slice together so route
+ * fields cannot be mixed with another draft's credentials. Applying a saved
+ * profile deliberately replaces the slice and needs no captured draft.
  */
 export function formAfterScopedProfileChange(
   draft: ConfigFormState,
   config: PublicConfig,
-  scope: ConfigProfileScope
+  scope: ConfigProfileScope,
+  submittedDraft: ConfigFormState = draft
 ): ConfigFormState {
+  const fields = SCOPED_PROFILE_FORM_FIELDS[scope];
+  if (fields.some((field) => JSON.stringify(draft[field]) !== JSON.stringify(submittedDraft[field]))) {
+    return draft;
+  }
   const saved = formFromConfig(config);
   const next: Record<string, unknown> = { ...draft };
-  for (const field of SCOPED_PROFILE_FORM_FIELDS[scope]) {
+  for (const field of fields) {
     next[field] = saved[field];
   }
   return next as ConfigFormState;
@@ -90,6 +103,7 @@ export function formAfterScopedProfileChange(
 export function emptyForm(): ConfigFormState {
   return {
     codexPrimaryBaseUrl: "",
+    codexPrimaryOAuthAccountId: "",
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
@@ -103,11 +117,13 @@ export function emptyForm(): ConfigFormState {
     codexPrimaryRotationOptOut: false,
     codexPrimaryStickyReserveSeconds: 0,
     codexCompactBaseUrl: "",
+    codexCompactOAuthAccountId: "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
     codexCompactCredentialPresetId: "",
     codexCompactUpstreamProtocol: "openai_responses",
     claudePrimaryBaseUrl: "",
+    claudePrimaryOAuthAccountId: "",
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
@@ -118,6 +134,7 @@ export function emptyForm(): ConfigFormState {
     claudePrimaryStickyReserveSeconds: 0,
     claudeModelMap: emptyClaudeModelMap(),
     claudeCompactBaseUrl: "",
+    claudeCompactOAuthAccountId: "",
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
     claudeCompactCredentialPresetId: "",
@@ -141,6 +158,7 @@ export function emptyForm(): ConfigFormState {
 export function formFromConfig(config: PublicConfig): ConfigFormState {
   return {
     codexPrimaryBaseUrl: config.primary.base_url,
+    codexPrimaryOAuthAccountId: config.primary.oauth_account_id ?? "",
     codexPrimaryApiKey: "",
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
@@ -162,11 +180,13 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexPrimaryStickyReserveSeconds: config.primary.sticky_reserve_seconds ?? 0,
     primaryStatePortability: config.primary_failover.state_portability,
     codexCompactBaseUrl: config.compact.base_url,
+    codexCompactOAuthAccountId: config.compact.oauth_account_id ?? "",
     codexCompactApiKey: "",
     clearCodexCompactApiKey: false,
     codexCompactCredentialPresetId: "",
     codexCompactUpstreamProtocol: config.compact.upstream_protocol,
     claudePrimaryBaseUrl: config.claude.primary.base_url,
+    claudePrimaryOAuthAccountId: config.claude.primary.oauth_account_id ?? "",
     claudePrimaryApiKey: "",
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
@@ -183,6 +203,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     claudePrimaryStickyReserveSeconds: config.claude.primary.sticky_reserve_seconds ?? 0,
     claudeModelMap: normalizeClaudeModelMap(config.claude.model_map),
     claudeCompactBaseUrl: config.claude.compact.base_url,
+    claudeCompactOAuthAccountId: config.claude.compact.oauth_account_id ?? "",
     claudeCompactApiKey: "",
     clearClaudeCompactApiKey: false,
     claudeCompactCredentialPresetId: "",
@@ -209,6 +230,8 @@ export function formToPatch(form: ConfigFormState) {
     base_url: form.codexPrimaryBaseUrl,
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
+    ...oauthCredentialDraft(form.codexPrimaryOAuthAccountId),
+    oauth_account_id: form.codexPrimaryOAuthAccountId || null,
     model_override: form.primaryModelOverride,
     upstream_protocol: form.codexPrimaryUpstreamProtocol,
     reasoning_effort: form.primaryReasoningEffort,
@@ -229,6 +252,8 @@ export function formToPatch(form: ConfigFormState) {
     base_url: form.codexCompactBaseUrl,
     ...credentialPresetPatch(form.codexCompactCredentialPresetId),
     ...apiKeyPatch(form.codexCompactApiKey, form.clearCodexCompactApiKey),
+    ...oauthCredentialDraft(form.codexCompactOAuthAccountId),
+    oauth_account_id: form.codexCompactOAuthAccountId || null,
     upstream_mode: form.upstreamMode,
     model_mode: form.modelMode,
     model_template: form.modelTemplate,
@@ -240,6 +265,8 @@ export function formToPatch(form: ConfigFormState) {
       base_url: form.claudePrimaryBaseUrl,
       ...credentialPresetPatch(form.claudePrimaryCredentialPresetId),
       ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey),
+      ...oauthCredentialDraft(form.claudePrimaryOAuthAccountId),
+      oauth_account_id: form.claudePrimaryOAuthAccountId || null,
       model_override: claudeModelMap.default,
       upstream_protocol: form.claudePrimaryUpstreamProtocol,
       key_strategy: form.claudePrimaryKeyStrategy,
@@ -257,6 +284,8 @@ export function formToPatch(form: ConfigFormState) {
       base_url: form.claudeCompactBaseUrl,
       ...credentialPresetPatch(form.claudeCompactCredentialPresetId),
       ...apiKeyPatch(form.claudeCompactApiKey, form.clearClaudeCompactApiKey),
+      ...oauthCredentialDraft(form.claudeCompactOAuthAccountId),
+      oauth_account_id: form.claudeCompactOAuthAccountId || null,
       upstream_mode: form.claudeCompactUpstreamMode,
       model_override: form.claudeCompactModelOverride,
       upstream_protocol: form.claudeCompactUpstreamProtocol
@@ -288,6 +317,21 @@ export function isFormDirty(config: PublicConfig, form: ConfigFormState): boolea
   return JSON.stringify(current) !== JSON.stringify(draft);
 }
 
+export function changedConfigAreas(config: PublicConfig, form: ConfigFormState): string[] {
+  const current = draftComparisonState(formFromConfig(config));
+  const draft = draftComparisonState(form);
+  const changed = (Object.keys(current) as Array<keyof ConfigFormState>)
+    .filter((key) => JSON.stringify(current[key]) !== JSON.stringify(draft[key]));
+  const areas: string[] = [];
+  if (changed.some((key) => SCOPED_PROFILE_FORM_FIELDS.codex.includes(key))) areas.push("Codex");
+  if (changed.some((key) => SCOPED_PROFILE_FORM_FIELDS.claude.includes(key))) areas.push("Claude");
+  if (changed.some((key) => key === "primaryStatePortability" || key === "autoSchedulePrimaryFailover")) {
+    areas.push("路由策略");
+  }
+  if (changed.some((key) => key.startsWith("logging"))) areas.push("日志存储");
+  return areas;
+}
+
 export function applyDraftToConfigExport(
   config: CompactGateConfig,
   form: ConfigFormState
@@ -297,6 +341,7 @@ export function applyDraftToConfigExport(
     listen: config.listen,
     primary: {
       ...config.primary,
+      ...oauthCredentialDraft(form.codexPrimaryOAuthAccountId),
       base_url: form.codexPrimaryBaseUrl,
       upstream_protocol: form.codexPrimaryUpstreamProtocol,
       model_override: form.primaryModelOverride,
@@ -323,6 +368,7 @@ export function applyDraftToConfigExport(
     },
     compact: {
       ...config.compact,
+      ...oauthCredentialDraft(form.codexCompactOAuthAccountId),
       base_url: form.codexCompactBaseUrl,
       upstream_protocol: form.codexCompactUpstreamProtocol,
       upstream_mode: form.upstreamMode,
@@ -333,6 +379,7 @@ export function applyDraftToConfigExport(
     claude: {
       primary: {
         ...config.claude.primary,
+        ...oauthCredentialDraft(form.claudePrimaryOAuthAccountId),
         base_url: form.claudePrimaryBaseUrl,
         upstream_protocol: form.claudePrimaryUpstreamProtocol,
         model_override: claudeModelMap.default,
@@ -352,6 +399,7 @@ export function applyDraftToConfigExport(
       },
       compact: {
         ...config.claude.compact,
+        ...oauthCredentialDraft(form.claudeCompactOAuthAccountId),
         base_url: form.claudeCompactBaseUrl,
         upstream_protocol: form.claudeCompactUpstreamProtocol,
         upstream_mode: form.claudeCompactUpstreamMode,
@@ -434,6 +482,7 @@ function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split
 function draftComparisonState(form: ConfigFormState) {
   return {
     codexPrimaryBaseUrl: form.codexPrimaryBaseUrl,
+    codexPrimaryOAuthAccountId: form.codexPrimaryOAuthAccountId,
     codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),
     clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
@@ -453,11 +502,13 @@ function draftComparisonState(form: ConfigFormState) {
     codexPrimaryRotationOptOut: form.codexPrimaryRotationOptOut,
     codexPrimaryStickyReserveSeconds: form.codexPrimaryStickyReserveSeconds,
     codexCompactBaseUrl: form.codexCompactBaseUrl,
+    codexCompactOAuthAccountId: form.codexCompactOAuthAccountId,
     codexCompactApiKey: normalizedApiKey(form.codexCompactApiKey),
     clearCodexCompactApiKey: form.clearCodexCompactApiKey,
     codexCompactCredentialPresetId: form.codexCompactCredentialPresetId,
     codexCompactUpstreamProtocol: form.codexCompactUpstreamProtocol,
     claudePrimaryBaseUrl: form.claudePrimaryBaseUrl,
+    claudePrimaryOAuthAccountId: form.claudePrimaryOAuthAccountId,
     claudePrimaryApiKey: normalizedApiKey(form.claudePrimaryApiKey),
     clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
     claudePrimaryCredentialPresetId: form.claudePrimaryCredentialPresetId,
@@ -474,6 +525,7 @@ function draftComparisonState(form: ConfigFormState) {
     claudePrimaryStickyReserveSeconds: form.claudePrimaryStickyReserveSeconds,
     claudeModelMap: normalizeClaudeModelMap(form.claudeModelMap),
     claudeCompactBaseUrl: form.claudeCompactBaseUrl,
+    claudeCompactOAuthAccountId: form.claudeCompactOAuthAccountId,
     claudeCompactApiKey: normalizedApiKey(form.claudeCompactApiKey),
     clearClaudeCompactApiKey: form.clearClaudeCompactApiKey,
     claudeCompactCredentialPresetId: form.claudeCompactCredentialPresetId,
@@ -501,6 +553,26 @@ function apiKeyPatch(value: string, shouldClear: boolean): { api_key?: string } 
 
   const apiKey = normalizedApiKey(value);
   return apiKey.length > 0 ? { api_key: apiKey } : {};
+}
+
+function oauthCredentialDraft(id: string) {
+  return { oauth_account_id: id || undefined, ...(id ? { api_key: "", api_key_env: "", api_keys: [] } : {}) };
+}
+
+export function formWithOAuthAccount(form: ConfigFormState, kind: RouteUrlPresetKind, account: OAuthAccountView | null): ConfigFormState {
+  const prefix = { codex_primary: "codexPrimary", codex_compact: "codexCompact", claude_primary: "claudePrimary", claude_compact: "claudeCompact" }[kind];
+  return {
+    ...form,
+    [`${prefix}OAuthAccountId`]: account?.id ?? "",
+    [`${prefix}ApiKey`]: "",
+    [`clear${prefix[0].toUpperCase()}${prefix.slice(1)}ApiKey`]: false,
+    [`${prefix}CredentialPresetId`]: "",
+    ...(account ? {
+      [`${prefix}BaseUrl`]: account.base_url,
+      [`${prefix}UpstreamProtocol`]: account.upstream_protocol,
+      ...(kind.endsWith("primary") ? { [`${prefix}ApiKeys`]: [], [`${prefix}RotationOptOut`]: true } : {})
+    } : {})
+  };
 }
 
 function credentialPresetPatch(value: string): { credential_preset_id?: string } {

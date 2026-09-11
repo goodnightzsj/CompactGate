@@ -23,6 +23,26 @@ describe("ConfigSaveBar", () => {
     expect(markup).toContain("另存为新档案");
   });
 
+  it("announces a save failure without requiring focus to leave the save button", () => {
+    const markup = renderSaveBar(true, [], "Synthetic save conflict");
+    expect(markup).toMatch(/class="error-banner config-save-error" role="alert"><span>Synthetic save conflict<\/span>/);
+  });
+
+  it("makes the full save scope and both changed clients explicit", () => {
+    const markup = renderSaveBar(true, ["Codex", "Claude", "日志存储"]);
+
+    expect(markup).toContain("保存范围：全部配置");
+    expect(markup).toContain("已改动：Codex、Claude、日志存储");
+  });
+
+  it("keeps the write-target explanation available in a compact disclosure", () => {
+    const markup = renderSaveBar(true);
+
+    expect(markup).toContain('<details class="config-save-target">');
+    expect(markup).toContain("写入目标：加载中");
+    expect(markup).toContain("配置加载完成后会显示本次应用会写入哪里。");
+  });
+
   it("locks a reviewed cross-scope creation to its target and shows the route preview", () => {
     const markup = renderToStaticMarkup(
       <ConfigSaveAsNewProfileDialog
@@ -64,14 +84,15 @@ describe("ConfigSaveBar", () => {
   });
 });
 
-function renderSaveBar(hasPendingChanges: boolean): string {
+function renderSaveBar(hasPendingChanges: boolean, changedAreas: string[] = [], saveError: string | null = null): string {
   return renderToStaticMarkup(
     <ConfigSaveBar
       config={null}
       saveState="idle"
-      saveError={null}
+      saveError={saveError}
       saveConflict={false}
       hasPendingChanges={hasPendingChanges}
+      changedAreas={changedAreas}
       profileErrors={{ codex: null, claude: null }}
       onSaveConfig={() => undefined}
       onOverrideSaveConflict={() => undefined}

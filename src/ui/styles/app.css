@@ -5,6 +5,7 @@
 @import "./app/dashboard.css";
 @import "./app/routes.css";
 @import "./app/config.css";
+@import "./app/oauth.css";
 @import "./app/logs.css";
 @import "./app/feedback.css";
 @import "./app/theme-overrides.css";

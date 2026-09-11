@@ -10,7 +10,10 @@ import {
   CompactionBridgeStore,
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
-import type { ConfigStore } from "./config.js";
+import { ConfigError, type ConfigStore } from "./config.js";
+import type { OAuthProviderId } from "../shared/oauth.js";
+import { prepareOAuthRequest } from "./oauth-transport.js";
+import { createCodexResponseTransform } from "./oauth-response.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
   parseJsonRecord,
@@ -286,6 +289,10 @@ async function proxyPrimaryRequest(
     route = classification.route;
     upstream = plan.upstream;
     primarySelection = plan.primarySelection;
+    const oauthProvider = await prepareOAuthRequest(
+      primarySelection?.config.primary ?? config.primary, configStore.oauth, plan, req.method
+    );
+    if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     if (!requestProfile) {
       await syncScheduledPrimaryProfile({
         configRevision,
@@ -352,6 +359,7 @@ async function proxyPrimaryRequest(
           canonicalBody: transaction.upstreamBody,
           extraResponseHeaders,
           targetStateDomain,
+          responseTransform: pickResponseTransform(plan, false, transaction, oauthProvider),
           startGenericRecovery: (result, afterErrorSpecificRepair) => {
             if (
               !targetStateFreeSuccess ||
@@ -409,23 +417,17 @@ async function proxyPrimaryRequest(
       responseTransform: pickResponseTransform(
         plan,
         classification.compactionMode === "remote_v2",
-        transaction
+        transaction,
+        oauthProvider
       )
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    const { responseWasTransformed, clientResult } = applyClientResult(transaction, result, plan);
+    applyClientResult(transaction, result, plan, transaction.requestMetadata.requestType === "stream");
     const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
-    if (transaction.requestMetadata.requestType === "stream") {
-      transaction.errorSummary ??= responseWasTransformed
-        ? summarizeOpenAiStreamFailure(clientResult)
-        : plan.upstreamProtocol === "anthropic_messages"
-          ? summarizeAnthropicStreamFailure(result)
-          : summarizeOpenAiStreamFailure(result);
-    }
     providerStatePortability = buildProviderStatePortabilityLog({
       enabled: recoveryEnabled,
       conversationHash: conversationIdentityHash,
@@ -481,7 +483,7 @@ async function proxyPrimaryRequest(
     if (error instanceof UpstreamRequestError) {
       applyUpstreamFailureToTransaction(transaction, error.details);
     }
-    transaction.status = error instanceof ProtocolConversionError
+    transaction.status = error instanceof ConfigError ? error.status ?? 400 : error instanceof ProtocolConversionError
       ? error.status
       : error instanceof RequestBodyTooLargeError
       ? 413
@@ -544,6 +546,7 @@ async function sendRecoveringPrimaryRequest(input: {
   canonicalBody: Buffer;
   extraResponseHeaders: Record<string, string>;
   targetStateDomain: string;
+  responseTransform?: (status: number, headers: IncomingHttpHeaders) => UpstreamResponseTransform | null;
   startGenericRecovery: (
     result: Awaited<ReturnType<typeof sendOpenAiUpstreamRequest>>,
     afterErrorSpecificRepair: boolean
@@ -576,6 +579,7 @@ async function sendRecoveringPrimaryRequest(input: {
       body,
       extraResponseHeaders: input.extraResponseHeaders,
       deferHttpErrors: true,
+      responseTransform: input.responseTransform,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY
     })
   });
@@ -781,6 +785,12 @@ async function proxyCompactRequest(
       });
     }
     upstream = plan.upstream;
+    const selectedConfig = selectedPrimary?.config ?? config;
+    const oauthProvider = await prepareOAuthRequest(
+      selectedConfig.compact.upstream_mode === "primary" ? selectedConfig.primary : selectedConfig.compact,
+      configStore.oauth, plan, req.method
+    );
+    if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
     transaction.upstreamBody = plan.upstreamBody;
@@ -849,12 +859,13 @@ async function proxyCompactRequest(
       responseTransform: pickResponseTransform(
         plan,
         classification.compactionMode === "remote_v1",
-        transaction
+        transaction,
+        oauthProvider
       )
     });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
-    const { responseWasTransformed, clientResult } = applyClientResult(transaction, result, plan);
+    applyClientResult(transaction, result, plan);
     const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     // 远程压缩归一化仅用于桥接存储和诊断日志,不写回客户端。本地摘要压缩返回普通
@@ -880,13 +891,6 @@ async function proxyCompactRequest(
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
     transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
-    if (responseWasTransformed && result.clientStreamSummary) {
-      transaction.errorSummary ??= summarizeOpenAiStreamFailure(clientResult);
-    } else if (result.streamSummary) {
-      transaction.errorSummary ??= plan.upstreamProtocol === "anthropic_messages"
-        ? summarizeAnthropicStreamFailure(result)
-        : summarizeOpenAiStreamFailure(result);
-    }
     if (
       transaction.status >= 200 &&
       transaction.status < 300 &&
@@ -917,7 +921,7 @@ async function proxyCompactRequest(
     if (error instanceof UpstreamRequestError) {
       applyUpstreamFailureToTransaction(transaction, error.details);
     }
-    transaction.status = error instanceof ProtocolConversionError
+    transaction.status = error instanceof ConfigError ? error.status ?? 400 : error instanceof ProtocolConversionError
       ? error.status
       : error instanceof RequestBodyTooLargeError
         ? 413
@@ -976,8 +980,12 @@ async function proxyCompactRequest(
 function pickResponseTransform(
   plan: Pick<OpenAiProxyPlan, "upstreamProtocol" | "compactionFallback">,
   nativeCompaction: boolean,
-  transaction: OpenAiProxyTransactionState
+  transaction: OpenAiProxyTransactionState,
+  oauthProvider: OAuthProviderId | null = null
 ): ((status: number, headers: IncomingHttpHeaders) => UpstreamResponseTransform | null) | undefined {
+  if (oauthProvider === "openai-codex") {
+    return (status, headers) => createCodexResponseTransform(status, headers, transaction.requestType === "stream");
+  }
   if (plan.upstreamProtocol === "anthropic_messages") {
     return nativeCompaction
       ? createAnthropicToResponsesCompactionResponseTransform
@@ -994,27 +1002,31 @@ function pickResponseTransform(
 }
 
 /**
- * Records the stream outcome for a completed upstream result and returns the
- * client-facing view of it. A transformed response is classified with the
- * client-side stream summary; an untransformed one is classified against the
- * protocol actually spoken upstream.
+ * Derive diagnostics before the outcome so late stream failures also reach
+ * failover. A JSON adapter owns its source-stream validation; only its translated
+ * client protocol can be diagnosed here, not the original provider events.
  */
 function applyClientResult(
   transaction: OpenAiProxyTransactionState,
   result: BufferedUpstreamResult,
-  plan: Pick<OpenAiProxyPlan, "upstreamProtocol">
-): { responseWasTransformed: boolean; clientResult: BufferedUpstreamResult } {
+  plan: Pick<OpenAiProxyPlan, "upstreamProtocol">,
+  expectStream = false
+): void {
   const responseWasTransformed = result.clientResponseHeaders !== null &&
     result.clientResponseHeaders !== undefined;
   const clientResult = responseWasTransformed
     ? { ...result, streamSummary: result.clientStreamSummary ?? null }
     : result;
-  transaction.streamOutcome = responseWasTransformed
-    ? classifyOpenAiUpstreamResult(clientResult)
-    : plan.upstreamProtocol === "anthropic_messages"
-      ? classifyAnthropicUpstreamResult(result)
-      : classifyOpenAiUpstreamResult(result);
-  return { responseWasTransformed, clientResult };
+  const anthropic = !responseWasTransformed && plan.upstreamProtocol === "anthropic_messages";
+  if (clientResult.streamSummary || expectStream) {
+    transaction.errorSummary ??= anthropic
+      ? summarizeAnthropicStreamFailure(clientResult)
+      : summarizeOpenAiStreamFailure(clientResult);
+  }
+  const classifiedResult = { ...clientResult, errorSummary: transaction.errorSummary };
+  transaction.streamOutcome = anthropic
+    ? classifyAnthropicUpstreamResult(classifiedResult)
+    : classifyOpenAiUpstreamResult(classifiedResult);
 }
 
 function compactionResponseHeaders(

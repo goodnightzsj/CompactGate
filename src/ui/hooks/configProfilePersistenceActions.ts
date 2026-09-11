@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type { ConfigProfileScope, HealthResponse, PublicConfig } from "../../shared/types.js";
+import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import {
   formAfterScopedProfileChange,
   formToPatch
@@ -15,7 +15,8 @@ export function createConfigProfilePersistenceActions({
   formRevision,
   setConfig,
   setForm,
-  setHealth,
+  applyProfileConfig,
+  refreshHealthAfterWrite,
   setSaveError,
   setSaveState,
   scopedProfileAccessors
@@ -25,7 +26,8 @@ export function createConfigProfilePersistenceActions({
   formRevision: string | null;
   setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
-  setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
+  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => void;
+  refreshHealthAfterWrite: () => Promise<void>;
   setSaveError: Dispatch<SetStateAction<string | null>>;
   setSaveState: Dispatch<SetStateAction<SaveState>>;
   scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
@@ -72,13 +74,9 @@ export function createConfigProfilePersistenceActions({
       // on disk had already changed.
       setConfig(nextConfig);
       if (savedProfileIsActive) {
-        const nextHealth = await fetchHealthOrNull();
-        if (nextHealth) {
-          setHealth(nextHealth);
-        }
         // Only the saved scope round-tripped through the server; rebuilding the
         // whole form here would revert untouched draft fields.
-        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
+        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope, form));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(
@@ -93,6 +91,7 @@ export function createConfigProfilePersistenceActions({
         () => accessors.setState((current) => current === "saved" ? "idle" : current),
         1600
       );
+      if (savedProfileIsActive) await refreshHealthAfterWrite();
       return true;
     } catch (error) {
       accessors.setState("error");
@@ -121,15 +120,10 @@ export function createConfigProfilePersistenceActions({
           profile_id: targetProfileId
         })
       });
-      const nextHealth = await fetchHealthOrNull();
       const nextScope = profileScopeState(nextConfig, scope);
       const nextActiveProfileId = nextScope.active_profile_id ?? targetProfileId;
 
-      setConfig(nextConfig);
-      if (nextHealth) {
-        setHealth(nextHealth);
-      }
-      setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
+      applyProfileConfig(nextConfig, scope);
       accessors.setSelectedId(nextActiveProfileId);
       // Applying a profile stores no name, so it must not reset the rename draft:
       // the sync effect fills the field from the selected profile whenever the
@@ -143,6 +137,7 @@ export function createConfigProfilePersistenceActions({
         setSaveState((current) => current === "saved" ? "idle" : current);
         accessors.setState((current) => current === "applied" ? "idle" : current);
       }, 1600);
+      await refreshHealthAfterWrite();
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
@@ -186,11 +181,7 @@ export function createConfigProfilePersistenceActions({
 
       setConfig(nextConfig);
       if (profileIsActive) {
-        const nextHealth = await fetchHealthOrNull();
-        if (nextHealth) {
-          setHealth(nextHealth);
-        }
-        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope));
+        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope, form));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(
@@ -205,6 +196,7 @@ export function createConfigProfilePersistenceActions({
         () => accessors.setState((current) => current === "updated" ? "idle" : current),
         1600
       );
+      if (profileIsActive) await refreshHealthAfterWrite();
     } catch (error) {
       accessors.setState("error");
       accessors.setError(errorSummary(error));
@@ -216,17 +208,4 @@ export function createConfigProfilePersistenceActions({
     saveConfigProfile,
     updateSelectedProfile
   };
-}
-
-/**
- * The health probe is a read-only follow-up to a write that already succeeded.
- * Letting it reject would abandon the config the server just returned, so the
- * UI would keep rendering the pre-write state.
- */
-async function fetchHealthOrNull(): Promise<HealthResponse | null> {
-  try {
-    return await api<HealthResponse>("/api/health", { method: "GET" });
-  } catch {
-    return null;
-  }
 }

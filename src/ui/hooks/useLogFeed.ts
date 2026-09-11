@@ -45,6 +45,29 @@ interface PendingLogLoad {
   snapshot: RequestLogPage | null;
 }
 
+interface LogRequestError {
+  message: string;
+  queryKey: string;
+  operation: "first-page" | "refresh" | "more";
+}
+
+function isUnfilteredQuery(query: LogPageQuery): boolean {
+  return query.route === "all" && query.status === "all" &&
+    query.host === ALL_HOSTS_FILTER && query.search === "";
+}
+
+function resolvePendingLogPage(page: RequestLogPage, pending: PendingLogLoad): RequestLogPage {
+  const { query } = pending;
+  return replayLiveLogEvents(
+    pending.snapshot ? mergeSnapshotLogPage(page, pending.snapshot) : page,
+    pending.liveEvents,
+    query.route,
+    query.status,
+    query.host,
+    query.search
+  );
+}
+
 interface LogPresentationState {
   page: RequestLogPage;
   syncVersion: number;
@@ -76,7 +99,9 @@ export function useLogFeed({
   const [statusFilter, setStatusFilter] = useState<"all" | LogStatusKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
   const [searchFilter, setSearchFilter] = useState("");
-  const [logError, setLogError] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<LogRequestError | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
   const isLoadingLogsRef = useRef(false);
@@ -92,6 +117,9 @@ export function useLogFeed({
     limit: DEFAULT_LOG_PAGE_LIMIT
   });
   const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
+  const hasStaleLogs = pageQueryKey !== logPageQueryKey({
+    route: routeFilter, status: statusFilter, host: hostFilter, search: searchFilter, limit: logPageLimit
+  });
 
   const logPage = logState.page;
 
@@ -146,17 +174,7 @@ export function useLogFeed({
           const pendingLoad = pendingLogLoadRef.current;
           let resolvedPage = nextPage;
           if (pendingLoad?.generation === generation) {
-            if (pendingLoad.snapshot) {
-              resolvedPage = mergeSnapshotLogPage(resolvedPage, pendingLoad.snapshot);
-            }
-            resolvedPage = replayLiveLogEvents(
-              resolvedPage,
-              pendingLoad.liveEvents,
-              query.route,
-              query.status,
-              query.host,
-              query.search
-            );
+            resolvedPage = resolvePendingLogPage(nextPage, pendingLoad);
             pendingLogLoadRef.current = null;
           }
           appliedQueryRef.current = query;
@@ -166,12 +184,12 @@ export function useLogFeed({
             liveInsertIds: []
           }));
           setPageQueryKey(logPageQueryKey(query));
-          setLogError(null);
+          setRequestError(null);
         }
       } catch (error) {
         if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
           pendingLogLoadRef.current = null;
-          setLogError(errorSummary(error));
+          setRequestError({ message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "first-page" });
         }
       } finally {
         if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
@@ -186,7 +204,7 @@ export function useLogFeed({
     return () => {
       cancelled = true;
     };
-  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, enabled, hasConfig, logPageLimit]);
+  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, enabled, hasConfig, logPageLimit, reloadToken]);
 
   useEffect(() => {
     if (!enabled) {
@@ -195,19 +213,19 @@ export function useLogFeed({
 
     let closed = false;
     let refreshRequestId = 0;
+    let pendingRefresh: PendingLogLoad | null = null;
 
     async function refreshAppliedLogPage(isStillRelevant: () => boolean): Promise<boolean> {
       const generation = generationRef.current;
       const query = appliedQueryRef.current;
       const requestId = refreshRequestId + 1;
       refreshRequestId = requestId;
+      const pendingLoad: PendingLogLoad = { generation, query, liveEvents: [], snapshot: null };
+      pendingRefresh = pendingLoad;
       try {
-        // ponytail: this replaces the loaded window with a single first page, so
-        // after "加载更早日志" an event-stream hiccup collapses the table back to
-        // one page and loses the scroll position. Asking for more rows cannot fix
-        // it — the API caps limit at logging.keep_recent — so a real fix has to
-        // merge the refreshed first page into the existing list instead of
-        // replacing it. The scroll handler re-loads, so it self-heals.
+        // ponytail: recovery starts from one bounded first page. Preserving a
+        // paged scroll position would require refreshing its contiguous range;
+        // merging disconnected windows could silently skip missed records.
         const nextPage = await fetchLogPage({
           ...query,
           offset: 0
@@ -224,12 +242,17 @@ export function useLogFeed({
             refreshRequestId
           )
         ) {
+          // A matching query does not make an old offset valid for a new window.
+          loadMoreRequestIdRef.current += 1;
+          isLoadingMoreLogsRef.current = false;
+          setIsLoadingMoreLogs(false);
           setLogState((previous) => ({
-            page: nextPage,
+            page: resolvePendingLogPage(nextPage, pendingLoad),
             syncVersion: previous.syncVersion + 1,
             liveInsertIds: []
           }));
-          setLogError(null);
+          setRequestError((previous) => previous?.queryKey === logPageQueryKey(query) ? null : previous);
+          setStreamError(null);
           onServerRecovered();
           return true;
         }
@@ -246,14 +269,18 @@ export function useLogFeed({
             refreshRequestId
           )
         ) {
-          setLogError(errorSummary(error));
+          setRequestError((previous) => previous?.operation === "first-page" ? previous : {
+            message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "refresh"
+          });
         }
+      } finally {
+        if (pendingRefresh === pendingLoad) pendingRefresh = null;
       }
       return false;
     }
 
     if (typeof window.EventSource !== "function") {
-      setLogError("当前浏览器不支持 SSE，已回退为轮询刷新。");
+      setStreamError("当前浏览器不支持 SSE，已回退为轮询刷新。");
       const interval = window.setInterval(() => {
         void refreshAppliedLogPage(() => true);
       }, 2500);
@@ -283,9 +310,15 @@ export function useLogFeed({
     }, 2500);
 
     function markStreamConnected() {
+      const wasInterrupted = streamInterrupted;
       streamInterrupted = false;
       pollingFallbackActive = false;
-      setLogError(null);
+      setStreamError(null);
+      // A reconnect snapshot may not overlap the loaded window. Re-query even
+      // unfiltered pages so subsequent offsets start from a contiguous page.
+      if (wasInterrupted) {
+        void refreshAppliedLogPage(() => !streamInterrupted);
+      }
     }
 
     const handleOpen = () => {
@@ -296,22 +329,12 @@ export function useLogFeed({
         const snapshot = JSON.parse(event.data) as StudioSnapshotEvent;
         applyRemoteConfig(snapshot.config);
         setHealth(snapshot.health);
-        const pendingLoad = pendingLogLoadRef.current;
-        if (
-          pendingLoad?.generation === generationRef.current &&
-          pendingLoad.query.route === "all" &&
-          pendingLoad.query.status === "all" &&
-          pendingLoad.query.host === ALL_HOSTS_FILTER &&
-          pendingLoad.query.search === ""
-        ) {
-          pendingLoad.snapshot = snapshot.log_page;
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh]) {
+          if (pendingLoad?.generation === generationRef.current && isUnfilteredQuery(pendingLoad.query)) {
+            pendingLoad.snapshot = snapshot.log_page;
+          }
         }
-        if (
-          appliedQueryRef.current.route === "all" &&
-          appliedQueryRef.current.status === "all" &&
-          appliedQueryRef.current.host === ALL_HOSTS_FILTER &&
-          appliedQueryRef.current.search === ""
-        ) {
+        if (isUnfilteredQuery(appliedQueryRef.current)) {
           setLogState((previous) => ({
             page: mergeSnapshotLogPage(previous.page, snapshot.log_page),
             syncVersion: previous.syncVersion + 1,
@@ -320,16 +343,17 @@ export function useLogFeed({
         }
         markStreamConnected();
       } catch (error) {
-        setLogError(errorSummary(error));
+        setStreamError(errorSummary(error));
       }
     };
     const handleLog = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
         setHealth((previous) => mergeCodexStatusIntoHealth(previous, payload));
-        const pendingLoad = pendingLogLoadRef.current;
-        if (pendingLoad?.generation === generationRef.current) {
-          pendingLoad.liveEvents.push(payload);
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh]) {
+          if (pendingLoad?.generation === generationRef.current) {
+            pendingLoad.liveEvents.push(payload);
+          }
         }
         const appliedQuery = appliedQueryRef.current;
         setLogState((previous) => {
@@ -369,13 +393,13 @@ export function useLogFeed({
         });
         markStreamConnected();
       } catch (error) {
-        setLogError(errorSummary(error));
+        setStreamError(errorSummary(error));
       }
     };
     const handleError = () => {
       streamInterrupted = true;
       if (!pollingFallbackActive) {
-        setLogError(STREAM_RECONNECTING_MESSAGE);
+        setStreamError(STREAM_RECONNECTING_MESSAGE);
       }
       void pollWhileStreamInterrupted();
     };
@@ -401,8 +425,12 @@ export function useLogFeed({
     setHealth
   ]);
 
+  function retryLogs() {
+    if (!isLoadingLogsRef.current) setReloadToken((previous) => previous + 1);
+  }
+
   async function loadMoreLogs() {
-    if (isLoadingLogsRef.current || isLoadingMoreLogsRef.current || !logPage.has_more) {
+    if (hasStaleLogs || isLoadingLogsRef.current || isLoadingMoreLogsRef.current || !logPage.has_more) {
       return;
     }
 
@@ -430,7 +458,7 @@ export function useLogFeed({
           ...previous,
           page: appendLogPage(previous.page, nextPage)
         }));
-        setLogError(null);
+        setRequestError((previous) => previous?.operation === "more" && previous.queryKey === logPageQueryKey(query) ? null : previous);
       }
     } catch (error) {
       if (isCurrentLogPageRequest(
@@ -441,7 +469,9 @@ export function useLogFeed({
         requestId,
         loadMoreRequestIdRef.current
       )) {
-        setLogError(errorSummary(error));
+        setRequestError((previous) => previous?.operation === "first-page" ? previous : {
+          message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "more"
+        });
       }
     } finally {
       if (isCurrentLogPageRequest(
@@ -472,7 +502,9 @@ export function useLogFeed({
     searchFilter,
     setSearchFilter,
     hostOptions,
-    logError,
+    logError: requestError?.message ?? streamError,
+    hasStaleLogs,
+    retryLogs,
     isLoadingLogs,
     isLoadingMoreLogs,
     loadMoreLogs

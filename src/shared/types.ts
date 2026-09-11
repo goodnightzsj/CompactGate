@@ -1,3 +1,5 @@
+import type { OAuthAccountStatus } from "./oauth.js";
+
 export type RouteKind = "primary" | "compact" | "claude";
 export type ProviderFamily = "openai" | "claude";
 export type UpstreamProtocol = "openai_responses" | "anthropic_messages" | "openai_chat";
@@ -15,7 +17,7 @@ export type StreamOutcome =
   | "timeout"
   | "upstream_request_error";
 export type CredentialScope = "primary" | "compact" | "claude" | "claude_primary" | "claude_compact";
-export type CredentialSource = "config" | "env" | "missing";
+export type CredentialSource = "config" | "env" | "oauth" | "missing";
 export type ConfigProfileScope = "codex" | "claude";
 export type RouteUrlPresetKind = "codex_primary" | "codex_compact" | "claude_primary" | "claude_compact";
 export type RequestTransport = "http" | "stream";
@@ -98,6 +100,8 @@ export interface UpstreamConfig {
   base_url: string;
   api_key: string;
   api_key_env: string;
+  /** Server-side OAuth connection reference; never an access or refresh token. */
+  oauth_account_id?: string;
   /**
    * Optional key pool. Absent or empty means the single `api_key` above is the
    * whole pool — the load path never materializes it into an entry, so an
@@ -286,6 +290,8 @@ export interface PublicConfigProfile {
   claude_primary_upstream_protocol: UpstreamProtocol | null;
   claude_compact_upstream_protocol: UpstreamProtocol | null;
   stored_api_key_count: number;
+  oauth_account_id?: string;
+  compact_oauth_account_id?: string;
 }
 
 export interface PublicCredentialState {
@@ -301,6 +307,8 @@ export interface PublicCredentialState {
   api_key_source: CredentialSource;
   active_api_key_env: string | null;
   active_credential_scope: CredentialScope;
+  oauth_account_id?: string;
+  oauth_status?: OAuthAccountStatus;
 }
 
 /**

@@ -42,6 +42,7 @@ export function useStudioPageModels({
     draftRevision,
     formRevision,
     applyRemoteConfig,
+    applyProfileConfig,
     commitConfig,
     notifyServerRecovered,
     pageError,
@@ -89,6 +90,8 @@ export function useStudioPageModels({
     formRevision,
     commitConfig,
     rebaseFormRevision,
+    applyRemoteConfig,
+    applyProfileConfig,
     setConfig,
     setForm,
     setHealth,
@@ -150,7 +153,20 @@ export function useStudioPageModels({
         activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
         latestLog,
         codexStatus: health?.codex ?? null,
-        clientIdentity: health?.client_identity ?? null
+        clientIdentity: health?.client_identity ?? null,
+        previewPanel: {
+          isPreviewing: configActions.isPreviewing,
+          previewPath: configActions.previewPath,
+          previewBody: configActions.previewBody,
+          previewHeaders: configActions.previewHeaders,
+          preview: configActions.preview,
+          previewError: configActions.previewError,
+          onPathChange: configActions.setPreviewPath,
+          onBodyChange: configActions.setPreviewBody,
+          onHeadersChange: configActions.setPreviewHeaders,
+          onPreviewSubmit: configActions.previewRoute,
+          onPreviewClear: configActions.clearPreview
+        }
       },
       configPage: {
         actions: configActions,
@@ -174,6 +190,7 @@ export function useStudioPageModels({
         hasMoreLogs: logFeed.logPage.has_more,
         isLoadingLogs: logFeed.isLoadingLogs,
         isLoadingMoreLogs: logFeed.isLoadingMoreLogs,
+        hasStaleLogs: logFeed.hasStaleLogs,
         routeFilter: logFeed.routeFilter,
         statusFilter: logFeed.statusFilter,
         hostFilter: logFeed.hostFilter,
@@ -183,6 +200,7 @@ export function useStudioPageModels({
         onHostFilterChange: logFeed.setHostFilter,
         onSearchFilterChange: logFeed.setSearchFilter,
         onLoadMore: logFeed.loadMoreLogs,
+        onRetryLogs: logFeed.retryLogs,
         error: logFeed.logError
       }
     },

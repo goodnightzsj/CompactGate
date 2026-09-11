@@ -1,7 +1,9 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useId, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { LogStatsSnapshot } from "../../shared/types.js";
 import {
+  clamp,
   formatCompactMetricNumber,
+  formatDateTime,
   formatDurationMs,
   formatMetricNumber
 } from "../shared/format.js";
@@ -72,7 +74,7 @@ export function AnalyticsSegmented<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="analytics-segmented analytics-panel-segmented" aria-label={label}>
+    <div className="analytics-segmented analytics-panel-segmented" role="group" aria-label={label}>
       {options.map((option) => (
         <button
           type="button"
@@ -95,7 +97,8 @@ export function AnalyticsTrendChart({
   points: AnalyticsTrendPoint[];
   metric: "requests" | "total_tokens";
 }) {
-  const width = 720;
+  const cursor = useChartCursor(points);
+  const { width } = cursor;
   const height = 236;
   const inset = { top: 18, right: 18, bottom: 30, left: 52 };
   const values = points.map((point) => point[metric]);
@@ -107,7 +110,7 @@ export function AnalyticsTrendChart({
     (1 - value / max) * (height - inset.top - inset.bottom);
   const requestLine = points.map((point, index) => `${x(index)},${y(point[metric])}`).join(" ");
   const errorLine = errors.map((value, index) => `${x(index)},${y(value)}`).join(" ");
-  const tickIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])]
+  const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
 
   if (points.length === 0 || values.every((value) => value === 0)) {
@@ -120,7 +123,7 @@ export function AnalyticsTrendChart({
   }
 
   return (
-    <div className="analytics-chart-wrap">
+    <div className="analytics-chart-wrap" ref={cursor.setContainer}>
       <div className="analytics-chart-legend" aria-hidden="true">
         <span className="is-primary">{metric === "requests" ? "请求" : "Token"}</span>
         {metric === "requests" && <span className="is-error">错误</span>}
@@ -130,6 +133,8 @@ export function AnalyticsTrendChart({
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={metric === "requests" ? "请求与错误趋势" : "Token 使用趋势"}
+        onPointerMove={(event) => cursor.pickAt(event, inset)}
+        onPointerDown={(event) => cursor.pickAt(event, inset)}
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
           const value = max * ratio;
@@ -147,6 +152,7 @@ export function AnalyticsTrendChart({
         {metric === "requests" && (
           <polyline className="analytics-chart-line is-error" points={errorLine} />
         )}
+        <line className="analytics-chart-cursor" x1={x(cursor.index)} x2={x(cursor.index)} y1={inset.top} y2={height - inset.bottom} />
         {points.map((point, index) => (
           <circle
             className="analytics-chart-point"
@@ -182,6 +188,13 @@ export function AnalyticsTrendChart({
           </text>
         ))}
       </svg>
+      <ChartReadout
+        label={metric === "requests" ? "请求趋势时段" : "Token 趋势时段"}
+        points={points}
+        index={cursor.index}
+        onSelect={cursor.selectIndex}
+        description={`${points[cursor.index].label}：${formatMetricNumber(points[cursor.index][metric])}${metric === "requests" ? ` 请求，错误 ${points[cursor.index].error_requests}` : " Token"}`}
+      />
     </div>
   );
 }
@@ -194,7 +207,8 @@ const TOKEN_SERIES = [
 ] as const;
 
 export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTrendPoint[] }) {
-  const width = 720;
+  const cursor = useChartCursor(points);
+  const { width } = cursor;
   const height = 252;
   const inset = { top: 18, right: 50, bottom: 30, left: 56 };
   const values = TOKEN_SERIES.flatMap((series) => points.map((point) => point[series.metric]));
@@ -208,7 +222,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
     : Math.min(100, (point.cache_read_tokens / point.input_tokens) * 100);
   const rateY = (value: number) => inset.top +
     (1 - value / 100) * (height - inset.top - inset.bottom);
-  const tickIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])]
+  const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
 
   if (points.length === 0 || values.every((value) => value === 0)) {
@@ -221,7 +235,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
   }
 
   return (
-    <div className="analytics-chart-wrap">
+    <div className="analytics-chart-wrap" ref={cursor.setContainer}>
       <div className="analytics-chart-legend is-token-breakdown" aria-hidden="true">
         {TOKEN_SERIES.map((series) => (
           <span className={series.tone} key={series.metric}>{series.label}</span>
@@ -233,6 +247,8 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label="输入、输出、缓存读取、缓存创建与缓存命中率趋势"
+        onPointerMove={(event) => cursor.pickAt(event, inset)}
+        onPointerDown={(event) => cursor.pickAt(event, inset)}
       >
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
           const value = max * ratio;
@@ -265,6 +281,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
           className="analytics-chart-line is-cache-rate"
           points={points.map((point, index) => `${x(index)},${rateY(rate(point))}`).join(" ")}
         />
+        <line className="analytics-chart-cursor" x1={x(cursor.index)} x2={x(cursor.index)} y1={inset.top} y2={height - inset.bottom} />
         {points.map((point, index) => (
           <circle
             className="analytics-chart-hit-target"
@@ -288,6 +305,58 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
           </text>
         ))}
       </svg>
+      <ChartReadout
+        label="Token 明细时段"
+        points={points}
+        index={cursor.index}
+        onSelect={cursor.selectIndex}
+        description={`${points[cursor.index].label}：${TOKEN_SERIES.map((series) => `${series.label} ${formatMetricNumber(points[cursor.index][series.metric])}`).join("，")}，缓存率 ${cacheHitRate(points[cursor.index].input_tokens, points[cursor.index].cache_read_tokens)}`}
+      />
+    </div>
+  );
+}
+
+function useChartCursor(points: AnalyticsTrendPoint[]) {
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(720);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const selectedIndex = points.findIndex((point) => point.key === selectedKey);
+  const index = selectedIndex < 0 ? Math.max(0, points.length - 1) : selectedIndex;
+
+  useEffect(() => {
+    if (!container) return;
+    // Keep SVG coordinates at CSS-pixel scale so labels stay legible on phones.
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(240, entry.contentRect.width)));
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [container]);
+
+  function selectIndex(next: number) {
+    setSelectedKey(points[next].key);
+  }
+
+  function pickAt(event: PointerEvent<SVGSVGElement>, inset: { left: number; right: number }) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = (event.clientX - rect.left) / rect.width * width;
+    selectIndex(clamp(Math.round((position - inset.left) / (width - inset.left - inset.right) * (points.length - 1)), 0, points.length - 1));
+  }
+
+  return { setContainer, width, index, selectIndex, pickAt };
+}
+
+function ChartReadout({ label, points, index, onSelect, description }: {
+  label: string;
+  points: AnalyticsTrendPoint[];
+  index: number;
+  onSelect: (index: number) => void;
+  description: string;
+}) {
+  const id = useId();
+  return (
+    <div className="analytics-chart-readout">
+      <input id={id} type="range" min={0} max={points.length - 1} step={1} value={index}
+        aria-label={label} aria-valuetext={description} onChange={(event) => onSelect(Number(event.target.value))} />
+      <output htmlFor={id}>{description}</output>
     </div>
   );
 }
@@ -346,6 +415,25 @@ export function AnalyticsLoadState({
       <span />
       <span />
     </div>
+  );
+}
+
+export function AnalyticsRefreshStatus({ loading, error, generatedAt }: {
+  loading: boolean;
+  error: string | null;
+  generatedAt: string | null;
+}) {
+  const message = loading
+    ? generatedAt ? "正在更新，当前显示上次统计" : "正在加载统计"
+    : error ? generatedAt ? "更新失败，保留上次统计" : "更新失败"
+      : generatedAt ? "统计已更新" : "等待统计";
+  return (
+    <p className="analytics-refresh-status" role="status" data-state={loading ? "loading" : error ? "error" : "ready"}>
+      <span>{message}</span>
+      {generatedAt && (
+        <span>采样于 <time dateTime={generatedAt} title={generatedAt}>{formatDateTime(generatedAt)}</time> · 手动刷新</span>
+      )}
+    </p>
   );
 }
 

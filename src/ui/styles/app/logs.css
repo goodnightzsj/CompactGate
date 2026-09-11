@@ -11,6 +11,38 @@
 
 .logs-toolbar .field { min-width: 140px; }
 
+.logs-filter-options {
+  min-width: 0;
+}
+
+.logs-filter-options > summary {
+  display: none;
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.logs-filter-options > summary span {
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.logs-filter-options > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.logs-filter-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .logs-toolbar .custom-select {
   min-width: 150px;
   flex: 0 1 auto;
@@ -49,10 +81,6 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
   outline: none;
-}
-
-.logs-search-input::placeholder {
-  color: var(--faint);
 }
 
 .log-error-filter-field {
@@ -753,22 +781,45 @@
   overflow: hidden;
 }
 
+.log-table-full .log-table-grid th,
+.log-table-full .log-row > td {
+  padding-inline: 8px;
+}
+
+.log-table-full .log-row.has-error td:first-child {
+  padding-left: calc(8px - 3px);
+}
+
+.log-table-full .log-cell-code,
+.log-table-full .log-cell-model {
+  max-inline-size: 100%;
+}
+
+.log-table-full .log-status {
+  min-width: 0;
+  padding-inline: 4px;
+}
+
+.log-table-full .log-transport {
+  padding-inline: 2px;
+}
+
 /* Total must stay at exactly 100: `table-layout: fixed` does not renormalize a
    short sum, and any shortfall becomes dead space past the last column. The
    duration and first-token columns carry values like `132.9s`, so they need real
    room — at the original 5% the duration text was clipped at every viewport. */
-.log-table-full .log-col-started { width: 12%; }
+.log-table-full .log-col-started { width: 11%; }
 .log-table-full .log-col-status { width: 5%; }
-.log-table-full .log-col-model-route { width: 12%; }
-.log-table-full .log-col-reasoning { width: 6%; }
-.log-table-full .log-col-response-model { width: 7%; }
-.log-table-full .log-col-host { width: 10%; }
-.log-table-full .log-col-key { width: 8%; }
-.log-table-full .log-col-endpoint { width: 10%; }
-.log-table-full .log-col-type { width: 6%; }
-.log-table-full .log-col-token { width: 8%; }
-.log-table-full .log-col-first-token { width: 8%; }
-.log-table-full .log-col-duration { width: 8%; }
+.log-table-full .log-col-model-route { width: 16%; }
+.log-table-full .log-col-reasoning { width: 5%; }
+.log-table-full .log-col-response-model { width: 10%; }
+.log-table-full .log-col-host { width: 15%; }
+.log-table-full .log-col-key { width: 4%; }
+.log-table-full .log-col-endpoint { width: 8%; }
+.log-table-full .log-col-type { width: 7%; }
+.log-table-full .log-col-token { width: 7%; }
+.log-table-full .log-col-first-token { width: 6%; }
+.log-table-full .log-col-duration { width: 6%; }
 
 .log-table-summary .log-table-body {
   overflow-x: hidden;

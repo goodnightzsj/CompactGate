@@ -6,6 +6,7 @@ import http, {
 } from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
+import { finished } from "node:stream/promises";
 import { copyResponseHeaders, decodeBodyText } from "./http-utils.js";
 import {
   createAnthropicStreamObserver,
@@ -47,6 +48,8 @@ export interface UpstreamResponseTransform {
   stream: Duplex;
   responseHeaders: IncomingHttpHeaders;
   streamProtocol: "openai" | "anthropic";
+  /** Source terminal observed by a protocol adapter, even when output is JSON. */
+  sawTerminalEvent?: boolean;
   /**
    * Set by the transform when it could not translate the upstream body and emitted
    * a fallback error envelope instead. The envelope keeps the client from seeing a
@@ -152,6 +155,13 @@ export function sendBufferedUpstreamRequest(
 
       settled = true;
       cleanup();
+      if (activeResponse?.responseTransform) {
+        const transform = activeResponse.responseTransform.stream;
+        activeResponse.response.unpipe(transform);
+        transform.unpipe(options.res);
+        transform.destroy();
+      }
+      upstreamReq?.destroy();
       reject(error);
     };
 
@@ -178,7 +188,7 @@ export function sendBufferedUpstreamRequest(
         return;
       }
 
-      if (settleAfterTerminal()) {
+      if (settleAfterTerminal("client")) {
         return;
       }
 
@@ -190,12 +200,10 @@ export function sendBufferedUpstreamRequest(
         "Client disconnected before upstream response completed.",
         details
       );
-      upstreamReq?.destroy();
       rejectOnce(error);
     }
 
     function handleClientError(error: Error) {
-      upstreamReq?.destroy();
       rejectOnce(new UpstreamRequestError(error.message, responseDetails("client_cancel", "none")));
     }
 
@@ -204,7 +212,6 @@ export function sendBufferedUpstreamRequest(
         options.timeoutMessage,
         responseDetails("timeout", activeResponse ? "before_terminal" : "before_headers")
       );
-      upstreamReq?.destroy(error);
       rejectOnce(error);
     }
 
@@ -213,7 +220,7 @@ export function sendBufferedUpstreamRequest(
     }
 
     function handleUpstreamResponseAborted() {
-      if (settleAfterTerminal()) {
+      if (settleAfterTerminal("upstream")) {
         return;
       }
       rejectOnce(new UpstreamRequestError(
@@ -223,7 +230,7 @@ export function sendBufferedUpstreamRequest(
     }
 
     function handleUpstreamResponseError(error: Error) {
-      if (settleAfterTerminal()) {
+      if (settleAfterTerminal("upstream")) {
         return;
       }
       rejectOnce(new UpstreamRequestError(
@@ -287,12 +294,11 @@ export function sendBufferedUpstreamRequest(
             }
             clientStreamObserver?.observe(chunk);
           });
-          responseTransformCompletion = new Promise<void>((resolve, reject) => {
-            responseTransform.stream.once("end", resolve);
-            responseTransform.stream.once("error", reject);
-          });
-          responseTransform.stream.once("error", (error) => {
-            response.destroy(error);
+          responseTransformCompletion = finished(responseTransform.stream, { cleanup: true }).catch((error: unknown) => {
+            rejectOnce(new UpstreamRequestError(
+              error instanceof Error ? error.message : "Upstream response transform failed.",
+              responseDetails("upstream_stream_incomplete", "before_terminal")
+            ));
           });
         }
         let bufferedBytes = 0;
@@ -379,16 +385,9 @@ export function sendBufferedUpstreamRequest(
     async function resolveUpstreamResponse(responseState: ActiveUpstreamResponse) {
       const responseBody = Buffer.concat(responseState.responseChunks);
       if (responseState.responseTransformCompletion) {
-        try {
-          await responseState.responseTransformCompletion;
-        } catch (error) {
-          rejectOnce(new UpstreamRequestError(
-            error instanceof Error ? error.message : "Upstream response transform failed.",
-            responseDetails("upstream_stream_incomplete", "before_terminal")
-          ));
-          return;
-        }
+        await responseState.responseTransformCompletion;
       }
+      if (settled) return;
       const streamSummary = responseState.streamObserver
         ? await responseState.streamObserver.finish()
         : null;
@@ -416,18 +415,30 @@ export function sendBufferedUpstreamRequest(
       });
     }
 
-    function settleAfterTerminal(): boolean {
+    function settleAfterTerminal(disconnected: "client" | "upstream"): boolean {
       const responseState = activeResponse;
       if (
-        !responseState ||
+        settled || !responseState ||
         responseState.responseResolutionStarted ||
-        !responseState.streamObserver?.snapshot().sawTerminalEvent
+        !(responseState.responseTransform?.sawTerminalEvent ??
+          (responseState.clientStreamObserver ?? responseState.streamObserver)?.snapshot().sawTerminalEvent)
       ) {
         return false;
       }
 
-      responseState.clientDisconnectPhase = "after_terminal";
+      responseState.clientDisconnectPhase = disconnected === "client" ? "after_terminal" : "none";
       responseState.responseResolutionStarted = true;
+      if (responseState.responseTransform) {
+        responseState.response.unpipe(responseState.responseTransform.stream);
+        if (disconnected === "client") {
+          responseState.responseTransform.stream.unpipe(options.res);
+          responseState.responseTransform.stream.resume();
+        }
+        responseState.responseTransform.stream.end();
+      } else {
+        responseState.response.unpipe(options.res);
+        if (disconnected === "upstream" && options.res.headersSent && !options.res.destroyed) options.res.end();
+      }
       upstreamReq?.destroy();
       void resolveUpstreamResponse(responseState);
       return true;
@@ -607,16 +618,16 @@ export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): st
   }
 
   const summary = result.streamSummary;
-  if (summary.sawCompletedEvent || summary.sawDoneMarker) {
-    return null;
-  }
-
   if (summary.sawFailedEvent) {
     return "OpenAI stream ended with response.failed.";
   }
 
   if (summary.sawIncompleteEvent) {
     return "OpenAI stream ended with response.incomplete.";
+  }
+
+  if (summary.sawCompletedEvent || summary.sawDoneMarker) {
+    return null;
   }
 
   if (summary.sawOutputEvent) {
@@ -634,7 +645,7 @@ export function classifyOpenAiUpstreamResult(result: BufferedUpstreamResult): St
   }
 
   const summary = result.streamSummary;
-  if (summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
+  if (result.errorSummary || summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
     return "upstream_stream_incomplete";
   }
 
@@ -663,6 +674,10 @@ export function classifyAnthropicUpstreamResult(result: BufferedUpstreamResult):
     return "upstream_stream_error";
   }
 
+  if (result.errorSummary) {
+    return summary && !summary.sawCompletedEvent ? "upstream_stream_incomplete" : "upstream_stream_error";
+  }
+
   if (result.clientDisconnectPhase === "after_terminal") {
     return "success";
   }
@@ -684,12 +699,12 @@ export function summarizeAnthropicStreamFailure(result: BufferedUpstreamResult):
   }
 
   const summary = result.streamSummary;
-  if (summary.sawCompletedEvent) {
-    return null;
-  }
-
   if (summary.sawFailedEvent) {
     return summary.errorSummary ?? "Anthropic stream ended with an error event.";
+  }
+
+  if (summary.sawCompletedEvent) {
+    return null;
   }
 
   if (summary.decodeError) {

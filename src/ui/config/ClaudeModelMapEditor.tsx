@@ -91,7 +91,7 @@ export function ClaudeModelMapEditor({
                   onChange={(event) => onModelMapChange(role, event.target.value)}
                   spellCheck={false}
                 />
-                <CustomSelect
+                {models.length > 0 && <CustomSelect
                   label="候选模型"
                   value={selectValue}
                   options={modelOptions}
@@ -103,7 +103,7 @@ export function ClaudeModelMapEditor({
                   disabled={models.length === 0}
                   compact
                   wide
-                />
+                />}
               </div>
               <small className="model-row-hint">{meta.hint}</small>
             </div>

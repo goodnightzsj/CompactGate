@@ -42,18 +42,20 @@ export function ConfigImportExportPanel({
           <p className="eyebrow">Portable Config</p>
           <h3 id="config-portable-title">配置导入导出</h3>
           <p>
-            导出当前配置为 compactgate JSON，或选择文件后先核对摘要，再确认覆盖当前运行时配置。
-            URL 预设只包含地址元数据；导入摘要不会显示任何 API key 值。
+            备份当前配置，或从文件恢复。导入前先核对摘要，确认后才会覆盖当前运行配置。
+            导入摘要不会显示任何 API key 值。
           </p>
         </div>
-        <button
+        <div className="config-export-action"><button
           type="button"
           className="btn btn-primary"
           disabled={!config}
+          aria-describedby={`${fileInputId}-export-note`}
           onClick={() => void onExportConfig()}
         >
-          导出配置
+          导出完整备份
         </button>
+        <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p></div>
       </div>
 
       <div className="config-portable-grid">

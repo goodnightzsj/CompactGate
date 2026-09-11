@@ -12,6 +12,7 @@ export function ConfigSaveBar({
   saveError,
   saveConflict,
   hasPendingChanges,
+  changedAreas = [],
   profileErrors,
   onSaveConfig,
   onOverrideSaveConflict,
@@ -23,6 +24,7 @@ export function ConfigSaveBar({
   /** The save was refused because someone else wrote since this draft was built. */
   saveConflict: boolean;
   hasPendingChanges: boolean;
+  changedAreas?: string[];
   /** Passed to the dialog: this bar is on every config tab, its error was not. */
   profileErrors: Record<ConfigProfileScope, string | null>;
   onSaveConfig: (event: React.FormEvent) => void;
@@ -35,7 +37,7 @@ export function ConfigSaveBar({
   return (
     <aside className={`config-save-bar ${hasPendingChanges ? "is-dirty" : ""}`} aria-label="配置保存">
       {saveError && (
-        <div className="error-banner config-save-error">
+        <div className="error-banner config-save-error" role="alert">
           <span>{saveError}</span>
           {saveConflict && (
             <button
@@ -52,7 +54,11 @@ export function ConfigSaveBar({
       )}
       <div className="config-save-copy" aria-live="polite">
         <strong>{saveLabel(saveState, hasPendingChanges, config?.last_saved_at)}</strong>
-        <span>{applyTarget.hint}</span>
+        <span>保存范围：全部配置{changedAreas.length > 0 && ` · 已改动：${changedAreas.join("、")}`}</span>
+        <details className="config-save-target">
+          <summary>写入目标：{!config ? "加载中" : applyTarget.savesActiveProfiles ? "运行时与绑定档案" : "当前运行时"}</summary>
+          <span>{applyTarget.hint}</span>
+        </details>
       </div>
       <div className="config-save-actions">
         <button

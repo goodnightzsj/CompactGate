@@ -29,7 +29,7 @@ export function DashboardPage({
   const listen = config?.listen ?? "127.0.0.1:7865";
 
   return (
-    <>
+    <div className="dashboard-page">
       <div className="page-header">
         <div>
           <p className="eyebrow">总览</p>
@@ -51,6 +51,6 @@ export function DashboardPage({
       />
 
       <DashboardRecentRequests logs={logs} listen={listen} />
-    </>
+    </div>
   );
 }

@@ -196,6 +196,7 @@ export async function createCompactGateServer(
     studioEvents.close();
     codexVersionMonitor.close();
     clientIdentity.close();
+    configStore.oauth.close();
   });
   return server;
 }

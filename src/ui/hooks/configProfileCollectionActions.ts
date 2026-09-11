@@ -8,13 +8,13 @@ import type { ScopedProfileAccessors } from "./useScopedProfileControls.js";
 export function createConfigProfileCollectionActions({
   config,
   profileDeleteCandidate,
-  setConfig,
+  onConfigChange,
   setProfileDeleteCandidate,
   scopedProfileAccessors
 }: {
   config: PublicConfig | null;
   profileDeleteCandidate: ProfileDeleteCandidate | null;
-  setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
+  onConfigChange: (config: PublicConfig) => void;
   setProfileDeleteCandidate: Dispatch<SetStateAction<ProfileDeleteCandidate | null>>;
   scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
 }) {
@@ -53,7 +53,7 @@ export function createConfigProfileCollectionActions({
         })
       });
 
-      setConfig(nextConfig);
+      onConfigChange(nextConfig);
       const nextScope = profileScopeState(nextConfig, scope);
       const nextSelectedProfileId = accessors.selectedId && nextScope.profiles.some((profile) => profile.id === accessors.selectedId)
         ? accessors.selectedId
@@ -128,7 +128,7 @@ export function createConfigProfileCollectionActions({
         .reverse()
         .find((profile) => profile.name === copyName);
 
-      setConfig(nextConfig);
+      onConfigChange(nextConfig);
       // The source id is only a sane fallback within its own scope; across scopes
       // it names nothing the destination panel can select, so hold its selection.
       const fallbackId = targetScope === scope ? sourceProfileId : accessors.selectedId;
@@ -189,7 +189,7 @@ export function createConfigProfileCollectionActions({
       });
       const nextScope = profileScopeState(nextConfig, candidate.scope);
 
-      setConfig(nextConfig);
+      onConfigChange(nextConfig);
       const nextSelectedProfileId = nextScope.active_profile_id ?? nextScope.profiles[0]?.id ?? "";
       accessors.setSelectedId(nextSelectedProfileId);
       accessors.setName(nextScope.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? "");

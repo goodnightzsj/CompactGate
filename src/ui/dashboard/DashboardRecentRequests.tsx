@@ -15,7 +15,7 @@ export function DashboardRecentRequests({
     <div className="card">
       <div className="card-header">
         <h3>最近请求</h3>
-        <span className="status-pill">{logs.length} 条</span>
+        <a className="dashboard-health-summary-link" href="/#logs">查看全部日志 · {logs.length} 条</a>
       </div>
       {logs.length === 0 ? (
         <div className="empty-state">
@@ -82,7 +82,6 @@ export function DashboardRecentRequests({
               <span className="dashboard-request-duration">{formatDurationMs(entry.duration_ms)}</span>
             </article>
           ))}
-          <a className="dashboard-request-all" href="/#logs">查看全部日志</a>
         </div>
         </>
       )}

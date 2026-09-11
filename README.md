@@ -100,7 +100,7 @@ export PRIMARY_API_KEY="你的主上游密钥"
 export COMPACT_API_KEY="你的 compact 上游密钥"
 ```
 
-如果你不想用环境变量，也可以先启动服务，再去 Studio 页面里直接保存 API Key。
+如果你不想用环境变量，也可以先启动服务，再去 Studio 页面里直接保存 API Key，或在“档案”中添加厂商 OAuth 连接。
 
 ### 5. 启动
 
@@ -364,9 +364,9 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 - 查看健康状态
 - 实时查看最近日志
 
-配置页六个 Tab 分别使用 `/config/profiles`、`/config/routes`、`/config/model`、`/config/logging`、`/config/preview` 和 `/config/portable`，可通过浏览器前进、后退回顾切换历史。
+配置页五个 Tab 分别使用 `/config/profiles`、`/config/routes`、`/config/model`、`/config/logging` 和 `/config/portable`，可通过浏览器前进、后退回顾切换历史。旧 `/config/preview` 入口进入路由工作区。
 
-模型目录不会在页面加载时自动联网。CompactGate 会根据已保存的 base URL 生成 OpenAI-compatible `/v1/models` 或 `/models` 候选；仅当端点返回 404/405 时尝试下一条路径。Primary 使用 Bearer 凭据，Claude 保留 Anthropic 兼容鉴权头。修改 URL 或凭据草稿后需先保存，再拉取对应上游目录。
+模型目录不会在页面加载时自动联网。手动凭据按已保存的 base URL 生成 OpenAI-compatible `/v1/models` 或 `/models` 候选；仅当端点返回 404/405 时尝试下一条路径。OAuth 连接使用厂商绑定的目录和认证方式，不尝试任意地址。修改 URL 或凭据草稿后需先保存，再拉取对应上游目录。
 
 日志是实时刷新的，使用的是 SSE。
 
@@ -385,7 +385,33 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 
 元数据始终持久化到本地 SQLite。只有 `logging.persist_body = true` 时正文才进入 SQLite；推荐保持关闭并通过有界抓包目录按需诊断。Studio 日志列表不返回正文或本机抓包路径，展开详情后也只有点击“查看抓包”才会加载原始内容。抓包查看器会对“客户端请求 → 上游请求”和“上游响应 → 客户端响应”做最多 200 项的结构化 JSON 对比；正文截断或不是 JSON 时明确标为不可比较。压缩日志还保存实现名、请求 compaction/trigger 数和响应 compaction 数，便于定位协议漂移。
 
+## 档案 OAuth
+
+在 `/config/profiles` 添加授权连接，按厂商选择浏览器或设备码授权。授权完成后，填写模型 ID 并创建 Codex 或 Claude 档案；创建不会应用，也不会清除现有草稿。已有连接还可在“连接与路由”中绑定到四个独立槽位。绑定会清除该槽位互斥的 API key、环境变量和密钥池，URL 与上游协议由厂商连接管理。
+
+| 厂商 | 授权方式 | 使用边界 |
+| --- | --- | --- |
+| OpenAI / ChatGPT Codex | 浏览器 PKCE、设备码 | ChatGPT Codex 权限，不等同 Platform API 额度；浏览器回调需要本机 1455 端口可用 |
+| Google Gemini / Vertex AI | 浏览器 PKCE | 自有 Desktop OAuth Client ID/Secret、Cloud 项目与区域；使用项目权限和账单，不接入消费者订阅 |
+| Qwen Code | 设备码 | 使用账号返回的受信模型端点和权限 |
+| Kimi Code | 设备码 | Coding 端点、Anthropic Messages 格式，受套餐权限限制 |
+| xAI | 设备码 | 受账号授予的 API 权限限制 |
+| GitHub Copilot | 设备码、服务端令牌交换 | 仅 github.com；不自动开启组织策略禁用的模型 |
+| OpenRouter | 浏览器 PKCE | 生成用户控制的 API key，无自动续期令牌 |
+
+协议参考：[OpenAI](https://developers.openai.com/codex/auth)、[Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai)、[Qwen Code](https://github.com/QwenLM/qwen-code)、[OpenRouter](https://openrouter.ai/docs/guides/overview/auth/oauth)。公开协议或 CLI 的实现不代表厂商承诺第三方兼容性；模型目录可读也不等于模型调用已验证。Vertex 的兼容接口不提供账号模型目录，需填写项目启用的 `google/模型ID`。
+
+Claude.ai 订阅登录不在此范围，Anthropic API 继续使用手动密钥，参见[厂商认证使用边界](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)。OAuth 不改变已有协议转换限制：Chat 不支持的请求、私有 provider state 和厂商未支持的端点仍会明确失败。Codex OAuth 使用厂商 SSE 约定，非流式客户端收到聚合 JSON；Platform 专属参数不等同订阅接口参数。
+
+凭据保存在配置同目录的 `compactgate-oauth.json`（自定义配置名对应 `<配置名>-oauth.json`），以 `0600` 权限原子写入，不进入公开配置、导出或版本备份。该文件包含敏感令牌，应按密钥文件保管；不是操作系统钥匙串。导入配置只带连接 ID，另一台机器缺少对应连接时明确报错，不回退其他密钥。过期连接按需刷新，同一连接并发刷新合并；被撤销时显示需重新授权。断开保留档案引用并删除本地凭据，不自动撤销厂商端授权；重新授权会创建新连接，需重新绑定原档案。
+
+授权须从 loopback Studio 地址发起；离开授权面板会取消未完成会话。OAuth 主路由默认不参与自动轮转；需要精确选用时可应用档案或使用请求级 `--profile`，而不是依赖故障转移主动选择该账号。
+
 ## 日志和本地数据库
+
+日志颜色表示完整请求结果，不只是 HTTP 状态。`status >= 400`、非空 `error_summary`、失败/未完成终止事件或非成功 `stream_outcome` 均按错误显示；Token 用量只做计量，不能证明请求成功。HTTP 200 后收到 `response.failed`、`response.incomplete` 或断流仍显示红色，并保留原始 200；真实 502 不再因有 Token 显示绿色。`response.failed` 后即使出现 `[DONE]`，也不会覆盖失败。
+
+同一判定用于前端列表、SQLite 筛选和统计；Primary 健康判定也不再以用量覆盖错误。新版启动会在事务中重建旧版正常/错误汇总，保留原始历史日志，不修改状态码或正文。
 
 请求元数据会持久化到 SQLite，不按页面展示数量自动删除。数据库文件、WAL 和 SHM 侧写文件合计默认上限为 1 GiB。超过上限时，CompactGate 先清空四段历史正文并把 `body_status` 标为 `purged`；回收后仍超限才删除最早的元数据行。维护任务执行 SQLite checkpoint/vacuum 回收磁盘空间。
 
@@ -442,6 +468,17 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 ### `POST /api/test-route`
 
 预览一条请求最终会怎么路由、怎么改模型。
+
+### OAuth 管理接口
+
+- `GET /api/oauth/providers`、`GET /api/oauth/accounts`：厂商与公开连接状态，不返回令牌。
+- `POST /api/oauth/sessions`：传 `provider`、`method`、`label`；Google 另传 `settings` 中的 `client_id`、`client_secret`、`project_id`、`location`。
+- `GET /api/oauth/sessions/:id`：查看状态；设备授权用 `POST /api/oauth/sessions/:id/poll`，遵守返回的 `poll_after_ms`。
+- `POST /api/oauth/sessions/:id/complete`：传完整 `callback_url`，校验回调地址、state 和一次性授权状态。
+- `DELETE /api/oauth/sessions/:id`：取消待定会话，不撤回已完成授权。
+- `POST /api/oauth/accounts/:id/refresh`、`GET /api/oauth/accounts/:id/models`：刷新凭据、按需读取厂商模型目录。
+- `DELETE /api/oauth/accounts/:id`：传 `{"confirm":true}` 断开本地连接。
+- `POST /api/oauth/profiles`：传 `account_id`、`scope`、`name`、`model`、`revision`，新建但不应用；同名档案和版本冲突明确拒绝。
 
 ### `POST /api/compact/capability-probe`
 

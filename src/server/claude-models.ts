@@ -22,6 +22,8 @@ import {
   type UpstreamModelsResponse
 } from "./upstream-models.js";
 import { buildUpstreamUrlWithMode } from "./upstream-url.js";
+import type { OAuthStore } from "./oauth-store.js";
+import { fetchOAuthModels } from "./oauth-transport.js";
 
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
@@ -65,13 +67,15 @@ const CLAUDE_CLIENT_IDENTITY: Record<string, string> = {
 
 export async function fetchClaudeModels(
   config: CompactGateConfig,
-  clientIdentity?: ClientIdentityStore
+  clientIdentity?: ClientIdentityStore,
+  oauth?: OAuthStore
 ): Promise<UpstreamModelsResponse> {
   const auth = resolveClaudeCredential(config);
   const identityKind = config.claude.primary.upstream_protocol === "anthropic_messages" ? "claude" : "codex";
   const userAgent = clientIdentity
     ? clientIdentity.userAgentFor(identityKind)
     : factoryClientUserAgent(identityKind);
+  if (config.claude.primary.oauth_account_id) return fetchOAuthModels(config.claude.primary, oauth, config.timeouts.claude_ms, userAgent);
   const headers = buildAnthropicUpstreamHeaders(
     {
       ...CLAUDE_CLIENT_IDENTITY,

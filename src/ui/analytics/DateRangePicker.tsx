@@ -1,4 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
+import { clamp } from "../shared/format.js";
 import { inputDate, parseInputDate } from "./analytics-data.js";
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
@@ -34,9 +36,38 @@ export function DateRangePicker({
   const [focusedDate, setFocusedDate] = useState(to);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [placement, setPlacement] = useState<CSSProperties | null>(null);
   const panelId = useId();
   const calendarDays = useMemo(() => monthGrid(visibleMonth), [visibleMonth]);
   const today = inputDate(new Date());
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function place() {
+      const trigger = triggerRef.current;
+      const panel = panelRef.current;
+      if (!trigger || !panel) return;
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.min(352, window.innerWidth - 24);
+      const maxHeight = window.innerHeight - 24;
+      const height = Math.min(panel.scrollHeight + 2, maxHeight);
+      const narrow = window.innerWidth <= 760;
+      setPlacement({
+        width,
+        maxHeight,
+        left: narrow ? (window.innerWidth - width) / 2 : clamp(rect.left, 12, window.innerWidth - width - 12),
+        top: narrow ? Math.max(12, (window.innerHeight - height) / 2) : clamp(rect.bottom + 8, 12, window.innerHeight - height - 12)
+      });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -51,8 +82,8 @@ export function DateRangePicker({
       return undefined;
     }
 
-    function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+    function handlePointerDown(event: Event) {
+      if (!rootRef.current?.contains(event.target as Node) && !panelRef.current?.contains(event.target as Node)) {
         setOpen(false);
       }
     }
@@ -67,9 +98,11 @@ export function DateRangePicker({
 
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("focusin", handlePointerDown);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("focusin", handlePointerDown);
     };
   }, [open]);
 
@@ -77,11 +110,12 @@ export function DateRangePicker({
     if (!open) {
       return;
     }
-    requestAnimationFrame(() => {
-      rootRef.current
+    const frame = requestAnimationFrame(() => {
+      panelRef.current
         ?.querySelector<HTMLButtonElement>(`[data-calendar-date="${focusedDate}"]`)
         ?.focus();
     });
+    return () => cancelAnimationFrame(frame);
   }, [focusedDate, open, visibleMonth]);
 
   function focusOn(value: string) {
@@ -185,8 +219,24 @@ export function DateRangePicker({
         <ChevronIcon open={open} />
       </button>
 
-      {open && (
-        <div id={panelId} className="usage-date-popover" role="dialog" aria-label="选择日期范围">
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          id={panelId}
+          className="usage-date-popover"
+          role="dialog"
+          aria-label="选择日期范围"
+          style={placement ?? { visibility: "hidden" }}
+          onKeyDown={(event) => {
+            if (event.key !== "Tab") return;
+            const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not([tabindex="-1"]):not(:disabled)');
+            const boundary = event.shiftKey ? buttons[0] : buttons[buttons.length - 1];
+            if (event.target !== boundary) return;
+            event.preventDefault();
+            setOpen(false);
+            triggerRef.current?.focus();
+          }}
+        >
           <div className="usage-date-presets" aria-label="快捷日期范围">
             {PRESETS.map((preset) => {
               const range = preset.range();
@@ -255,7 +305,8 @@ export function DateRangePicker({
             <small>{selectingEnd ? "选择结束日期，最多 31 天" : "最多选择 31 天"}</small>
             <button type="button" className="btn btn-primary btn-sm" onClick={apply}>应用</button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
