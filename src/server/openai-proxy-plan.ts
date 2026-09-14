@@ -7,7 +7,7 @@ import {
 } from "./compaction-bridge.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { appendHeaderToken, buildUpstreamHeaders, parseJsonRecord } from "./http-utils.js";
-import { applyHostQuirks } from "./host-quirks.js";
+import { applyHostBodyQuirks, applyHostQuirks, type HostBodyQuirkContext } from "./host-quirks.js";
 import { applyClientIdentityUserAgent, isNativeCliRequest } from "./client-identity.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import {
@@ -243,9 +243,20 @@ function withRequestHeaders(
     targetModel: plan.targetModel,
     headers: requestHeaders
   });
+  // A body rewrite is applied last and only on the host actually being called:
+  // routing has picked `base_url` by now, but the body was built before that.
+  const bodyQuirk: HostBodyQuirkContext = {
+    host: plan.upstream.hostname,
+    upstreamProtocol: plan.upstreamProtocol,
+    body: plan.upstreamBody
+  };
+  if (applyHostBodyQuirks(bodyQuirk).length > 0) {
+    delete requestHeaders["content-encoding"];
+  }
 
   return {
     ...plan,
+    upstreamBody: bodyQuirk.body,
     requestHeaders,
     sensitiveHeaderNames: Object.keys(extraHeaders)
   };

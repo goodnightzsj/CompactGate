@@ -73,6 +73,32 @@ describe("PrimaryFailoverState", () => {
     });
   });
 
+  // The host is only final here: a profile or scene can swap in another
+  // `base_url`, so the body rewrite has to resolve against the plan's upstream.
+  it("applies host body quirks against the routed upstream, not the ingress", () => {
+    const input = [
+      { type: "message", role: "assistant", id: "msg_02e22a5d85dec6d5006aa7a6be80d881", content: [] },
+      { type: "reasoning", id: "rs_02e22a5d85dec6d5006aa7a89906d48196841", encrypted_content: "gAAAAAB" }
+    ];
+    const buildPlan = (baseUrl: string) => buildPrimaryOpenAiProxyPlan({
+      config: configWithCodexProfiles([codexProfile("codex-quirk", "Quirk", baseUrl)]),
+      url: new URL("http://compactgate.local/v1/responses"),
+      headers: { "content-type": "application/json" },
+      rawBody: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", input })),
+      endpoint: "/responses",
+      compactionBridge: new CompactionBridgeStore(),
+      primaryFailover: new PrimaryFailoverState({ random: () => 0 })
+    });
+
+    const stripped = JSON.parse(buildPlan("https://agentrouter.org/v1").upstreamBody.toString("utf8"));
+    expect(stripped.input.every((item: Record<string, unknown>) => !("id" in item))).toBe(true);
+    // Only the id goes; reasoning state is what the next turn actually replays.
+    expect(stripped.input[1].encrypted_content).toBe("gAAAAAB");
+
+    const kept = JSON.parse(buildPlan("https://anyrouter.top/v1").upstreamBody.toString("utf8"));
+    expect(kept.input[0].id).toBe("msg_02e22a5d85dec6d5006aa7a6be80d881");
+  });
+
   it("rejects plans whose split compaction state cannot be bridged locally", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),

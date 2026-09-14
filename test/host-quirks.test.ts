@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyHostQuirks, resolveHostShortCircuit } from "../src/server/host-quirks.js";
+import {
+  applyHostBodyQuirks,
+  applyHostQuirks,
+  resolveHostShortCircuit
+} from "../src/server/host-quirks.js";
 
 describe("applyHostQuirks", () => {
   it("adds the 1m context beta for opus targets on anyrouter", () => {
@@ -57,6 +61,90 @@ describe("applyHostQuirks", () => {
     const headers: Record<string, string> = {};
     applyHostQuirks({ host: "notanyrouter.top", sourceModel: null, targetModel: "claude-opus-5", headers });
     expect(headers["anthropic-beta"]).toBeUndefined();
+  });
+});
+
+describe("applyHostBodyQuirks", () => {
+  // Shaped after the capture that motivated this: a Codex turn replaying the
+  // previous response's items, two of which carry ids minted by whichever Azure
+  // resource served that turn.
+  const agentrouterBody = () => Buffer.from(JSON.stringify({
+    model: "gpt-6-astra",
+    store: false,
+    input: [
+      { type: "message", role: "assistant", id: "msg_02e22a5d85dec6d5006aa7a6be80d88196a258a8f45cfab653", content: [] },
+      {
+        type: "custom_tool_call",
+        id: "ctc_02e22a5d85dec6d5006aa7a6bf80508196bc3142355a7ab3b8",
+        call_id: "call_z22vOmEl9pMDJnfq56ZQ2h1E",
+        name: "exec",
+        input: "1"
+      },
+      {
+        type: "reasoning",
+        id: "rs_02e22a5d85dec6d5006aa7a89906d48196841ad44485bdbca6",
+        summary: [],
+        encrypted_content: "gAAAAAB"
+      },
+      { type: "item_reference", id: "msg_02e22a5d85dec6d5006aa7a6be80d88196a258a8f45cfab653" }
+    ]
+  }));
+
+  it("strips every input item id for agentrouter responses requests", () => {
+    const context = {
+      host: "agentrouter.org",
+      upstreamProtocol: "openai_responses" as const,
+      body: agentrouterBody()
+    };
+    expect(applyHostBodyQuirks(context)).toEqual(["agentrouter-strip-input-item-ids"]);
+
+    const items = JSON.parse(context.body.toString()).input;
+    expect(items.every((item: Record<string, unknown>) => !("id" in item))).toBe(true);
+  });
+
+  it("keeps the state that is not the item id", () => {
+    const context = {
+      host: "agentrouter.org",
+      upstreamProtocol: "openai_responses" as const,
+      body: agentrouterBody()
+    };
+    applyHostBodyQuirks(context);
+    const items = JSON.parse(context.body.toString()).input;
+
+    // Reasoning state rides on the encrypted payload, tool pairing on call_id.
+    expect(items[1].call_id).toBe("call_z22vOmEl9pMDJnfq56ZQ2h1E");
+    expect(items[2].encrypted_content).toBe("gAAAAAB");
+    expect(items[2].summary).toEqual([]);
+    // An id-only item has nothing left to say.
+    expect(items).toHaveLength(3);
+  });
+
+  it("leaves the body untouched when there are no ids to strip", () => {
+    const body = Buffer.from(JSON.stringify({
+      model: "gpt-6-astra",
+      input: [{ type: "message", role: "user", content: [] }]
+    }));
+    const context = { host: "agentrouter.org", upstreamProtocol: "openai_responses" as const, body };
+    expect(applyHostBodyQuirks(context)).toEqual([]);
+    expect(context.body).toBe(body);
+  });
+
+  it("does not apply to any other host", () => {
+    for (const host of ["anyrouter.top", "opencode.9962510.xyz", "notagentrouter.org"]) {
+      const context = { host, upstreamProtocol: "openai_responses" as const, body: agentrouterBody() };
+      expect(applyHostBodyQuirks(context)).toEqual([]);
+      expect(JSON.parse(context.body.toString()).input[0].id).toBeDefined();
+    }
+  });
+
+  it("does not apply to a non-Responses protocol on the same host", () => {
+    const context = {
+      host: "agentrouter.org",
+      upstreamProtocol: "anthropic_messages" as const,
+      body: agentrouterBody()
+    };
+    expect(applyHostBodyQuirks(context)).toEqual([]);
+    expect(JSON.parse(context.body.toString()).input[0].id).toBeDefined();
   });
 });
 
