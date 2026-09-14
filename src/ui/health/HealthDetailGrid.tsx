@@ -18,8 +18,8 @@ export function HealthDetailGrid({
 
   return (
     <section className={`health-detail-grid ${needsAttention ? "" : "is-compact"}`}>
-      {needsAttention && <section className="panel health-notes" aria-labelledby="health-notes-title">
-        <div className="section-heading">
+      {needsAttention && <section className="health-notes" aria-labelledby="health-notes-title">
+        <div className="health-card-head">
           <p className="eyebrow">检查清单</p>
           <h2 id="health-notes-title">如何判断现在能不能接请求</h2>
         </div>

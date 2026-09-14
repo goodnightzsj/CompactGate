@@ -8,10 +8,12 @@ import { MAX_CLAUDE_LONG_CONTEXT_BYTES } from "./config-internals.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl,
+  hostNeedsToolReferenceStripping,
   resolveClaudeCredential,
   resolveClaudeMappedModel,
   resolveClaudeRequestRouting,
-  rewriteClaudeModelBody
+  rewriteClaudeModelBody,
+  stripClaudeToolReferenceBlocks
 } from "./claude-models.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import type { ClaudeKeyPoolState } from "./claude-key-pool.js";
@@ -162,6 +164,10 @@ export async function proxyClaudeRequest(
     const upstreamProtocol = config.claude.primary.upstream_protocol;
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
     const openAiUpstream = upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat";
+    // `upstream` still points at the base config's host here; the scene routing
+    // above may have swapped in a profile with a different base_url, and the
+    // branch below rebuilds it. Deciding the host-scoped strip now would read
+    // the wrong host, so it is applied after that rebuild.
     transaction.upstreamBody = rewriteClaudeModelBody(
       transaction.rawBody,
       transaction.targetModel ?? "",
@@ -200,6 +206,14 @@ export async function proxyClaudeRequest(
         auth.apiKey,
         config.claude.primary.extra_headers
       );
+    }
+    // Scoped to the host actually being called, which is only known now: the
+    // scene routing above can swap in a profile with its own base_url, and both
+    // branches above rebuild `upstream` from the routed config. Only a relay
+    // observed rejecting `tool_reference` gets its body changed; every other
+    // host keeps the block as the accurate record of the tools the turn loaded.
+    if (hostNeedsToolReferenceStripping(upstream.hostname)) {
+      transaction.upstreamBody = stripClaudeToolReferenceBlocks(transaction.upstreamBody);
     }
     // The outbound protocol decides which CLI to impersonate, not the ingress
     // path: a Messages request routed to an OpenAI-protocol upstream leaves here

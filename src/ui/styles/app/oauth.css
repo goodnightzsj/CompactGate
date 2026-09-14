@@ -51,6 +51,7 @@
 .oauth-session { display: grid; gap: 12px; padding: 16px 0; border-top: 1px solid var(--hairline); }
 .oauth-code code { font-size: 1.25rem; overflow-wrap: anywhere; }
 .oauth-list-heading { color: var(--ink-soft); font-size: 0.875rem; font-weight: 600; }
+.oauth-account-list { display: grid; }
 .oauth-account { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 24px; padding: 20px 0; border-top: 1px solid var(--hairline); }
 .oauth-account-copy { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .oauth-account-copy > strong { font-size: 1rem; font-weight: 600; }

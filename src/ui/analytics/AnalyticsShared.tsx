@@ -5,7 +5,8 @@ import {
   formatCompactMetricNumber,
   formatDateTime,
   formatDurationMs,
-  formatMetricNumber
+  formatMetricNumber,
+  formatShortDateTime
 } from "../shared/format.js";
 import type { AnalyticsTrendPoint } from "./analytics-data.js";
 
@@ -110,6 +111,7 @@ export function AnalyticsTrendChart({
     (1 - value / max) * (height - inset.top - inset.bottom);
   const requestLine = points.map((point, index) => `${x(index)},${y(point[metric])}`).join(" ");
   const errorLine = errors.map((value, index) => `${x(index)},${y(value)}`).join(" ");
+  const markers = sampleMarkerIndexes(points, width, cursor.index);
   const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
 
@@ -153,7 +155,7 @@ export function AnalyticsTrendChart({
           <polyline className="analytics-chart-line is-error" points={errorLine} />
         )}
         <line className="analytics-chart-cursor" x1={x(cursor.index)} x2={x(cursor.index)} y1={inset.top} y2={height - inset.bottom} />
-        {points.map((point, index) => (
+        {markers.map(({ index, point }) => (
           <circle
             className="analytics-chart-point"
             cx={x(index)}
@@ -165,7 +167,7 @@ export function AnalyticsTrendChart({
         {/* The 3px dot is too small to hit, especially on touch where there is no
             hover at all, so the tooltip lives on a transparent 7px target — the
             same pairing the token chart below already uses. */}
-        {points.map((point, index) => (
+        {markers.map(({ index, point }) => (
           <circle
             className="analytics-chart-hit-target"
             cx={x(index)}
@@ -178,7 +180,6 @@ export function AnalyticsTrendChart({
         ))}
         {tickIndexes.map((index) => (
           <text
-            className="analytics-chart-x-label"
             x={x(index)}
             y={height - 6}
             textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}
@@ -224,6 +225,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
     (1 - value / 100) * (height - inset.top - inset.bottom);
   const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
+  const markers = sampleMarkerIndexes(points, width, cursor.index);
 
   if (points.length === 0 || values.every((value) => value === 0)) {
     return (
@@ -282,7 +284,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
           points={points.map((point, index) => `${x(index)},${rateY(rate(point))}`).join(" ")}
         />
         <line className="analytics-chart-cursor" x1={x(cursor.index)} x2={x(cursor.index)} y1={inset.top} y2={height - inset.bottom} />
-        {points.map((point, index) => (
+        {markers.map(({ index, point }) => (
           <circle
             className="analytics-chart-hit-target"
             cx={x(index)}
@@ -295,7 +297,6 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
         ))}
         {tickIndexes.map((index) => (
           <text
-            className="analytics-chart-x-label"
             x={x(index)}
             y={height - 6}
             textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}
@@ -314,6 +315,44 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
       />
     </div>
   );
+}
+
+/** Widest gap allowed between drawn markers, in CSS px. */
+const MARKER_GAP_PX = 8;
+
+/**
+ * Picks which points get a dot. Above one marker per ~8px the dots merge into a
+ * solid line anyway, so drawing every point over a 30-day hourly range only
+ * costs DOM: each point currently also renders a second 7px hit circle and a
+ * `<title>`. The cursor is index-driven (`pickAt` works off the svg's own
+ * pointer events, not the circles), so dropping markers cannot break it — but
+ * the selected index has to stay drawn or the readout would describe a point
+ * with no marker under it.
+ */
+function sampleMarkerIndexes(
+  points: AnalyticsTrendPoint[],
+  width: number,
+  selectedIndex: number
+): Array<{ index: number; point: AnalyticsTrendPoint }> {
+  const plotWidth = Math.max(1, width - 70);
+  const stride = Math.max(1, Math.ceil(points.length / (plotWidth / MARKER_GAP_PX)));
+  if (stride === 1) {
+    return points.map((point, index) => ({ index, point }));
+  }
+
+  const sampled: Array<{ index: number; point: AnalyticsTrendPoint }> = [];
+  for (let index = 0; index < points.length; index += stride) {
+    sampled.push({ index, point: points[index] });
+  }
+  const last = points.length - 1;
+  if (last >= 0 && sampled[sampled.length - 1]?.index !== last) {
+    sampled.push({ index: last, point: points[last] });
+  }
+  if (selectedIndex >= 0 && !sampled.some((marker) => marker.index === selectedIndex)) {
+    sampled.push({ index: selectedIndex, point: points[selectedIndex] });
+    sampled.sort((left, right) => left.index - right.index);
+  }
+  return sampled;
 }
 
 function useChartCursor(points: AnalyticsTrendPoint[]) {
@@ -431,7 +470,7 @@ export function AnalyticsRefreshStatus({ loading, error, generatedAt }: {
     <p className="analytics-refresh-status" role="status" data-state={loading ? "loading" : error ? "error" : "ready"}>
       <span>{message}</span>
       {generatedAt && (
-        <span>采样于 <time dateTime={generatedAt} title={generatedAt}>{formatDateTime(generatedAt)}</time> · 手动刷新</span>
+        <span>采样于 <time dateTime={generatedAt} title={generatedAt}>{formatDateTime(generatedAt)}</time> · 每分钟自动刷新</span>
       )}
     </p>
   );
@@ -443,7 +482,7 @@ export function RetainedRange({ stats }: { stats: LogStatsSnapshot }) {
   return (
     <span className="analytics-retained-range">
       {oldest && newest
-        ? `SQLite 保留记录 ${formatShortDate(oldest)} - ${formatShortDate(newest)}`
+        ? `SQLite 保留记录 ${formatShortDateTime(oldest)} - ${formatShortDateTime(newest)}`
         : "SQLite 暂无保留记录"}
     </span>
   );
@@ -461,13 +500,4 @@ export function cacheHitRate(inputTokens: number, cacheReadTokens: number): stri
 
 export function durationPair(p50: number | null, p95: number | null): string {
   return `${formatDurationMs(p50)} / ${formatDurationMs(p95)}`;
-}
-
-function formatShortDate(iso: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(iso));
 }

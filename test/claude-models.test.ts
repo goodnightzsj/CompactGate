@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   detectClaudeScene,
   hasClaudeImageInput,
+  hostNeedsToolReferenceStripping,
   resolveClaudeMappedModel,
-  rewriteClaudeModelBody
+  rewriteClaudeModelBody,
+  stripClaudeToolReferenceBlocks
 } from "../src/server/claude-models.js";
 import { anthropicRequestToResponses } from "../src/server/protocol-conversion.js";
 
@@ -220,5 +222,125 @@ describe("Claude thinking scene detection", () => {
       messages: [{ role: "user", content: "hi" }],
       thinking: { type: "adaptive" }
     }), "claude-opus-4-8", 0).scene).toBe("thinking");
+  });
+});
+
+describe("Claude tool_reference stripping on a model rewrite", () => {
+  // The rewrite and the strip are separate steps now: the caller decides the
+  // strip from the resolved upstream host, so this mirrors that two-step shape.
+  function rewritten(
+    value: unknown,
+    model = "deepseek/deepseek-v4.1-flash",
+    align = true,
+    stripToolReferences = true
+  ) {
+    const rewrittenBody = rewriteClaudeModelBody(body(value), model, align);
+    return JSON.parse(
+      (stripToolReferences ? stripClaudeToolReferenceBlocks(rewrittenBody) : rewrittenBody).toString()
+    );
+  }
+
+  const withToolReference = {
+    model: "claude-opus-4-8",
+    messages: [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [
+            { type: "tool_reference", tool_name: "mcp__playwright__browser_navigate" },
+            { type: "tool_reference", tool_name: "mcp__playwright__browser_evaluate" }
+          ]
+        }]
+      }
+    ]
+  };
+
+  it("replaces tool_reference blocks with the names, keeping the exchange well-formed", () => {
+    const result = rewritten(withToolReference);
+    expect(result.messages[1].content[0]).toEqual({
+      type: "tool_result",
+      tool_use_id: "t1",
+      content: [{
+        type: "text",
+        text: "mcp__playwright__browser_navigate\nmcp__playwright__browser_evaluate"
+      }]
+    });
+  });
+
+  it("keeps sibling tool_result content alongside the replacement", () => {
+    const result = rewritten({
+      model: "claude-opus-4-8",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "t1",
+          content: [
+            { type: "text", text: "Tool loaded." },
+            { type: "tool_reference", tool_name: "Bash" }
+          ]
+        }]
+      }]
+    });
+    expect(result.messages[0].content[0].content).toEqual([
+      { type: "text", text: "Tool loaded." },
+      { type: "text", text: "Bash" }
+    ]);
+  });
+
+  it("leaves a body without tool_reference byte-identical", () => {
+    const plain = {
+      model: "claude-opus-4-8",
+      max_tokens: 64000,
+      thinking: { type: "adaptive" },
+      messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] }]
+    };
+    expect(rewritten(plain).messages).toEqual(plain.messages);
+  });
+
+  it("strips for the OpenAI-protocol path too, whose converters 422 on the block", () => {
+    // alignThinking=false is the OpenAI-protocol branch; stripping is a separate
+    // flag and must still fire, or anthropicRequestToResponses refuses the
+    // request locally before any upstream sees it.
+    const converted = rewritten(withToolReference, "deepseek/deepseek-v4.1-flash", false, true);
+    expect(converted.messages[1].content[0].content).toEqual([{
+      type: "text",
+      text: "mcp__playwright__browser_navigate\nmcp__playwright__browser_evaluate"
+    }]);
+    expect(() => anthropicRequestToResponses(
+      Buffer.from(JSON.stringify(converted)),
+      { countTokens: false }
+    )).not.toThrow();
+  });
+
+  it("leaves the block untouched on a host that never rejected it", () => {
+    // The default is not to strip: only relays confirmed to refuse the block are
+    // in the list. A host that passes it through keeps the accurate record of
+    // which tools the turn loaded.
+    const otherHost = rewritten(withToolReference, "deepseek/deepseek-v4.1-flash", true, false);
+    expect(otherHost.messages).toEqual(withToolReference.messages);
+    expect(otherHost.messages[1].content[0].content).toEqual([
+      { type: "tool_reference", tool_name: "mcp__playwright__browser_navigate" },
+      { type: "tool_reference", tool_name: "mcp__playwright__browser_evaluate" }
+    ]);
+  });
+});
+
+describe("tool_reference stripping host scope", () => {
+  it("matches the confirmed host and its subdomains, and nothing else", () => {
+    expect(hostNeedsToolReferenceStripping("opencode.9962510.xyz")).toBe(true);
+    expect(hostNeedsToolReferenceStripping("OpenCode.9962510.XYZ")).toBe(true);
+    expect(hostNeedsToolReferenceStripping("  opencode.9962510.xyz  ")).toBe(true);
+    expect(hostNeedsToolReferenceStripping("cdn.opencode.9962510.xyz")).toBe(true);
+
+    // A suffix match must not be fooled by a host that merely contains the name.
+    expect(hostNeedsToolReferenceStripping("notopencode.9962510.xyz")).toBe(false);
+    expect(hostNeedsToolReferenceStripping("opencode.9962510.xyz.evil.test")).toBe(false);
+    expect(hostNeedsToolReferenceStripping("anyrouter.top")).toBe(false);
+    expect(hostNeedsToolReferenceStripping("agentrouter.org")).toBe(false);
+    expect(hostNeedsToolReferenceStripping("")).toBe(false);
   });
 });

@@ -136,10 +136,38 @@ export function resolveClaudeMappedModel(
 }
 
 /**
+ * Upstream hosts observed to reject a rewritten request that still carries
+ * Claude Code's `tool_reference` blocks. Each entry needs a confirmed repro —
+ * the same body 502s with the block and 200s with it replaced — because the
+ * fix changes what the model is shown, and doing that to a host that never
+ * complained would be a silent behaviour change with no evidence behind it.
+ *
+ * Hosts absent from this list keep the block: on a relay that passes it through
+ * untouched, it is the accurate record of which tools were loaded.
+ */
+export const TOOL_REFERENCE_STRIPPING_HOSTS = ["opencode.9962510.xyz"];
+
+/**
+ * Suffix match so a relay reached through an alternate subdomain still counts —
+ * the same rule `HOST_QUIRKS` and the proxy agent use.
+ */
+export function hostNeedsToolReferenceStripping(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return TOOL_REFERENCE_STRIPPING_HOSTS.some(
+    (candidate) => normalized === candidate || normalized.endsWith(`.${candidate}`)
+  );
+}
+
+/**
  * Rewrites the request model, and on a native Anthropic upstream also carries
  * the client's thinking level across that rewrite. `alignThinking` must stay
  * false when the body is headed for an OpenAI-protocol conversion, which does
  * its own thinking translation and rejects `output_config`.
+ *
+ * `tool_reference` stripping is separate and host-scoped (see
+ * `stripClaudeToolReferenceBlocks`), applied by the caller once the upstream
+ * host is final — the scene routing can swap in a profile with another
+ * base_url, so the rewrite alone cannot know which host will receive it.
  */
 export function rewriteClaudeModelBody(
   rawBody: Buffer,
@@ -161,6 +189,77 @@ export function rewriteClaudeModelBody(
     ...(alignThinking ? alignClaudeThinkingToModel(parsed, model) : {}),
     model
   }));
+}
+
+/**
+ * Replaces Claude Code's `tool_reference` blocks with the referenced tool names.
+ * Returns `body` unchanged when there are none, so a body this does not apply to
+ * is not re-serialised.
+ */
+export function stripClaudeToolReferenceBlocks(body: Buffer): Buffer {
+  const parsed = parseJsonRecord(body);
+  if (!parsed) {
+    return body;
+  }
+
+  const messages = replaceClaudeToolReferenceBlocks(parsed.messages);
+  if (!messages) {
+    return body;
+  }
+
+  return Buffer.from(JSON.stringify({ ...parsed, messages }));
+}
+
+/**
+ * Claude Code answers a ToolSearch / deferred-tool turn with `tool_reference`
+ * blocks inside `tool_result.content`. Anthropic accepts those only for a model
+ * that knows the referenced tools; every relay this proxy fronts rewrites the
+ * model to a vendor one instead, and the relay answers HTTP 502 (or an
+ * in-stream "all upstream models failed") for as long as the block stays in the
+ * conversation — which is every later turn, so a single ToolSearch wedges the
+ * whole session. Measured against opencode: the identical body with the block
+ * replaced by text returns 200, with the block present 502, deterministically.
+ *
+ * The referenced tool is always one the request already declares in `tools`, so
+ * the block carries no information the model is not already given. Replacing it
+ * with the tool's name keeps the tool-use exchange well-formed — a `tool_result`
+ * cannot be emptied — without inventing a capability claim.
+ */
+function replaceClaudeToolReferenceBlocks(messages: unknown): unknown[] | null {
+  if (!Array.isArray(messages)) {
+    return null;
+  }
+  let changed = false;
+  const next = messages.map((message) => {
+    if (!isRecord(message) || !Array.isArray(message.content)) {
+      return message;
+    }
+    let messageChanged = false;
+    const content = message.content.map((block) => {
+      if (!isRecord(block) || block.type !== "tool_result" || !Array.isArray(block.content)) {
+        return block;
+      }
+      const text = block.content
+        .filter((nested) => isRecord(nested) && nested.type === "tool_reference")
+        .map((nested) => readTrimmedString((nested as Record<string, unknown>).tool_name))
+        .filter((name): name is string => Boolean(name))
+        .join("\n");
+      if (!text) {
+        return block;
+      }
+      const remaining = block.content.filter(
+        (nested) => !(isRecord(nested) && nested.type === "tool_reference")
+      );
+      messageChanged = true;
+      return { ...block, content: [...remaining, { type: "text", text }] };
+    });
+    if (!messageChanged) {
+      return message;
+    }
+    changed = true;
+    return { ...message, content };
+  });
+  return changed ? next : null;
 }
 
 /**

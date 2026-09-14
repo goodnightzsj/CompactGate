@@ -853,7 +853,10 @@
   align-items: end;
   gap: 8px;
   padding: 10px 4px 7px;
-  color: var(--faint);
+  /* The only thing inheriting this is the "→" between the two dates; the date
+     spans set their own --ink-soft. --faint is graphics-only (see tokens.css)
+     and 2.6:1 here, so the arrow is a text node and takes --muted. */
+  color: var(--muted);
   font-size: 0.72rem;
   text-align: center;
 }

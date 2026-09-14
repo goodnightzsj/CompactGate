@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { LogStatsMetric, LogStatsSnapshot } from "../../shared/types.js";
 import { api, errorSummary } from "../shared/api.js";
@@ -8,6 +8,25 @@ export type AnalyticsRange = LogStatsSnapshot["range"];
 export type AnalyticsPreset = "24h" | "7d" | "30d";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How often an open analytics page re-reads its statistics. The dashboard shows
+ * a rolling "今日" bucket and 1/5-minute RPM, so a page left open drifted: the
+ * numbers only moved when the user pressed 刷新, while the status line claimed
+ * the page updates on its own. Long enough not to hammer the log database on
+ * every visit, short enough that the rolling rates stay meaningful.
+ */
+const STATS_REFRESH_MS = 60 * 1000;
+
+/** Same visibility contract the log feed's resume path uses. */
+function subscribeDocumentVisibility(onChange: () => void): () => void {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+function readDocumentVisible(): boolean {
+  return document.visibilityState === "visible";
+}
 
 export interface AnalyticsTrendPoint {
   key: string;
@@ -53,8 +72,11 @@ export function useLogStats(
       signal: controller.signal
     }).then(async (snapshot) => {
       if (controller.signal.aborted) return;
+      const isAutoRefresh = autoRefreshRef.current;
+      autoRefreshRef.current = false;
       if (
         transitionUpdates &&
+        !isAutoRefresh &&
         hasData.current &&
         typeof document.startViewTransition === "function" &&
         !window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -82,6 +104,31 @@ export function useLogStats(
       transition?.skipTransition();
     };
   }, [includeOverview, range.from, range.to, revision, transitionUpdates]);
+
+  const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, readDocumentVisible, () => false);
+  const autoRefreshRef = useRef(false);
+
+  // Poll only while the tab is visible: a hidden tab re-reading a large log
+  // query every minute is pure cost, and its numbers would be stale the moment
+  // it came back anyway. Coming back into view refreshes at once rather than
+  // waiting out the interval, so the gap the user actually notices is covered.
+  useEffect(() => {
+    if (!documentVisible) {
+      return;
+    }
+
+    const bump = () => {
+      // An automatic refresh must not drive a view transition: that cross-fade
+      // belongs to a range change the user asked for, and one every minute would
+      // flicker the whole panel for no reason.
+      autoRefreshRef.current = true;
+      setRevision((current) => current + 1);
+    };
+    bump();
+
+    const interval = window.setInterval(bump, STATS_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [documentVisible]);
 
   return {
     data,

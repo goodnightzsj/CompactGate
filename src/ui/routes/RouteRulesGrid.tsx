@@ -35,7 +35,7 @@ export function RouteRulesGrid({
     <div className="routes-layout">
       <div className="route-rule codex">
         <div className="route-rule-head">
-          <span className="route-chip codex route-rule-kicker">Codex 通道</span>
+          <span className="route-chip codex">Codex 通道</span>
           <h3>OpenAI 兼容入口</h3>
         </div>
         <p>请求目标：<code>http://{listen}/v1</code></p>
@@ -88,7 +88,7 @@ export function RouteRulesGrid({
 
       <div className="route-rule claude">
         <div className="route-rule-head">
-          <span className="route-chip claude route-rule-kicker">Claude 通道</span>
+          <span className="route-chip claude">Claude 通道</span>
           <h3>Anthropic 兼容入口</h3>
         </div>
         <p>请求目标：<code>http://{listen}/anthropic</code></p>

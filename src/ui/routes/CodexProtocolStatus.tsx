@@ -1,5 +1,6 @@
 import type { CodexVersionStatus } from "../../shared/types.js";
 import { compactionModeClass, compactionModeLabel } from "../logs/log-utils.js";
+import { formatShortDateTime } from "../shared/format.js";
 
 export function CodexProtocolStatus({ status }: { status: CodexVersionStatus | null }) {
   const client = status?.protocol_source === "request"
@@ -29,11 +30,11 @@ export function CodexProtocolStatus({ status }: { status: CodexVersionStatus | n
         <div>
           <span>V2 默认起点</span>
           <strong>{status?.v2_default_from ?? "0.140.0"}</strong>
-          <small>{status?.last_checked_at ? `探测于 ${formatStatusTime(status.last_checked_at)}` : "等待本机 CLI 探测"}</small>
+          <small>{status?.last_checked_at ? `探测于 ${formatShortDateTime(status.last_checked_at)}` : "等待本机 CLI 探测"}</small>
         </div>
         <div>
           <span>最近观测</span>
-          <strong>{status?.observed_at ? formatStatusTime(status.observed_at) : "暂无压缩请求"}</strong>
+          <strong>{status?.observed_at ? formatShortDateTime(status.observed_at) : "暂无压缩请求"}</strong>
           <small>{status?.confidence === "observed" ? "来自真实请求日志" : "尚未获得真实协议证据"}</small>
         </div>
       </div>
@@ -97,17 +98,4 @@ function protocolSourceLabel(source: CodexVersionStatus["protocol_source"]): str
     return "版本基线推断";
   }
   return "未观测";
-}
-
-function formatStatusTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
 }

@@ -8,6 +8,7 @@ import type {
   ClientIdentityUaStatus
 } from "../../shared/types.js";
 import { api, errorSummary } from "../shared/api.js";
+import { formatShortDateTime } from "../shared/format.js";
 
 const SOURCE_LABEL: Record<ClientIdentitySourceKind, string> = {
   extracted: "CLI 提取",
@@ -358,17 +359,5 @@ function sourceMeta(
 }
 
 function formatTime(value: string | null): string {
-  if (!value) {
-    return "未知";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
+  return value ? formatShortDateTime(value) : "未知";
 }

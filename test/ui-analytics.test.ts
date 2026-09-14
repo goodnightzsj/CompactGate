@@ -107,14 +107,20 @@ describe("analytics data helpers", () => {
     expect(markup).toContain('aria-busy="true"');
   });
 
-  it("shows the actual sample time on both pages without implying live polling", () => {
+  it("shows the actual sample time and states the real refresh cadence", () => {
+    // The label has to match what the page actually does. It read "手动刷新"
+    // while nothing drove a refetch, so the rolling 今日 and RPM numbers froze
+    // on a page left open; the pages now poll every minute while visible, and
+    // the copy says so. "自动" must stay qualified by the cadence — an unqualified
+    // claim would overstate it the same way "手动" understated it before.
     const stats = snapshot([]);
     vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
     for (const Page of [AnalyticsDashboardPage, UsageAnalyticsPage]) {
       const markup = renderToStaticMarkup(createElement(Page));
       expect(markup).toContain("采样于");
       expect(markup).toContain(stats.generated_at);
-      expect(markup).toContain("手动刷新");
+      expect(markup).toContain("每分钟自动刷新");
+      expect(markup).not.toContain("实时");
     }
   });
 

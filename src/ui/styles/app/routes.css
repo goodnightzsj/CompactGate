@@ -495,7 +495,7 @@
 }
 
 .identity-source.is-empty .identity-source-value {
-  color: var(--faint);
+  color: var(--muted);
   font-style: italic;
 }
 
