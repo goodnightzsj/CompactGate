@@ -92,14 +92,11 @@ export const HOST_BODY_QUIRKS: HostBodyQuirk[] = [
     // picks one per request, so a turn whose earlier items came from resource A
     // is rejected with HTTP 400 "The requested item was created under a
     // different Azure OpenAI resource" when it lands on B. The error carries
-    // `code: null`, so nothing downstream can classify it.
+    // `code: null`, so recovery must match the specific message instead.
     //
-    // Every input item id is scratch state on a `store: false` request — the
-    // providers in the capture were served ~3000 times with no ids at all — so
-    // dropping them makes the body identical on whichever resource receives it.
-    // Reasoning state rides on `encrypted_content`, and tool pairing on
-    // `call_id`; neither is touched. `item_reference` carries nothing else and
-    // would otherwise dangle, so it goes whole.
+    // Only known replay metadata is disposable on stateless, self-contained
+    // history. Local-shell outputs and MCP approvals use `id` as a correlation
+    // key; stored item references must also retain both the reference and target.
     id: "agentrouter-strip-input-item-ids",
     matches: ({ host, upstreamProtocol }) =>
       upstreamProtocol === "openai_responses" && hostMatchesSuffix(host, "agentrouter.org"),
@@ -132,7 +129,11 @@ export function applyHostBodyQuirks(context: HostBodyQuirkContext): string[] {
  */
 function stripResponsesInputItemIds(body: Buffer): Buffer {
   const parsed = parseJsonRecord(body);
-  if (!parsed || !Array.isArray(parsed.input)) {
+  if (!parsed || parsed.store !== false || !Array.isArray(parsed.input)) {
+    return body;
+  }
+  if (parsed.input.some((item) => isRecord(item) && typeof item.id === "string" &&
+    (item.type === "item_reference" || item.type === undefined))) {
     return body;
   }
 
@@ -143,11 +144,8 @@ function stripResponsesInputItemIds(body: Buffer): Buffer {
       next.push(item);
       continue;
     }
-    if (item.type === "item_reference") {
-      changed = true;
-      continue;
-    }
-    if (typeof item.id === "string") {
+    if (typeof item.id === "string" && typeof item.type === "string" &&
+      ["message", "reasoning", "function_call", "custom_tool_call"].includes(item.type)) {
       const { id: _id, ...rest } = item;
       next.push(rest);
       changed = true;
@@ -157,6 +155,43 @@ function stripResponsesInputItemIds(body: Buffer): Buffer {
   }
 
   return changed ? Buffer.from(JSON.stringify({ ...parsed, input: next })) : body;
+}
+
+/** A matched error with no safe ID removal still stops broader state cleanup. */
+export function recoverAgentrouterCompactionIds(
+  host: string,
+  body: Buffer,
+  status: number,
+  responseBody: Buffer
+): { body: Buffer; removedIds: number } | null {
+  if (status !== 400 || !hostMatchesSuffix(host, "agentrouter.org")) return null;
+  const response = parseJsonRecord(responseBody);
+  const error = isRecord(response?.error) ? response.error : null;
+  const message = "The requested item was created under a different Azure OpenAI resource. " +
+    "Use the same resource that created the item to access it.";
+  if (error?.type !== "invalid_request_error" || typeof error.message !== "string" ||
+    !error.message.startsWith(message)) return null;
+
+  const unchanged = { body, removedIds: 0 };
+  const parsed = parseJsonRecord(body);
+  if (!parsed || parsed.store !== false || !Array.isArray(parsed.input) ||
+    parsed.previous_response_id != null || parsed.previousResponseId != null ||
+    parsed.input.some((item) => isRecord(item) &&
+      (item.type === "item_reference" || (item.type === undefined && typeof item.id === "string")))) {
+    return unchanged;
+  }
+
+  // Captures show successful V2 output rejected on the next turn with only its
+  // compaction.id left. Test that ID alone; its opaque context is not disposable.
+  let removedIds = 0;
+  for (const item of parsed.input) {
+    if (isRecord(item) && item.type === "compaction" && typeof item.id === "string" &&
+      typeof item.encrypted_content === "string" && item.encrypted_content.length > 0) {
+      delete item.id;
+      removedIds += 1;
+    }
+  }
+  return removedIds > 0 ? { body: Buffer.from(JSON.stringify(parsed)), removedIds } : unchanged;
 }
 
 /**

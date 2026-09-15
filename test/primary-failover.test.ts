@@ -84,7 +84,7 @@ describe("PrimaryFailoverState", () => {
       config: configWithCodexProfiles([codexProfile("codex-quirk", "Quirk", baseUrl)]),
       url: new URL("http://compactgate.local/v1/responses"),
       headers: { "content-type": "application/json" },
-      rawBody: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", input })),
+      rawBody: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol", store: false, input })),
       endpoint: "/responses",
       compactionBridge: new CompactionBridgeStore(),
       primaryFailover: new PrimaryFailoverState({ random: () => 0 })

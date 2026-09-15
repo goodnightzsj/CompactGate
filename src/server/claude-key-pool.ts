@@ -125,8 +125,9 @@ export class ClaudeKeyPoolState {
           ? left.blockedUntil - right.blockedUntil
           : left.order - right.order
       );
+    const priority = Math.max(...eligible.map((candidate) => candidate.entry.priority ?? 0));
     const pick = eligible.length > 0
-      ? rollAmong(eligible, this.random)
+      ? rollAmong(eligible.filter((candidate) => (candidate.entry.priority ?? 0) === priority), this.random)
       : // Nothing takes traffic: the soonest-to-unblock key, with jitter so
         // concurrent requests do not all wake on the same deadline.
         [...candidates]

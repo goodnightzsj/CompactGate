@@ -5,6 +5,8 @@ import type {
   UpstreamApiKey,
   UpstreamConfig
 } from "../shared/types.js";
+import { DIRECT_API_KEY_ID } from "../shared/api-key-priority.js";
+export { DIRECT_API_KEY_ID } from "../shared/api-key-priority.js";
 
 export interface ResolvedCredential {
   apiKey: string | null;
@@ -16,20 +18,14 @@ export interface ResolvedCredential {
 }
 
 /**
- * Identity of the route's own `api_key` once it takes part in the pool. Reserved:
- * `validateApiKeys` rejects an explicit entry claiming it, so the composite
- * health keys (`profileId#keyId`) can never collide with a stored entry's.
- */
-export const DIRECT_API_KEY_ID = "__direct__";
-
-/**
- * The schedulable entries of a route's key pool, the direct `api_key` first.
+ * The schedulable entries, highest priority first. Ties keep the direct
+ * `api_key` first, then the configured pool order.
  *
  * The direct key is a pool member, not a fallback the pool shadows: adding a
  * second credential in the Studio used to *replace* the one already configured,
  * because every scheduler read the explicit pool and stopped there. It leads
- * because `fill_first` means "burn the first before the next", and the key that
- * was already carrying the route is the one to burn first.
+ * within the default priority because `fill_first` means "burn the first
+ * before the next". Changing priority never changes a key's stable identity.
  *
  * An absent or empty `api_keys` is still just the single key, and it stays
  * unmaterialized in the file so a legacy config cannot lose its stored key.
@@ -40,9 +36,10 @@ export function enabledApiKeyPool(route: UpstreamConfig): UpstreamApiKey[] {
   const stored = (route.api_keys ?? []).filter(
     (key) => key.enabled && key.api_key.trim().length > 0
   );
-  return direct.length > 0
-    ? [{ id: DIRECT_API_KEY_ID, label: "", api_key: direct, enabled: true }, ...stored]
+  const entries = direct.length > 0
+    ? [{ id: DIRECT_API_KEY_ID, label: "", api_key: direct, enabled: true, priority: route.api_key_priority ?? 0 }, ...stored]
     : stored;
+  return entries.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0));
 }
 
 export function resolveRouteCredential(
@@ -64,8 +61,8 @@ export function resolveRouteCredential(
     };
   }
   // Outside the failover scheduler (compact routing, health, model probes) a
-  // pool is served by its first enabled key, which is the direct `api_key`
-  // whenever one is configured. Per-request rotation lives in the candidate
+  // pool is served by its highest-priority enabled key (direct wins ties).
+  // Per-request rotation lives in the candidate
   // list, not here — this function must stay pure: the failover signatures hash
   // its output on every preview.
   const poolKey = enabledApiKeyPool(activeConfig)[0];

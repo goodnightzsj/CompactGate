@@ -23,7 +23,7 @@ import {
   isNativeClaudeUserAgent,
   isNativeCliRequest
 } from "./client-identity.js";
-import { DIRECT_API_KEY_ID } from "./credentials.js";
+import { DIRECT_API_KEY_ID, enabledApiKeyPool } from "./credentials.js";
 import { applyHostQuirks, resolveHostShortCircuit } from "./host-quirks.js";
 import {
   buildUpstreamHeaders,
@@ -92,6 +92,7 @@ export async function proxyClaudeRequest(
     clientIdentity.observeCliUserAgent("claude", inboundUserAgent);
   }
   const baseConfig = configStore.get();
+  const configRevision = configStore.revision;
   let config = baseConfig;
   const route: RouteKind = "claude";
   const requestId = randomUUID();
@@ -278,6 +279,8 @@ export async function proxyClaudeRequest(
     const oauthProvider = await prepareOAuthRequest(config.claude.primary, configStore.oauth, oauthRequest, req.method);
     if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     transaction.upstreamBody = oauthRequest.upstreamBody;
+    studioEvents.broadcastKeyActivity("claude", routing.profileId,
+      claudeKeySelection?.keyId ?? enabledApiKeyPool(config.claude.primary)[0]?.id ?? null, configRevision);
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,

@@ -1,4 +1,5 @@
 import type { BufferedUpstreamResult } from "./upstream-client.js";
+import { recoverAgentrouterCompactionIds } from "./host-quirks.js";
 import {
   analyzeProviderState,
   compileProviderStateAttempt,
@@ -31,6 +32,7 @@ export interface ProviderStateMigrationResult {
 
 interface RunProviderStateMigrationOptions {
   canonicalBody: Buffer;
+  upstreamHost?: string;
   targetStateDomain: string;
   canReplay: () => boolean;
   startGenericRecovery: (
@@ -96,6 +98,29 @@ export async function runProviderStateMigration(
 
     if (result.status < 400 || !options.canReplay()) {
       return { result, body: compiled.body, attempts, trigger };
+    }
+
+    const hostRepair = recoverAgentrouterCompactionIds(
+      options.upstreamHost ?? "", compiled.body, result.status, result.responseBody
+    );
+    if (hostRepair) {
+      if (strategy !== "original" || result.responseBodyTruncated || hostRepair.removedIds === 0 ||
+        !options.canReplay()) {
+        return { result, body: compiled.body, attempts, trigger };
+      }
+      const repaired = compileProviderStateAttempt(hostRepair.body, { strategy: "original" });
+      repaired.metrics.providerItemIdsRemoved = hostRepair.removedIds;
+      const retryResult = await options.send(repaired.body, "error_400", "original");
+      attempts.push({
+        strategy: "error_400",
+        bodyHash: repaired.bodyHash,
+        status: retryResult.status,
+        errorCode: providerStateErrorCode(retryResult.status, retryResult.responseBody),
+        compiled: repaired
+      });
+      // This host-specific experiment never falls through to CPA/strict, even
+      // if the second error changes: preserve the encrypted context on failure.
+      return { result: retryResult, body: repaired.body, attempts, trigger: "explicit_400" };
     }
 
     if (

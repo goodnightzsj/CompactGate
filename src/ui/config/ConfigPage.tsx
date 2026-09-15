@@ -1,7 +1,8 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   ConfigProfileScope,
-  PublicConfig
+  PublicConfig,
+  StudioKeyActivityEvent
 } from "../../shared/types.js";
 import {
   ConfigImportExportPanel
@@ -34,6 +35,7 @@ export function ConfigPage({
   form,
   hasPendingChanges,
   linkedCompactModel,
+  keyActivity,
   onFormChange,
   onConfigTabChange
 }: {
@@ -43,6 +45,7 @@ export function ConfigPage({
   form: ConfigFormState;
   hasPendingChanges: boolean;
   linkedCompactModel: string;
+  keyActivity?: StudioKeyActivityEvent[];
   onFormChange: Dispatch<SetStateAction<ConfigFormState>>;
   onConfigTabChange: (tab: ConfigTab) => void;
 }) {
@@ -207,6 +210,7 @@ export function ConfigPage({
             {configTab === "routes" && (
               <RouteConfigPanel
                 config={config}
+                keyActivity={keyActivity}
                 form={form}
                 onFormChange={onFormChange}
                 onManageOAuth={() => onConfigTabChange("profiles")}

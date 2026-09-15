@@ -86,6 +86,8 @@ export interface UpstreamApiKey {
   label: string;
   api_key: string;
   enabled: boolean;
+  /** 0–100, higher first within this profile; omitted means 0. */
+  priority?: number;
 }
 
 /**
@@ -99,6 +101,8 @@ export type PrimaryKeyStrategy = "fill_first" | "spread";
 export interface UpstreamConfig {
   base_url: string;
   api_key: string;
+  /** Priority of the direct key in the pool; omitted means 0. */
+  api_key_priority?: number;
   api_key_env: string;
   /** Server-side OAuth connection reference; never an access or refresh token. */
   oauth_account_id?: string;
@@ -296,6 +300,7 @@ export interface PublicConfigProfile {
 
 export interface PublicCredentialState {
   api_key_env: string;
+  api_key_priority?: number;
   stored_api_key: boolean;
   /**
    * Trailing four characters of the route's own `api_key`, empty when none is
@@ -321,6 +326,7 @@ export interface PublicApiKeyEntry {
   label: string;
   tail: string;
   enabled: boolean;
+  priority?: number;
 }
 
 export interface PublicUpstreamConfig extends PublicCredentialState {
@@ -795,4 +801,13 @@ export interface StudioLogEvent {
   entry: RequestLogEntry;
   operation: "insert" | "update";
   codex_status?: CodexVersionStatus;
+}
+
+/** A real proxy attempt, not a health verdict or an exclusive session binding. */
+export interface StudioKeyActivityEvent {
+  scope: ConfigProfileScope;
+  profile_id: string | null;
+  key_id: string;
+  used_at: string;
+  config_revision: string;
 }

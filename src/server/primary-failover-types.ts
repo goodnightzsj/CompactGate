@@ -54,6 +54,8 @@ export interface PrimaryCandidate {
   keyId: string | null;
   keyLabel: string | null;
   name: string;
+  /** Admission tier within this profile only; does not affect its identity. */
+  keyPriority: number;
   config: CompactGateConfig;
   order: number;
   active: boolean;

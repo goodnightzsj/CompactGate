@@ -1,4 +1,5 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
+import { isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../shared/api-key-priority.js";
 import type {
   ClaudeModelMap,
   ClaudePrimaryConfig,
@@ -68,6 +69,7 @@ export function validateRuntimeConfig(config: CompactGateRuntimeConfig): void {
     validateExtraHeaders(upstream.extra_headers, `${field}.extra_headers`);
     validateProxyUrl(upstream.proxy_url, upstream.base_url, `${field}.proxy_url`);
     validateApiKeys(upstream.api_keys, `${field}.api_keys`);
+    readApiKeyPriority(upstream.api_key_priority, undefined, `${field}.api_key_priority`);
     if (upstream.oauth_account_id !== undefined) {
       if (!/^[a-zA-Z0-9_-]{1,128}$/.test(upstream.oauth_account_id)) {
         throw new ConfigError(`${field}.oauth_account_id must reference an OAuth connection.`);
@@ -292,6 +294,7 @@ function validateApiKeys(value: UpstreamApiKey[] | undefined, field: string): vo
 
   const seen = new Set<string>();
   for (const [index, key] of value.entries()) {
+    readApiKeyPriority(key.priority, undefined, `${field}[${index}].priority`);
     // The id is what patch merge and failover health key on — a blank or
     // duplicated one would either orphan or conflate two credentials.
     if (key.id.trim().length === 0) {
@@ -415,6 +418,7 @@ function mergeUpstreamConfig(
   patch: Record<string, unknown>
 ): UpstreamConfig & { model_override: string } {
   const apiKeys = mergeApiKeys(patch.api_keys, base.api_keys);
+  const priority = readApiKeyPriority(patch.api_key_priority, base.api_key_priority, "api_key_priority");
   const oauthId = patch.oauth_account_id === undefined ? base.oauth_account_id
     : patch.oauth_account_id === null || patch.oauth_account_id === "" ? undefined
       : patch.oauth_account_id;
@@ -424,6 +428,7 @@ function mergeUpstreamConfig(
   return {
     base_url: readString(patch.base_url, base.base_url),
     api_key: readString(patch.api_key, base.api_key),
+    ...(priority !== undefined ? { api_key_priority: priority } : {}),
     api_key_env: readString(patch.api_key_env, base.api_key_env),
     ...(oauthId ? { oauth_account_id: oauthId } : {}),
     // An absent pool must not materialize as an `api_keys: undefined` key —
@@ -457,25 +462,35 @@ function mergeApiKeys(
   }
 
   const baseline = new Map((base ?? []).map((key) => [key.id, key]));
-  const merged = value.map((entry) => {
+  const merged = value.map((entry, index) => {
     if (!isRecord(entry)) {
       throw new ConfigError("api_keys entries must be JSON objects.");
     }
     const id = readString(entry.id, "");
     const existing = baseline.get(id);
+    const priority = readApiKeyPriority(entry.priority, existing?.priority, `api_keys[${index}].priority`);
     return {
       id,
       label: readString(entry.label, existing?.label ?? ""),
       api_key: Object.hasOwn(entry, "api_key")
         ? readString(entry.api_key, "")
         : existing?.api_key ?? "",
-      enabled: typeof entry.enabled === "boolean" ? entry.enabled : existing?.enabled ?? true
+      enabled: typeof entry.enabled === "boolean" ? entry.enabled : existing?.enabled ?? true,
+      ...(priority !== undefined ? { priority } : {})
     };
   });
 
   // An empty pool is the single-key configuration, not a distinct state — keep
   // it out of the file so the single `api_key` stays the one source of truth.
   return merged.length > 0 ? merged : undefined;
+}
+
+function readApiKeyPriority(value: unknown, fallback: number | undefined, field: string): number | undefined {
+  const priority = value === undefined ? fallback : value;
+  if (priority !== undefined && !isApiKeyPriority(priority)) {
+    throw new ConfigError(`${field} must be an integer between 0 and ${MAX_API_KEY_PRIORITY}.`);
+  }
+  return priority;
 }
 
 function readExtraHeaders(

@@ -2,7 +2,8 @@ import type * as React from "react";
 import type {
   ConfigProfileScope,
   PublicConfig,
-  RouteUrlPresetKind
+  RouteUrlPresetKind,
+  StudioKeyActivityEvent
 } from "../../shared/types.js";
 import { profileScopeState } from "./profile-utils.js";
 import {
@@ -24,20 +25,26 @@ export function RouteConfigPanel({
   form,
   onFormChange,
   onManageOAuth,
+  keyActivity = [],
   scope = "codex"
 }: {
   config: PublicConfig | null;
   form: ConfigFormState;
   onFormChange: React.Dispatch<React.SetStateAction<ConfigFormState>>;
   onManageOAuth: () => void;
+  keyActivity?: StudioKeyActivityEvent[];
   scope?: ConfigProfileScope;
 }) {
   const oauth = useOAuthAccounts();
+  const activity = config ? keyActivity.find((entry) => entry.scope === scope &&
+    entry.profile_id === profileScopeState(config, scope).active_profile_id &&
+    entry.config_revision === config.revision) : undefined;
   return (
     <div className="route-config-stack">
       {oauth.error && <p role="alert" className="error-note">{oauth.error} <button className="ghost-button" type="button" onClick={oauth.reload}>重试授权连接</button></p>}
       {scope === "codex" && <div className="config-row">
         <RouteCredentialFields
+          key={`codex:${config ? profileScopeState(config, "codex").active_profile_id : ""}`}
           title="Codex 主路由" badge="Codex" tone="primary"
           onManageOAuth={onManageOAuth}
           oauthAccountId={form.codexPrimaryOAuthAccountId} oauthAccounts={oauth.accounts}
@@ -77,6 +84,13 @@ export function RouteConfigPanel({
             codexPrimaryCredentialPresetId: ""
           }))}
           keyPool={form.codexPrimaryApiKeys}
+          keyActivity={form.codexPrimaryBaseUrl === config?.primary.base_url &&
+            !form.codexPrimaryApiKey && !form.clearCodexPrimaryApiKey && !form.codexPrimaryCredentialPresetId
+            ? activity : undefined}
+          credentialPresetId={form.codexPrimaryCredentialPresetId}
+          apiKeyPriority={form.codexPrimaryApiKeyPriority}
+          onApiKeyPriorityChange={(codexPrimaryApiKeyPriority) => onFormChange((previous) => ({ ...previous, codexPrimaryApiKeyPriority }))}
+          keyRotationEnabled={form.autoSchedulePrimaryFailover && Boolean(config && profileScopeState(config, "codex").active_profile_id)}
           keyStrategy={form.codexPrimaryKeyStrategy}
           rotationOptOut={form.codexPrimaryRotationOptOut}
           stickyReserveSeconds={form.codexPrimaryStickyReserveSeconds}
@@ -139,6 +153,7 @@ export function RouteConfigPanel({
       </div>}
       {scope === "claude" && <div className="config-row">
         <RouteCredentialFields
+          key={`claude:${config ? profileScopeState(config, "claude").active_profile_id : ""}`}
           title="Claude 主路由" badge="Claude" tone="claude"
           onManageOAuth={onManageOAuth}
           oauthAccountId={form.claudePrimaryOAuthAccountId} oauthAccounts={oauth.accounts}
@@ -178,7 +193,14 @@ export function RouteConfigPanel({
             claudePrimaryCredentialPresetId: ""
           }))}
           keyPool={form.claudePrimaryApiKeys}
+          keyActivity={form.claudePrimaryBaseUrl === config?.claude.primary.base_url &&
+            !form.claudePrimaryApiKey && !form.clearClaudePrimaryApiKey && !form.claudePrimaryCredentialPresetId
+            ? activity : undefined}
+          credentialPresetId={form.claudePrimaryCredentialPresetId}
+          apiKeyPriority={form.claudePrimaryApiKeyPriority}
+          onApiKeyPriorityChange={(claudePrimaryApiKeyPriority) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKeyPriority }))}
           keyStrategy={form.claudePrimaryKeyStrategy}
+          keyRotationEnabled={Boolean(config && profileScopeState(config, "claude").active_profile_id)}
           rotationOptOut={form.claudePrimaryRotationOptOut}
           stickyReserveSeconds={form.claudePrimaryStickyReserveSeconds}
           onKeyPoolChange={(claudePrimaryApiKeys) => onFormChange((previous) => ({ ...previous, claudePrimaryApiKeys }))}
@@ -282,7 +304,7 @@ export function RouteConfigPanel({
             <span className="profile-item-kicker">主路由保护</span>
             <h3 id="auto-schedule-title">错误自动调度</h3>
             <p>
-              开启后，Codex 主路由同类错误超过 10 次才会自动调度到下一个账号，并同步当前运行时档案。
+              开启后，主路由按健康状态与密钥优先级调度。401 / 配额耗尽立即隔离，429 按冷却时间跳过；连续瞬时错误达到阈值后切换，并同步运行时档案。
             </p>
           </div>
           <label className="auto-schedule-switch">

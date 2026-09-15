@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { gzipSync } from "node:zlib";
 import {
   runProviderStateMigration
 } from "../src/server/provider-state-migration.js";
@@ -261,6 +262,103 @@ describe("provider-state recovery state machine", () => {
       "error_400"
     ]);
     expect(recovery.result.status).toBe(400);
+  });
+});
+
+describe("agentrouter compaction ID recovery", () => {
+  const error = { error: {
+    message: "The requested item was created under a different Azure OpenAI resource. " +
+      "Use the same resource that created the item to access it.\n[trace_id=15d282710125406b3b990feef345de65]",
+    type: "invalid_request_error", param: "", code: null
+  } };
+  const request = () => ({
+    model: "synthetic-model", store: false, previous_response_id: null,
+    input: [
+      { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] },
+      { type: "compaction", id: "cmp_remove", encrypted_content: "opaque-state" },
+      { type: "custom_tool_call", id: "ct_keep", call_id: "call_keep", name: "exec", input: "1" },
+      { type: "custom_tool_call_output", call_id: "call_keep", output: "ok" },
+      { type: "message", role: "user", content: "continue" }
+    ]
+  });
+
+  it.each([200, 400, 502])("retries only compaction IDs once and stops at HTTP %s", async (retryStatus) => {
+    const original = request();
+    const canonicalBody = Buffer.from(JSON.stringify(original));
+    const sent: Buffer[] = [];
+    const recovery = await runProviderStateMigration({
+      canonicalBody, upstreamHost: "agentrouter.org", targetStateDomain: "same-domain",
+      canReplay: () => true,
+      startGenericRecovery: () => { throw new Error("must not run broader cleanup"); },
+      send: async (body) => {
+        sent.push(body);
+        return sent.length === 1 ? upstreamResult(400, error) : upstreamResult(retryStatus, error);
+      }
+    });
+    const expected = request();
+    delete expected.input[1].id;
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toBe(canonicalBody);
+    expect(JSON.parse(canonicalBody.toString())).toEqual(original);
+    expect(JSON.parse(sent[1].toString())).toEqual(expected);
+    expect(recovery.body).toBe(sent[1]);
+    expect(recovery.result.status).toBe(retryStatus);
+    expect(recovery.trigger).toBe("explicit_400");
+    expect(recovery.attempts.map((attempt) => attempt.strategy)).toEqual(["original", "error_400"]);
+    expect(recovery.attempts[1].compiled.fidelity).toBe("exact");
+    expect(Object.entries(recovery.attempts[1].compiled.metrics).filter(([, count]) => count > 0))
+      .toEqual([["providerItemIdsRemoved", 1]]);
+  });
+
+  it.each([
+    "other-host", "lookalike-host", "other-error", "success", "status-500", "cancelled",
+    "truncated", "deadline-during-repair", "store-true", "store-absent", "reference", "untyped-reference", "continuation",
+    "no-id", "no-ciphertext"
+  ])("does not perform the host repair for %s", async (scenario) => {
+    const body: Record<string, unknown> = request();
+    const input = body.input as Array<Record<string, unknown>>;
+    let host = "agentrouter.org";
+    let result = upstreamResult(400, error);
+    if (scenario === "other-host") host = "anyrouter.top";
+    if (scenario === "lookalike-host") host = "agentrouter.org.example";
+    if (scenario === "other-error") result = upstreamResult(400, { error: { type: "invalid_request_error", message: "bad input" } });
+    if (scenario === "success") result = upstreamResult(200, { output: [] });
+    if (scenario === "status-500") result.status = 500;
+    if (scenario === "truncated") result.responseBodyTruncated = true;
+    if (scenario === "store-true") body.store = true;
+    if (scenario === "store-absent") delete body.store;
+    if (scenario === "reference") input.push({ type: "item_reference", id: "cmp_remove" });
+    if (scenario === "untyped-reference") input.push({ id: "cmp_remove" });
+    if (scenario === "continuation") body.previous_response_id = "resp_keep";
+    if (scenario === "no-id") delete input[1].id;
+    if (scenario === "no-ciphertext") delete input[1].encrypted_content;
+    const canonicalBody = Buffer.from(JSON.stringify(body));
+    let sends = 0;
+    let replayChecks = 0;
+    const recovery = await runProviderStateMigration({
+      canonicalBody, upstreamHost: host, targetStateDomain: "same-domain",
+      canReplay: () => scenario !== "cancelled" &&
+        (scenario !== "deadline-during-repair" || replayChecks++ === 0),
+      startGenericRecovery: () => null,
+      send: async (sent) => { sends += 1; expect(sent).toBe(canonicalBody); return result; }
+    });
+    expect(sends).toBe(1);
+    expect(recovery.result).toBe(result);
+  });
+
+  it("recognizes gzip errors on a subdomain without changing encrypted context", async () => {
+    let sends = 0;
+    const recovery = await runProviderStateMigration({
+      canonicalBody: Buffer.from(JSON.stringify(request())), upstreamHost: "api.agentrouter.org",
+      targetStateDomain: "same-domain", canReplay: () => true, startGenericRecovery: () => null,
+      send: async () => {
+        sends += 1;
+        return sends === 1 ? { ...upstreamResult(400, error), responseBody: gzipSync(JSON.stringify(error)) }
+          : upstreamResult(200, { output: [] });
+      }
+    });
+    expect(sends).toBe(2);
+    expect(JSON.parse(recovery.body.toString()).input[1]).toEqual({ type: "compaction", encrypted_content: "opaque-state" });
   });
 });
 

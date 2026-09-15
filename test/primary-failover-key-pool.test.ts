@@ -366,12 +366,14 @@ describe("rotation opt-out", () => {
     }
     oauth.config.primary.rotation_opt_out = true;
     const config = configWithCodexProfiles([
-      oauth,
-      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "sk-b")
+      codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1", "sk-b"),
+      oauth
     ]);
     const { state } = createState();
 
     // Automatic rotation never selects the bound account.
+    expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+    recordRequests(state, config, 1, 401);
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
 
     // Manual force still works — the operator chose it.

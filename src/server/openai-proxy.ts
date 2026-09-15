@@ -11,6 +11,7 @@ import {
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
 import { ConfigError, type ConfigStore } from "./config.js";
+import { enabledApiKeyPool } from "./credentials.js";
 import type { OAuthProviderId } from "../shared/oauth.js";
 import { prepareOAuthRequest } from "./oauth-transport.js";
 import { createCodexResponseTransform } from "./oauth-response.js";
@@ -346,6 +347,9 @@ async function proxyPrimaryRequest(
     const targetStateFreeSuccess = logger.hasProviderStateRecoveryEvidence(targetHealthKey);
     const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error" &&
       plan.upstreamProtocol === "openai_responses";
+    studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? null,
+      primarySelection?.keyId ?? enabledApiKeyPool(primarySelection?.config.primary ?? config.primary)[0]?.id ?? null,
+      configRevision);
     const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
       ? await sendRecoveringPrimaryRequest({
           req,
@@ -554,6 +558,7 @@ async function sendRecoveringPrimaryRequest(input: {
 }): Promise<ProviderStateMigrationResult> {
   const recovery = await runProviderStateMigration({
     canonicalBody: input.canonicalBody,
+    upstreamHost: input.upstream.hostname,
     targetStateDomain: input.targetStateDomain,
     canReplay: () =>
       !input.res.headersSent &&
@@ -830,6 +835,10 @@ async function proxyCompactRequest(
       return;
     }
     attemptedUpstream = true;
+    if (selectedConfig.compact.upstream_mode === "primary") {
+      studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? requestProfile?.profileId ?? null,
+        primarySelection?.keyId ?? enabledApiKeyPool(selectedConfig.primary)[0]?.id ?? null, configRevision);
+    }
 
     // 方案 B:流式转发原始上游 SSE 流给客户端。Codex compact 用 collect_compaction_output 逐事件消费,
     // 需要 response.created / response.output_item.done / response.completed 事件;缓冲后转 JSON 会让客户端

@@ -12,6 +12,28 @@ export interface SelectOption {
   disabled?: boolean;
 }
 
+export function selectMenuPlacement(
+  rect: Pick<DOMRect, "left" | "top" | "bottom" | "width">,
+  viewport: { width: number; height: number },
+  contentHeight: number,
+  wide = false
+): CSSProperties {
+  const padding = 12;
+  const gap = 8;
+  const width = Math.min(Math.max(0, viewport.width - padding * 2), wide ? Math.max(rect.width, 420) : rect.width);
+  const below = Math.max(0, viewport.height - rect.bottom - padding - gap);
+  const above = Math.max(0, rect.top - padding - gap);
+  const openAbove = below < Math.min(320, contentHeight) && above > below;
+  return {
+    left: clamp(rect.left, padding, Math.max(padding, viewport.width - width - padding)),
+    width,
+    maxHeight: Math.min(320, openAbove ? above : below),
+    // Anchor the near edge, not an assumed height: a two-option menu is much
+    // shorter than maxHeight and must still sit directly beside its trigger.
+    ...(openAbove ? { bottom: viewport.height - rect.top + gap } : { top: rect.bottom + gap })
+  };
+}
+
 export function CustomSelect({
   label,
   value,
@@ -54,10 +76,11 @@ export function CustomSelect({
     }
 
     updateMenuPlacement();
-    window.requestAnimationFrame(() => {
+    const frame = window.requestAnimationFrame(() => {
       focusOption(selectedIndex);
     });
-  }, [open, selectedIndex]);
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, selectedIndex, wide, compact, options.length]);
 
   useEffect(() => {
     if (!open) {
@@ -107,7 +130,7 @@ export function CustomSelect({
     for (let offset = 0; offset < options.length; offset += 1) {
       const next = (index + offset * direction + options.length) % options.length;
       if (!options[next].disabled) {
-        optionRefs.current[next]?.focus();
+        optionRefs.current[next]?.focus({ preventScroll: true });
         return;
       }
     }
@@ -120,25 +143,11 @@ export function CustomSelect({
       return;
     }
 
-    const rect = trigger.getBoundingClientRect();
-    const viewportPadding = 12;
-    const width = wide ? Math.max(rect.width, Math.min(420, window.innerWidth - viewportPadding * 2)) : rect.width;
-    const left = clamp(rect.left, viewportPadding, window.innerWidth - width - viewportPadding);
-    const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
-    const availableAbove = rect.top - viewportPadding;
-    const openAbove = availableAbove > availableBelow;
-    const availableSpace = openAbove ? availableAbove : availableBelow;
-    const maxHeight = Math.max(120, Math.min(320, availableSpace));
-    const top = openAbove
-      ? Math.max(viewportPadding, rect.top - maxHeight - 8)
-      : rect.bottom + 8;
-
-    setMenuStyle({
-      left,
-      top,
-      width,
-      maxHeight
-    });
+    const menu = menuRef.current;
+    if (!menu) return;
+    setMenuStyle(selectMenuPlacement(trigger.getBoundingClientRect(), {
+      width: window.innerWidth, height: window.innerHeight
+    }, menu.scrollHeight + menu.offsetHeight - menu.clientHeight, wide));
   }
 
   function handleTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -214,14 +223,14 @@ export function CustomSelect({
         {typeof selected.count === "number" && <span className="custom-select-count">{selected.count}</span>}
       </button>
 
-      {open && !disabled && menuStyle && createPortal(
+      {open && !disabled && createPortal(
         <div
           ref={menuRef}
           id={listId}
           className={`custom-select-menu ${wide ? "is-wide" : ""} ${compact ? "is-compact" : ""}`}
           role="listbox"
           aria-label={label}
-          style={menuStyle}
+          style={menuStyle ?? { visibility: "hidden", maxHeight: 320 }}
         >
           {options.map((option, optionIndex) => (
             <button
@@ -251,6 +260,7 @@ export function CustomSelect({
                 {option.meta && <small>{option.meta}</small>}
               </span>
               {typeof option.count === "number" && <span className="custom-select-count">{option.count}</span>}
+              {typeof option.count !== "number" && option.value === value && <span className="custom-select-check" aria-hidden="true">✓</span>}
             </button>
           ))}
         </div>,

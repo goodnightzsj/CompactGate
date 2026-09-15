@@ -219,8 +219,8 @@ describe("UI key pool form state", () => {
 
     const form = formFromConfig(storeWithPool.toPublicConfig());
     expect(form.codexPrimaryApiKeys).toEqual([
-      { id: "saved-1", label: "主号", apiKey: "", enabled: true, tail: "ored" },
-      { id: "saved-2", label: "备用", apiKey: "", enabled: false, tail: "pare" }
+      { id: "saved-1", label: "主号", apiKey: "", enabled: true, priority: 0, tail: "ored" },
+      { id: "saved-2", label: "备用", apiKey: "", enabled: false, priority: 0, tail: "pare" }
     ]);
 
     // Typing a new secret for the first entry and adding a third.
@@ -229,7 +229,7 @@ describe("UI key pool form state", () => {
       codexPrimaryApiKeys: [
         { ...form.codexPrimaryApiKeys[0], apiKey: "sk-rotated" },
         form.codexPrimaryApiKeys[1],
-        { id: "draft-3", label: "新钥匙", apiKey: "sk-new", enabled: true, tail: "" }
+        { id: "draft-3", label: "新钥匙", apiKey: "sk-new", enabled: true, priority: 0, tail: "" }
       ],
       codexPrimaryKeyStrategy: "spread" as const,
       codexPrimaryStickyReserveSeconds: 300
@@ -238,9 +238,9 @@ describe("UI key pool form state", () => {
     const patch = formToPatch(dirty);
     expect(patch.primary.api_keys).toEqual([
       // Stored secret travels as absent so the server inherits by id.
-      { id: "saved-1", label: "主号", enabled: true, api_key: "sk-rotated" },
-      { id: "saved-2", label: "备用", enabled: false },
-      { id: "draft-3", label: "新钥匙", enabled: true, api_key: "sk-new" }
+      { id: "saved-1", label: "主号", enabled: true, priority: 0, api_key: "sk-rotated" },
+      { id: "saved-2", label: "备用", enabled: false, priority: 0 },
+      { id: "draft-3", label: "新钥匙", enabled: true, priority: 0, api_key: "sk-new" }
     ]);
     expect(patch.primary).toMatchObject({
       key_strategy: "spread",

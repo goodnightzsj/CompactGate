@@ -4,6 +4,10 @@ import {
   applyHostQuirks,
   resolveHostShortCircuit
 } from "../src/server/host-quirks.js";
+import { DEFAULT_CONFIG } from "../src/server/config.js";
+import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
+import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
+import { PrimaryFailoverState } from "../src/server/primary-failover.js";
 
 describe("applyHostQuirks", () => {
   it("adds the 1m context beta for opus targets on anyrouter", () => {
@@ -85,12 +89,11 @@ describe("applyHostBodyQuirks", () => {
         id: "rs_02e22a5d85dec6d5006aa7a89906d48196841ad44485bdbca6",
         summary: [],
         encrypted_content: "gAAAAAB"
-      },
-      { type: "item_reference", id: "msg_02e22a5d85dec6d5006aa7a6be80d88196a258a8f45cfab653" }
+      }
     ]
   }));
 
-  it("strips every input item id for agentrouter responses requests", () => {
+  it("strips replay metadata ids for stateless agentrouter responses requests", () => {
     const context = {
       host: "agentrouter.org",
       upstreamProtocol: "openai_responses" as const,
@@ -115,8 +118,41 @@ describe("applyHostBodyQuirks", () => {
     expect(items[1].call_id).toBe("call_z22vOmEl9pMDJnfq56ZQ2h1E");
     expect(items[2].encrypted_content).toBe("gAAAAAB");
     expect(items[2].summary).toEqual([]);
-    // An id-only item has nothing left to say.
     expect(items).toHaveLength(3);
+  });
+
+  it.each([true, undefined])("preserves stored history when store is %s", (store) => {
+    const body = Buffer.from(JSON.stringify({ ...JSON.parse(agentrouterBody().toString()), store }));
+    const context = { host: "agentrouter.org", upstreamProtocol: "openai_responses" as const, body };
+    expect(applyHostBodyQuirks(context)).toEqual([]);
+    expect(context.body).toBe(body);
+  });
+
+  it.each(["item_reference", undefined])("preserves references and their targets when type is %s", (type) => {
+    const parsed = JSON.parse(agentrouterBody().toString());
+    parsed.input.push({ type, id: parsed.input[0].id });
+    const body = Buffer.from(JSON.stringify(parsed));
+    const context = { host: "agentrouter.org", upstreamProtocol: "openai_responses" as const, body };
+    expect(applyHostBodyQuirks(context)).toEqual([]);
+    expect(context.body).toBe(body);
+  });
+
+  it("keeps local-shell and MCP approval linkage through the real proxy plan", () => {
+    const input = [
+      { type: "local_shell_call_output", id: "call_shell", output: "done" },
+      { type: "mcp_approval_request", id: "approval_1", name: "read", arguments: "{}", server_label: "test" },
+      { type: "mcp_approval_response", approval_request_id: "approval_1", approve: true },
+      { type: "future_item", id: "opaque_1" }
+    ];
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.primary.base_url = "https://agentrouter.org/v1";
+    const plan = buildPrimaryOpenAiProxyPlan({
+      config, url: new URL("http://localhost/v1/responses"), headers: {},
+      rawBody: Buffer.from(JSON.stringify({ model: "test", store: false, input })),
+      endpoint: "/v1/responses", compactionBridge: new CompactionBridgeStore(),
+      primaryFailover: new PrimaryFailoverState()
+    });
+    expect(JSON.parse(plan.upstreamBody.toString()).input).toEqual(input);
   });
 
   it("leaves the body untouched when there are no ids to strip", () => {

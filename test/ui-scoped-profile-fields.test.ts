@@ -44,7 +44,7 @@ const PUBLIC_ACTIVATED = buildPublicConfig({
 const STALE_DRAFT = {
   ...formFromConfig(PUBLIC_ACTIVATED),
   codexPrimaryApiKeys: [
-    { id: "A-1", label: "a one", tail: "aaaa", apiKey: "", enabled: true }
+    { id: "A-1", label: "a one", tail: "aaaa", apiKey: "", enabled: true, priority: 0 }
   ],
   codexPrimaryKeyStrategy: "fill_first" as const,
   codexPrimaryRotationOptOut: false,

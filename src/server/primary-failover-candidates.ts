@@ -52,7 +52,12 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
 
   for (const { profile } of rotation) {
     const profilePrimary = readProfilePrimary(profile) as Partial<UpstreamConfig>;
-    const mergedPrimary = { ...config.primary, ...profilePrimary, oauth_account_id: profilePrimary.oauth_account_id };
+    const mergedPrimary = {
+      ...config.primary,
+      ...profilePrimary,
+      api_key_priority: profilePrimary.api_key_priority,
+      oauth_account_id: profilePrimary.oauth_account_id
+    };
     // Strategy is a per-profile choice with the runtime primary as its default.
     const spread = (
       (profilePrimary as Partial<{ key_strategy: string }>).key_strategy ??
@@ -86,6 +91,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         profileId: profile.id,
         keyId: single?.id ?? null,
         keyLabel: single?.label ?? null,
+        keyPriority: pool[0]?.priority ?? 0,
         name: single?.label ? `${profile.name} · ${single.label}` : profile.name,
         order: sequentialOrder++,
         active: profileIsActive,
@@ -101,6 +107,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         profileId: profile.id,
         keyId: key.id,
         keyLabel: key.label || null,
+        keyPriority: key.priority ?? 0,
         name: key.label ? `${profile.name} · ${key.label}` : `${profile.name} · #${keyIndex + 1}`,
         // fill_first burns one key before the next; spread shares the profile's
         // slot so sibling keys land in the same top-K score window.
@@ -144,7 +151,9 @@ function withPrimaryConfig(
     primary: {
       ...config.primary,
       ...profilePrimary,
-      // An API-key profile must not inherit the active profile's OAuth binding.
+      // Optional profile-owned fields must not inherit the active profile's
+      // priority or OAuth binding. An omitted priority means zero here.
+      api_key_priority: profilePrimary.api_key_priority,
       oauth_account_id: profilePrimary.oauth_account_id,
       // The pool has to be emptied alongside, or the selection is inert:
       // `resolveRouteCredential` reads the pool's first enabled entry *before*

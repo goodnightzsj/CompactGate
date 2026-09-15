@@ -74,7 +74,7 @@ describe("OAuth configuration UI contracts", () => {
     const { store, account, issuer } = await configured();
     let form = formFromConfig(store.toPublicConfig());
     for (const kind of ["codex_primary", "claude_primary"] as const) {
-      form.codexPrimaryApiKeys = [{ id: "old", label: "Old", apiKey: "synthetic-typed", enabled: true, tail: "" }];
+      form.codexPrimaryApiKeys = [{ id: "old", label: "Old", apiKey: "synthetic-typed", enabled: true, priority: 0, tail: "" }];
       form.claudePrimaryApiKeys = form.codexPrimaryApiKeys;
       const bound = formWithOAuthAccount(form, kind, account);
       const prefix = kind === "codex_primary" ? "codexPrimary" : "claudePrimary";

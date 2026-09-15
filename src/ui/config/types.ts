@@ -34,6 +34,8 @@ export interface FormKeyPoolEntry {
    * never returns plaintext, so the merge inherits by id on the server. */
   apiKey: string;
   enabled: boolean;
+  /** Empty is allowed while editing and saves as the default priority, 0. */
+  priority: number | "";
   /** Four trailing characters of the stored secret, for telling keys apart. */
   tail: string;
 }
@@ -42,6 +44,7 @@ export type ConfigFormState = {
   codexPrimaryBaseUrl: string;
   codexPrimaryOAuthAccountId: string;
   codexPrimaryApiKey: string;
+  codexPrimaryApiKeyPriority: number | "";
   clearCodexPrimaryApiKey: boolean;
   codexPrimaryCredentialPresetId: string;
   codexPrimaryUpstreamProtocol: UpstreamProtocol;
@@ -62,6 +65,7 @@ export type ConfigFormState = {
   claudePrimaryBaseUrl: string;
   claudePrimaryOAuthAccountId: string;
   claudePrimaryApiKey: string;
+  claudePrimaryApiKeyPriority: number | "";
   clearClaudePrimaryApiKey: boolean;
   claudePrimaryCredentialPresetId: string;
   claudePrimaryUpstreamProtocol: UpstreamProtocol;

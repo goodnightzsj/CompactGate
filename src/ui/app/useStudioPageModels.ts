@@ -170,6 +170,7 @@ export function useStudioPageModels({
       },
       configPage: {
         actions: configActions,
+        keyActivity: logFeed.keyActivity,
         config,
         configTab,
         form,

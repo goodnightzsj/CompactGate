@@ -154,6 +154,7 @@ function publicUpstream(
   return {
     base_url: upstream.base_url,
     api_key_env: upstream.api_key_env,
+    api_key_priority: upstream.api_key_priority ?? 0,
     host: safeHost(upstream.base_url),
     extra_header_names: Object.keys(upstream.extra_headers).sort(),
     proxy_configured: upstream.proxy_url.trim().length > 0,
@@ -175,7 +176,8 @@ function publicUpstream(
           id: key.id,
           label: key.label,
           tail: key.api_key.slice(-4),
-          enabled: key.enabled
+          enabled: key.enabled,
+          priority: key.priority ?? 0
         }))
       : null
   };

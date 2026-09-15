@@ -8,6 +8,7 @@ import type {
 import { emptyClaudeModelMap, normalizeClaudeModelMap } from "./model-map.js";
 import type { ConfigFormState } from "./types.js";
 import type { OAuthAccountView } from "../../shared/oauth.js";
+import { isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../../shared/api-key-priority.js";
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * 1024 * 1024;
@@ -23,6 +24,7 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "codexPrimaryBaseUrl",
     "codexPrimaryOAuthAccountId",
     "codexPrimaryApiKey",
+    "codexPrimaryApiKeyPriority",
     "clearCodexPrimaryApiKey",
     "codexPrimaryCredentialPresetId",
     "codexPrimaryUpstreamProtocol",
@@ -55,6 +57,7 @@ const SCOPED_PROFILE_FORM_FIELDS: Record<ConfigProfileScope, ReadonlyArray<keyof
     "claudePrimaryBaseUrl",
     "claudePrimaryOAuthAccountId",
     "claudePrimaryApiKey",
+    "claudePrimaryApiKeyPriority",
     "clearClaudePrimaryApiKey",
     "claudePrimaryCredentialPresetId",
     "claudePrimaryUpstreamProtocol",
@@ -105,6 +108,7 @@ export function emptyForm(): ConfigFormState {
     codexPrimaryBaseUrl: "",
     codexPrimaryOAuthAccountId: "",
     codexPrimaryApiKey: "",
+    codexPrimaryApiKeyPriority: 0,
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
     codexPrimaryUpstreamProtocol: "openai_responses",
@@ -125,6 +129,7 @@ export function emptyForm(): ConfigFormState {
     claudePrimaryBaseUrl: "",
     claudePrimaryOAuthAccountId: "",
     claudePrimaryApiKey: "",
+    claudePrimaryApiKeyPriority: 0,
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
     claudePrimaryUpstreamProtocol: "anthropic_messages",
@@ -160,6 +165,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     codexPrimaryBaseUrl: config.primary.base_url,
     codexPrimaryOAuthAccountId: config.primary.oauth_account_id ?? "",
     codexPrimaryApiKey: "",
+    codexPrimaryApiKeyPriority: config.primary.api_key_priority ?? 0,
     clearCodexPrimaryApiKey: false,
     codexPrimaryCredentialPresetId: "",
     codexPrimaryUpstreamProtocol: config.primary.upstream_protocol,
@@ -173,6 +179,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
       label: key.label,
       apiKey: "",
       enabled: key.enabled,
+      priority: key.priority ?? 0,
       tail: key.tail
     })),
     codexPrimaryKeyStrategy: config.primary.key_strategy ?? "fill_first",
@@ -188,6 +195,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
     claudePrimaryBaseUrl: config.claude.primary.base_url,
     claudePrimaryOAuthAccountId: config.claude.primary.oauth_account_id ?? "",
     claudePrimaryApiKey: "",
+    claudePrimaryApiKeyPriority: config.claude.primary.api_key_priority ?? 0,
     clearClaudePrimaryApiKey: false,
     claudePrimaryCredentialPresetId: "",
     claudePrimaryUpstreamProtocol: config.claude.primary.upstream_protocol,
@@ -196,6 +204,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
       label: key.label,
       apiKey: "",
       enabled: key.enabled,
+      priority: key.priority ?? 0,
       tail: key.tail
     })),
     claudePrimaryKeyStrategy: config.claude.primary.key_strategy ?? "fill_first",
@@ -230,6 +239,7 @@ export function formToPatch(form: ConfigFormState) {
     base_url: form.codexPrimaryBaseUrl,
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
     ...apiKeyPatch(form.codexPrimaryApiKey, form.clearCodexPrimaryApiKey),
+    api_key_priority: apiKeyPriority(form.codexPrimaryApiKeyPriority, "Codex 直填密钥"),
     ...oauthCredentialDraft(form.codexPrimaryOAuthAccountId),
     oauth_account_id: form.codexPrimaryOAuthAccountId || null,
     model_override: form.primaryModelOverride,
@@ -245,6 +255,7 @@ export function formToPatch(form: ConfigFormState) {
       id: entry.id,
       label: entry.label,
       enabled: entry.enabled,
+      priority: apiKeyPriority(entry.priority, `Codex 密钥 ${entry.label || entry.id}`),
       ...(entry.apiKey.trim().length > 0 ? { api_key: entry.apiKey.trim() } : {})
     }))
   };
@@ -265,6 +276,7 @@ export function formToPatch(form: ConfigFormState) {
       base_url: form.claudePrimaryBaseUrl,
       ...credentialPresetPatch(form.claudePrimaryCredentialPresetId),
       ...apiKeyPatch(form.claudePrimaryApiKey, form.clearClaudePrimaryApiKey),
+      api_key_priority: apiKeyPriority(form.claudePrimaryApiKeyPriority, "Claude 直填密钥"),
       ...oauthCredentialDraft(form.claudePrimaryOAuthAccountId),
       oauth_account_id: form.claudePrimaryOAuthAccountId || null,
       model_override: claudeModelMap.default,
@@ -276,6 +288,7 @@ export function formToPatch(form: ConfigFormState) {
         id: entry.id,
         label: entry.label,
         enabled: entry.enabled,
+        priority: apiKeyPriority(entry.priority, `Claude 密钥 ${entry.label || entry.id}`),
         ...(entry.apiKey.trim().length > 0 ? { api_key: entry.apiKey.trim() } : {})
       }))
     },
@@ -348,6 +361,7 @@ export function applyDraftToConfigExport(
       reasoning_effort: form.primaryReasoningEffort,
       state_domain_id: form.primaryStateDomainId,
       key_strategy: form.codexPrimaryKeyStrategy,
+      api_key_priority: apiKeyPriority(form.codexPrimaryApiKeyPriority, "Codex 直填密钥"),
       rotation_opt_out: form.codexPrimaryRotationOptOut,
       // The export needs a concrete number, so a blank or out-of-range box falls
       // back to what is stored rather than being omitted.
@@ -362,7 +376,8 @@ export function applyDraftToConfigExport(
           id: entry.id,
           label: entry.label,
           api_key: entry.apiKey.trim().length > 0 ? entry.apiKey.trim() : stored?.api_key ?? "",
-          enabled: entry.enabled
+          enabled: entry.enabled,
+          priority: apiKeyPriority(entry.priority, `Codex 密钥 ${entry.label || entry.id}`)
         };
       })
     },
@@ -384,6 +399,7 @@ export function applyDraftToConfigExport(
         upstream_protocol: form.claudePrimaryUpstreamProtocol,
         model_override: claudeModelMap.default,
         key_strategy: form.claudePrimaryKeyStrategy,
+        api_key_priority: apiKeyPriority(form.claudePrimaryApiKeyPriority, "Claude 直填密钥"),
         rotation_opt_out: form.claudePrimaryRotationOptOut,
         sticky_reserve_seconds: boundedStickyReserve(form.claudePrimaryStickyReserveSeconds)
           ?? config.claude.primary.sticky_reserve_seconds,
@@ -393,7 +409,8 @@ export function applyDraftToConfigExport(
             id: entry.id,
             label: entry.label,
             api_key: entry.apiKey.trim().length > 0 ? entry.apiKey.trim() : stored?.api_key ?? "",
-            enabled: entry.enabled
+            enabled: entry.enabled,
+            priority: apiKeyPriority(entry.priority, `Claude 密钥 ${entry.label || entry.id}`)
           };
         })
       },
@@ -484,6 +501,7 @@ function draftComparisonState(form: ConfigFormState) {
     codexPrimaryBaseUrl: form.codexPrimaryBaseUrl,
     codexPrimaryOAuthAccountId: form.codexPrimaryOAuthAccountId,
     codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),
+    codexPrimaryApiKeyPriority: form.codexPrimaryApiKeyPriority === "" ? 0 : form.codexPrimaryApiKeyPriority,
     clearCodexPrimaryApiKey: form.clearCodexPrimaryApiKey,
     codexPrimaryCredentialPresetId: form.codexPrimaryCredentialPresetId,
     codexPrimaryUpstreamProtocol: form.codexPrimaryUpstreamProtocol,
@@ -496,6 +514,7 @@ function draftComparisonState(form: ConfigFormState) {
       entry.label,
       entry.apiKey,
       entry.enabled,
+      entry.priority === "" ? 0 : entry.priority,
       entry.tail
     ]),
     codexPrimaryKeyStrategy: form.codexPrimaryKeyStrategy,
@@ -510,6 +529,7 @@ function draftComparisonState(form: ConfigFormState) {
     claudePrimaryBaseUrl: form.claudePrimaryBaseUrl,
     claudePrimaryOAuthAccountId: form.claudePrimaryOAuthAccountId,
     claudePrimaryApiKey: normalizedApiKey(form.claudePrimaryApiKey),
+    claudePrimaryApiKeyPriority: form.claudePrimaryApiKeyPriority === "" ? 0 : form.claudePrimaryApiKeyPriority,
     clearClaudePrimaryApiKey: form.clearClaudePrimaryApiKey,
     claudePrimaryCredentialPresetId: form.claudePrimaryCredentialPresetId,
     claudePrimaryUpstreamProtocol: form.claudePrimaryUpstreamProtocol,
@@ -518,6 +538,7 @@ function draftComparisonState(form: ConfigFormState) {
       entry.label,
       entry.apiKey,
       entry.enabled,
+      entry.priority === "" ? 0 : entry.priority,
       entry.tail
     ]),
     claudePrimaryKeyStrategy: form.claudePrimaryKeyStrategy,
@@ -555,6 +576,14 @@ function apiKeyPatch(value: string, shouldClear: boolean): { api_key?: string } 
   return apiKey.length > 0 ? { api_key: apiKey } : {};
 }
 
+function apiKeyPriority(value: number | "", label: string): number {
+  const priority = value === "" ? 0 : value;
+  if (!isApiKeyPriority(priority)) {
+    throw new Error(`${label}优先级须为 0–${MAX_API_KEY_PRIORITY} 的整数。`);
+  }
+  return priority;
+}
+
 function oauthCredentialDraft(id: string) {
   return { oauth_account_id: id || undefined, ...(id ? { api_key: "", api_key_env: "", api_keys: [] } : {}) };
 }
@@ -570,7 +599,7 @@ export function formWithOAuthAccount(form: ConfigFormState, kind: RouteUrlPreset
     ...(account ? {
       [`${prefix}BaseUrl`]: account.base_url,
       [`${prefix}UpstreamProtocol`]: account.upstream_protocol,
-      ...(kind.endsWith("primary") ? { [`${prefix}ApiKeys`]: [], [`${prefix}RotationOptOut`]: true } : {})
+      ...(kind.endsWith("primary") ? { [`${prefix}ApiKeys`]: [], [`${prefix}ApiKeyPriority`]: 0, [`${prefix}RotationOptOut`]: true } : {})
     } : {})
   };
 }

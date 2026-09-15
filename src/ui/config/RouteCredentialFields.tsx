@@ -11,19 +11,7 @@ import { Field } from "./Field.js";
 import type { FormKeyPoolEntry } from "./types.js";
 import type { OAuthAccountView } from "../../shared/oauth.js";
 import { oauthStatusLabel } from "./useOAuthAccounts.js";
-
-const KEY_STRATEGY_OPTIONS: SelectOption[] = [
-  {
-    value: "fill_first",
-    label: "故障转移（用尽再换）",
-    meta: "适合订阅型 5h / 7d 窗口配额"
-  },
-  {
-    value: "spread",
-    label: "分摊（同时轮转）",
-    meta: "适合按 token 计费的中转站"
-  }
-];
+import { ApiKeyPoolEditor } from "./ApiKeyPoolEditor.js";
 
 const UPSTREAM_PROTOCOL_OPTIONS: SelectOption[] = [
   {
@@ -65,14 +53,18 @@ export function RouteCredentialFields({
   upstreamProtocol,
   baseUrl,
   apiKey,
+  apiKeyPriority = 0,
   storedApiKey,
   storedApiKeyTail = "",
   clearApiKey,
   routeUrlSuggestions = [],
+  credentialPresetId = "",
   keyPool,
   keyStrategy,
   rotationOptOut,
   stickyReserveSeconds,
+  keyRotationEnabled = true,
+  keyActivity,
   oauthAccountId = "",
   oauthAccounts = [],
   onOAuthAccountChange,
@@ -80,6 +72,7 @@ export function RouteCredentialFields({
   onBaseUrlChange,
   onSuggestionSelect,
   onApiKeyChange,
+  onApiKeyPriorityChange,
   onUpstreamProtocolChange,
   onToggleClearApiKey,
   onKeyPoolChange,
@@ -97,15 +90,19 @@ export function RouteCredentialFields({
   upstreamProtocol: UpstreamProtocol;
   baseUrl: string;
   apiKey: string;
+  apiKeyPriority?: number | "";
   storedApiKey: boolean;
   /** Tail of the stored direct key, so the pool can label its leading row. */
   storedApiKeyTail?: string;
   clearApiKey: boolean;
   routeUrlSuggestions?: RouteUrlSuggestion[];
+  credentialPresetId?: string;
   keyPool?: FormKeyPoolEntry[];
   keyStrategy?: PrimaryKeyStrategy;
   rotationOptOut?: boolean;
   stickyReserveSeconds?: number;
+  keyRotationEnabled?: boolean;
+  keyActivity?: { key_id: string; used_at: string };
   oauthAccountId?: string;
   oauthAccounts?: OAuthAccountView[];
   onOAuthAccountChange?: (account: OAuthAccountView | null) => void;
@@ -113,6 +110,7 @@ export function RouteCredentialFields({
   onBaseUrlChange: (value: string) => void;
   onSuggestionSelect?: (suggestion: RouteUrlSuggestion) => void;
   onApiKeyChange: (value: string) => void;
+  onApiKeyPriorityChange?: (value: number | "") => void;
   onUpstreamProtocolChange: (value: UpstreamProtocol) => void;
   onToggleClearApiKey: () => void;
   onKeyPoolChange?: (entries: FormKeyPoolEntry[]) => void;
@@ -124,20 +122,14 @@ export function RouteCredentialFields({
     keyPool &&
     onKeyPoolChange &&
     onKeyStrategyChange &&
+    onApiKeyPriorityChange &&
     onRotationOptOutChange &&
     onStickyReserveChange
   );
 
-  function updateEntry(id: string, patch: Partial<Omit<FormKeyPoolEntry, "id" | "tail">>) {
-    if (!keyPool || !onKeyPoolChange) {
-      return;
-    }
-    onKeyPoolChange(keyPool.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
-  }
   const [urlSuggestionsOpen, setUrlSuggestionsOpen] = useState(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
   const [suggestionsStyle, setSuggestionsStyle] = useState<CSSProperties | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const baseUrlInputRef = useRef<HTMLInputElement | null>(null);
   const repositionFrameRef = useRef<number | null>(null);
   const blurCloseTimerRef = useRef<number | null>(null);
@@ -148,7 +140,10 @@ export function RouteCredentialFields({
     showSuggestions && activeSuggestionIndex >= 0
       ? `${suggestionsId}-option-${activeSuggestionIndex}`
       : undefined;
-
+  const selectedPreset = routeUrlSuggestions.find((suggestion) =>
+    credentialPresetId.length > 0 && suggestion.credentialPresetId === credentialPresetId);
+  const hasDirectKey = apiKey.trim().length > 0 || (!clearApiKey && (selectedPreset?.storedApiKey ?? storedApiKey));
+  const directTail = apiKey.trim() ? apiKey.trim().slice(-4) : selectedPreset ? "" : storedApiKeyTail;
   useEffect(() => {
     if (!showSuggestions) {
       setActiveSuggestionIndex(-1);
@@ -423,160 +418,14 @@ export function RouteCredentialFields({
         )}
       </Field>
 
-      {showKeyPool && keyPool && (
-        <details className="key-pool-editor" aria-label={`${title} 密钥池`} open={keyPool.length > 0}>
-          <summary className="key-pool-editor-head">
-            <h5>密钥池（同一档案多账号轮转）</h5>
-            <span className="route-chip primary">
-              {keyPool.filter((entry) => entry.enabled).length + (storedApiKey ? 1 : 0)}/
-              {keyPool.length + (storedApiKey ? 1 : 0)} 可用
-            </span>
-          </summary>
-          <p className="key-pool-editor-hint">
-            每把密钥是一个独立上游账号：故障转移时按序使用，401/429 单独冷却与隔离，加密会话状态按密钥隔离。
-            上方「{apiKeyLabel}」也是池成员，排在第一位。
-          </p>
-
-          {/*
-            The direct `api_key` is pool member #1 on the server, so it is shown
-            as row #1 here — a pool that started at the *added* keys read as
-            "the key I already configured stopped being used", which is exactly
-            what the old projection did. Edited through the field above rather
-            than inline: it is the one credential a route can hold without any
-            pool at all, and a route with no pool has no editor to show it in.
-          */}
-          {storedApiKey && (
-            <div className="key-pool-rows key-pool-rows-direct">
-              <div className="key-pool-row is-direct">
-                <span className="key-pool-index">1</span>
-                <span className="key-pool-direct-label">
-                  {apiKeyLabel}
-                  {storedApiKeyTail ? <small>…{storedApiKeyTail}</small> : null}
-                </span>
-                <span className="key-pool-direct-note">在上方「{apiKeyLabel}」中修改</span>
-              </div>
-            </div>
-          )}
-
-          {keyPool.length === 0 ? (
-            <p className="key-pool-empty">
-              {storedApiKey
-                ? "只有上面这一把密钥。再添加一把后，本档案会在它们之间自动轮转。"
-                : "还没有密钥。添加第二把密钥后，本档案会在它们之间自动轮转 —— 单把密钥就是原有行为。"}
-            </p>
-          ) : (
-            <div className="key-pool-rows">
-              {keyPool.map((entry, index) => (
-                <div
-                  key={entry.id}
-                  className={`key-pool-row${entry.enabled ? "" : " is-disabled"}`}
-                >
-                  <span className="key-pool-index">{index + 1 + (storedApiKey ? 1 : 0)}</span>
-                  <input
-                    className="key-pool-label-input"
-                    aria-label="密钥标签"
-                    placeholder={entry.tail ? `密钥 …${entry.tail}` : "新密钥标签"}
-                    value={entry.label}
-                    onChange={(event) => updateEntry(entry.id, { label: event.target.value })}
-                  />
-                  <input
-                    className="key-pool-secret-input"
-                    aria-label="密钥值"
-                    type="password"
-                    autoComplete="off"
-                    placeholder={entry.tail ? "输入新值以覆盖，留空保持不变" : "sk-..."}
-                    value={entry.apiKey}
-                    onChange={(event) => updateEntry(entry.id, { apiKey: event.target.value })}
-                    spellCheck={false}
-                  />
-                  <label className="key-pool-toggle">
-                    <input
-                      type="checkbox"
-                      checked={entry.enabled}
-                      onChange={(event) => updateEntry(entry.id, { enabled: event.target.checked })}
-                    />
-                    <span className="key-pool-track" aria-hidden="true">
-                      <span className="key-pool-thumb" />
-                    </span>
-                    <span className="key-pool-toggle-text">启用</span>
-                  </label>
-                  {/*
-                    Two-step for a row that is already saved. Its secret lives only
-                    on the server — the pool never sends plaintext back, only a tail
-                    — so a misclick costs a trip to wherever the key came from. A row
-                    with no tail was added in this draft and has nothing to lose, so
-                    it goes on the first click.
-                  */}
-                  <button
-                    className="field-inline-button is-danger"
-                    type="button"
-                    aria-label={pendingDeleteId === entry.id
-                      ? `确认删除密钥 ${entry.label || entry.tail || entry.id}`
-                      : `删除密钥 ${entry.label || entry.tail || entry.id}`}
-                    onClick={() => {
-                      if (!entry.tail || pendingDeleteId === entry.id) {
-                        setPendingDeleteId(null);
-                        onKeyPoolChange?.(keyPool.filter((item) => item.id !== entry.id));
-                        return;
-                      }
-                      setPendingDeleteId(entry.id);
-                    }}
-                    onBlur={() => setPendingDeleteId((current) =>
-                      current === entry.id ? null : current)}
-                  >
-                    {pendingDeleteId === entry.id ? "确认删除" : "删除"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="key-pool-actions">
-            <button
-              className="ghost-button key-pool-add"
-              type="button"
-              onClick={() => onKeyPoolChange?.([...keyPool, {
-                id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-                label: "",
-                apiKey: "",
-                enabled: true,
-                tail: ""
-              }])}
-            >
-              + 添加密钥
-            </button>
-          </div>
-
-          <div className="key-pool-policies">
-            <CustomSelect
-              label="轮转策略"
-              value={keyStrategy ?? "fill_first"}
-              options={KEY_STRATEGY_OPTIONS}
-              onChange={(value) => onKeyStrategyChange?.(value as PrimaryKeyStrategy)}
-            />
-            <Field label="粘性保留带宽（秒）" hint="429 冷却结束后仍只服务已绑定会话的时长；0 关闭。">
-              <input
-                type="number"
-                min={0}
-                max={86400}
-                value={stickyReserveSeconds ?? 0}
-                onChange={(event) => onStickyReserveChange?.(Number(event.target.value))}
-              />
-            </Field>
-            <label className="key-pool-policy-toggle">
-              <input
-                type="checkbox"
-                checked={rotationOptOut ?? false}
-                onChange={(event) => onRotationOptOutChange?.(event.target.checked)}
-              />
-              <span className="key-pool-track" aria-hidden="true">
-                <span className="key-pool-thumb" />
-              </span>
-              <span>不参与自动轮转（账号绑定凭据，如 OAuth；故障转移永不主动使用）</span>
-            </label>
-          </div>
-        </details>
-      )}
+      {showKeyPool && keyPool && <ApiKeyPoolEditor
+        title={title} direct={{ configured: hasDirectKey, tail: directTail, priority: apiKeyPriority }}
+        entries={keyPool} strategy={keyStrategy ?? "fill_first"} rotationEnabled={keyRotationEnabled}
+        rotationOptOut={rotationOptOut ?? false} stickyReserveSeconds={stickyReserveSeconds ?? 0}
+        activity={keyActivity} onEntriesChange={onKeyPoolChange!} onDirectPriorityChange={onApiKeyPriorityChange!}
+        onStrategyChange={onKeyStrategyChange!} onRotationOptOutChange={onRotationOptOutChange!}
+        onStickyReserveChange={onStickyReserveChange!}
+      />}
       </>}
     </section>
   );

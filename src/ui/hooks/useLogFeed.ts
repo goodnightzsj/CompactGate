@@ -5,6 +5,7 @@ import type {
   PublicConfig,
   RequestLogPage,
   RouteKind,
+  StudioKeyActivityEvent,
   StudioLogEvent,
   StudioSnapshotEvent
 } from "../../shared/types.js";
@@ -101,6 +102,7 @@ export function useLogFeed({
   const [searchFilter, setSearchFilter] = useState("");
   const [requestError, setRequestError] = useState<LogRequestError | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [keyActivity, setKeyActivity] = useState<StudioKeyActivityEvent[]>([]);
   const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingMoreLogs, setIsLoadingMoreLogs] = useState(false);
@@ -207,6 +209,7 @@ export function useLogFeed({
   }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, enabled, hasConfig, logPageLimit, reloadToken]);
 
   useEffect(() => {
+    setKeyActivity([]);
     if (!enabled) {
       return;
     }
@@ -327,6 +330,7 @@ export function useLogFeed({
     const handleSnapshot = (event: MessageEvent<string>) => {
       try {
         const snapshot = JSON.parse(event.data) as StudioSnapshotEvent;
+        setKeyActivity((previous) => previous.filter((entry) => entry.config_revision === snapshot.config.revision));
         applyRemoteConfig(snapshot.config);
         setHealth(snapshot.health);
         for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh]) {
@@ -396,7 +400,17 @@ export function useLogFeed({
         setStreamError(errorSummary(error));
       }
     };
+    const handleKeyActivity = (event: MessageEvent<string>) => {
+      try {
+        const activity = JSON.parse(event.data) as StudioKeyActivityEvent;
+        setKeyActivity((previous) => [activity, ...previous.filter((entry) =>
+          entry.scope !== activity.scope || entry.profile_id !== activity.profile_id)]);
+      } catch (error) {
+        setStreamError(errorSummary(error));
+      }
+    };
     const handleError = () => {
+      setKeyActivity([]);
       streamInterrupted = true;
       if (!pollingFallbackActive) {
         setStreamError(STREAM_RECONNECTING_MESSAGE);
@@ -407,6 +421,7 @@ export function useLogFeed({
     stream.addEventListener("open", handleOpen);
     stream.addEventListener("snapshot", handleSnapshot as EventListener);
     stream.addEventListener("log", handleLog as EventListener);
+    stream.addEventListener("key_activity", handleKeyActivity as EventListener);
     stream.addEventListener("error", handleError as EventListener);
 
     return () => {
@@ -415,6 +430,7 @@ export function useLogFeed({
       stream.removeEventListener("open", handleOpen);
       stream.removeEventListener("snapshot", handleSnapshot as EventListener);
       stream.removeEventListener("log", handleLog as EventListener);
+      stream.removeEventListener("key_activity", handleKeyActivity as EventListener);
       stream.removeEventListener("error", handleError as EventListener);
       stream.close();
     };
@@ -489,6 +505,7 @@ export function useLogFeed({
   }
 
   return {
+    keyActivity,
     logPage,
     logSyncVersion: logState.syncVersion,
     liveInsertIds: logState.liveInsertIds,

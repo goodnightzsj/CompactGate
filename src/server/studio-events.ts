@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { RequestLogEntry, StudioLogEvent, StudioSnapshotEvent } from "../shared/types.js";
+import type { ConfigProfileScope, RequestLogEntry, StudioKeyActivityEvent, StudioLogEvent, StudioSnapshotEvent } from "../shared/types.js";
 import type { ConfigStore } from "./config.js";
 import { healthForConfig } from "./health.js";
 import type { RequestLogger } from "./logger.js";
@@ -87,13 +87,21 @@ export class StudioEventBroadcaster {
     this.broadcast("snapshot", snapshot);
   }
 
+  broadcastKeyActivity(scope: ConfigProfileScope, profileId: string | null, keyId: string | null, configRevision: string): void {
+    if (!keyId) return;
+    this.broadcast("key_activity", {
+      scope, profile_id: profileId, key_id: keyId,
+      used_at: new Date().toISOString(), config_revision: configRevision
+    });
+  }
+
   close(): void {
     for (const client of [...this.clients]) {
       this.disposeClient(client);
     }
   }
 
-  private broadcast(event: "log" | "snapshot", payload: StudioLogEvent | StudioSnapshotEvent): void {
+  private broadcast(event: "log" | "snapshot" | "key_activity", payload: StudioLogEvent | StudioSnapshotEvent | StudioKeyActivityEvent): void {
     if (this.clients.size === 0) {
       return;
     }

@@ -267,6 +267,8 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 明确 `400 invalid_encrypted_content` 或 `previous_response_not_found` 直接执行一次错误专用修复。修复后仍返回同一明确 400 时,若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；错误专用修复按错误位置插入。所有请求固定在当前 profile/host，最多发送 4 个不同 body，且每次都从同一份不可变请求体派生。只有完整成功响应才更新持久绑定。
 
+`agentrouter.org`（含子域）的原生 Responses 另有一项定向恢复：首发收到 `The requested item was created under a different Azure OpenAI resource...` 的 HTTP 400 后，若 `store=false`、无存储引用且 compaction 携带密文，只删除 `compaction.id`，在同一上游重试一次。密文与其余上下文保持不变；第二次失败直接返回，不继续 CPA/strict。此尝试不保证跨资源密文可用，且 `state_portability=off` 时不启用。
+
 通过 `POST /api/config/profiles/apply` 手动应用 Codex profile 是一次权威切换：CompactGate 会清除旧的进程内会话 stickiness，并强制下一次 Primary 选择新 profile，即使 `auto_schedule=true`。自动调度内部同步 active profile 不触发该强制逻辑。
 
 ### `compact`
@@ -359,7 +361,7 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 - 切换 `split` / `primary` 模式
 - 切换 linked / custom 模型改写方式
 - 从已保存的 Primary/Claude 上游按需拉取模型并选择思考强度，或保留自定义兼容模型
-- 直接保存 API Key
+- 直接保存 API Key，为同一档案的多把密钥设置优先级
 - 预览某条请求会走哪条路由
 - 查看健康状态
 - 实时查看最近日志
@@ -384,6 +386,21 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 - 可选的上游响应体
 
 元数据始终持久化到本地 SQLite。只有 `logging.persist_body = true` 时正文才进入 SQLite；推荐保持关闭并通过有界抓包目录按需诊断。Studio 日志列表不返回正文或本机抓包路径，展开详情后也只有点击“查看抓包”才会加载原始内容。抓包查看器会对“客户端请求 → 上游请求”和“上游响应 → 客户端响应”做最多 200 项的结构化 JSON 对比；正文截断或不是 JSON 时明确标为不可比较。压缩日志还保存实现名、请求 compaction/trigger 数和响应 compaction 数，便于定位协议漂移。
+
+### 密钥池与优先级
+
+在“连接与路由”的 Codex 或 Claude 主路由中，通过“API Key 使用顺序”统一排列直填密钥与池内密钥。支持拖拽、上移、下移、置顶和撤销排序；例如排成 `2→1→3→4` 后保存即可。数字优先级在展开项中编辑，为 **0–100 的整数，数值越大越优先**；旧配置或留空按 0 保存。
+
+- 配置字段为直填密钥的 `api_key_priority` 和池条目的 `api_keys[].priority`；编辑优先级、标签或顺序不会更换条目 ID，也不会清空已保存密钥。
+- 自动调度先保留健康可用的会话绑定，再为新会话选择本档案中最高可用优先级。高优先级密钥处于冷却、隔离或仅服务旧会话的保留期时，会使用下一档；全部阻塞时仍按最快解封规则回填。
+- 同级使用原来的 `fill_first`（按配置顺序使用，直填密钥在前）或 `spread`（分摊新会话）；优先级不跨档案比较，不改变档案路由顺序。
+- Codex 关闭 `primary_failover.auto_schedule` 时，仍沿用固定选择行为，优先级只决定首把密钥，不开启自动故障切换。退出轮转的档案不参与自动候选选择，显式指定 Codex 档案也不启用自动调度。健康检查和模型目录等非轮转入口使用排序后的首把已配置密钥。
+
+排序复用现有优先级字段，不新增顺序字段；撤销只恢复排序，不抹掉标签或密钥草稿。`spread` 不允许直接拖动破坏同级分摊，须先显式切换到故障转移。最多 101 把可生成严格优先顺序，停用与未填写项保留在列表但不计入候选。
+
+“首选”仅表示草稿优先级；“Active · 最近选用”来自真实代理请求发起前的脱敏 SSE `key_activity` 事件，只包含客户端作用域、档案/密钥 ID、时间与配置版本，不保存凭据或新增持久化数据。它不是实时健康、成功标记，也不代表所有会话只用这一把。刷新页面、断线或配置变更后等待新的观察；未保存的替换密钥不继承旧标记。预览、健康检查、模型目录和缓存命中不会伪造活动记录。
+
+池内切换不是逐请求循环：已有健康会话继续绑定原 key，调序不会重置绑定或冷却。Codex 需要有效活动档案、自动调度开启且未退出轮转；显式指定 Codex 档案绕过自动调度。Claude 在请求解析到档案且有多把候选时默认启用池内选择，退出轮转后不自动切换。401/配额、429、瞬时错误按各自隔离/冷却阈值影响**后续请求**，不是失败请求立即跨 key 重发。
 
 ## 档案 OAuth
 

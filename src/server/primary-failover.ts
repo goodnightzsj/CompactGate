@@ -459,7 +459,15 @@ export class PrimaryFailoverState {
       })[0] ?? candidates[0];
     }
 
+    // Priority is an admission tier, not a score bonus that load penalties can
+    // outweigh. Compare only siblings; profile order and existing pins keep
+    // their original semantics, and blocked tiers cannot suppress a fallback.
+    const priorities = new Map<string, number>();
+    for (const candidate of eligible) {
+      priorities.set(candidate.profileId, Math.max(priorities.get(candidate.profileId) ?? 0, candidate.keyPriority));
+    }
     const scored = eligible
+      .filter((candidate) => candidate.keyPriority === priorities.get(candidate.profileId))
       .map((candidate) => ({
         candidate,
         score: this.scoreCandidate(candidate)

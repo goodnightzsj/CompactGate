@@ -125,6 +125,7 @@ function carriedRouteFields(route: PrimaryUpstreamConfig | CompactConfig | Claud
   return {
     base_url: route.base_url,
     api_key: route.api_key,
+    ...(route.api_key_priority !== undefined ? { api_key_priority: route.api_key_priority } : {}),
     extra_headers: { ...route.extra_headers },
     proxy_url: route.proxy_url,
     ...(route.oauth_account_id ? {
