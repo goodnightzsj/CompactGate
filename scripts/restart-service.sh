@@ -142,7 +142,7 @@ if [[ "$BUILD_BEFORE_RESTART" != "0" ]]; then
     echo "[$(timestamp)] Building before scheduling restart"
     build_dist
     echo "[$(timestamp)] Build complete; scheduling restart worker"
-  } >>"$RESTART_LOG" 2>&1
+  } 2>&1 | tee -a "$RESTART_LOG"
 else
   echo "Skipping build before restart."
 fi
