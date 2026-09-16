@@ -562,6 +562,8 @@ npm test
 npm run build
 ```
 
+Studio 总览随入口加载，其余页面首次打开时按需下载；React 运行时单独分包缓存。页面加载失败时仍可切换导航，也可手动刷新重试；刷新会丢失未保存的修改。
+
 ## 常见问题
 
 ### 1. Codex 没有调用 `/v1/responses/compact`，压缩还能分流吗

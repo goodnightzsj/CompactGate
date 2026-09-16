@@ -7,7 +7,14 @@ export default defineConfig({
   root: ".",
   build: {
     outDir: "dist/public",
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react-vendor";
+        }
+      }
+    }
   },
   server: {
     host: "127.0.0.1",
