@@ -6,6 +6,8 @@ dist/
 coverage/
 
 # Local runtime config and secrets
+*.bak
+*.bak.*
 compactgate.json
 /compactgate.json.backup.*
 /compactgate.codex-profiles-backup.*
