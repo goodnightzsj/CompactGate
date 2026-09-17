@@ -72,7 +72,7 @@ function hostnameOf(hostHeader: string): string {
 }
 
 function isLoopbackHostname(hostname: string): boolean {
-  const name = hostname.toLowerCase();
+  const name = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1");
   return name === "localhost" ||
     name === "::1" ||
     name === "0:0:0:0:0:0:0:1" ||
@@ -122,7 +122,7 @@ function createDebugCaptureWriter(
       const entries = logger.markCapturesPurged(capturePaths, CAPTURE_PURGE_SNAPSHOT_THRESHOLD);
       if (capturePaths.length > CAPTURE_PURGE_SNAPSHOT_THRESHOLD) {
         studioEvents.broadcastSnapshot(
-          createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
+          { ...createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity), logs_invalidated: true }
         );
         return;
       }
@@ -148,6 +148,11 @@ export async function createCompactGateServer(
 ): Promise<http.Server> {
   await clientIdentity.load();
   const actualLogger = logger ?? createRequestLogger(configStore);
+  const notifyLogPrune = () => studioEvents.broadcastSnapshot({
+    ...createStudioSnapshot(configStore, actualLogger, codexVersionMonitor, clientIdentity),
+    logs_invalidated: true
+  });
+  actualLogger.addEventListener("storage-pruned", notifyLogPrune);
   const actualCaptureWriter =
     captureWriter ??
     createDebugCaptureWriter(
@@ -192,6 +197,7 @@ export async function createCompactGateServer(
   });
   server.once("close", () => {
     stopIdentityUpdates();
+    actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
     actualLogger.close();
     studioEvents.close();
     codexVersionMonitor.close();

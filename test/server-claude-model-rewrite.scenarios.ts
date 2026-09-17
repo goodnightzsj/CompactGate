@@ -1,5 +1,6 @@
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import http, { type IncomingMessage, type RequestOptions } from "node:http";
+import { describe, expect, it, vi } from "vitest";
 import {
   MIMO_IMAGE_INPUT_MODEL,
   resolveClaudeMappedModel
@@ -23,6 +24,57 @@ import {
 } from "./server-claude-core-helpers.js";
 
 describe("CompactGate Claude routing", () => {
+  it.each([
+    ["anthropic_messages", "opencode.9962510.xyz"],
+    ["openai_responses", "opencode.9962510.xyz"],
+    ["openai_chat", "opencode.9962510.xyz"],
+    ["anthropic_messages", "other.example"]
+  ] as const)("handles tool references before %s conversion using the routed host %s", async (protocol, host) => {
+    const captured: CapturedRequest[] = [];
+    const upstream = await startCapturedClaudeUpstream(captured, (_req, res) => {
+      writeJsonResponse(res, protocol === "openai_responses"
+        ? { id: "resp_test", model: "test", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }] }
+        : protocol === "openai_chat"
+          ? { id: "chat_test", model: "test", choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }
+          : { id: "msg_test", type: "message", content: [{ type: "text", text: "OK" }], stop_reason: "end_turn" });
+    });
+    const request = http.request;
+    const transport = vi.spyOn(http, "request").mockImplementation(((target: URL, options: RequestOptions, callback: (res: IncomingMessage) => void) => {
+      expect(target.hostname).toBe(host);
+      return request(new URL(target.pathname + target.search, upstream.url), { ...options, agent: undefined }, callback);
+    }) as typeof http.request);
+    try {
+      const app = await startApp(undefined, undefined, { claude: { primary: {
+        base_url: host === "other.example" ? "http://opencode.9962510.xyz" : "http://other.example",
+        api_key: "synthetic-key", api_key_env: ""
+      } } });
+      await app.config.saveProfile("claude", "Scene", { claude: { primary: {
+        base_url: `http://${host}`, upstream_protocol: protocol
+      } } });
+      const id = app.config.toPublicConfig().profile_scopes.claude.profiles[0].id;
+      await app.config.patch({ claude: { scene_map: { default: { profile_id: id } } } });
+      const response = await postClaudeMessage(app.url, "/anthropic/v1/messages", {
+        model: "test", max_tokens: 30,
+        messages: [
+          { role: "user", content: "Find a tool" },
+          { role: "assistant", content: [{ type: "tool_use", id: "call_search", name: "ToolSearch", input: { query: "read" } }] },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "call_search", content: [{ type: "tool_reference", tool_name: "Read" }] }] }
+        ],
+        tools: [{ name: "ToolSearch", input_schema: { type: "object" } }, { name: "Read", input_schema: { type: "object" } }]
+      });
+      const text = await response.text();
+      expect(response.status, text).toBe(200);
+      expect(text).toContain("OK");
+      expect(response.headers.get("x-compactgate-profile-source")).toBe("scene");
+      expect(captured).toHaveLength(1);
+      expect(captured[0].body.includes("tool_reference")).toBe(host === "other.example");
+      expect(captured[0].body).toContain("call_search");
+      expect(captured[0].body).toContain("Read");
+    } finally {
+      transport.mockRestore();
+    }
+  });
+
   it("rewrites ordinary Claude request models from the active Claude profile", async () => {
     const captured: { current: CapturedRequest | null } = { current: null };
     const claude = await startCapturedClaudeUpstream(captured, (_req, res) => {

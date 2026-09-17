@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
-import type { CompactGateConfig } from "../shared/types.js";
+import { createHash } from "node:crypto";
+import type { CompactGateConfig, StreamOutcome } from "../shared/types.js";
 import { enabledApiKeyPool } from "./credentials.js";
 import { readTrimmedString } from "./http-utils.js";
 import { enforceMaxEntries, rememberMapEntry } from "./primary-failover-limits.js";
@@ -26,6 +27,7 @@ const UNBLOCK_JITTER_MS = 2_000;
 const MAX_STICKY_ENTRIES = 2_048;
 
 interface ClaudeKeyHealth {
+  version: number;
   inFlight: number;
   transientFailures: number;
   quarantineUntil: number;
@@ -48,12 +50,22 @@ export interface ClaudeKeyPoolResult {
   status: number;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs?: number | null;
+  streamOutcome?: StreamOutcome | null;
+  errorSummary?: string | null;
 }
 
 export class ClaudeKeyPoolState {
   private readonly health = new Map<string, ClaudeKeyHealth>();
+  private readonly signatures = new Map<string | null, Map<string, string>>();
+  private readonly reservations = new WeakMap<ClaudeKeySelection, {
+    health: ClaudeKeyHealth;
+    version: number;
+    composite: string;
+    sessionKey: string | null;
+    reserveMs: number;
+  }>();
 
-  /** sessionKey -> keyId, the prompt-cache affinity for Claude sessions. */
+  /** sessionKey -> profile/key composite, the prompt-cache affinity. */
   private readonly sessionStickiness = new Map<string, { keyId: string; expiresAt: number }>();
 
   private readonly now: () => number;
@@ -75,6 +87,7 @@ export class ClaudeKeyPoolState {
     headers: IncomingHttpHeaders
   ): ClaudeKeySelection | null {
     const entries = enabledApiKeyPool(config.claude.primary);
+    this.reconcile(config, profileId);
     if (entries.length <= 1) {
       return null;
     }
@@ -85,9 +98,9 @@ export class ClaudeKeyPoolState {
     if (sessionKey) {
       const pin = this.sessionStickiness.get(sessionKey);
       if (pin && pin.expiresAt > now) {
-        const pinned = entries.find((entry) => entry.id === pin.keyId);
+        const pinned = entries.find((entry) => `${profileId}#${entry.id}` === pin.keyId);
         if (pinned && !this.isBlocked(`${profileId}#${pinned.id}`, now)) {
-          return { keyId: pinned.id, apiKey: pinned.api_key };
+          return this.reserve(pinned, profileId, sessionKey, config, now);
         }
       }
     }
@@ -99,10 +112,7 @@ export class ClaudeKeyPoolState {
       // pool exists only as a manual fallback list. The UI has offered this
       // toggle for the Claude scope all along while only the codex side read it.
       const first = entries[0];
-      const health = this.healthFor(`${profileId}#${first.id}`);
-      health.inFlight += 1;
-      health.lastSelectedAt = now;
-      return { keyId: first.id, apiKey: first.api_key };
+      return this.reserve(first, profileId, sessionKey, config, now);
     }
 
     const spread = config.claude.primary.key_strategy === "spread";
@@ -139,48 +149,50 @@ export class ClaudeKeyPoolState {
               : left.order - right.order;
           })[0] ?? candidates[0];
 
-    const health = this.healthFor(pick.id);
+    return this.reserve(pick.entry, profileId, sessionKey, config, now);
+  }
+
+  private reserve(
+    key: { id: string; api_key: string },
+    profileId: string | null,
+    sessionKey: string | null,
+    config: CompactGateConfig,
+    now: number
+  ): ClaudeKeySelection {
+    const composite = `${profileId}#${key.id}`;
+    const health = this.healthFor(composite);
     health.inFlight += 1;
     health.lastSelectedAt = now;
-    return { keyId: pick.entry.id, apiKey: pick.entry.api_key };
+    const selection = { keyId: key.id, apiKey: key.api_key };
+    this.reservations.set(selection, {
+      health, version: health.version, composite, sessionKey,
+      reserveMs: (config.claude.primary.sticky_reserve_seconds ?? 0) * 1000
+    });
+    return selection;
   }
 
-  /**
-   * A late in-flight must be released even if the request failed; the caller
-   * records the outcome right after.
-   */
-  release(profileId: string | null, keyId: string | null): void {
-    if (!profileId || !keyId) {
-      return;
-    }
-    const health = this.health.get(`${profileId}#${keyId}`);
-    if (health) {
-      health.inFlight = Math.max(0, health.inFlight - 1);
-    }
-  }
-
-  /**
-   * `config` is the routed config the matching `select` ran against — it supplies
-   * `sticky_reserve_seconds`. Optional so a caller that never configured a
-   * reserve, and every existing test, keeps working unchanged.
-   */
+  /** Null means no upstream attempt: release only, without health or affinity evidence. */
   recordResult(
-    profileId: string | null,
-    keyId: string | null,
-    result: ClaudeKeyPoolResult,
-    headers: IncomingHttpHeaders,
-    config?: CompactGateConfig
+    selection: ClaudeKeySelection | null,
+    result: ClaudeKeyPoolResult | null
   ): void {
-    if (!profileId || !keyId) {
-      return;
-    }
-    const composite = `${profileId}#${keyId}`;
-    const health = this.healthFor(composite);
+    if (!selection) return;
+    const reservation = this.reservations.get(selection);
+    if (!reservation) return;
+    this.reservations.delete(selection);
+    const { health, composite, sessionKey, reserveMs, version } = reservation;
+    // Even A -> B -> A creates a different health instance. Settle the original
+    // reservation exactly once, never a newly enabled instance with the same ID.
     health.inFlight = Math.max(0, health.inFlight - 1);
+    if (!result || this.health.get(composite) !== health) return;
     const now = this.now();
     const status = result.status;
+    if (result.streamOutcome === "client_cancel" || result.streamOutcome === "client_cancel_after_terminal") return;
+    const streamFailed = Boolean(result.errorSummary) ||
+      (result.streamOutcome != null && result.streamOutcome !== "success");
 
-    if (status >= 200 && status < 300) {
+    if (status >= 200 && status < 300 && !streamFailed) {
+      if (version !== health.version) return;
       // A success is direct proof the key is whole again — it ends the
       // quarantine, clears the transient window and refreshes the session pin.
       health.transientFailures = 0;
@@ -188,14 +200,14 @@ export class ClaudeKeyPoolState {
       health.rateLimitUntil = 0;
       health.cooldownUntil = 0;
       health.stickyOnlyUntil = 0;
-      const sessionKey = extractClaudeSessionKey(headers);
       if (sessionKey) {
-        this.rememberSessionPin(sessionKey, keyId, now);
+        this.rememberSessionPin(sessionKey, composite, now);
       }
       return;
     }
 
     if (status === 401 || status === 402 || status === 403) {
+      health.version += 1;
       // Self-describing: the upstream says this credential — or its budget, in
       // one-api's "Budget pool quota has been exhausted" 402 — is no good.
       // The codex route classifies 402 as a quota verdict and cools it on the
@@ -209,6 +221,7 @@ export class ClaudeKeyPoolState {
     }
 
     if (status === 429) {
+      health.version += 1;
       health.rateLimitUntil = Math.max(
         health.rateLimitUntil,
         now + retryAfterCooldownMs(result.responseHeaders, now)
@@ -216,14 +229,14 @@ export class ClaudeKeyPoolState {
       // Same reasoning as the codex route: when the cooldown expires the upstream
       // has only said "try me later", not "I am whole again", so the key stays
       // sticky-only for the configured reserve. A success ends the zone early.
-      const reserveMs = (config?.claude.primary.sticky_reserve_seconds ?? 0) * 1000;
       if (reserveMs > 0) {
         health.stickyOnlyUntil = Math.max(health.stickyOnlyUntil, health.rateLimitUntil + reserveMs);
       }
       return;
     }
 
-    if (status === 408 || status >= 500) {
+    if (status === 408 || status >= 500 || (status >= 200 && status < 300 && streamFailed)) {
+      health.version += 1;
       health.transientFailures += 1;
       if (health.transientFailures >= TRANSIENT_THRESHOLD) {
         const multiplier = Math.max(1, health.transientFailures - TRANSIENT_THRESHOLD + 1);
@@ -241,6 +254,21 @@ export class ClaudeKeyPoolState {
 
   private blockedUntilWithJitter(composite: string, now: number): number {
     return this.blockedUntil(composite, now) + Math.round(this.random() * UNBLOCK_JITTER_MS);
+  }
+
+  private reconcile(config: CompactGateConfig, profileId: string | null): void {
+    const next = new Map(enabledApiKeyPool(config.claude.primary)
+      .map((key) => [key.id, keySignature(config, key.api_key)]));
+    const previous = this.signatures.get(profileId);
+    for (const [keyId, signature] of previous ?? []) {
+      if (next.get(keyId) === signature) continue;
+      const composite = `${profileId}#${keyId}`;
+      this.health.delete(composite);
+      for (const [session, pin] of this.sessionStickiness) {
+        if (pin.keyId === composite) this.sessionStickiness.delete(session);
+      }
+    }
+    this.signatures.set(profileId, next);
   }
 
   /** Test seam: proves expired pins are evicted rather than accumulating. */
@@ -263,6 +291,7 @@ export class ClaudeKeyPoolState {
       return existing;
     }
     const created: ClaudeKeyHealth = {
+      version: 0,
       inFlight: 0,
       transientFailures: 0,
       quarantineUntil: 0,
@@ -308,6 +337,14 @@ export class ClaudeKeyPoolState {
     }
     return Math.max(health.quarantineUntil, health.rateLimitUntil, health.cooldownUntil);
   }
+}
+
+function keySignature(config: CompactGateConfig, apiKey: string): string {
+  const upstream = config.claude.primary;
+  return createHash("sha256").update(JSON.stringify([
+    upstream.base_url, upstream.upstream_protocol, upstream.proxy_url, apiKey.trim(),
+    Object.entries(upstream.extra_headers).sort(([left], [right]) => left.localeCompare(right))
+  ])).digest("hex");
 }
 
 function rollAmong<T extends { order: number }>(

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
+import { useMediaQuery } from "./useNarrowViewport.js";
 
 // Settle time of the row-entry spring in LogsPage (stiffness 500, damping 30,
 // mass 1 → zeta 0.671, underdamped): a 20px offset takes ~260ms to fall inside
@@ -58,6 +59,7 @@ export function useStaggeredLogs(
   liveInsertIds: readonly string[] = [],
   active = true
 ): { logs: RequestLogEntry[]; pendingCount: number } {
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [displayed, setDisplayed] = useState<RequestLogEntry[]>(logs);
   const [pendingCount, setPendingCount] = useState(0);
   const state = useRef({
@@ -95,7 +97,7 @@ export function useStaggeredLogs(
       (active && !state.prevActive)
     );
 
-    if (restated) {
+    if (restated || reduceMotion) {
       state.queue = [];
       clearTimer();
       replaceDisplayed(logs);
@@ -132,12 +134,12 @@ export function useStaggeredLogs(
     state.prevActive = active;
     state.prevQueryKey = queryKey;
     state.prevSyncVersion = syncVersion;
-  }, [active, liveInsertIds, logs, queryKey, syncVersion]);
+  }, [active, liveInsertIds, logs, queryKey, reduceMotion, syncVersion]);
 
   // Intentionally dep-free: it must re-arm after every commit that reveals a row
   // or refills the queue. Re-running is a no-op while a timer is already pending.
   useEffect(() => {
-    if (!active) {
+    if (!active || reduceMotion) {
       clearTimer();
       return;
     }

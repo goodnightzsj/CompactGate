@@ -8,6 +8,7 @@ import type {
 } from "../src/shared/types.js";
 import {
   dateInputsToRange,
+  fetchLogStats,
   groupTrend,
   platformBreakdown,
   presetForRange,
@@ -27,8 +28,28 @@ import { DateRangePicker } from "../src/ui/analytics/DateRangePicker.js";
 import { formatCompactMetricNumber } from "../src/ui/shared/format.js";
 
 afterEach(() => vi.restoreAllMocks());
+const pageProps = { preferences: null, onPreferencesChange: vi.fn(), onNavigate: vi.fn() };
 
 describe("analytics data helpers", () => {
+  it("resolves rolling ranges on every request without moving fixed usage dates", async () => {
+    const fixed = dateInputsToRange("2026-08-01", "2026-08-07");
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify(snapshot([]))));
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-14T02:00:00.000Z"));
+    await fetchLogStats("24h", true);
+    await fetchLogStats(fixed);
+    clock.mockReturnValue(Date.parse("2026-09-14T02:01:00.000Z"));
+    await fetchLogStats("24h", true);
+    await fetchLogStats(fixed);
+    const queries = fetcher.mock.calls.map(([url]) => new URL(String(url), "https://synthetic.example").searchParams);
+    expect(queries[0].get("to")).toBe("2026-09-14T02:00:00.000Z");
+    expect(queries[2].get("to")).toBe("2026-09-14T02:01:00.000Z");
+    expect(queries[2].get("from")).toBe("2026-09-13T02:01:00.000Z");
+    expect(queries[2].get("overview")).toBe("1");
+    expect(Object.fromEntries(queries[1])).toEqual(fixed);
+    expect(Object.fromEntries(queries[3])).toEqual(fixed);
+  });
+
   it("formats analytics-scale values without changing precise formatters", () => {
     expect(formatCompactMetricNumber(999)).toBe("999");
     expect(formatCompactMetricNumber(1_900_000)).toBe("1.9M");
@@ -100,8 +121,9 @@ describe("analytics data helpers", () => {
   });
 
   it("keeps existing statistics visible and announces a refresh", () => {
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), loading: true, error: null, refresh: vi.fn() });
-    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage));
+    const stats = vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), loading: true, error: null, refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage, pageProps));
+    expect(stats).toHaveBeenCalledWith("24h", { includeOverview: true, transitionUpdates: true });
     expect(markup).toContain("正在更新，当前显示上次统计");
     expect(markup).toMatch(/analytics-refresh[^>]*disabled/);
     expect(markup).toContain('aria-busy="true"');
@@ -115,8 +137,8 @@ describe("analytics data helpers", () => {
     // claim would overstate it the same way "手动" understated it before.
     const stats = snapshot([]);
     vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
-    for (const Page of [AnalyticsDashboardPage, UsageAnalyticsPage]) {
-      const markup = renderToStaticMarkup(createElement(Page));
+    for (const page of [createElement(AnalyticsDashboardPage, pageProps), createElement(UsageAnalyticsPage, pageProps)]) {
+      const markup = renderToStaticMarkup(page);
       expect(markup).toContain("采样于");
       expect(markup).toContain(stats.generated_at);
       expect(markup).toContain("每分钟自动刷新");
@@ -140,7 +162,7 @@ describe("analytics data helpers", () => {
     stats.summary.total_tokens = 1_900_000;
     stats.summary.input_tokens = 1_800_000;
     vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
-    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage));
+    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, pageProps));
     const primary = markup.match(/<section class="usage-metric-grid"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
     const details = markup.match(/<section class="analytics-metric-section usage-token-metrics"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
     expect(primary.match(/<article /g)).toHaveLength(3);
@@ -190,7 +212,7 @@ describe("analytics data helpers", () => {
       refresh: vi.fn()
     });
 
-    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage));
+    const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage, pageProps));
 
     expect(markup).toContain("aria-label=\"历史统计范围\"");
     expect(markup).toContain("近 5 分钟 RPM");
@@ -212,6 +234,43 @@ describe("analytics data helpers", () => {
     expect(markup.slice(0, markup.indexOf('<section class="analytics-metric-section analytics-latency-metrics"')).match(/<article /g)).toHaveLength(4);
     expect(markup).not.toContain("<details");
     expect(markup).not.toContain("<summary");
+  });
+
+  it.each([true, false])("blocks export of a different date range while preserving its labeled sample (loading=%s)", (loading) => {
+    const stats = snapshot([]);
+    stats.range = dateInputsToRange("2026-08-01", "2026-08-07");
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading, error: loading ? null : "fixture failed", refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
+      preferences: { from: "2026-08-08", to: "2026-08-14", granularity: "day", endpointMeasure: "requests" }
+    }));
+    expect(markup).toMatch(/<button[^>]*disabled[^>]*>导出 CSV<\/button>/);
+    expect(markup).toContain("当前显示 2026-08-01 — 2026-08-07 的上次统计");
+  });
+
+  it("allows exporting the current date range during a background refresh", () => {
+    const stats = snapshot([]);
+    stats.range = dateInputsToRange("2026-08-01", "2026-08-07");
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: true, error: null, refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
+      preferences: { from: "2026-08-01", to: "2026-08-07", granularity: "day", endpointMeasure: "requests" }
+    }));
+    expect(markup).toMatch(/<button(?:(?!disabled)[^>])*>导出 CSV<\/button>/);
+    expect(markup).not.toContain("usage-range-notice");
+  });
+
+  it.each([false, true])("uses one actionable empty state without removing metrics (retained=%s)", (retained) => {
+    const stats = snapshot([]);
+    if (retained) stats.retained_range = { oldest_at: "2026-07-01T00:00:00.000Z", newest_at: "2026-07-02T00:00:00.000Z" };
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    for (const page of [createElement(AnalyticsDashboardPage, pageProps), createElement(UsageAnalyticsPage, pageProps)]) {
+      const markup = renderToStaticMarkup(page);
+      expect(markup.match(/class="analytics-empty-state"/g)).toHaveLength(1);
+      expect(markup).toContain(retained ? "当前范围没有请求" : "暂无保留日志");
+      expect(markup).toContain(retained ? "查看日志" : "检查路由配置");
+      expect(markup).not.toContain("analytics-chart-empty");
+      expect(markup).not.toContain("<table");
+      expect(markup).toContain("analytics-metric-grid");
+    }
   });
 
   it("treats date inputs as inclusive local calendar days with a 31-day limit", () => {

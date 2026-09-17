@@ -10,7 +10,8 @@ import {
   rateLimitCooldownMs
 } from "./primary-failover-result.js";
 import {
-  PrimaryProfileHealthStore
+  PrimaryProfileHealthStore,
+  type ProfileHealth
 } from "./primary-failover-health.js";
 import { PrimaryStickinessStore } from "./primary-failover-stickiness.js";
 import type {
@@ -65,6 +66,7 @@ export class PrimaryFailoverState {
   private generation = 0;
   private forcedProfileId: string | null = null;
   private readonly health: PrimaryProfileHealthStore;
+  private readonly reservations = new WeakMap<PrimaryRouteSelection, ProfileHealth | null>();
   private readonly stickiness: PrimaryStickinessStore;
   private readonly now: () => number;
   private readonly random: () => number;
@@ -92,6 +94,8 @@ export class PrimaryFailoverState {
     if (!health || selection.generation !== this.generation) {
       throw new Error("Cannot reserve a stale primary route selection.");
     }
+    if (this.reservations.has(selection)) throw new Error("Primary route selection was already reserved.");
+    this.reservations.set(selection, health);
 
     const now = this.now();
     if (candidateId === this.forcedProfileId || selection.profileId === this.forcedProfileId) {
@@ -120,18 +124,16 @@ export class PrimaryFailoverState {
           errorSummary: maybeErrorSummary ?? null
         }
       : resultOrStatus;
-    const health = this.health.get(candidateId);
-    if (!health) {
-      return;
+    const reserved = this.reservations.get(selection);
+    if (reserved === null) return;
+    if (reserved) {
+      // Release the original instance once, including across unrelated edits.
+      // A same-id credential replacement may already own a different instance.
+      reserved.inFlight = Math.max(0, reserved.inFlight - 1);
+      this.reservations.set(selection, null);
     }
-
-    // Release the reservation before the staleness check. The generation moves
-    // whenever *any* candidate's config changes, while an unchanged profile
-    // keeps its health record — so returning first leaked one inFlight for
-    // every request that was open across an unrelated config edit, and each
-    // leaked unit is a permanent -80 on that profile's score.
-    health.inFlight = Math.max(0, health.inFlight - 1);
-    if (selection.generation !== this.generation) {
+    const health = this.health.get(candidateId);
+    if (!health || (reserved && reserved !== health) || selection.generation !== this.generation) {
       return;
     }
 
@@ -375,7 +377,10 @@ export class PrimaryFailoverState {
       };
     }
 
-    if (!config.primary_failover.auto_schedule) {
+    // Applying an opted-out profile pins the route until the operator changes
+    // it again, including new sessions and process restarts. The one-shot force
+    // above only overrides old stickiness/health; it is not the saved choice.
+    if (!config.primary_failover.auto_schedule || candidates.some((candidate) => candidate.active && candidate.rotationOptOut)) {
       const selected = candidates.find((candidate) => candidate.active) ?? candidates[0];
       const health = this.health.forProfile(selected.id);
       return {

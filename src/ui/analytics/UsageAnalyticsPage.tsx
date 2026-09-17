@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import type { StudioPage } from "../app-types.js";
 import { formatCompactMetricNumber, formatMetricNumber } from "../shared/format.js";
 import {
   AnalyticsDistribution,
+  AnalyticsEmptyState,
   AnalyticsLoadState,
   AnalyticsMetricGrid,
   AnalyticsPanel,
@@ -17,20 +19,31 @@ import {
   defaultUsageDates,
   downloadUsageCsv,
   groupTrend,
+  inputDate,
   type AnalyticsGranularity,
   useLogStats
 } from "./analytics-data.js";
 import { DateRangePicker } from "./DateRangePicker.js";
 
-export function UsageAnalyticsPage() {
+export interface UsagePreferences {
+  from: string;
+  to: string;
+  granularity: AnalyticsGranularity;
+  endpointMeasure: "requests" | "total_tokens";
+}
+
+export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigate }: {
+  preferences: UsagePreferences | null;
+  onPreferencesChange: (preferences: UsagePreferences) => void;
+  onNavigate: (page: StudioPage) => void;
+}) {
   const defaults = useMemo(() => defaultUsageDates(), []);
-  const [fromDate, setFromDate] = useState(defaults.from);
-  const [toDate, setToDate] = useState(defaults.to);
-  const [range, setRange] = useState(() => dateInputsToRange(defaults.from, defaults.to));
-  const [granularity, setGranularity] = useState<AnalyticsGranularity>("day");
-  const [endpointMeasure, setEndpointMeasure] = useState<"requests" | "total_tokens">("requests");
+  const current: UsagePreferences = preferences ?? { ...defaults, granularity: "day", endpointMeasure: "requests" };
+  const { from: fromDate, to: toDate, granularity, endpointMeasure } = current;
+  const range = useMemo(() => dateInputsToRange(fromDate, toDate), [fromDate, toDate]);
   const [formError, setFormError] = useState<string | null>(null);
   const stats = useLogStats(range);
+  const matchesSelectedRange = stats.data?.range.from === range.from && stats.data.range.to === range.to;
   const trend = useMemo(
     () => stats.data ? groupTrend(stats.data, granularity) : [],
     [granularity, stats.data]
@@ -38,10 +51,8 @@ export function UsageAnalyticsPage() {
 
   function applyRange(from: string, to: string) {
     try {
-      const nextRange = dateInputsToRange(from, to);
-      setFromDate(from);
-      setToDate(to);
-      setRange(nextRange);
+      dateInputsToRange(from, to);
+      onPreferencesChange({ ...current, from, to });
       setFormError(null);
     } catch (cause) {
       setFormError(cause instanceof Error ? cause.message : "日期范围无效。");
@@ -59,7 +70,7 @@ export function UsageAnalyticsPage() {
           <button
             type="button"
             className="btn btn-sm"
-            disabled={trend.length === 0}
+            disabled={!matchesSelectedRange || trend.length === 0}
             onClick={() => downloadUsageCsv(trend)}
           >
             导出 CSV
@@ -77,7 +88,7 @@ export function UsageAnalyticsPage() {
               type="button"
               className={granularity === "hour" ? "is-active" : ""}
               aria-pressed={granularity === "hour"}
-              onClick={() => setGranularity("hour")}
+              onClick={() => onPreferencesChange({ ...current, granularity: "hour" })}
             >
               小时
             </button>
@@ -85,7 +96,7 @@ export function UsageAnalyticsPage() {
               type="button"
               className={granularity === "day" ? "is-active" : ""}
               aria-pressed={granularity === "day"}
-              onClick={() => setGranularity("day")}
+              onClick={() => onPreferencesChange({ ...current, granularity: "day" })}
             >
               天
             </button>
@@ -96,6 +107,11 @@ export function UsageAnalyticsPage() {
       {formError && <div className="error-banner" role="alert">{formError}</div>}
       <AnalyticsLoadState loading={stats.loading && !stats.data} error={stats.error} />
       <AnalyticsRefreshStatus loading={stats.loading} error={stats.error} generatedAt={stats.data?.generated_at ?? null} />
+      {stats.data && !matchesSelectedRange && (
+        <p className="usage-range-notice" role="status">
+          当前显示 {inputDate(new Date(stats.data.range.from))} — {inputDate(new Date(Date.parse(stats.data.range.to) - 1))} 的上次统计；所选范围加载完成后可导出。
+        </p>
+      )}
 
       {stats.data && (
         <>
@@ -157,6 +173,9 @@ export function UsageAnalyticsPage() {
             ]} />
           </section>
 
+          {stats.data.summary.requests === 0 ? (
+            <AnalyticsEmptyState hasRetainedLogs={stats.data.retained_range.oldest_at !== null} onNavigate={onNavigate} />
+          ) : <>
           <AnalyticsPanel title="Token 趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
             <AnalyticsTokenBreakdownChart points={trend} />
           </AnalyticsPanel>
@@ -233,7 +252,7 @@ export function UsageAnalyticsPage() {
                     { value: "requests", label: "请求" },
                     { value: "total_tokens", label: "Token" }
                   ]}
-                  onChange={setEndpointMeasure}
+                  onChange={(endpointMeasure) => onPreferencesChange({ ...current, endpointMeasure })}
                 />
               )}
             >
@@ -246,6 +265,7 @@ export function UsageAnalyticsPage() {
               }))} />
             </AnalyticsPanel>
           </div>
+          </>}
 
           <RetainedRange stats={stats.data} />
         </>

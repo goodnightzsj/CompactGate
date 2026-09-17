@@ -87,7 +87,7 @@ export function CustomSelect({
       return undefined;
     }
 
-    function handlePointerDown(event: PointerEvent) {
+    function handleOutsideFocusOrPointer(event: Event) {
       const target = event.target as Node | null;
       if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) {
         return;
@@ -105,11 +105,13 @@ export function CustomSelect({
       });
     }
 
-    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("pointerdown", handleOutsideFocusOrPointer);
+    document.addEventListener("focusin", handleOutsideFocusOrPointer);
     window.addEventListener("resize", scheduleReposition);
     window.addEventListener("scroll", scheduleReposition, true);
     return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("pointerdown", handleOutsideFocusOrPointer);
+      document.removeEventListener("focusin", handleOutsideFocusOrPointer);
       window.removeEventListener("resize", scheduleReposition);
       window.removeEventListener("scroll", scheduleReposition, true);
       if (rafRef.current !== null) {
@@ -130,7 +132,17 @@ export function CustomSelect({
     for (let offset = 0; offset < options.length; offset += 1) {
       const next = (index + offset * direction + options.length) % options.length;
       if (!options[next].disabled) {
-        optionRefs.current[next]?.focus({ preventScroll: true });
+        const option = optionRefs.current[next];
+        option?.focus({ preventScroll: true });
+        // Scroll only the portaled menu, never the page behind it.
+        const menu = menuRef.current;
+        if (menu && option) {
+          const item = option.getBoundingClientRect();
+          const box = menu.getBoundingClientRect();
+          const top = box.top + menu.clientTop;
+          const bottom = top + menu.clientHeight;
+          menu.scrollTop += item.top < top ? item.top - top : Math.max(0, item.bottom - bottom);
+        }
         return;
       }
     }
@@ -171,6 +183,13 @@ export function CustomSelect({
     event: KeyboardEvent<HTMLButtonElement>,
     optionIndex: number
   ) {
+    if (event.key === "Tab") {
+      // Resume native tab order beside the trigger, not at the end of the
+      // document where this portal lives. Do not cancel the browser's Tab.
+      triggerRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       closeAndFocusTrigger();
@@ -243,6 +262,7 @@ export function CustomSelect({
               }`}
               type="button"
               role="option"
+              tabIndex={-1}
               disabled={option.disabled}
               aria-disabled={option.disabled || undefined}
               aria-selected={option.value === value}

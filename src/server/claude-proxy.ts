@@ -102,6 +102,7 @@ export async function proxyClaudeRequest(
   let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
   let claudeKeySelection: { keyId: string; apiKey: string } | null = null;
+  let upstreamAttempted = false;
   // Resolved after the key selection below; must live at function scope so the
   // finalizer in `finally` can read it.
   let keyName: string | null = null;
@@ -121,7 +122,7 @@ export async function proxyClaudeRequest(
       req.socket.remoteAddress
     );
     config = routing.config;
-    if (claudeKeyPool && routing.profileId) {
+    if (claudeKeyPool) {
       claudeKeySelection = claudeKeyPool.select(config, routing.profileId, req.headers);
     }
     if (claudeKeySelection) {
@@ -149,7 +150,7 @@ export async function proxyClaudeRequest(
     // shows its label. Read from `routing.config` (not the mutated `config`):
     // the injection above empties `api_keys` in the copy that resolved the
     // credential, while the label lookup still needs the pool.
-    if (routing.profileId) {
+    if (routing.profileId || claudeKeySelection) {
       if (claudeKeySelection && claudeKeySelection.keyId !== DIRECT_API_KEY_ID) {
         keyName = (routing.config.claude.primary.api_keys ?? [])
           .find((candidate) => candidate.id === claudeKeySelection?.keyId)
@@ -165,10 +166,6 @@ export async function proxyClaudeRequest(
     const upstreamProtocol = config.claude.primary.upstream_protocol;
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
     const openAiUpstream = upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat";
-    // `upstream` still points at the base config's host here; the scene routing
-    // above may have swapped in a profile with a different base_url, and the
-    // branch below rebuilds it. Deciding the host-scoped strip now would read
-    // the wrong host, so it is applied after that rebuild.
     transaction.upstreamBody = rewriteClaudeModelBody(
       transaction.rawBody,
       transaction.targetModel ?? "",
@@ -178,6 +175,11 @@ export async function proxyClaudeRequest(
       // The body was unreadable, so no mapping was applied; report what the
       // upstream actually receives rather than the model we meant to send.
       transaction.targetModel = transaction.sourceModel;
+    }
+    // Routing has resolved the actual profile, but the body is still Messages.
+    // Strip before conversion: the OpenAI converters reject tool_reference.
+    if (hostNeedsToolReferenceStripping(new URL(config.claude.primary.base_url).hostname)) {
+      transaction.upstreamBody = stripClaudeToolReferenceBlocks(transaction.upstreamBody);
     }
     if (openAiUpstream) {
       const conversion = upstreamProtocol === "openai_chat"
@@ -207,14 +209,6 @@ export async function proxyClaudeRequest(
         auth.apiKey,
         config.claude.primary.extra_headers
       );
-    }
-    // Scoped to the host actually being called, which is only known now: the
-    // scene routing above can swap in a profile with its own base_url, and both
-    // branches above rebuild `upstream` from the routed config. Only a relay
-    // observed rejecting `tool_reference` gets its body changed; every other
-    // host keeps the block as the accurate record of the tools the turn loaded.
-    if (hostNeedsToolReferenceStripping(upstream.hostname)) {
-      transaction.upstreamBody = stripClaudeToolReferenceBlocks(transaction.upstreamBody);
     }
     // The outbound protocol decides which CLI to impersonate, not the ingress
     // path: a Messages request routed to an OpenAI-protocol upstream leaves here
@@ -281,6 +275,7 @@ export async function proxyClaudeRequest(
     transaction.upstreamBody = oauthRequest.upstreamBody;
     studioEvents.broadcastKeyActivity("claude", routing.profileId,
       claudeKeySelection?.keyId ?? enabledApiKeyPool(config.claude.primary)[0]?.id ?? null, configRevision);
+    upstreamAttempted = true;
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,
@@ -363,17 +358,16 @@ export async function proxyClaudeRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
-    if (claudeKeyPool && routing?.profileId) {
+    if (claudeKeyPool && routing) {
       claudeKeyPool.recordResult(
-        routing.profileId,
-        claudeKeySelection?.keyId ?? null,
-        {
+        claudeKeySelection,
+        upstreamAttempted ? {
           status: transaction.status,
           responseHeaders: transaction.responseHeaders ?? {},
-          firstTokenMs: transaction.firstTokenMs ?? null
-        },
-        req.headers,
-        config
+          firstTokenMs: transaction.firstTokenMs ?? null,
+          streamOutcome: transaction.streamOutcome,
+          errorSummary: transaction.errorSummary
+        } : null
       );
     }
     const logUrl = new URL(`${upstreamPath}${url.search}`, "http://compactgate.local");

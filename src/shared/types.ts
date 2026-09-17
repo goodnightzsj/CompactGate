@@ -431,6 +431,8 @@ export interface RoutePreviewResponse {
 }
 
 export interface RequestLogEntry {
+  /** SQLite insert ID; absent on unpersisted events and legacy payloads. */
+  sequence?: number;
   time: string;
   completed_at: string;
   route: RouteKind;
@@ -601,6 +603,8 @@ export type ProviderLogCounts = Record<"all" | ProviderFamily, number>;
 export type StatusLogCounts = Record<"all" | LogStatusKind, number>;
 
 export interface RequestLogPage {
+  /** Highest persisted insert ID in this snapshot, across all filters. */
+  latest_sequence?: number;
   logs: RequestLogEntry[];
   limit: number;
   offset: number;
@@ -791,6 +795,8 @@ export interface HealthResponse {
 }
 
 export interface StudioSnapshotEvent {
+  /** Maintenance changed stored rows/bodies; re-query the applied log filters. */
+  logs_invalidated?: boolean;
   config: PublicConfig;
   health: HealthResponse;
   logs: RequestLogEntry[];

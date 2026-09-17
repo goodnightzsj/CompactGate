@@ -21,6 +21,29 @@ function withKeepRecent(value: number): CompactGateConfig {
 }
 
 describe("config file repository", () => {
+  it.each(["null", "[]", '"broken"'])("rejects non-object %s on load and restore without changing saved state", async (json) => {
+    const dir = await makeConfigDir();
+    const invalidPath = path.join(dir, "invalid.json");
+    await writeFile(invalidPath, json);
+    await expect(ConfigStore.load(invalidPath)).rejects.toThrow("Config must be a JSON object.");
+    const configPath = path.join(dir, "compactgate.json");
+    const store = await ConfigStore.load(configPath);
+    try {
+      await store.patch({ primary: { base_url: "https://synthetic.invalid/v1" } });
+      await store.saveProfile("codex", "Synthetic", {});
+      const before = store.get();
+      const revision = store.revision;
+      const persisted = await readFile(configPath, "utf8");
+      const backups = await store.listBackups();
+      await writeFile(path.join(dir, backups[0]!.id), json);
+      await expect(store.restoreBackup(backups[0]!.id)).rejects.toThrow("Config must be a JSON object.");
+      expect(store.get()).toEqual(before);
+      expect(store.revision).toBe(revision);
+      expect(await readFile(configPath, "utf8")).toBe(persisted);
+      await expect(store.importConfig(JSON.parse(json))).rejects.toThrow("Imported config must be a JSON object.");
+    } finally { store.oauth.close(); }
+  });
+
   it("writes private files and keeps the ten newest prior versions", async () => {
     const dir = await makeConfigDir();
     const configPath = path.join(dir, "compactgate.json");

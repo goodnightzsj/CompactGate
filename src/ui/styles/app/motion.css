@@ -1,11 +1,10 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
-
-  .main-content > .page-appear:not(.page-appear-logs) > * {
+    animation-iteration-count: 1 !important;
     animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 
   .key-order-row,

@@ -1,6 +1,7 @@
 /* Multi-device compatibility pass: keep the dense console usable on touch, tablet, and narrow phones. */
 @media (hover: none), (pointer: coarse) {
   button,
+  .btn-sm,
   .ghost-button,
   .solid-button,
   .custom-select-trigger,
@@ -244,7 +245,7 @@
     gap: var(--space-sm);
   }
 
-  .analytics-header-actions .btn { flex: 1 1 auto; }
+  .analytics-header-actions .btn { flex: 1 1 auto; min-height: 44px; }
   .analytics-overview-metrics { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .analytics-recent-metrics .analytics-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-metric { padding: 8px 0; gap: 6px; }

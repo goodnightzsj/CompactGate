@@ -41,7 +41,7 @@ export function StudioApp() {
         />
 
         <main id="studio-main" className="main-content" tabIndex={-1}>
-          <StudioPageOutlet {...pageModels.pageOutlet} />
+          <StudioPageOutlet {...pageModels.pageOutlet} onNavigate={navigation.navigateTo} />
         </main>
 
         {pageModels.profileDeleteDialog && (

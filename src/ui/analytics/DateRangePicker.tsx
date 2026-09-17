@@ -268,10 +268,14 @@ export function DateRangePicker({
           </div>
 
           <div className="usage-calendar" role="grid" aria-label={formatMonth(visibleMonth)}>
+            <div className="usage-calendar-row" role="row">
             {WEEKDAYS.map((weekday) => (
               <span key={weekday} className="usage-calendar-weekday" role="columnheader">{weekday}</span>
             ))}
-            {calendarDays.map((value) => {
+            </div>
+            {Array.from({ length: 6 }, (_, week) => (
+            <div className="usage-calendar-row" role="row" key={calendarDays[week * 7]}>
+            {calendarDays.slice(week * 7, week * 7 + 7).map((value) => {
               const outside = monthStart(value) !== visibleMonth;
               const inRange = value >= draftFrom && value <= draftTo;
               const boundary = value === draftFrom || value === draftTo;
@@ -299,6 +303,8 @@ export function DateRangePicker({
                 </span>
               );
             })}
+            </div>
+            ))}
           </div>
 
           <div className="usage-date-actions">

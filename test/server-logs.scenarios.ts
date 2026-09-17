@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { CaptureSerializedBody } from "../src/shared/types.js";
+import type { CaptureSerializedBody, StudioSnapshotEvent } from "../src/shared/types.js";
 import { decodeCaptureBody } from "../src/server/capture-body-decode.js";
 import { DebugCaptureWriter } from "../src/server/debug-capture.js";
 import { persistCapture } from "../src/server/proxy-support.js";
@@ -13,6 +13,7 @@ import {
   fetchLogPage,
   fetchRecentLogs,
   postJson,
+  openSseStream,
   readLatestLogBodyFields,
   readLogCount,
   seedLegacyLogDatabase,
@@ -35,6 +36,20 @@ function startClaudeJsonUpstream(body: unknown, status = 200) {
 }
 
 describe("CompactGate logs and capture", () => {
+  it("notifies connected Studios after deferred database body pruning", async () => {
+    const upstream = await startJsonUpstream({ ok: true });
+    const app = await startApp(upstream.url, upstream.url, {
+      logging: { persist_body: true, max_database_bytes: 120 * 1024 }
+    });
+    const stream = await openSseStream(`${app.url}/api/events`);
+    await stream.waitForEvent("snapshot");
+    await postJson(app.url, "/v1/responses/compact", { model: "synthetic", input: "x".repeat(128 * 1024) });
+    const snapshot = await stream.waitForEvent("snapshot") as StudioSnapshotEvent;
+    expect(snapshot).toMatchObject({ logs_invalidated: true });
+    expect(snapshot.log_page.logs[0]?.body_status).toBe("purged");
+    expect(snapshot.log_page.total).toBe(1);
+  });
+
   it("does not build debug capture records when capture is disabled", async () => {
     let built = false;
     await persistCapture(DebugCaptureWriter.fromEnv(), () => {
@@ -555,6 +570,11 @@ describe("CompactGate logs and capture", () => {
     expect(firstLogs.map((entry) => entry.source_model)).toEqual(["gpt-5.5", "gpt-5.4"]);
     const firstPage = await fetchLogPage(firstApp.url);
     expect(firstPage.total).toBe(3);
+    expect(firstPage.latest_sequence).toBe(firstPage.logs[0].sequence);
+    expect(firstPage.logs[0].sequence).toBeGreaterThan(firstPage.logs[1].sequence!);
+    const filteredPage = await fetchLogPage(firstApp.url, "?route=primary");
+    expect(filteredPage.logs).toHaveLength(0);
+    expect(filteredPage.latest_sequence).toBe(firstPage.latest_sequence);
     expect(firstPage.all_total).toBe(3);
     expect(firstPage.provider_counts).toEqual({
       all: 3,
@@ -596,6 +616,8 @@ describe("CompactGate logs and capture", () => {
     expect(olderPage.logs[0].source_model).toBe("gpt-5.3");
     expect(olderPage.total).toBe(3);
     expect(olderPage.has_more).toBe(false);
+    expect(olderPage.latest_sequence).toBe(firstPage.latest_sequence);
+    expect(olderPage.logs[0].sequence).toBeLessThan(firstPage.logs[1].sequence!);
     expect(JSON.stringify(restartedLogs)).not.toContain("sensitive prompt");
   });
 

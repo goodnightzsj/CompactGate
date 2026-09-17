@@ -3,8 +3,9 @@ import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
 import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
-import { mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
+import { fetchPendingLogPage, fetchMoreLogPage, mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
+import { DashboardRecentRequests } from "../src/ui/dashboard/DashboardRecentRequests.js";
 import { useNarrowViewport } from "../src/ui/logs/useNarrowViewport.js";
 import {
   ALL_HOSTS_FILTER,
@@ -18,7 +19,8 @@ import {
 } from "../src/ui/logs/log-feed-query.js";
 
 vi.mock("../src/ui/logs/useNarrowViewport.js", () => ({
-  useNarrowViewport: vi.fn(() => false)
+  useNarrowViewport: vi.fn(() => false),
+  useMediaQuery: vi.fn(() => false)
 }));
 
 describe("log request generations", () => {
@@ -46,6 +48,108 @@ describe("log request generations", () => {
 });
 
 describe("live log page updates", () => {
+  it.each([false, true])("preserves a continuous window when an insert crosses pagination (already counted=%s)", async (alreadyCounted) => {
+    const row = (id: number) => requestLog(String(id), { sequence: id });
+    const baseline = { ...emptyPage(2), logs: [row(4), row(3)], latest_sequence: 4, total: 4, all_total: 4, has_more: true };
+    const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      generation: 1, query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
+      liveEvents: [], snapshot: null
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      pending.liveEvents.push({ operation: "insert", entry: row(5) });
+      return new Response(JSON.stringify({ ...baseline, offset: 2,
+        logs: alreadyCounted ? [row(3), row(2)] : [row(2), row(1)],
+        latest_sequence: alreadyCounted ? 5 : 4, total: alreadyCounted ? 5 : 4, all_total: alreadyCounted ? 5 : 4 }));
+    });
+    try {
+      const result = await fetchMoreLogPage(pending, baseline, () => true);
+      expect(result.logs.map((entry) => entry.request_id)).toEqual(["5", "4", "3", "2"]);
+      expect(result).toMatchObject({ total: 5, all_total: 5, has_more: true, limit: 2, offset: 0 });
+    } finally { fetcher.mockRestore(); }
+  });
+
+  it("does not double-count an invisible insert already in a filtered snapshot", () => {
+    const page = { ...emptyPage(2), latest_sequence: 2, logs: [requestLog("primary", { sequence: 1 })],
+      total: 1, all_total: 2, counts: { all: 2, primary: 1, compact: 1, claude: 0 } };
+    const result = replayLiveLogEvents(page,
+      [{ operation: "insert", entry: requestLog("compact", { route: "compact", sequence: 2 }) }],
+      "primary", "all", ALL_HOSTS_FILTER, "");
+    expect(result.all_total).toBe(2);
+    expect(result.counts.compact).toBe(1);
+  });
+
+  it("restarts from a contiguous first page when rows are deleted during pagination", async () => {
+    const baseline = { ...emptyPage(2), logs: [requestLog("4"), requestLog("3")], total: 4, has_more: true };
+    const remaining = { ...emptyPage(2), logs: [requestLog("4")], total: 1, all_total: 1 };
+    const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      generation: 1, query: { route: "primary", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
+      liveEvents: [], snapshot: null
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => {
+        pending.snapshot = remaining;
+        return new Response(JSON.stringify({ ...baseline, offset: 2, logs: [requestLog("2"), requestLog("1")] }));
+      })
+      .mockImplementationOnce(async () => {
+        pending.liveEvents.push({ operation: "update", entry: requestLog("4", { capture_status: "present" }) });
+        return new Response(JSON.stringify(remaining));
+      });
+    try {
+      const result = await fetchMoreLogPage(pending, baseline, () => true);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(String(fetcher.mock.calls[1][0])).toContain("offset=0");
+      expect(result.logs.map((entry) => entry.request_id)).toEqual(["4"]);
+      expect(result.logs[0].capture_status).toBe("present");
+      expect(result).toMatchObject({ total: 1, all_total: 1, has_more: false });
+    } finally { fetcher.mockRestore(); }
+  });
+
+  it.each([false, true])("re-queries an interleaved snapshot without mixing page windows (newer snapshot=%s)", async (newerSnapshot) => {
+    const oldPage = { ...emptyPage(2), logs: [requestLog("3"), requestLog("2")], total: 3, all_total: 3, has_more: true };
+    const newPage = { ...oldPage, logs: [requestLog("4"), requestLog("3")], total: 4, all_total: 4 };
+    const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      generation: 1,
+      query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
+      liveEvents: [], snapshot: null
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => {
+        pending.snapshot = newerSnapshot ? newPage : oldPage;
+        pending.liveEvents.push({ operation: "insert", entry: requestLog("4") });
+        return new Response(JSON.stringify(newerSnapshot ? oldPage : newPage));
+      })
+      .mockImplementationOnce(async () => {
+        pending.liveEvents.push({ operation: "update", entry: requestLog("4", { capture_status: "present" }) });
+        return new Response(JSON.stringify(newPage));
+      });
+    try {
+      const result = await fetchPendingLogPage(pending, () => true);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(result.logs.map((entry) => entry.request_id)).toEqual(["4", "3"]);
+      expect(result.logs[0].capture_status).toBe("present");
+      expect(result).toMatchObject({ total: 4, all_total: 4, has_more: true, offset: 0 });
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
+  it("does not re-query a pending load that lost its generation", async () => {
+    const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      generation: 1, query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
+      liveEvents: [], snapshot: null
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      pending.snapshot = emptyPage(2);
+      return new Response(JSON.stringify(emptyPage(2)));
+    });
+    try {
+      await fetchPendingLogPage(pending, () => false);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    } finally {
+      fetcher.mockRestore();
+    }
+  });
+
   it("projects compact event protocol status into the current health snapshot", () => {
     const health = { codex: { observed_protocol: "remote_v1" } } as HealthResponse;
     const event = {
@@ -168,12 +272,20 @@ describe("live log page updates", () => {
 });
 
 describe("LogsPage loaded rows", () => {
-  it("keeps failed filter context visible with an accessible retry and blocks stale pagination", () => {
+  it.each([false, true])("uses the dashboard's CSS breakpoint with one mounted view (narrow=%s)", (narrow) => {
+    vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
+    const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[requestLog("recent")]} listen="127.0.0.1:0" />);
+    expect(useNarrowViewport).toHaveBeenLastCalledWith("(max-width: 760px)");
+    expect(markup.includes("dashboard-request-table")).toBe(!narrow);
+    expect(markup.includes("dashboard-request-list")).toBe(narrow);
+  });
+
+  it.each(["all", "error"] as const)("keeps failed refresh context visible and blocks stale pagination (status=%s)", (statusFilter) => {
     const markup = renderLogsPage([requestLog("previous-result")], {
-      statusFilter: "error", hasStaleLogs: true, hasMoreLogs: true, error: "Synthetic filter failure"
+      statusFilter, hasStaleLogs: true, hasMoreLogs: true, error: "Synthetic refresh failure"
     });
     expect(markup).toContain('role="alert"');
-    expect(markup).toContain("筛选尚未应用，下面保留上次成功加载的结果。");
+    expect(markup).toContain("当前结果尚未更新，下面保留上次成功加载的结果。");
     expect(markup).toContain("上次结果 · ");
     expect(markup).toContain("重试日志");
     expect(markup).toMatch(/<button[^>]+disabled=""[^>]*>加载更早日志/);

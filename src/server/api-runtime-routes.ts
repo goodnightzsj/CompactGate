@@ -189,7 +189,10 @@ export async function handleRuntimeApi(
     }
 
     const result = logger.purgeStoredBodies();
-    studioEvents.broadcastSnapshot(createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity));
+    studioEvents.broadcastSnapshot({
+      ...createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity),
+      logs_invalidated: true
+    });
     sendJson(res, 200, result);
     return true;
   }

@@ -95,8 +95,8 @@ export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status
 
   const keyword = options.search?.trim();
   if (keyword) {
-    const like = `%${keyword}%`;
-    conditions.push(`(${LOG_SEARCH_COLUMNS.map((column) => `${column} LIKE ?`).join(" OR ")})`);
+    const like = `%${keyword.replace(/[\\%_]/g, "\\$&")}%`;
+    conditions.push(`(${LOG_SEARCH_COLUMNS.map((column) => `${column} LIKE ? ESCAPE '\\'`).join(" OR ")})`);
     params.push(...LOG_SEARCH_COLUMNS.map(() => like));
   }
 
@@ -142,6 +142,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
   const userAgent = readNullableString(row.user_agent);
   const keyName = readNullableString(row.key_name);
   return {
+    sequence: readNullableNumber(row.id) ?? undefined,
     time: String(row.time),
     completed_at: readCompletedAt(row.completed_at, row.time),
     route: normalizeRoute(row.route),

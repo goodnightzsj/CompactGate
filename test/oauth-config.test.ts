@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
 import { resolveRouteCredential } from "../src/server/credentials.js";
 import { candidateSignatures, codexPrimaryCandidates } from "../src/server/primary-failover-candidates.js";
+import { PrimaryFailoverState } from "../src/server/primary-failover.js";
 import { stateDomainForPrimary } from "../src/server/provider-state-domain.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
@@ -42,6 +43,31 @@ describe("OAuth configuration references", () => {
     expect(resolveRouteCredential("compact", store.get())).toMatchObject({ apiKeySource: "oauth", activeCredentialScope: "primary" });
     expect(store.toPublicConfig().primary).toMatchObject({ oauth_account_id: id, oauth_status: "connected", api_key_configured: true });
     expect(JSON.stringify(store.toPublicConfig())).not.toContain("synthetic-oauth-secret");
+  });
+
+  it("keeps an applied OAuth profile selected for new sessions and after reload", async () => {
+    const { store, id, configPath } = await configured();
+    await store.saveProfile("codex", "Manual", {});
+    const manualId = store.toPublicConfig().profiles[0].id;
+    await store.applyProfile("codex", manualId);
+    await store.saveOAuthProfile("codex", id, "OAuth", "model", store.revision);
+    const oauthId = store.toPublicConfig().profiles.find((profile) => profile.name === "OAuth")!.id;
+    const applied = await store.applyProfile("codex", oauthId);
+    expect(applied.primary_failover.auto_schedule).toBe(true);
+    const state = new PrimaryFailoverState();
+    state.forceNextProfileSelection(applied, oauthId);
+    for (const sessionKey of ["first", "first", "next-session"]) {
+      const selection = state.preview(store.get(), { sessionKey });
+      expect(selection.profileId).toBe(oauthId);
+      state.reserveSelection(selection, true);
+      state.recordResult(selection, 200, null);
+    }
+    const reloaded = await ConfigStore.load(configPath);
+    stores.push(reloaded);
+    expect(new PrimaryFailoverState().preview(reloaded.get(), { sessionKey: "after-restart" }).profileId).toBe(oauthId);
+    const manual = await store.applyProfile("codex", manualId);
+    state.forceNextProfileSelection(manual, manualId);
+    expect(state.preview(manual, { sessionKey: "first" }).profileId).toBe(manualId);
   });
 
   it.each(["codex", "claude"] as const)("preserves same-URL manual presets through %s OAuth profile operations", async (scope) => {

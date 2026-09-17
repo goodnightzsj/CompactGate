@@ -43,8 +43,20 @@ export interface AnalyticsTrendPoint {
   total_tokens: number;
 }
 
+export function fetchLogStats(
+  range: AnalyticsRange | AnalyticsPreset,
+  includeOverview = false,
+  signal?: AbortSignal
+): Promise<LogStatsSnapshot> {
+  // Resolve relative ranges at request time, including timer/visibility refreshes.
+  const { from, to } = typeof range === "string" ? rangeForPreset(range) : range;
+  const query = new URLSearchParams({ from, to });
+  if (includeOverview) query.set("overview", "1");
+  return api<LogStatsSnapshot>(`/api/logs/stats?${query.toString()}`, { signal });
+}
+
 export function useLogStats(
-  range: AnalyticsRange,
+  range: AnalyticsRange | AnalyticsPreset,
   options: { includeOverview?: boolean; transitionUpdates?: boolean } = {}
 ) {
   const { includeOverview = false, transitionUpdates = false } = options;
@@ -62,15 +74,9 @@ export function useLogStats(
         setError(errorSummary(cause));
       }
     };
-    const query = new URLSearchParams({ from: range.from, to: range.to });
-    if (includeOverview) {
-      query.set("overview", "1");
-    }
     setError(null);
     setLoading(true);
-    void api<LogStatsSnapshot>(`/api/logs/stats?${query.toString()}`, {
-      signal: controller.signal
-    }).then(async (snapshot) => {
+    void fetchLogStats(range, includeOverview, controller.signal).then(async (snapshot) => {
       if (controller.signal.aborted) return;
       const isAutoRefresh = autoRefreshRef.current;
       autoRefreshRef.current = false;
@@ -103,16 +109,19 @@ export function useLogStats(
       controller.abort();
       transition?.skipTransition();
     };
-  }, [includeOverview, range.from, range.to, revision, transitionUpdates]);
+  }, [includeOverview, range, revision, transitionUpdates]);
 
   const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, readDocumentVisible, () => false);
   const autoRefreshRef = useRef(false);
+  const previousVisible = useRef(documentVisible);
 
   // Poll only while the tab is visible: a hidden tab re-reading a large log
   // query every minute is pure cost, and its numbers would be stale the moment
   // it came back anyway. Coming back into view refreshes at once rather than
   // waiting out the interval, so the gap the user actually notices is covered.
   useEffect(() => {
+    const resumed = documentVisible && !previousVisible.current;
+    previousVisible.current = documentVisible;
     if (!documentVisible) {
       return;
     }
@@ -124,7 +133,7 @@ export function useLogStats(
       autoRefreshRef.current = true;
       setRevision((current) => current + 1);
     };
-    bump();
+    if (resumed) bump();
 
     const interval = window.setInterval(bump, STATS_REFRESH_MS);
     return () => window.clearInterval(interval);

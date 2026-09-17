@@ -87,7 +87,7 @@ export function resolveLogDatabasePath(configPath: string): string {
   return path.resolve(path.dirname(configPath), `${configBaseName}-logs.sqlite`);
 }
 
-export class RequestLogger {
+export class RequestLogger extends EventTarget {
   private readonly db: DatabaseSync;
 
   private readonly databasePath: string;
@@ -123,6 +123,7 @@ export class RequestLogger {
     databasePath: string,
     options: RequestLoggerOptions = {}
   ) {
+    super();
     const resolvedPath = path.resolve(databasePath);
     mkdirSync(path.dirname(resolvedPath), { recursive: true });
     this.databasePath = resolvedPath;
@@ -339,13 +340,14 @@ export class RequestLogger {
     }
   }
 
-  add(entry: RequestLogEntry): void {
+  add(entry: RequestLogEntry): number | undefined {
+    let sequence: number | undefined;
     try {
       // One transaction for both statements: the UPDATE below targets
       // `last_insert_rowid()`, so a failure between them would leave a row whose
       // portability payload is silently missing rather than absent-by-design.
       this.db.exec("BEGIN IMMEDIATE;");
-      this.addStatement()
+      const inserted = this.addStatement()
         .run(
           entry.time,
           entry.completed_at,
@@ -403,6 +405,7 @@ export class RequestLogger {
           .run(JSON.stringify(entry.provider_state_portability));
       }
       this.db.exec("COMMIT;");
+      sequence = Number(inserted.lastInsertRowid);
       // Both prunes open their own write transactions, so they must run after the
       // commit above rather than nested inside it.
       this.requestStoragePrune();
@@ -416,6 +419,7 @@ export class RequestLogger {
       this.recordPersistenceFailure("persist request log", error);
       console.error(`Failed to persist request log to ${this.databasePath}.`, error);
     }
+    return sequence;
   }
 
   /**
@@ -556,6 +560,7 @@ export class RequestLogger {
 
     return {
       logs,
+      latest_sequence: Number(this.db.prepare("SELECT COALESCE(MAX(id), 0) AS sequence FROM request_logs").get()!.sequence),
       limit,
       offset,
       total,
@@ -1023,10 +1028,14 @@ export class RequestLogger {
       return;
     }
 
+    let changed = false;
     try {
+      // WAL pages can be reclaimed without deleting any saved body.
+      this.checkpointSqliteStorage();
       if (this.databaseFootprintBytes() > this.maxDatabaseBytes) {
         const rowsCleared = this.clearPersistedBodies();
         if (rowsCleared > 0) {
+          changed = true;
           this.reclaimSqliteStorage();
         }
       }
@@ -1038,7 +1047,7 @@ export class RequestLogger {
         // already under its cap can measure far over it, and the overshoot-based
         // delete below would then throw away rows in proportion to WAL bytes
         // that deleting rows cannot shrink.
-        this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+        this.checkpointSqliteStorage();
         const footprint = this.databaseFootprintBytes();
         if (footprint <= this.maxDatabaseBytes) {
           return;
@@ -1067,6 +1076,7 @@ export class RequestLogger {
           )
         );
         this.deleteOldestPersistedRows(rowsToDelete);
+        changed = true;
         this.reclaimSqliteStorage();
         passes += 1;
       }
@@ -1076,6 +1086,10 @@ export class RequestLogger {
         `Failed to prune request log database below ${this.maxDatabaseBytes} bytes.`,
         error
       );
+    } finally {
+      // A later VACUUM/checkpoint can fail after rows were already changed.
+      // Studios must still invalidate their old window in that case.
+      if (changed) this.dispatchEvent(new Event("storage-pruned"));
     }
   }
 
@@ -1121,9 +1135,16 @@ export class RequestLogger {
   }
 
   private reclaimSqliteStorage(): void {
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.checkpointSqliteStorage();
     this.db.exec("VACUUM;");
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    this.checkpointSqliteStorage();
+  }
+
+  private checkpointSqliteStorage(): void {
+    const result = this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE);").get();
+    if (result?.busy !== 0) {
+      throw new Error("SQLite checkpoint is busy; storage pruning was not completed.");
+    }
   }
 
   private databaseFootprintBytes(): number {

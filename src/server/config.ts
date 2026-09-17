@@ -84,7 +84,9 @@ export class ConfigStore {
     return store;
   }
 
-  get(): CompactGateConfig {
+  get(revision?: unknown): CompactGateConfig {
+    // Check and clone synchronously so a draft export cannot mix revisions.
+    this.assertRevisionCurrent(revision);
     return cloneConfig(this.current);
   }
 
@@ -386,7 +388,8 @@ function validateRouteUrlPreset(preset: RouteUrlPreset): void {
 }
 
 function mergeConfig(base: CompactGateConfig, patch: unknown, strict = false): CompactGateConfig {
-  const patchRecord = isRecord(patch) ? patch : {};
+  if (!isRecord(patch)) throw new ConfigError("Config must be a JSON object.");
+  const patchRecord = patch;
   const runtime = mergeRuntimeConfig(base, patchRecord);
   const profileScopes = mergeProfileScopes(base, patchRecord, strict);
 

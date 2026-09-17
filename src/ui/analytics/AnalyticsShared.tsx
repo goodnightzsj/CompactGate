@@ -1,5 +1,6 @@
 import { useEffect, useId, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { LogStatsSnapshot } from "../../shared/types.js";
+import type { StudioPage } from "../app-types.js";
 import {
   clamp,
   formatCompactMetricNumber,
@@ -473,6 +474,23 @@ export function AnalyticsRefreshStatus({ loading, error, generatedAt }: {
         <span>采样于 <time dateTime={generatedAt} title={generatedAt}>{formatDateTime(generatedAt)}</time> · 每分钟自动刷新</span>
       )}
     </p>
+  );
+}
+
+export function AnalyticsEmptyState({ hasRetainedLogs, onNavigate }: {
+  hasRetainedLogs: boolean;
+  onNavigate: (page: StudioPage) => void;
+}) {
+  return (
+    <section className="analytics-empty-state">
+      <h3>{hasRetainedLogs ? "当前范围没有请求" : "暂无保留日志"}</h3>
+      <p>{hasRetainedLogs
+        ? "可调整上方时间范围，或查看日志确认请求时间。统计只包含仍保留的记录。"
+        : "确认路由配置并通过代理发送请求后，这里会显示统计；已清理的记录不计入用量。"}</p>
+      <button type="button" className="btn btn-sm" onClick={() => onNavigate(hasRetainedLogs ? "logs" : "config")}>
+        {hasRetainedLogs ? "查看日志" : "检查路由配置"}
+      </button>
+    </section>
   );
 }
 

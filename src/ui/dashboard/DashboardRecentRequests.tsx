@@ -16,7 +16,7 @@ export function DashboardRecentRequests({
   logs: RequestLogEntry[];
   listen: string;
 }) {
-  const narrowViewport = useNarrowViewport();
+  const narrowViewport = useNarrowViewport("(max-width: 760px)");
   // One slice and one pass of formatting for both layouts. The table and the
   // card list are alternatives, never shown together, so rendering only the
   // visible one skips half this component's work on every log event — and stops

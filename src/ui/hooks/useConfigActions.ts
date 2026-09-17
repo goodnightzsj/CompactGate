@@ -88,14 +88,16 @@ export function useConfigActions({
     scopedProfileAccessors
   });
 
-  async function exportConfig() {
+  async function exportConfig(includeDraft = true) {
     if (!config) {
       return;
     }
 
     try {
-      const savedConfig = await api<CompactGateConfig>("/api/config/export");
-      const payload = applyDraftToConfigExport(savedConfig, form);
+      if (includeDraft && !formRevision) throw new Error("草稿版本尚未就绪，请重新加载配置后再导出。");
+      const query = includeDraft ? `?revision=${encodeURIComponent(formRevision!)}` : "";
+      const savedConfig = await api<CompactGateConfig>(`/api/config/export${query}`);
+      const payload = includeDraft ? applyDraftToConfigExport(savedConfig, form) : savedConfig;
       const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
         type: "application/json"
       });
@@ -105,8 +107,12 @@ export function useConfigActions({
       link.download = "compactgate.json";
       link.click();
       URL.revokeObjectURL(url);
+      setPageError(null);
     } catch (error) {
-      setPageError(errorSummary(error));
+      const summary = errorSummary(error);
+      setPageError(/superseded revision/i.test(summary)
+        ? "配置已在其他页面或调度中更新，未导出混合版本。请先处理草稿冲突，或选择“仅导出已保存配置”。"
+        : summary);
     }
   }
 
@@ -203,6 +209,7 @@ export function useConfigActions({
     claudeProfileName,
     claudeProfileState,
     exportConfig,
+    exportSavedConfig: () => exportConfig(false),
     importConfig,
     profileDeleteCandidate,
     profileError,

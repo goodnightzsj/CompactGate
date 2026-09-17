@@ -13,6 +13,7 @@ import { addLog, emptyUsageMetrics } from "../src/server/proxy-support.js";
 import { providerStateBindingIdentityHashes } from "../src/server/provider-state-binding.js";
 import { providerStateTargetHealthKey } from "../src/server/provider-state-evidence.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
+import { ALL_HOSTS_FILTER, emptyLogPage, mergeLiveLogPage } from "../src/ui/logs/log-utils.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -26,6 +27,45 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("matches HTTP and live search literally, including SQL wildcards and case folding", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-search-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(20, path.join(dir, "logs.sqlite"));
+    const models = ["gpt-test", "gpt_test", "gpt%test", "gpt\\test", "Ä-test", "ä-test"];
+    const entries = models.map((model, index) => ({ ...logEntry(index), source_model: model, target_model: model }));
+    try {
+      for (const entry of entries) logger.add(entry);
+      for (const search of ["gpt_test", "%", "\\", "GpT", "Ä", "ä", "absent"]) {
+        const page = logger.page({ limit: 20, offset: 0, search });
+        const live = entries.reduce((current, entry) =>
+          mergeLiveLogPage(current, entry, "all", "all", ALL_HOSTS_FILTER, search), emptyLogPage(20));
+        expect(page.logs.map((entry) => entry.request_id)).toEqual(live.logs.map((entry) => entry.request_id));
+        expect(page.total).toBe(live.total);
+        expect(page.counts).toEqual(live.counts);
+        expect(page.status_counts).toEqual(live.status_counts);
+        if (search !== "GpT" && search !== "absent") expect(page.total).toBe(1);
+      }
+    } finally { logger.close(); }
+  });
+
+  it("emits one storage-pruned event for a changed deferred pass and none for a no-op", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-prune-event-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(200, path.join(dir, "logs.sqlite"), { maxDatabaseBytes: Infinity, deferStoragePrune: true });
+    const notify = vi.fn();
+    logger.addEventListener("storage-pruned", notify);
+    try {
+      for (let index = 0; index < 150; index++) logger.add(logEntry(index, "body".repeat(1_000)));
+      logger.configure({ keepRecent: 200, maxDatabaseBytes: 128 * 1024 });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(logger.page({ limit: 200, offset: 0 }).total).toBeLessThan(150);
+      expect(notify).toHaveBeenCalledTimes(1);
+      logger.configure({ keepRecent: 200, maxDatabaseBytes: 10 * 1024 * 1024 });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally { logger.close(); }
+  });
+
   it("defaults the persisted SQLite database cap to 1 GiB", () => {
     expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(1024 * 1024 * 1024);
   });
@@ -649,6 +689,58 @@ describe("RequestLogger", () => {
       expect(health.last_persist_error_at).toEqual(expect.any(String));
     } finally {
       consoleError.mockRestore();
+      logger.close();
+    }
+  });
+
+  it("keeps bodies when a checkpoint alone brings the database below its cap", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-wal-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "logs.sqlite");
+    const logger = new RequestLogger(30, databasePath, { maxDatabaseBytes: Infinity });
+    const db = new DatabaseSync(databasePath);
+    try {
+      for (let index = 1; index <= 20; index++) logger.add(logEntry(index, "body".repeat(500)));
+      const pages = Number(db.prepare("PRAGMA page_count").get()!.page_count);
+      const pageSize = Number(db.prepare("PRAGMA page_size").get()!.page_size);
+      const cap = pages * pageSize + statSync(`${databasePath}-shm`).size + 8192;
+      expect(databaseFootprintBytes(databasePath)).toBeGreaterThan(cap);
+      logger.configure({ keepRecent: 30, maxDatabaseBytes: cap });
+      const page = logger.page({ limit: 30, offset: 0 });
+      expect(page.logs).toHaveLength(20);
+      expect(page.logs.every((entry) => entry.body_status === "present")).toBe(true);
+      expect(db.prepare("SELECT COUNT(incoming_request_body) AS count FROM request_logs").get()!.count).toBe(20);
+      expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(cap);
+    } finally {
+      db.close();
+      logger.close();
+    }
+  });
+
+  it("reports an unfinished checkpoint instead of pruning bodies from an inflated footprint", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-wal-busy-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"), { maxDatabaseBytes: Infinity });
+    logger.add(logEntry(1, "preserve this body"));
+    const prepare = DatabaseSync.prototype.prepare;
+    const checkpointGets: Array<() => void> = [];
+    const spy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql) {
+      const statement = prepare.call(this, sql);
+      if (sql === "PRAGMA wal_checkpoint(TRUNCATE);") {
+        const get = vi.spyOn(statement, "get").mockReturnValue({ busy: 1, log: 4, checkpointed: 0 });
+        checkpointGets.push(() => get.mockRestore());
+      }
+      return statement;
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      logger.configure({ keepRecent: 10, maxDatabaseBytes: 1 });
+      expect(logger.page({ limit: 10, offset: 0 }).logs[0]?.body_status).toBe("present");
+      expect(logger.getPersistenceHealth().last_persist_error).toContain("checkpoint is busy");
+    } finally {
+      checkpointGets.forEach((restore) => restore());
+      spy.mockRestore();
+      error.mockRestore();
       logger.close();
     }
   });

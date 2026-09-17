@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import type { StudioPage } from "../app-types.js";
 import {
   formatCompactMetricNumber,
   formatDurationMs,
@@ -6,6 +7,7 @@ import {
 } from "../shared/format.js";
 import {
   AnalyticsDistribution,
+  AnalyticsEmptyState,
   AnalyticsLoadState,
   AnalyticsMetricGrid,
   AnalyticsPanel,
@@ -20,7 +22,6 @@ import {
   groupTrend,
   platformBreakdown,
   presetForRange,
-  rangeForPreset,
   type AnalyticsPreset,
   useLogStats
 } from "./analytics-data.js";
@@ -43,13 +44,23 @@ const MEASURE_OPTIONS = [
 type SourceDimension = typeof SOURCE_OPTIONS[number]["value"];
 type DistributionMeasure = typeof MEASURE_OPTIONS[number]["value"];
 
-export function AnalyticsDashboardPage() {
-  const [preset, setPreset] = useState<AnalyticsPreset>("24h");
-  const [range, setRange] = useState(() => rangeForPreset("24h"));
-  const [sourceDimension, setSourceDimension] = useState<SourceDimension>("platform");
-  const [sourceMeasure, setSourceMeasure] = useState<DistributionMeasure>("requests");
-  const [modelMeasure, setModelMeasure] = useState<DistributionMeasure>("requests");
-  const stats = useLogStats(range, { includeOverview: true, transitionUpdates: true });
+export interface AnalyticsPreferences {
+  preset: AnalyticsPreset;
+  sourceDimension: SourceDimension;
+  sourceMeasure: DistributionMeasure;
+  modelMeasure: DistributionMeasure;
+}
+
+export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNavigate }: {
+  preferences: AnalyticsPreferences | null;
+  onPreferencesChange: (preferences: AnalyticsPreferences) => void;
+  onNavigate: (page: StudioPage) => void;
+}) {
+  const current: AnalyticsPreferences = preferences ?? {
+    preset: "24h", sourceDimension: "platform", sourceMeasure: "requests", modelMeasure: "requests"
+  };
+  const { preset, sourceDimension, sourceMeasure, modelMeasure } = current;
+  const stats = useLogStats(preset, { includeOverview: true, transitionUpdates: true });
   const displayedPreset = stats.data ? presetForRange(stats.data.range) : preset;
   const granularity = displayedPreset === "24h" ? "hour" : "day";
   const trend = useMemo(
@@ -63,21 +74,8 @@ export function AnalyticsDashboardPage() {
   const rangeLabel = PRESETS.find((item) => item.value === displayedPreset)?.label ?? "所选范围";
   const oneMinute = stats.data?.overview?.recent.one_minute;
   const fiveMinutes = stats.data?.overview?.recent.five_minutes;
-  // The bucket is the natural day containing the range end, and the page only
-  // refetches on a range change or a manual refresh. A dashboard left open past
-  // midnight, or pointed at a past range, kept labelling that bucket 今日 while
-  // it no longer was one.
+  // A failed refresh may leave yesterday's sample visible after midnight.
   const dayLabel = overviewDayLabel(stats.data?.overview?.today.from ?? null);
-
-  function selectPreset(next: AnalyticsPreset) {
-    setPreset(next);
-    setRange(rangeForPreset(next));
-  }
-
-  function refresh() {
-    setRange(rangeForPreset(preset));
-    stats.refresh();
-  }
 
   return (
     <>
@@ -93,14 +91,14 @@ export function AnalyticsDashboardPage() {
                 type="button"
                 className={preset === item.value ? "is-active" : ""}
                 aria-pressed={preset === item.value}
-                onClick={() => selectPreset(item.value)}
+                onClick={() => onPreferencesChange({ ...current, preset: item.value })}
                 key={item.value}
               >
                 {item.label}
               </button>
             ))}
           </div>
-          <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
+          <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={stats.refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
         </div>
       </div>
 
@@ -192,6 +190,9 @@ export function AnalyticsDashboardPage() {
               ]} />
             </section>
 
+            {stats.data.summary.requests === 0 ? (
+              <AnalyticsEmptyState hasRetainedLogs={stats.data.retained_range.oldest_at !== null} onNavigate={onNavigate} />
+            ) : <>
             <div className="analytics-chart-grid">
               <AnalyticsPanel title="请求趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
                 <AnalyticsTrendChart points={trend} metric="requests" />
@@ -210,13 +211,13 @@ export function AnalyticsDashboardPage() {
                       label="来源维度"
                       value={sourceDimension}
                       options={SOURCE_OPTIONS}
-                      onChange={setSourceDimension}
+                      onChange={(sourceDimension) => onPreferencesChange({ ...current, sourceDimension })}
                     />
                     <AnalyticsSegmented
                       label="来源度量"
                       value={sourceMeasure}
                       options={MEASURE_OPTIONS}
-                      onChange={setSourceMeasure}
+                      onChange={(sourceMeasure) => onPreferencesChange({ ...current, sourceMeasure })}
                     />
                   </div>
                 )}
@@ -243,7 +244,7 @@ export function AnalyticsDashboardPage() {
                     label="模型分布度量"
                     value={modelMeasure}
                     options={MEASURE_OPTIONS}
-                    onChange={setModelMeasure}
+                    onChange={(modelMeasure) => onPreferencesChange({ ...current, modelMeasure })}
                   />
                 )}
               >
@@ -295,6 +296,7 @@ export function AnalyticsDashboardPage() {
                 </div>
               )}
             </AnalyticsPanel>
+            </>}
 
             <RetainedRange stats={stats.data} />
           </div>

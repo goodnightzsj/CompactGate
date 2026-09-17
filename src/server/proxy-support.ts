@@ -177,8 +177,8 @@ export function addLog(
     capture_path: input.capturePath,
     capture_status: input.captureStatus
   };
-  logger.add(entry);
-  return entry;
+  const sequence = logger.add(entry);
+  return { ...entry, sequence };
 }
 
 export function resolveResponseModelSource(input: {

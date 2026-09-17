@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
@@ -19,7 +19,7 @@ import {
   logStatusKind
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
-import { useNarrowViewport } from "./useNarrowViewport.js";
+import { useMediaQuery, useNarrowViewport } from "./useNarrowViewport.js";
 import { ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
 
 function logEntryKey(entry: RequestLogEntry): string {
@@ -61,7 +61,7 @@ export function LogsPage({
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const reduceMotion = useReducedMotion();
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const narrowViewport = useNarrowViewport();
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : ROW_SPRING_TRANSITION;
   const effectiveDetailTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition;
@@ -269,7 +269,7 @@ export function LogsPage({
         <div className="error-banner page-error-banner" role="alert">
           <span>
             {error}
-            {hasStaleLogs && " 筛选尚未应用，下面保留上次成功加载的结果。"}
+            {hasStaleLogs && " 当前结果尚未更新，下面保留上次成功加载的结果。"}
           </span>
           <button className="btn btn-sm" type="button" disabled={isLoadingLogs} onClick={onRetryLogs}>
             {isLoadingLogs ? "重试中..." : "重试日志"}

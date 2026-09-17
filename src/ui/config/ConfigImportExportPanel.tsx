@@ -20,6 +20,7 @@ export function ConfigImportExportPanel({
   importError,
   onFileChange,
   onExportConfig,
+  onExportSavedConfig,
   onConfirmImport,
   onClearImport
 }: {
@@ -29,6 +30,7 @@ export function ConfigImportExportPanel({
   importError: string | null;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onExportConfig: () => void | Promise<void>;
+  onExportSavedConfig: () => void | Promise<void>;
   onConfirmImport: () => void | Promise<void>;
   onClearImport: () => void;
 }) {
@@ -55,6 +57,8 @@ export function ConfigImportExportPanel({
         >
           导出完整备份
         </button>
+        <button type="button" className="btn btn-ghost" disabled={!config}
+          onClick={() => void onExportSavedConfig()}>仅导出已保存配置</button>
         <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p></div>
       </div>
 

@@ -550,6 +550,28 @@
   place-items: center;
 }
 
+.analytics-empty-state {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 0 0 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.analytics-empty-state h3 { margin: 0; font-size: 0.94rem; }
+
+.analytics-empty-state p,
+.usage-range-notice {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.usage-range-notice { margin-bottom: 16px; }
+
 .analytics-distribution {
   display: grid;
   gap: 12px;
@@ -903,6 +925,11 @@
 .usage-calendar-head button:hover { background: var(--paper-warm); color: var(--ink); }
 
 .usage-calendar {
+  display: grid;
+  gap: 2px;
+}
+
+.usage-calendar-row {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 2px;

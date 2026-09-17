@@ -38,6 +38,14 @@ describe("admin API cross-site guard", () => {
     }))).toBeNull();
   });
 
+  it("allows an IPv6 loopback Studio Origin without allowing a remote IPv6 host", () => {
+    for (const host of ["[::1]:7865", "[0:0:0:0:0:0:0:1]:7865"]) {
+      expect(crossSiteApiRejection(request({ origin: `http://${host}`, host }))).toBeNull();
+    }
+    expect(crossSiteApiRejection(request({ origin: "http://[2001:db8::1]:7865", host: "[::1]:7865" })))
+      .toMatch(/cross-site Origin/);
+  });
+
   it("refuses DNS rebinding, where a hostile name resolves to loopback", () => {
     expect(crossSiteApiRejection(request({ host: "rebind.evil.example:7865" })))
       .toMatch(/Host refused/);

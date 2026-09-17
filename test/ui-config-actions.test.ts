@@ -61,6 +61,16 @@ describe("profile operations that do not submit a draft", () => {
 });
 
 describe("config writes and their health follow-up", () => {
+  it("pins exports to the draft revision and does not download a rejected snapshot", async () => {
+    const { actions, config, callbacks, fetchMock } = await setup(409, 200);
+    const createElementMock = vi.fn();
+    vi.stubGlobal("document", { createElement: createElementMock });
+    await actions.exportConfig();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/config/export?revision=${encodeURIComponent(config.revision)}`);
+    expect(createElementMock).not.toHaveBeenCalled();
+    expect(callbacks.setPageError).toHaveBeenCalledWith("Synthetic write failure");
+  });
+
   it.each(["save", "update", "apply"] as const)("commits an active profile %s before its health follow-up", async (operation) => {
     const { actions, config, callbacks } = await setup(200, 503, true);
     if (operation === "save") await expect(actions.saveConfigProfile("codex", "Active")).resolves.toBe(true);

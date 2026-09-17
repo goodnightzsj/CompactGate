@@ -148,6 +148,7 @@ export const LOG_INTERNAL_STATE_SCHEMA_SQL = `
 export const LOG_FACET_CLASSIFICATION_VERSION = "4";
 
 export const RECENT_LOG_FIELDS = `
+  id,
   time,
   completed_at,
   route,

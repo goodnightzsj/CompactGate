@@ -24,6 +24,60 @@ import type {
 import { compactUpstreamBaseUrl, deriveCompactModel } from "../src/server/routing.js";
 
 describe("PrimaryFailoverState", () => {
+  it("settles a reservation once and rejects re-reserving it", () => {
+    let roll = 0;
+    const state = new PrimaryFailoverState({ now: () => 0, random: () => roll });
+    const config = configWithCodexProfiles([pooledProfile("pool", "Pool", ["k1", "k2"])]);
+    const first = selectAndReserve(state, config, { sessionKey: "same" });
+    selectAndReserve(state, config, { sessionKey: "same" });
+    selectAndReserve(state, config, { sessionKey: "same" });
+    expect(() => state.reserveSelection(first, true)).toThrow(/already reserved/);
+    state.recordResult(first, 200);
+    roll = 0.999;
+    expect(state.preview(config, { sessionKey: "new" }).keyId).toBe("k2");
+    state.recordResult(first, 401, "late duplicate");
+    expect(state.preview(config, { sessionKey: "new" }).keyId).toBe("k2");
+    expect(state.preview(config, { sessionKey: "same" }).keyId).toBe("k1");
+  });
+
+  it("releases reservations across unrelated credential edits", () => {
+    const a = codexProfile("a", "A", "http://127.0.0.1:9101/v1", "synthetic-a");
+    const b = codexProfile("b", "B", "http://127.0.0.1:9102/v1", "synthetic-b");
+    const config = configWithCodexProfiles([a, b]);
+    const { state } = createState();
+    if (!("primary" in b.config)) throw new Error("Expected primary profile");
+    for (let index = 0; index < 25; index++) {
+      const selected = selectAndReserve(state, config, { sessionKey: `request-${index}` });
+      expect(selected.profileId).toBe("a");
+      b.config.primary.api_key = `synthetic-b-${index}`;
+      state.preview(config);
+      state.recordResult(selected, 200);
+    }
+    expect(state.preview(config).profileId).toBe("a");
+  });
+
+  it("does not release new reservations when a replaced credential's old request finishes", () => {
+    const profile = pooledProfile("pool", "Pool", ["k1", "k2"]);
+    const config = configWithCodexProfiles([profile]);
+    let roll = 0;
+    const state = new PrimaryFailoverState({ now: () => 0, random: () => roll });
+    const old = selectAndReserve(state, config, { sessionKey: "old" });
+    if (!("primary" in profile.config)) throw new Error("Expected primary profile");
+    profile.config.primary.api_keys![0].api_key = "synthetic-replacement";
+    const current = selectAndReserve(state, config, { sessionKey: "current" });
+    const other = selectAndReserve(state, config, { sessionKey: "current" });
+    expect(current.keyId).toBe("k1");
+    expect(other.keyId).toBe("k1");
+    roll = 0.999;
+    expect(state.preview(config, { sessionKey: "new" }).keyId).toBe("k2");
+    state.recordResult(old, 200);
+    expect(state.preview(config, { sessionKey: "new" }).keyId).toBe("k2");
+    state.recordResult(current, 200);
+    state.recordResult(other, 200);
+    roll = 0;
+    expect(state.preview(config, { sessionKey: "new" }).keyId).toBe("k1");
+  });
+
   it("changes candidate signatures when protocol or transport settings change", () => {
     const base = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "https://api.example.test/v1")

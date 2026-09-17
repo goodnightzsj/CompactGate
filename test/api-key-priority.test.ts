@@ -93,7 +93,7 @@ describe("API key priority selection", () => {
     expect(codex.preview(config, { sessionKey: "next" }).keyId).toBe(DIRECT_API_KEY_ID);
     const claude = new ClaudeKeyPoolState({ now: () => 0, random: () => 0 });
     expect(claude.select(config, "main", {})?.keyId).toBe("preferred");
-    claude.recordResult("main", "preferred", { status: 401, responseHeaders: {} }, {});
+    claude.recordResult(claude.select(config, "main", {}), { status: 401, responseHeaders: {} });
     expect(claude.select(config, "main", {})?.keyId).toBe(DIRECT_API_KEY_ID);
   });
 
@@ -134,12 +134,12 @@ describe("API key priority selection", () => {
     codex.reserveSelection(success, true);
     codex.recordResult(success, 200);
     claude.select(config, "main", headers);
-    claude.recordResult("main", "preferred", { status: 200, responseHeaders: {} }, headers);
+    claude.recordResult(claude.select(config, "main", headers), { status: 200, responseHeaders: {} });
     const limited = codex.preview(config, { sessionKey: "old" });
     codex.reserveSelection(limited, true);
     const rateLimit = { status: 429, errorSummary: "rate limited", responseHeaders: { "retry-after": "1" } };
     codex.recordResult(limited, rateLimit);
-    claude.recordResult("main", "preferred", rateLimit, headers, config);
+    claude.recordResult(claude.select(config, "main", headers), rateLimit);
     now += 1_001;
     expect(codex.preview(config, { sessionKey: "new" }).keyId).toBe(DIRECT_API_KEY_ID);
     expect(claude.select(config, "main", {})?.keyId).toBe(DIRECT_API_KEY_ID);
@@ -148,7 +148,7 @@ describe("API key priority selection", () => {
     expect(claude.select(config, "main", headers)?.keyId).toBe("preferred");
     codex.reserveSelection(recovered, true);
     codex.recordResult(recovered, 200);
-    claude.recordResult("main", "preferred", { status: 200, responseHeaders: {} }, headers);
+    claude.recordResult(claude.select(config, "main", headers), { status: 200, responseHeaders: {} });
     expect(codex.preview(config, { sessionKey: "new" }).keyId).toBe("preferred");
     expect(claude.select(config, "main", {})?.keyId).toBe("preferred");
   });
@@ -164,7 +164,7 @@ describe("API key priority selection", () => {
       const result = { status: 429, errorSummary: "rate limited", responseHeaders: { "retry-after": seconds } };
       codex.reserveSelection(selection, true);
       codex.recordResult(selection, result);
-      claude.recordResult("main", keyId, result, {}, config);
+      claude.recordResult(claude.select(config, "main", {}), result);
     }
     expect(codex.preview(config).keyId).toBe("fallback");
     expect(claude.select(config, "main", {})?.keyId).toBe("fallback");
@@ -196,11 +196,11 @@ describe("API key priority selection", () => {
     const state = new ClaudeKeyPoolState({ now: () => 0, random: () => 0 });
     const headers = { "x-session-id": "old" };
     expect(state.select(config, "main", headers)?.keyId).toBe("preferred");
-    state.recordResult("main", "preferred", { status: 200, responseHeaders: {} }, headers);
+    state.recordResult(state.select(config, "main", headers), { status: 200, responseHeaders: {} });
     config.claude.primary.api_keys![0].priority = 50;
     expect(state.select(config, "main", headers)?.keyId).toBe("preferred");
     expect(state.select(config, "main", { "x-session-id": "new" })?.keyId).toBe("fallback");
-    state.recordResult("main", "preferred", { status: 401, responseHeaders: {} }, headers);
+    state.recordResult(state.select(config, "main", headers), { status: 401, responseHeaders: {} });
     config.claude.primary.api_keys![1].priority = 90;
     expect(state.select(config, "main", headers)?.keyId).toBe("fallback");
   });

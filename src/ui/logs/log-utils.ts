@@ -204,10 +204,12 @@ export async function fetchLogPage({
 }
 
 export function appendLogPage(previous: RequestLogPage, nextPage: RequestLogPage): RequestLogPage {
+  const logs = mergeUniqueLogs([...previous.logs, ...nextPage.logs]).slice(0, nextPage.total);
   return {
     ...nextPage,
     offset: 0,
-    logs: mergeUniqueLogs([...previous.logs, ...nextPage.logs])
+    logs,
+    has_more: logs.length < nextPage.total
   };
 }
 
@@ -250,14 +252,16 @@ export function mergeLiveLogPage(
     };
   }
 
-  const duplicate = previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
+  const duplicate = (nextEntry.sequence !== undefined && previous.latest_sequence !== undefined &&
+    nextEntry.sequence <= previous.latest_sequence) ||
+    previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
   const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter, searchFilter);
   const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter, searchFilter);
   const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter, searchFilter);
   const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER, searchFilter);
   const loadedWindowSize = Math.max(previous.limit, previous.logs.length);
   const nextLogs = matchesFilter
-    ? [nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)]
+    ? mergeUniqueLogs([nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)])
         .slice(0, loadedWindowSize)
     : previous.logs;
   const nextTotal = previous.total + (matchesFilter && !duplicate ? 1 : 0);
@@ -269,6 +273,8 @@ export function mergeLiveLogPage(
 
   return {
     ...previous,
+    latest_sequence: nextEntry.sequence === undefined ? previous.latest_sequence
+      : Math.max(previous.latest_sequence ?? 0, nextEntry.sequence),
     logs: nextLogs,
     total: nextTotal,
     all_total: previous.all_total + (duplicate ? 0 : 1),
@@ -323,7 +329,8 @@ function mergeUniqueLogs(logs: RequestLogEntry[]): RequestLogEntry[] {
     next.push(entry);
   }
 
-  return next;
+  return next.sort((left, right) => left.sequence !== undefined && right.sequence !== undefined
+    ? right.sequence - left.sequence : 0);
 }
 
 function logEntryMatchesFilter(
@@ -341,7 +348,7 @@ function logEntryMatchesFilter(
 }
 
 function logEntryMatchesSearch(entry: RequestLogEntry, searchFilter: string): boolean {
-  const keyword = searchFilter.trim().toLowerCase();
+  const keyword = foldSearchCase(searchFilter.trim());
   if (keyword.length === 0) {
     return true;
   }
@@ -355,7 +362,12 @@ function logEntryMatchesSearch(entry: RequestLogEntry, searchFilter: string): bo
     entry.upstream_host,
     entry.request_summary,
     String(entry.status)
-  ].some((value) => value !== null && value !== undefined && value.toLowerCase().includes(keyword));
+  ].some((value) => value !== null && value !== undefined && foldSearchCase(value).includes(keyword));
+}
+
+// Match SQLite LIKE: ASCII case-insensitive, non-ASCII characters literal.
+function foldSearchCase(value: string): string {
+  return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 function bump<K extends string>(

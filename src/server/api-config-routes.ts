@@ -52,7 +52,7 @@ export async function handleConfigApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/config/export") {
-    sendJson(res, 200, configStore.get());
+    sendJson(res, 200, configStore.get(url.searchParams.get("revision")));
     return true;
   }
 

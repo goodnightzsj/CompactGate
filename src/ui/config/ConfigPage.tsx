@@ -26,7 +26,7 @@ import type { ConfigFormState, ConfigTab } from "./types.js";
 import type { ConfigActions } from "../hooks/useConfigActions.js";
 import { useConfigImportWorkflow } from "./useConfigImportWorkflow.js";
 
-type ConfigDisplayScope = ConfigProfileScope | "all";
+export type ConfigDisplayScope = ConfigProfileScope | "all";
 
 export function ConfigPage({
   actions,
@@ -36,6 +36,8 @@ export function ConfigPage({
   hasPendingChanges,
   linkedCompactModel,
   keyActivity,
+  displayScope,
+  onDisplayScopeChange: setDisplayScope,
   onFormChange,
   onConfigTabChange
 }: {
@@ -46,11 +48,12 @@ export function ConfigPage({
   hasPendingChanges: boolean;
   linkedCompactModel: string;
   keyActivity?: StudioKeyActivityEvent[];
+  displayScope: ConfigDisplayScope;
+  onDisplayScopeChange: (scope: ConfigDisplayScope) => void;
   onFormChange: Dispatch<SetStateAction<ConfigFormState>>;
   onConfigTabChange: (tab: ConfigTab) => void;
 }) {
   const [crossScopeDraft, setCrossScopeDraft] = useState<CrossScopeProfileDraft | null>(null);
-  const [displayScope, setDisplayScope] = useState<ConfigDisplayScope>("codex");
   const [profileToLocate, setProfileToLocate] = useState<{ scope: ConfigProfileScope; id: string } | null>(null);
   const visibleScope = configTab === "profiles" || displayScope !== "all" ? displayScope : "codex";
   const importWorkflow = useConfigImportWorkflow({
@@ -76,7 +79,6 @@ export function ConfigPage({
     <>
       <div className="page-header">
         <div>
-          <p className="eyebrow">配置管理</p>
           <h2>配置管理</h2>
         </div>
       </div>
@@ -242,6 +244,7 @@ export function ConfigPage({
                 importError={importWorkflow.importError}
                 onFileChange={importWorkflow.handleImportFileChange}
                 onExportConfig={actions.exportConfig}
+                onExportSavedConfig={actions.exportSavedConfig}
                 onConfirmImport={importWorkflow.confirmImportConfig}
                 onClearImport={importWorkflow.clearImportCandidate}
               />

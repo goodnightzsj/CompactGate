@@ -57,16 +57,43 @@ function isUnfilteredQuery(query: LogPageQuery): boolean {
     query.host === ALL_HOSTS_FILTER && query.search === "";
 }
 
-function resolvePendingLogPage(page: RequestLogPage, pending: PendingLogLoad): RequestLogPage {
+export async function fetchPendingLogPage(
+  pending: PendingLogLoad,
+  isCurrent: () => boolean
+): Promise<RequestLogPage> {
   const { query } = pending;
+  let page: RequestLogPage;
+  do {
+    // Inserts share a SQLite sequence, but maintenance snapshots can remove
+    // rows without an insert. Re-query their window rather than mixing totals.
+    pending.snapshot = null;
+    pending.liveEvents = [];
+    page = await fetchLogPage({ ...query, offset: 0 });
+  } while (pending.snapshot && isCurrent());
   return replayLiveLogEvents(
-    pending.snapshot ? mergeSnapshotLogPage(page, pending.snapshot) : page,
+    page,
     pending.liveEvents,
     query.route,
     query.status,
     query.host,
     query.search
   );
+}
+
+export async function fetchMoreLogPage(
+  pending: PendingLogLoad,
+  baseline: RequestLogPage,
+  isCurrent: () => boolean
+): Promise<RequestLogPage> {
+  const { query } = pending;
+  const next = await fetchLogPage({ ...query, offset: baseline.logs.length });
+  if (pending.snapshot && isCurrent()) return fetchPendingLogPage(pending, isCurrent);
+  // Live inserts may have cropped the displayed tail while this request was
+  // pending. Start from its original window and grow it before replaying.
+  const merged = replayLiveLogEvents({
+    ...appendLogPage(baseline, next), limit: baseline.logs.length + query.limit
+  }, pending.liveEvents, query.route, query.status, query.host, query.search);
+  return { ...merged, limit: query.limit };
 }
 
 interface LogPresentationState {
@@ -111,6 +138,7 @@ export function useLogFeed({
   const generationRef = useRef(0);
   const loadMoreRequestIdRef = useRef(0);
   const pendingLogLoadRef = useRef<PendingLogLoad | null>(null);
+  const pendingMoreLoadRef = useRef<PendingLogLoad | null>(null);
   const appliedQueryRef = useRef<LogPageQuery>({
     route: "all",
     status: "all",
@@ -119,7 +147,7 @@ export function useLogFeed({
     limit: DEFAULT_LOG_PAGE_LIMIT
   });
   const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
-  const hasStaleLogs = pageQueryKey !== logPageQueryKey({
+  const hasStaleLogs = (requestError !== null && requestError.operation !== "more") || pageQueryKey !== logPageQueryKey({
     route: routeFilter, status: statusFilter, host: hostFilter, search: searchFilter, limit: logPageLimit
   });
 
@@ -138,6 +166,7 @@ export function useLogFeed({
     if (!enabled || !hasConfig) {
       isLoadingLogsRef.current = false;
       pendingLogLoadRef.current = null;
+      pendingMoreLoadRef.current = null;
       setIsLoadingLogs(false);
       return;
     }
@@ -146,6 +175,7 @@ export function useLogFeed({
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     loadMoreRequestIdRef.current += 1;
+    pendingMoreLoadRef.current = null;
     isLoadingMoreLogsRef.current = false;
     setIsLoadingMoreLogs(false);
     const query: LogPageQuery = {
@@ -156,32 +186,26 @@ export function useLogFeed({
       limit: logPageLimit
     };
     isLoadingLogsRef.current = true;
-    pendingLogLoadRef.current = {
+    const pendingLoad: PendingLogLoad = {
       generation,
       query,
       liveEvents: [],
       snapshot: null
     };
+    pendingLogLoadRef.current = pendingLoad;
 
     async function loadLogs() {
       setIsLoadingLogs(true);
 
       try {
-        const nextPage = await fetchLogPage({
-          ...query,
-          offset: 0
-        });
+        const nextPage = await fetchPendingLogPage(pendingLoad,
+          () => !cancelled && isCurrentLogRequest(generation, generationRef.current));
 
         if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
-          const pendingLoad = pendingLogLoadRef.current;
-          let resolvedPage = nextPage;
-          if (pendingLoad?.generation === generation) {
-            resolvedPage = resolvePendingLogPage(nextPage, pendingLoad);
-            pendingLogLoadRef.current = null;
-          }
+          pendingLogLoadRef.current = null;
           appliedQueryRef.current = query;
           setLogState((previous) => ({
-            page: resolvedPage,
+            page: nextPage,
             syncVersion: previous.syncVersion + 1,
             liveInsertIds: []
           }));
@@ -219,38 +243,37 @@ export function useLogFeed({
     let pendingRefresh: PendingLogLoad | null = null;
 
     async function refreshAppliedLogPage(isStillRelevant: () => boolean): Promise<boolean> {
+      // In-flight loads already replay maintenance invalidations. Do not launch
+      // a second owner that can replace their newer query or release its flags.
+      if (pendingLogLoadRef.current || pendingRefresh) return false;
       const generation = generationRef.current;
       const query = appliedQueryRef.current;
       const requestId = refreshRequestId + 1;
       refreshRequestId = requestId;
       const pendingLoad: PendingLogLoad = { generation, query, liveEvents: [], snapshot: null };
       pendingRefresh = pendingLoad;
+      loadMoreRequestIdRef.current += 1;
+      pendingMoreLoadRef.current = null;
+      isLoadingMoreLogsRef.current = false;
+      setIsLoadingMoreLogs(false);
+      isLoadingLogsRef.current = true;
+      setIsLoadingLogs(true);
+      const isCurrent = () => !closed && isStillRelevant() && isCurrentLogPageRequest(
+        generation, generationRef.current, query, appliedQueryRef.current, requestId, refreshRequestId
+      );
       try {
         // ponytail: recovery starts from one bounded first page. Preserving a
         // paged scroll position would require refreshing its contiguous range;
         // merging disconnected windows could silently skip missed records.
-        const nextPage = await fetchLogPage({
-          ...query,
-          offset: 0
-        });
-        if (
-          !closed &&
-          isStillRelevant() &&
-          isCurrentLogPageRequest(
-            generation,
-            generationRef.current,
-            query,
-            appliedQueryRef.current,
-            requestId,
-            refreshRequestId
-          )
-        ) {
+        const nextPage = await fetchPendingLogPage(pendingLoad, isCurrent);
+        if (isCurrent()) {
           // A matching query does not make an old offset valid for a new window.
           loadMoreRequestIdRef.current += 1;
+          pendingMoreLoadRef.current = null;
           isLoadingMoreLogsRef.current = false;
           setIsLoadingMoreLogs(false);
           setLogState((previous) => ({
-            page: resolvePendingLogPage(nextPage, pendingLoad),
+            page: nextPage,
             syncVersion: previous.syncVersion + 1,
             liveInsertIds: []
           }));
@@ -260,24 +283,17 @@ export function useLogFeed({
           return true;
         }
       } catch (error) {
-        if (
-          !closed &&
-          isStillRelevant() &&
-          isCurrentLogPageRequest(
-            generation,
-            generationRef.current,
-            query,
-            appliedQueryRef.current,
-            requestId,
-            refreshRequestId
-          )
-        ) {
+        if (isCurrent()) {
           setRequestError((previous) => previous?.operation === "first-page" ? previous : {
             message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "refresh"
           });
         }
       } finally {
         if (pendingRefresh === pendingLoad) pendingRefresh = null;
+        if (!closed && generation === generationRef.current && !pendingLogLoadRef.current) {
+          isLoadingLogsRef.current = false;
+          setIsLoadingLogs(false);
+        }
       }
       return false;
     }
@@ -333,12 +349,18 @@ export function useLogFeed({
         setKeyActivity((previous) => previous.filter((entry) => entry.config_revision === snapshot.config.revision));
         applyRemoteConfig(snapshot.config);
         setHealth(snapshot.health);
-        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh]) {
-          if (pendingLoad?.generation === generationRef.current && isUnfilteredQuery(pendingLoad.query)) {
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh, pendingMoreLoadRef.current]) {
+          if (pendingLoad?.generation === generationRef.current) {
             pendingLoad.snapshot = snapshot.log_page;
           }
         }
-        if (isUnfilteredQuery(appliedQueryRef.current)) {
+        if (snapshot.logs_invalidated) {
+          loadMoreRequestIdRef.current += 1;
+          pendingMoreLoadRef.current = null;
+          isLoadingMoreLogsRef.current = false;
+          setIsLoadingMoreLogs(false);
+          void refreshAppliedLogPage(() => true);
+        } else if (isUnfilteredQuery(appliedQueryRef.current)) {
           setLogState((previous) => ({
             page: mergeSnapshotLogPage(previous.page, snapshot.log_page),
             syncVersion: previous.syncVersion + 1,
@@ -354,7 +376,7 @@ export function useLogFeed({
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
         setHealth((previous) => mergeCodexStatusIntoHealth(previous, payload));
-        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh]) {
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh, pendingMoreLoadRef.current]) {
           if (pendingLoad?.generation === generationRef.current) {
             pendingLoad.liveEvents.push(payload);
           }
@@ -456,12 +478,13 @@ export function useLogFeed({
     const requestId = loadMoreRequestIdRef.current + 1;
     loadMoreRequestIdRef.current = requestId;
     const query = appliedQueryRef.current;
+    const pending: PendingLogLoad = { generation, query, liveEvents: [], snapshot: null };
+    pendingMoreLoadRef.current = pending;
+    const isCurrent = () => isCurrentLogPageRequest(generation, generationRef.current,
+      query, appliedQueryRef.current, requestId, loadMoreRequestIdRef.current);
 
     try {
-      const nextPage = await fetchLogPage({
-        ...query,
-        offset: logPage.logs.length
-      });
+      const nextPage = await fetchMoreLogPage(pending, logPage, isCurrent);
       if (isCurrentLogPageRequest(
         generation,
         generationRef.current,
@@ -472,7 +495,7 @@ export function useLogFeed({
       )) {
         setLogState((previous) => ({
           ...previous,
-          page: appendLogPage(previous.page, nextPage)
+          page: nextPage
         }));
         setRequestError((previous) => previous?.operation === "more" && previous.queryKey === logPageQueryKey(query) ? null : previous);
       }
@@ -490,6 +513,7 @@ export function useLogFeed({
         });
       }
     } finally {
+      if (pendingMoreLoadRef.current === pending) pendingMoreLoadRef.current = null;
       if (isCurrentLogPageRequest(
         generation,
         generationRef.current,

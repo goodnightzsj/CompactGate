@@ -7,6 +7,24 @@ import { fetchJson, startApp } from "./helpers/server-test-utils.js";
  * "save my draft anyway" override, and it can only do that from the status code.
  */
 describe("CompactGate config API error statuses", () => {
+  it("exports only the snapshot matching the draft revision while keeping saved-only export compatible", async () => {
+    const app = await startApp();
+    const { body: original } = await fetchJson<PublicConfig>(`${app.url}/api/config`, "GET");
+    const pinnedUrl = `${app.url}/api/config/export?revision=${encodeURIComponent(original.revision)}`;
+    expect((await fetch(pinnedUrl)).status).toBe(200);
+    await fetchJson(`${app.url}/api/config`, "PATCH", {
+      primary: { base_url: "https://synthetic-b.example/v1", api_key: "SYNTHETIC_B" }
+    });
+    const stale = await fetch(pinnedUrl);
+    expect(stale.status).toBe(409);
+    expect(await stale.text()).not.toContain("SYNTHETIC_B");
+    const saved = await fetch(`${app.url}/api/config/export`);
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ primary: {
+      base_url: "https://synthetic-b.example/v1", api_key: "SYNTHETIC_B"
+    } });
+  });
+
   it("separates a lost write, a missing profile and a bad payload", async () => {
     const app = await startApp();
 
