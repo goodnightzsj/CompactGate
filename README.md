@@ -117,6 +117,85 @@ http://127.0.0.1:7865/
 
 这里就是 CompactGate Studio。
 
+### 6.（可选）装成随登录自启的常驻服务
+
+上面的 `npm start` 是前台进程，关掉终端就没了。要让 CompactGate 一直在，装成 macOS LaunchAgent。
+
+这一步不是必须的：不装也能正常用，只是每次开机要手动起。
+
+#### 1. 编译命名壳程序
+
+```bash
+npm run build:launcher
+```
+
+生成 `bin/compactgate`，一个把 node 路径 `execv` 过去的小壳（源码 `scripts/launcher.c`）。
+
+**为什么需要它**：macOS「系统设置 → 通用 → 登录项与扩展」里显示的服务名，取自**可执行文件名**而不是 plist 的 `Label`。直接指向 `node`，那一栏就会登记成 `node` / `Node.js Foundation`——既认不出来，也容易当成无用进程被关掉。壳程序用 ad-hoc 签名即可，`npm run build:launcher` 已经代劳。
+
+产物不在版本控制里（复制或重建都会让签名失效），克隆仓库后必须自己跑一次。
+
+#### 2. 改 plist 里的路径
+
+`scripts/compactgate.plist` 里有几处写死的绝对路径，按你的机器改：
+
+| 键 | 改成 |
+|---|---|
+| `ProgramArguments[1]` | 你的 `node` 绝对路径（`which node`） |
+| `ProgramArguments[2]` | 这个仓库的 `dist/server/main.js` 绝对路径 |
+| `WorkingDirectory` | 仓库根目录 |
+| `EnvironmentVariables` → `COMPACTGATE_CONFIG` | `compactgate.json` 绝对路径 |
+| `EnvironmentVariables` → `PATH` | 至少含 node 与 `/opt/homebrew/bin` |
+| `StandardOutPath` / `StandardErrorPath` | 你想让日志落到哪 |
+| `COMPACTGATE_CONFIG` 旁的两个 `_PROXY` | 走代理才需要；`NO_PROXY` 里务必保留 `127.0.0.1` |
+
+`PATH` 里必须有 `/opt/homebrew/bin`：服务启动时会同步跑一次 `codex --version`，找不到命令时版本检测会静默降级。
+
+#### 3. 安装并启动
+
+```bash
+cp scripts/compactgate.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/compactgate.plist
+```
+
+`bootstrap` 有时会返回 `Bootstrap failed: 5: Input/output error`，但服务其实已经起来了——判断成败要看下面这条，不要只看它的退出码：
+
+```bash
+launchctl list | grep compactgate
+curl -s http://127.0.0.1:7865/api/health
+```
+
+#### 4. 日常命令
+
+```bash
+npm run restart    # 重新编译并重启（改完源码用这个）
+npm run stop       # 停止；15 秒后若无人监听会自动拉起
+npm run defer-start 5   # 手动臂化一次延迟启动，做危险操作前用
+```
+
+`npm run stop` 是**临时**语义：它在停止前先安排一次 15 秒后的检查，发现端口没人监听就重新启动。要真正停住：
+
+```bash
+COMPACTGATE_STOP_AUTO_RESTART_SECONDS=0 npm run stop
+```
+
+彻底卸载（连自启定义一起删）：
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/compactgate.plist
+```
+
+#### 5. 它替你兜了什么
+
+| 场景 | 行为 |
+|---|---|
+| 进程崩溃 / 被 `kill -9` | `KeepAlive` 自动拉回（约数秒） |
+| 开机、登录 | `RunAtLoad` 自动启动 |
+| `npm run restart` | `launchctl kickstart -k`，先杀后起，不留空窗 |
+| 收到 SIGTERM | 优雅退出：先断空闲连接，3 秒后强制断开长连接（Studio 的 SSE 是永不结束的流，否则会挂住），再 checkpoint 数据库并以 `exit(0)` 收尾 |
+
+`exit(0)` 与崩溃的区分正是 `KeepAlive{SuccessfulExit:false}` 的依据——正常停止不会被当成崩溃重新拉起。
+
 ## Codex 怎么接入
 
 构建后可以直接用一次性启动器，不修改 `~/.codex/config.toml`：

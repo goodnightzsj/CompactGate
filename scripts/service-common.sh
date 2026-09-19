@@ -68,3 +68,19 @@ wait_for_port_to_close() {
 
   return 1
 }
+
+# Blocks until the configured /api/health endpoint answers, or HEALTHCHECK_RETRIES
+# half-second attempts run out. Callers may set HEALTHCHECK_RETRIES beforehand.
+wait_for_server() {
+  local retries="${HEALTHCHECK_RETRIES:-60}"
+  local deadline=$((SECONDS + retries))
+
+  while [[ $SECONDS -lt $deadline ]]; do
+    if curl -fsS "http://$HEALTHCHECK_HOST:$PORT/api/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+
+  return 1
+}

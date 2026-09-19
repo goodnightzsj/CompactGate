@@ -9,61 +9,49 @@ HOST="127.0.0.1"
 PORT="7865"
 HEALTHCHECK_HOST="$HOST"
 BUILD_BEFORE_RESTART="${COMPACTGATE_RESTART_BUILD:-1}"
-RESTART_DELAY_SECONDS="${COMPACTGATE_RESTART_DELAY_SECONDS:-0.25}"
 RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT_DIR/.codex-tasks/20260602-unified-logs-codex-compression/raw/runtime}"
-LAUNCH_LABEL="${COMPACTGATE_RESTART_LABEL:-com.compactgate.restart}"
-PID_FILE="$RUNTIME_DIR/compactgate.pid"
+LAUNCH_LABEL="${COMPACTGATE_LAUNCH_LABEL:-compactgate}"
+LAUNCH_PLIST="${COMPACTGATE_LAUNCH_PLIST:-${HOME:-}/Library/LaunchAgents/$LAUNCH_LABEL.plist}"
+HEALTHCHECK_RETRIES="${COMPACTGATE_HEALTHCHECK_RETRIES:-60}"
 RESTART_LOG="$RUNTIME_DIR/compactgate.restart.log"
 SERVER_LOG="$RUNTIME_DIR/compactgate.server.log"
-RUNNER_SCRIPT="$RUNTIME_DIR/compactgate-runner.sh"
 
 source "$(dirname "$SCRIPT_PATH")/service-common.sh"
 
 resolve_listen_target
 
-start_server() {
-  cat >"$RUNNER_SCRIPT" <<RUNNER
-#!/usr/bin/env bash
-set -euo pipefail
-cd "$PROJECT_DIR"
-exec env \
-  -u COMPACTGATE_LOG_DB \
-  COMPACTGATE_CONFIG="$CONFIG_PATH" \
-  NODE_ENV=production \
-  PATH="$PATH" \
-  HTTPS_PROXY="${HTTPS_PROXY:-}" \
-  https_proxy="${https_proxy:-}" \
-  HTTP_PROXY="${HTTP_PROXY:-}" \
-  http_proxy="${http_proxy:-}" \
-  NO_PROXY="${NO_PROXY:-}" \
-  no_proxy="${no_proxy:-}" \
-  "$NODE_BIN" dist/server/main.js
-RUNNER
-  chmod +x "$RUNNER_SCRIPT"
+# Absolute paths are baked into the plist because launchd has no shell: it does
+# not read PATH from a profile and cannot see nvm. The script's job shrinks to
+# keeping those values in sync with this checkout.
+install_agent() {
+  if [[ ! -f "$LAUNCH_PLIST" ]]; then
+    echo "[$(timestamp)] Missing LaunchAgent: $LAUNCH_PLIST" >&2
+    echo "Install it once with:" >&2
+    echo "  cp $PROJECT_DIR/scripts/$LAUNCH_LABEL.plist $LAUNCH_PLIST" >&2
+    exit 1
+  fi
 
-  launchctl submit \
-    -l "$LAUNCH_LABEL" \
-    -o "$SERVER_LOG" \
-    -e "$SERVER_LOG" \
-    -- "$RUNNER_SCRIPT"
-}
+  local node_bin plist_launcher plist_node
+  node_bin="$(command -v "$NODE_BIN" || true)"
+  # ProgramArguments is [launcher, node, main.js]: the launcher is the execv shim
+  # that exists so BTM names this service "compactgate" instead of "node", so the
+  # node path to check lives at index 1, not 0.
+  plist_launcher="$(plutil -extract ProgramArguments.0 raw "$LAUNCH_PLIST")"
+  plist_node="$(plutil -extract ProgramArguments.1 raw "$LAUNCH_PLIST")"
+  if [[ ! -x "$plist_launcher" ]]; then
+    echo "[$(timestamp)] Launcher missing or not executable: $plist_launcher" >&2
+    echo "Rebuild it with: npm run build:launcher" >&2
+    exit 1
+  fi
+  if [[ -n "$node_bin" && "$node_bin" != "$plist_node" ]]; then
+    echo "[$(timestamp)] Node moved: plist has $plist_node, this shell uses $node_bin" >&2
+    echo "Update ProgramArguments in $LAUNCH_PLIST and re-run." >&2
+    exit 1
+  fi
 
-stop_launch_job() {
-  echo "[$(timestamp)] Removing launchd job if present: $LAUNCH_LABEL"
-  launchctl remove "$LAUNCH_LABEL" >/dev/null 2>&1 || true
-}
-
-wait_for_server() {
-  local deadline=$((SECONDS + 15))
-
-  while [[ $SECONDS -lt $deadline ]]; do
-    if curl -fsS "http://$HEALTHCHECK_HOST:$PORT/api/health" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.5
-  done
-
-  return 1
+  # `launchctl bootstrap` exits non-zero when the service is already bootstrapped,
+  # which is the normal case on a restart.
+  launchctl bootstrap "gui/$(id -u)" "$LAUNCH_PLIST" 2>/dev/null || true
 }
 
 build_dist() {
@@ -95,33 +83,20 @@ restart_worker() {
     exit 1
   fi
 
-  sleep "$RESTART_DELAY_SECONDS"
-  stop_launch_job
+  install_agent
 
-  local pids
-  pids="$(list_listener_pids)"
-  if [[ -n "$pids" ]]; then
-    echo "[$(timestamp)] Stopping listener PID(s): $pids"
-    kill $pids 2>/dev/null || true
-
-    if ! wait_for_port_to_close; then
-      pids="$(list_listener_pids)"
-      if [[ -n "$pids" ]]; then
-        echo "[$(timestamp)] Force stopping listener PID(s): $pids"
-        kill -9 $pids 2>/dev/null || true
-      fi
-    fi
-  else
-    echo "[$(timestamp)] No existing listener found"
-  fi
-
-  echo "[$(timestamp)] Starting CompactGate"
-  start_server
+  # `kickstart -k` kills the running instance and starts a fresh one, in that
+  # order, inside launchd — so there is no window where the job is half-torn-down.
+  # The old `remove` + `submit` pair had exactly that window, and a submit landing
+  # in it exits 0 while starting nothing, which is how this service used to come
+  # back up dead after a restart.
+  echo "[$(timestamp)] Kickstarting $LAUNCH_LABEL"
+  launchctl kickstart -k "gui/$(id -u)/$LAUNCH_LABEL"
 
   if wait_for_server; then
-    pids="$(list_listener_pids)"
-    printf "%s\n" "$pids" | head -n 1 >"$PID_FILE"
-    echo "[$(timestamp)] Restart complete; PID $(cat "$PID_FILE") is listening on $HOST:$PORT via $LAUNCH_LABEL"
+    local pid
+    pid="$(launchctl print "gui/$(id -u)/$LAUNCH_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
+    echo "[$(timestamp)] Restart complete; PID ${pid:-unknown} is listening on $HOST:$PORT via $LAUNCH_LABEL"
   else
     echo "[$(timestamp)] Restart failed; server did not become healthy"
     tail -n 80 "$SERVER_LOG" || true
@@ -149,18 +124,13 @@ fi
 
 LAUNCHER="$(command -v setsid || echo nohup)"
 
-# The worker is a direct child of this shell, so it inherits PATH and the proxy
-# variables already present in the environment. Only the shell-local values need
-# exporting. (The launchd runner script is different: launchd does not inherit
-# this environment, so it must keep re-passing PATH and the proxy variables.)
 export PROJECT_DIR RUNTIME_DIR NODE_BIN
-export COMPACTGATE_RESTART_DELAY_SECONDS="$RESTART_DELAY_SECONDS"
 
 "$LAUNCHER" bash "$SCRIPT_PATH" --worker >>"$RESTART_LOG" 2>&1 </dev/null &
 
 echo "Scheduled CompactGate restart for http://$HOST:$PORT"
 echo "Build before restart: $BUILD_BEFORE_RESTART"
-echo "Restart delay seconds: $RESTART_DELAY_SECONDS"
 echo "Launch label: $LAUNCH_LABEL"
+echo "Launch plist: $LAUNCH_PLIST"
 echo "Restart log: $RESTART_LOG"
 echo "Server log: $SERVER_LOG"

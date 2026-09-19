@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/server/main.ts",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
+    "build:launcher": "cc -O2 -o bin/compactgate scripts/launcher.c && codesign --force --sign - --identifier com.compactgate.launcher bin/compactgate",
     "start": "node dist/server/main.js",
     "restart": "bash scripts/restart-service.sh",
     "test": "vitest run",
@@ -20,7 +21,8 @@
     "check": "npm run check:diff && npm run lint:style && npm run typecheck:strict && npm test && npm run build",
     "check:diff": "git diff HEAD --check",
     "typecheck:strict": "tsc -p tsconfig.json --noEmit --noUnusedLocals --noUnusedParameters",
-    "stop": "bash scripts/stop-service.sh"
+    "stop": "bash scripts/stop-service.sh",
+    "defer-start": "bash scripts/defer-start.sh"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.3.0",

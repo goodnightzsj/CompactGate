@@ -59,3 +59,12 @@ Thumbs.db
 /*.avif
 /*.bmp
 llmdoc/
+
+# Compiled launchd exec shim; rebuild with `npm run build:launcher`.
+# Signed ad-hoc, and the signature is invalidated by any copy or rebuild.
+/bin/compactgate
+
+# LaunchAgent definition for this machine only: it hardcodes the absolute node
+# path, the nvm version and this checkout's location. Install it with
+# `cp scripts/compactgate.plist ~/Library/LaunchAgents/`.
+/scripts/compactgate.plist
