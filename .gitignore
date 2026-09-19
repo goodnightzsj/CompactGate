@@ -60,6 +60,11 @@ Thumbs.db
 /*.bmp
 llmdoc/
 
+# Local debugging probes: they read this machine's real compactgate.json and
+# hardcode profile ids, so they cannot run for anyone else and must not look
+# like part of the test suite. `npm test` does not collect them.
+/scripts/probes/
+
 # Compiled launchd exec shim; rebuild with `npm run build:launcher`.
 # Signed ad-hoc, and the signature is invalidated by any copy or rebuild.
 /bin/compactgate

@@ -1536,7 +1536,7 @@ describe("CompactGate OpenAI routing", () => {
 
   it("repairs readable Chinese legacy compaction items without a cached compact response", async () => {
     const summaryText = [
-      "- 项目：`/Users/zsj/code/program/CompactGate`。",
+      "- 项目：`/path/to/project`。",
       "- 用户请求：分析压缩后 resume 仍然断流的问题。",
       "- 当前结论：这个可读摘要应该转换成 assistant summary message。"
     ].join("\n");
