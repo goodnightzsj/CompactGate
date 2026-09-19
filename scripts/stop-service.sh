@@ -14,7 +14,7 @@ STOP_LOG="$RUNTIME_DIR/compactgate.stop.log"
 # Stop is deliberately transient: a safety-net start is armed before this script
 # exits, so a stop that was meant to be a restart (or a maintenance step whose
 # follow-up failed) cannot leave the proxy down. Set to 0 for a durable stop.
-STOP_AUTO_RESTART_SECONDS="${COMPACTGATE_STOP_AUTO_RESTART_SECONDS:-15}"
+STOP_AUTO_RESTART_SECONDS="${COMPACTGATE_STOP_AUTO_RESTART_SECONDS:-5}"
 
 source "$(dirname "$SCRIPT_PATH")/service-common.sh"
 
