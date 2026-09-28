@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import type { HTMLMotionProps } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
@@ -20,7 +21,7 @@ import {
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useMediaQuery, useNarrowViewport } from "./useNarrowViewport.js";
-import { ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
+import { groupLogAnimations, ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
 
 function logEntryKey(entry: RequestLogEntry): string {
   return `${entry.request_id}-${entry.time}`;
@@ -37,6 +38,20 @@ const detailTransition = {
 // Module-level so the prop identity is stable across renders — a fresh object
 // every tick would defeat memoization of the row components below.
 const REDUCED_MOTION_TRANSITION = { duration: 0.01 };
+
+// Keep every loaded row mounted, but measure layout only while it is visible.
+// Motion shares the IntersectionObserver; scrolling does not rebuild the list.
+function LogMotionRow({ reduceMotion, ...props }: HTMLMotionProps<"tr"> & { reduceMotion: boolean }) {
+  const [visible, setVisible] = useState(false);
+  return <MotionTr {...props} layout layoutDependency={visible && !reduceMotion ? undefined : false}
+    onViewportEnter={() => setVisible(true)} onViewportLeave={() => setVisible(false)} />;
+}
+
+function LogMotionCard({ reduceMotion, ...props }: HTMLMotionProps<"div"> & { reduceMotion: boolean }) {
+  const [visible, setVisible] = useState(false);
+  return <MotionDiv {...props} layout layoutDependency={visible && !reduceMotion ? undefined : false}
+    onViewportEnter={() => setVisible(true)} onViewportLeave={() => setVisible(false)} />;
+}
 
 export function LogsPage({
   logs, pendingLogCount = 0,
@@ -61,8 +76,12 @@ export function LogsPage({
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const keyboardHintId = useId();
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const narrowViewport = useNarrowViewport();
+  const initialRender = useRef(true);
+  useEffect(() => { initialRender.current = false; }, []);
+  const logGroups = useMemo(() => groupLogAnimations(logs), [logs]);
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : ROW_SPRING_TRANSITION;
   const effectiveDetailTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition;
   const {
@@ -114,17 +133,18 @@ export function LogsPage({
   // displayed window changes. Keep the presence tree stable until its inputs do.
   const renderedLogs = useMemo(() => narrowViewport ? (
     <AnimatePresence initial={false}>
-      {logs.map((entry) => {
+      {logGroups.map((group) => <AnimatePresence key={group.key} initial={!initialRender.current} propagate>
+      {group.logs.map((entry) => {
         const logKey = logEntryKey(entry);
         return (
-          <MotionDiv
+          <LogMotionCard
             key={`mobile-${logKey}`}
+            reduceMotion={reduceMotion}
             className="log-mobile-motion-item"
             initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             transition={effectiveRowTransition}
-            layout
             data-log-id={entry.request_id}
           >
             <LogMobileCard
@@ -134,30 +154,33 @@ export function LogsPage({
               expanded={expandedLogKey === logKey}
               onToggle={toggleLog}
             />
-          </MotionDiv>
+          </LogMotionCard>
         );
       })}
+      </AnimatePresence>)}
     </AnimatePresence>
   ) : (
     <AnimatePresence initial={false}>
-      {logs.flatMap((entry) => {
+      {logGroups.map((group) => <AnimatePresence key={group.key} initial={!initialRender.current} propagate>
+      {group.logs.flatMap((entry) => {
         const logKey = logEntryKey(entry);
         const detailId = `desktop-log-detail-${entry.request_id}`;
         const expanded = expandedLogKey === logKey;
         const hasError = logStatusKind(entry) === "error";
         const rows = [
-          <MotionTr
+          <LogMotionRow
             key={logKey}
+            reduceMotion={reduceMotion}
             initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             transition={effectiveRowTransition}
-            layout
             data-log-id={entry.request_id}
             className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
             tabIndex={0}
             aria-expanded={expanded}
             aria-controls={detailId}
+            aria-describedby={keyboardHintId}
             aria-label={`${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
             onClick={(event) => {
               if ((event.target as Element).closest("button, a, input, select, textarea, [role='button']")) return;
@@ -166,7 +189,7 @@ export function LogsPage({
             onKeyDown={(event) => handleRowKeyDown(event, logKey)}
           >
             <LogRowCells entry={entry} />
-          </MotionTr>
+          </LogMotionRow>
         ];
 
         if (expanded) {
@@ -204,8 +227,9 @@ export function LogsPage({
 
         return rows;
       })}
+      </AnimatePresence>)}
     </AnimatePresence>
-  ), [logs, narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown]);
+  ), [logGroups, narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown, keyboardHintId]);
 
   function clearFilters() {
     onRouteFilterChange("all");
@@ -220,6 +244,7 @@ export function LogsPage({
         <div>
           <p className="eyebrow">流量日志</p>
           <h2>请求日志</h2>
+          {!narrowViewport && <span className="log-keyboard-hint" id={keyboardHintId}>点击请求行，或聚焦后按 Enter / 空格查看完整信息</span>}
         </div>
         <div className="logs-page-actions">
           {/* The live region stays mounted and only its contents change: an

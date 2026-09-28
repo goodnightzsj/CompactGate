@@ -52,7 +52,7 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
       data-label="Token"
       aria-describedby={placement ? tooltipId : undefined}
       aria-expanded={placement !== null}
-      onClick={() => placement ? hideTooltip() : showTooltip()}
+      onClick={showTooltip}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { logStatusToneClass } from "../logs/log-utils.js";
@@ -17,6 +17,9 @@ export function DashboardRecentRequests({
   listen: string;
 }) {
   const narrowViewport = useNarrowViewport("(max-width: 760px)");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const keyboardHintId = useId();
+  const toggleRow = (id: string) => setExpandedId((current) => current === id ? null : id);
   // One slice and one pass of formatting for both layouts. The table and the
   // card list are alternatives, never shown together, so rendering only the
   // visible one skips half this component's work on every log event — and stops
@@ -33,6 +36,7 @@ export function DashboardRecentRequests({
     <div className="card">
       <div className="card-header">
         <h3>最近请求</h3>
+        {!narrowViewport && <span className="log-keyboard-hint" id={keyboardHintId}>点击请求行，或聚焦后按 Enter / 空格查看完整信息</span>}
         <a className="dashboard-health-summary-link" href="/#logs">查看全部日志 · {logs.length} 条</a>
       </div>
       {logs.length === 0 ? (
@@ -85,7 +89,24 @@ export function DashboardRecentRequests({
               </thead>
               <tbody>
                 {rows.map(({ entry, startedAt, completedAt, duration }) => (
-                  <tr key={entry.request_id} className="log-row">
+                  <tr
+                    key={entry.request_id}
+                    className={`log-row is-clickable ${expandedId === entry.request_id ? "is-expanded" : ""}`}
+                    tabIndex={0}
+                    aria-expanded={expandedId === entry.request_id}
+                    aria-describedby={keyboardHintId}
+                    aria-label={`${entry.status} ${entry.source_model ?? "未知模型"}，${expandedId === entry.request_id ? "收起" : "查看"}完整信息`}
+                    onClick={() => toggleRow(entry.request_id)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        toggleRow(entry.request_id);
+                      } else if (event.key === "Escape") {
+                        setExpandedId(null);
+                      }
+                    }}
+                  >
                     <td><LogTextTooltip className="log-cell-time" value={startedAt} /></td>
                     <td><LogTextTooltip className="log-cell-time" value={completedAt} /></td>
                     <td><LogTextTooltip className="log-cell-model" value={entry.source_model ?? "-"} /></td>

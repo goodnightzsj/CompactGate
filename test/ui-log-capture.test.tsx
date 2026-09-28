@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry } from "../src/shared/types.js";
+import { DashboardRecentRequests } from "../src/ui/dashboard/DashboardRecentRequests.js";
 import {
   CaptureRequestError,
   captureDownloadUrl,
@@ -13,6 +14,18 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("offers one keyboard entry per recent request with full metadata and instructions", () => {
+  const entry = requestLog("none");
+  entry.source_model = "long-model-".repeat(20);
+  entry.upstream_host = "long-host-".repeat(20);
+  entry.endpoint = "/long-endpoint".repeat(20);
+  const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[entry]} listen="127.0.0.1:7865" />);
+  expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
+  expect(markup).toMatch(/<tr[^>]*aria-expanded="false"[^>]*aria-describedby=/);
+  expect(markup).toContain("Enter / 空格查看完整信息");
+  for (const value of [entry.source_model, entry.upstream_host, entry.endpoint]) expect(markup).toContain(value);
 });
 
 describe("capture client", () => {

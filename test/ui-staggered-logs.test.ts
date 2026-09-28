@@ -7,6 +7,7 @@ import {
   ROW_SPRING_TRANSITION,
   STAGGER_BASE_MS,
   estimateStaggerDuration,
+  groupLogAnimations,
   planStaggeredLogCatchUp,
   revealStaggeredLog,
   selectStaggeredLogIds,
@@ -14,6 +15,23 @@ import {
 } from "../src/ui/logs/useStaggeredLogs.js";
 
 describe("staggered log query changes", () => {
+  it("keeps animation group and row identities across sequence-boundary inserts and maintenance trims", () => {
+    const rows = Array.from({ length: 2000 }, (_, index) => ({ ...log(String(2000 - index)), sequence: 2000 - index }));
+    const before = groupLogAnimations(rows);
+    expect(before.flatMap((group) => group.logs)).toEqual(rows);
+    expect(before.every((group) => group.logs.length <= 64)).toBe(true);
+    const keyFor = (groups: ReturnType<typeof groupLogAnimations>, entry: RequestLogEntry) =>
+      groups.find((group) => group.logs.includes(entry))?.key;
+    const boundary = rows.filter((entry) => entry.sequence <= 63);
+    const inserted = groupLogAnimations([{ ...log("64"), sequence: 64 }, ...boundary]);
+    expect(keyFor(inserted, boundary[0])).toBe(keyFor(groupLogAnimations(boundary), boundary[0]));
+    expect(keyFor(groupLogAnimations(rows.slice(0, 1900)), rows[1000])).toBe(keyFor(before, rows[1000]));
+    for (const legacy of [[log("a"), log("b")], [rows[10], rows[0], rows[20]]]) {
+      expect(groupLogAnimations(legacy)).toEqual([{ key: "all", logs: legacy }]);
+    }
+    expect(groupLogAnimations([])).toEqual([]);
+  });
+
   it("keeps the insertion cadence at or above the row spring's settle time", () => {
     // The mush this guards against: inserting faster than the LogsPage row
     // spring settles leaves several springs plus their layout FLIPs in flight at

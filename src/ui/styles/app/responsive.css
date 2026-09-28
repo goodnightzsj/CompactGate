@@ -25,6 +25,24 @@
 
   .profile-card { --profile-handle-size: 44px; }
 
+  .log-error-filter,
+  .log-table .token-tooltip,
+  .sidebar .theme-switch button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .log-table .token-tooltip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sidebar-footer,
+  .sidebar-footer .theme-switch {
+    min-width: 144px;
+  }
+
   .profile-item-actions .solid-button,
   .profile-item-actions .ghost-button,
   .profile-item-more summary,
@@ -94,6 +112,7 @@
 @media (min-width: 761px) and (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
 
   .sidebar {

@@ -34,6 +34,24 @@ export const INSTANT_THRESHOLD = Math.min(
   Math.floor(MAX_STAGGER_DURATION_MS / STAGGER_BASE_MS)
 );
 
+/** Stable SQLite sequence ranges bound Motion's per-presence key comparisons. */
+export function groupLogAnimations(logs: RequestLogEntry[]): Array<{ key: string; logs: RequestLogEntry[] }> {
+  const groups: Array<{ key: string; logs: RequestLogEntry[] }> = [];
+  let previousSequence = Infinity;
+  for (const entry of logs) {
+    // Legacy entries may lack sequence; keep their existing order and identity.
+    if (entry.sequence === undefined || entry.sequence > previousSequence) return [{ key: "all", logs }];
+    previousSequence = entry.sequence;
+    // ponytail: fixed ranges keep insert/trim identity stable; very sparse filters
+    // can still have many groups, so windowing remains a measured follow-up.
+    const key = String(Math.floor(entry.sequence / 64));
+    const last = groups[groups.length - 1];
+    if (last?.key === key) last.logs.push(entry);
+    else groups.push({ key, logs: [entry] });
+  }
+  return groups;
+}
+
 /**
  * Returns a displayed list that gradually catches up to the live `logs` array,
  * plus the number of rows still queued behind it.

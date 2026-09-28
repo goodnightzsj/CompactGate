@@ -311,6 +311,18 @@
 
 .log-table .log-row.is-clickable { cursor: pointer; }
 
+.log-keyboard-hint {
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.dashboard-request-table .log-row.is-expanded :is(.log-cell-time, .log-cell-model, .log-cell-code) {
+  max-inline-size: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .log-table .log-row.is-clickable:focus {
   outline: none;
 }
