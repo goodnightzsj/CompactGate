@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { StudioEventBroadcaster } from "../src/server/studio-events.js";
 import type {
   HealthResponse,
@@ -309,6 +309,34 @@ describe("CompactGate HTTP basics", () => {
       body_status: "purged"
     });
     await sse.close();
+  });
+
+  it("invalidates logs and reports partial completion when purge VACUUM fails", async () => {
+    const app = await startApp();
+    const db = new DatabaseSync(path.join(app.dir, "compactgate-logs.sqlite"));
+    try {
+      db.prepare(`INSERT INTO request_logs (time, route, method, path, incoming_request_body,
+        body_status, status, duration_ms, upstream_host, request_id)
+        VALUES (?, 'primary', 'POST', '/v1/responses', 'synthetic', 'present', 200, 1,
+        'synthetic.invalid', 'partial-purge')`).run(new Date().toISOString());
+    } finally { db.close(); }
+    const sse = await openSseStream(`${app.url}/api/events`);
+    await sse.waitForEvent("snapshot");
+    const originalExec = DatabaseSync.prototype.exec;
+    const vacuum = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === "VACUUM;") throw new Error("Synthetic VACUUM failure");
+      return originalExec.call(this, sql);
+    });
+    try {
+      const response = await fetch(`${app.url}/api/logs/maintenance/purge-bodies`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: '{"confirm":true}'
+      });
+      expect(response.status).toBe(500);
+      expect((await response.json()).error).toMatch(/Cleared bodies from 1 log rows.*Synthetic VACUUM failure/);
+      const snapshot = await sse.waitForEvent("snapshot") as StudioSnapshotEvent;
+      expect(snapshot.logs_invalidated).toBe(true);
+      expect(snapshot.log_page.logs[0]?.body_status).toBe("purged");
+    } finally { vacuum.mockRestore(); await sse.close(); }
   });
 
   it("serves static assets without falling back missing files to the SPA index", async () => {

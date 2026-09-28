@@ -802,6 +802,8 @@ describe("RequestLogger", () => {
     const logger = new RequestLogger(10, databasePath, {
       maxDatabaseBytes: 10 * 1024 * 1024
     });
+    const notify = vi.fn();
+    logger.addEventListener("storage-pruned", notify);
 
     try {
       logger.add(logEntry(1, "body-1"));
@@ -828,10 +830,31 @@ describe("RequestLogger", () => {
         row_count_before: 3,
         row_count_after: 3
       });
+      expect(notify).toHaveBeenCalledTimes(1);
     } finally {
       logger.close();
     }
   });
+
+  it("notifies committed body removal even when a reader blocks checkpoint", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-purge-busy-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "logs.sqlite");
+    const logger = new RequestLogger(10, databasePath, { maxDatabaseBytes: Infinity });
+    const reader = new DatabaseSync(databasePath);
+    const notify = vi.fn();
+    logger.addEventListener("storage-pruned", notify);
+    try {
+      logger.add(logEntry(1, "synthetic body"));
+      reader.exec("BEGIN;");
+      reader.prepare("SELECT COUNT(*) FROM request_logs").get();
+      expect(() => logger.purgeStoredBodies()).toThrow(/Cleared bodies from 1 log rows.*SQLite checkpoint is busy/);
+      expect(logger.page({ limit: 10, offset: 0 }).logs[0]?.body_status).toBe("purged");
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(logger.purgeStoredBodies().rows_cleared).toBe(0);
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally { reader.exec("ROLLBACK;"); reader.close(); logger.close(); }
+  }, 10_000);
 
   it("skips startup storage pruning when deferred mode is enabled", async () => {
     vi.useFakeTimers();

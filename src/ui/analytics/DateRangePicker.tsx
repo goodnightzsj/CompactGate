@@ -49,7 +49,7 @@ export function DateRangePicker({
       const panel = panelRef.current;
       if (!trigger || !panel) return;
       const rect = trigger.getBoundingClientRect();
-      const width = Math.min(352, window.innerWidth - 24);
+      const width = Math.min(352, window.innerWidth - (window.innerWidth <= 360 ? 8 : 24));
       const maxHeight = window.innerHeight - 24;
       const height = Math.min(panel.scrollHeight + 2, maxHeight);
       const narrow = window.innerWidth <= 760;

@@ -24,6 +24,28 @@ import type {
 import { compactUpstreamBaseUrl, deriveCompactModel } from "../src/server/routing.js";
 
 describe("PrimaryFailoverState", () => {
+  it("releases local results once without changing health or clearing quarantine", () => {
+    const { state } = createState();
+    const config = configWithCodexProfiles([pooledProfile("pool", "Pool", ["k1", "k2"])]);
+    const failed = selectAndReserve(state, config, {});
+    state.recordResult(failed, 401);
+    config.primary_failover.auto_schedule = false;
+    const local = selectAndReserve(state, config, {});
+    expect(local.keyId).toBe("k1");
+    state.recordResult(local, null);
+    state.recordResult(local, 200);
+    expect(state.preview(config).healthVersion).toBe(local.healthVersion);
+    config.primary_failover.auto_schedule = true;
+    expect(state.preview(config).keyId).toBe("k2");
+
+    for (let index = 0; index < 25; index++) {
+      const selected = selectAndReserve(state, config, {});
+      expect(selected.keyId).toBe("k2");
+      state.recordResult(selected, null);
+      expect(state.preview(config).healthVersion).toBe(selected.healthVersion);
+    }
+  });
+
   it("settles a reservation once and rejects re-reserving it", () => {
     let roll = 0;
     const state = new PrimaryFailoverState({ now: () => 0, random: () => roll });

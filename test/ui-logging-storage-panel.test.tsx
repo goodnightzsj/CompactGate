@@ -18,5 +18,8 @@ describe("LoggingStoragePanel", () => {
     expect(markup).toContain('for="logging-capture-dir"');
     expect(markup).toContain("清理历史正文");
     expect(markup).not.toContain("正文脱敏");
+    const directoryInput = markup.match(/<input[^>]*id="logging-capture-dir"[^>]*>/)?.[0];
+    expect(directoryInput).toBeDefined();
+    expect(directoryInput).not.toContain("disabled");
   });
 });

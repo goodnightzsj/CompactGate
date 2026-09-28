@@ -13,9 +13,8 @@ import {
 
 /**
  * The heavy part of a desktop log row — every tooltip cell. The motion row
- * frame around it is rebuilt on each stagger tick (AnimatePresence has to diff
- * its direct children), but with entry being a stable array reference and this
- * component memoized, the cell work is skipped for rows that merely shift.
+ * frame around it changes on stagger ticks, but identical metadata skips cell
+ * work both when a row shifts and when an HTTP snapshot recreates its object.
  */
 export const LogRowCells = memo(function LogRowCells({
   entry
@@ -50,4 +49,6 @@ export const LogRowCells = memo(function LogRowCells({
       <td><LogTextTooltip className="log-cell-time" value={formatDurationMs(entry.duration_ms)} /></td>
     </>
   );
-});
+}, (previous, next) => previous.entry === next.entry ||
+  // HTTP snapshots recreate metadata objects; equal data needs no cell render.
+  JSON.stringify(previous.entry) === JSON.stringify(next.entry));

@@ -211,6 +211,11 @@ async function proxyPrimaryRequest(
     detectionSource: null
   };
   let delegatedToCompact = false;
+  let attemptedUpstream = false;
+  const sendUpstream: typeof sendOpenAiUpstreamRequest = (options) => {
+    attemptedUpstream = true;
+    return sendOpenAiUpstreamRequest(options);
+  };
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
   const configRevision = configStore.revision;
@@ -352,6 +357,7 @@ async function proxyPrimaryRequest(
       configRevision);
     const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
       ? await sendRecoveringPrimaryRequest({
+          send: sendUpstream,
           req,
           res,
           upstream,
@@ -400,7 +406,7 @@ async function proxyPrimaryRequest(
       }
       transaction.upstreamBody = recovery.body;
     }
-    const result = recovery?.result ?? await sendOpenAiUpstreamRequest({
+    const result = recovery?.result ?? await sendUpstream({
       req,
       res,
       upstream,
@@ -506,14 +512,14 @@ async function proxyPrimaryRequest(
     // check used to swallow whatever the compact path had thrown.
     if (!delegatedToCompact) {
     if (primarySelection && !requestProfile) {
-      primaryFailover.recordResult(primarySelection, {
+      primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
         responseBody: transaction.responseBody,
         responseHeaders: transaction.responseHeaders,
         firstTokenMs: transaction.firstTokenMs,
         usage: transaction.usage
-      });
+      } : null);
     }
 
       await finalizeFromTransaction(transaction, {
@@ -539,6 +545,7 @@ async function proxyPrimaryRequest(
 }
 
 async function sendRecoveringPrimaryRequest(input: {
+  send: typeof sendOpenAiUpstreamRequest;
   req: IncomingMessage;
   res: ServerResponse;
   upstream: URL;
@@ -566,7 +573,7 @@ async function sendRecoveringPrimaryRequest(input: {
       !input.res.destroyed &&
       performance.now() - input.startedAt < input.timeoutMs,
     startGenericRecovery: input.startGenericRecovery,
-    send: (body, strategy, priorStrategy) => sendOpenAiUpstreamRequest({
+    send: (body, strategy, priorStrategy) => input.send({
       req: input.req,
       res: input.res,
       upstream: input.upstream,
@@ -951,14 +958,14 @@ async function proxyCompactRequest(
     }
   } finally {
     if (primarySelection && !requestProfile) {
-      primaryFailover.recordResult(primarySelection, {
+      primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
         responseBody: transaction.responseBody,
         responseHeaders: transaction.responseHeaders,
         firstTokenMs: transaction.firstTokenMs,
         usage: transaction.usage
-      });
+      } : null);
     }
     await finalizeFromTransaction(transaction, {
       logger,

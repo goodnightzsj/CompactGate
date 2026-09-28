@@ -4,7 +4,7 @@ import { ConfigImportExportPanel } from "../src/ui/config/ConfigImportExportPane
 
 it("keeps the complete-backup sensitivity and unsaved-draft boundary beside export", () => {
   const markup = renderToStaticMarkup(<ConfigImportExportPanel config={null} importCandidate={null}
-    importState="idle" importError={null} onFileChange={() => {}} onExportConfig={() => {}}
+    importState="idle" importError={null} importSubmission={null} onFileChange={() => {}} onExportConfig={() => {}}
     onExportSavedConfig={() => {}} onConfirmImport={() => {}} onClearImport={() => {}} />);
   expect(markup).toContain("导出完整备份");
   expect(markup).toContain("仅导出已保存配置");

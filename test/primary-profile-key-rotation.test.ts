@@ -47,18 +47,12 @@ function configWithPool(): CompactGateConfig {
   };
 }
 
-/** `profileName` is rendered as "<profile> · <key>" for pooled selections. */
-function profileOf(profileName: string): string {
-  return profileName.split(" · ")[0];
-}
-
 function selectAndFail(state: PrimaryFailoverState, config: CompactGateConfig, index: number) {
   const selection = state.preview(config, {
     sessionKey: `s${index}`,
-    model: "gpt-6-astra",
-    headers: {}
-  } as never);
-  state.recordResult(selection, { status: 401, retryable: false, nowMs: index * 1000 } as never);
+    model: "gpt-6-astra"
+  });
+  state.recordResult(selection, { status: 401, errorSummary: null });
   return selection;
 }
 
@@ -74,13 +68,13 @@ describe("primary key pool inside one active profile", () => {
     const third = selectAndFail(state, config, 2);
 
     // The failing key's sibling carries the retry, inside the same profile.
-    expect(profileOf(first.profileName)).toBe("Demo");
-    expect(profileOf(second.profileName)).toBe("Demo");
+    expect(first.profileId).toBe("codex-demo");
+    expect(second.profileId).toBe("codex-demo");
     expect(first.keyLabel).toBe("primary");
     expect(second.keyLabel).toBe("backup");
 
     // Only after both keys of the active profile have failed does it leave.
-    expect(profileOf(third.profileName)).toBe("Other");
+    expect(third.profileId).toBe("codex-other");
   });
 
   it("keeps both keys of the active profile as candidates", () => {

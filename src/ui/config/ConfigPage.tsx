@@ -242,6 +242,7 @@ export function ConfigPage({
                 importCandidate={importWorkflow.importCandidate}
                 importState={importWorkflow.importState}
                 importError={importWorkflow.importError}
+                importSubmission={importWorkflow.importSubmission}
                 onFileChange={importWorkflow.handleImportFileChange}
                 onExportConfig={actions.exportConfig}
                 onExportSavedConfig={actions.exportSavedConfig}

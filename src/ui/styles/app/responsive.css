@@ -1,4 +1,11 @@
 /* Multi-device compatibility pass: keep the dense console usable on touch, tablet, and narrow phones. */
+@media (max-width: 360px) {
+  /* Use the panel's inner padding for seven 44px targets at a 320px viewport. */
+  .usage-calendar { margin-inline: -10px; }
+  .usage-calendar-row { column-gap: 0; }
+  .usage-calendar button:focus-visible { outline-offset: -2px; }
+}
+
 @media (hover: none), (pointer: coarse) {
   button,
   .btn-sm,
@@ -165,17 +172,14 @@
    * columns (including Key) to a full 100%. Without this the missing share parked itself as dead
    * space past the last column and squeezed `duration` until it clipped
    * mid-glyph. Keep this block's total at exactly 100.
-   *
-   * ponytail: below roughly 900px the timestamp still ellipsises — ten nowrap
-   * columns do not fit and this table deliberately has no horizontal scroll
-   * (at 720px it switches to `LogMobileCard`). Add a third breakpoint here if
-   * that band ever needs the full timestamp.
+   * The table keeps its minimum readable width with local horizontal scroll;
+   * at 720px it switches to `LogMobileCard`.
    */
   .log-table-full .log-col-started { width: 13%; }
   .log-table-full .log-col-status { width: 6%; }
-  .log-table-full .log-col-model-route { width: 20%; }
-  .log-table-full .log-col-host { width: 18%; }
-  .log-table-full .log-col-key { width: 4%; }
+  .log-table-full .log-col-model-route { width: 18%; }
+  .log-table-full .log-col-host { width: 16%; }
+  .log-table-full .log-col-key { width: 8%; }
   .log-table-full .log-col-endpoint { width: 11%; }
   .log-table-full .log-col-type { width: 7%; }
   .log-table-full .log-col-token { width: 7%; }

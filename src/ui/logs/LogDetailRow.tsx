@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
+import { errorSummary } from "../shared/api.js";
 import {
   cacheCreationInputTokens,
   cacheReadInputTokens,
@@ -22,26 +23,33 @@ import {
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
 
 function CopyValue({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copyResult, setCopyResult] = useState("");
+  const copied = copyResult === "已复制";
+  const copyVersion = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => {
+    copyVersion.current++;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
     }
   }, []);
 
   async function handleCopy() {
+    const version = ++copyVersion.current;
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    setCopyResult("正在复制…");
     try {
+      if (!navigator.clipboard) throw new Error("当前浏览器不支持剪贴板");
       await navigator.clipboard.writeText(value);
-    } catch {
-      return;
+      if (version !== copyVersion.current) return;
+      setCopyResult("已复制");
+      timerRef.current = setTimeout(() => setCopyResult(""), 1600);
+    } catch (error) {
+      if (version === copyVersion.current) {
+        setCopyResult(`复制失败：${errorSummary(error)}。请重试，或手动选择请求 ID。`);
+      }
     }
-    setCopied(true);
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-    }
-    timerRef.current = setTimeout(() => setCopied(false), 1600);
   }
 
   return (
@@ -55,6 +63,7 @@ function CopyValue({ value }: { value: string }) {
       >
         {copied ? "已复制" : "复制"}
       </button>
+      <span className={copyResult.startsWith("复制失败") ? "log-copy-feedback" : "visually-hidden"} role="status">{copyResult}</span>
     </span>
   );
 }

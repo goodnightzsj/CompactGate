@@ -95,6 +95,10 @@ export class ClaudeKeyPoolState {
     const now = this.now();
     this.cleanupStickiness(now);
     const sessionKey = extractClaudeSessionKey(headers);
+    // Explicit fixed selection overrides affinity, even while the key is cooling.
+    if (config.claude.primary.rotation_opt_out === true) {
+      return this.reserve(entries[0], profileId, sessionKey, config, now);
+    }
     if (sessionKey) {
       const pin = this.sessionStickiness.get(sessionKey);
       if (pin && pin.expiresAt > now) {
@@ -103,16 +107,6 @@ export class ClaudeKeyPoolState {
           return this.reserve(pinned, profileId, sessionKey, config, now);
         }
       }
-    }
-
-    // The pinned key above is the only traffic a reserved key accepts, so this
-    // has to come after that lookup and before the general pick.
-    if (config.claude.primary.rotation_opt_out === true) {
-      // Opted out of rotation: the first enabled key carries everything, and the
-      // pool exists only as a manual fallback list. The UI has offered this
-      // toggle for the Claude scope all along while only the codex side read it.
-      const first = entries[0];
-      return this.reserve(first, profileId, sessionKey, config, now);
     }
 
     const spread = config.claude.primary.key_strategy === "spread";

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
@@ -100,14 +100,112 @@ export function LogsPage({
     }
   }, []);
 
-  function handleRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, logKey: string) {
+  const handleRowKeyDown = useCallback((event: KeyboardEvent<HTMLTableRowElement>, logKey: string) => {
+    if (event.target !== event.currentTarget) return;
     if (event.key !== "Enter" && event.key !== " ") {
       return;
     }
 
     event.preventDefault();
     toggleLog(logKey);
-  }
+  }, [toggleLog]);
+
+  // Status/filter bookkeeping must not re-diff every Motion child before the
+  // displayed window changes. Keep the presence tree stable until its inputs do.
+  const renderedLogs = useMemo(() => narrowViewport ? (
+    <AnimatePresence initial={false}>
+      {logs.map((entry) => {
+        const logKey = logEntryKey(entry);
+        return (
+          <MotionDiv
+            key={`mobile-${logKey}`}
+            className="log-mobile-motion-item"
+            initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={effectiveRowTransition}
+            layout
+            data-log-id={entry.request_id}
+          >
+            <LogMobileCard
+              entry={entry}
+              logKey={logKey}
+              detailId={`mobile-log-detail-${entry.request_id}`}
+              expanded={expandedLogKey === logKey}
+              onToggle={toggleLog}
+            />
+          </MotionDiv>
+        );
+      })}
+    </AnimatePresence>
+  ) : (
+    <AnimatePresence initial={false}>
+      {logs.flatMap((entry) => {
+        const logKey = logEntryKey(entry);
+        const detailId = `desktop-log-detail-${entry.request_id}`;
+        const expanded = expandedLogKey === logKey;
+        const hasError = logStatusKind(entry) === "error";
+        const rows = [
+          <MotionTr
+            key={logKey}
+            initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={effectiveRowTransition}
+            layout
+            data-log-id={entry.request_id}
+            className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
+            tabIndex={0}
+            aria-expanded={expanded}
+            aria-controls={detailId}
+            aria-label={`${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
+            onClick={(event) => {
+              if ((event.target as Element).closest("button, a, input, select, textarea, [role='button']")) return;
+              toggleLog(logKey);
+            }}
+            onKeyDown={(event) => handleRowKeyDown(event, logKey)}
+          >
+            <LogRowCells entry={entry} />
+          </MotionTr>
+        ];
+
+        if (expanded) {
+          rows.push(
+            <MotionTr
+              key={`${logKey}-detail`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={effectiveDetailTransition}
+              className="log-detail-row"
+              id={detailId}
+            >
+              <td colSpan={12}>
+                {/* Height animates on this wrapper, not on the <tr>:
+                    a row's specified height is only a minimum in
+                    table layout, so the old collapse on the row did
+                    nothing and the panel popped open. The rows below
+                    are pushed by this div growing, which is real
+                    layout motion — no `layout` on the <tr> above,
+                    which would only fight it. */}
+                <MotionDiv
+                  className="log-detail-collapse"
+                  initial={{ height: 0 }}
+                  animate={{ height: "auto" }}
+                  exit={{ height: 0 }}
+                  transition={effectiveDetailTransition}
+                >
+                  <LogDetailPanel entry={entry} />
+                </MotionDiv>
+              </td>
+            </MotionTr>
+          );
+        }
+
+        return rows;
+      })}
+    </AnimatePresence>
+  ), [logs, narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown]);
 
   function clearFilters() {
     onRouteFilterChange("all");
@@ -357,69 +455,7 @@ export function LogsPage({
                     table layout entirely and into the corner of the positioned
                     .log-table-body. axonhub gets away with it; a list that trims
                     one row per insert does not. */}
-                <AnimatePresence initial={false}>
-                  {logs.flatMap((entry) => {
-                    const logKey = logEntryKey(entry);
-                    const detailId = `desktop-log-detail-${entry.request_id}`;
-                    const expanded = expandedLogKey === logKey;
-                    const hasError = logStatusKind(entry) === "error";
-                    const rows = [
-                      <MotionTr
-                        key={logKey}
-                        initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0 }}
-                        transition={effectiveRowTransition}
-                        layout
-                        data-log-id={entry.request_id}
-                        className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
-                        tabIndex={0}
-                        aria-expanded={expanded}
-                        aria-controls={detailId}
-                        aria-label={`${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
-                        onClick={() => toggleLog(logKey)}
-                        onKeyDown={(event) => handleRowKeyDown(event, logKey)}
-                      >
-                        <LogRowCells entry={entry} />
-                      </MotionTr>
-                    ];
-
-                    if (expanded) {
-                      rows.push(
-                        <MotionTr
-                          key={`${logKey}-detail`}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={effectiveDetailTransition}
-                          className="log-detail-row"
-                          id={detailId}
-                        >
-                          <td colSpan={12}>
-                            {/* Height animates on this wrapper, not on the <tr>:
-                                a row's specified height is only a minimum in
-                                table layout, so the old collapse on the row did
-                                nothing and the panel popped open. The rows below
-                                are pushed by this div growing, which is real
-                                layout motion — no `layout` on the <tr> above,
-                                which would only fight it. */}
-                            <MotionDiv
-                              className="log-detail-collapse"
-                              initial={{ height: 0 }}
-                              animate={{ height: "auto" }}
-                              exit={{ height: 0 }}
-                              transition={effectiveDetailTransition}
-                            >
-                              <LogDetailPanel entry={entry} />
-                            </MotionDiv>
-                          </td>
-                        </MotionTr>
-                      );
-                    }
-
-                    return rows;
-                  })}
-                </AnimatePresence>
+                {renderedLogs}
               </tbody>
             </table>
           </MotionDiv>
@@ -442,31 +478,7 @@ export function LogsPage({
               is what lets useLogTableScroll compensate scroll synchronously
               instead of waiting out the spring. `layout` carries the
               displacement. */}
-          <AnimatePresence initial={false}>
-            {logs.map((entry) => {
-              const logKey = logEntryKey(entry);
-              return (
-                <MotionDiv
-                  key={`mobile-${logKey}`}
-                  className="log-mobile-motion-item"
-                  initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={effectiveRowTransition}
-                  layout
-                  data-log-id={entry.request_id}
-                >
-                  <LogMobileCard
-                    entry={entry}
-                    logKey={logKey}
-                    detailId={`mobile-log-detail-${entry.request_id}`}
-                    expanded={expandedLogKey === logKey}
-                    onToggle={toggleLog}
-                  />
-                </MotionDiv>
-              );
-            })}
-          </AnimatePresence>
+          {renderedLogs}
         </MotionDiv>
       )}
 

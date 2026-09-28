@@ -555,6 +555,12 @@
 .token-tooltip {
   display: inline-block;
   min-width: max-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .token-tooltip:focus-visible {
@@ -655,9 +661,17 @@
 
 .log-copy-value {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.log-copy-feedback {
+  flex-basis: 100%;
+  color: var(--brick);
+  font-family: var(--font-ui);
+  font-weight: 400;
 }
 
 .log-copy-button {
@@ -765,12 +779,13 @@
 }
 
 .log-table-full .log-table-body {
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 
 .log-table-full .log-table-grid {
   width: 100%;
-  min-width: 0;
+  /* Keep twelve metric columns readable between the card and desktop layouts. */
+  min-width: 960px;
   max-width: 100%;
   table-layout: fixed;
 }
@@ -810,11 +825,11 @@
    room — at the original 5% the duration text was clipped at every viewport. */
 .log-table-full .log-col-started { width: 11%; }
 .log-table-full .log-col-status { width: 5%; }
-.log-table-full .log-col-model-route { width: 16%; }
+.log-table-full .log-col-model-route { width: 14%; }
 .log-table-full .log-col-reasoning { width: 5%; }
 .log-table-full .log-col-response-model { width: 10%; }
-.log-table-full .log-col-host { width: 15%; }
-.log-table-full .log-col-key { width: 4%; }
+.log-table-full .log-col-host { width: 13%; }
+.log-table-full .log-col-key { width: 8%; }
 .log-table-full .log-col-endpoint { width: 8%; }
 .log-table-full .log-col-type { width: 7%; }
 .log-table-full .log-col-token { width: 7%; }

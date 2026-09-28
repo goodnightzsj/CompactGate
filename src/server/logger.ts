@@ -641,7 +641,17 @@ export class RequestLogger extends EventTarget {
     const rowCountBefore = this.persistedRowCount();
     const rowsCleared = this.clearPersistedBodies();
     if (rowsCleared > 0) {
-      this.reclaimSqliteStorage();
+      try {
+        this.reclaimSqliteStorage();
+      } catch (error) {
+        throw new Error(
+          `Cleared bodies from ${rowsCleared} log rows, but SQLite space reclamation failed: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error }
+        );
+      } finally {
+        // The UPDATE committed even when checkpoint/VACUUM cannot reclaim space.
+        this.dispatchEvent(new Event("storage-pruned"));
+      }
     }
 
     return {

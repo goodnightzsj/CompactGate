@@ -23,7 +23,7 @@ const TOOLTIP_GAP = 10;
 export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
   const [placement, setPlacement] = useState<CSSProperties | null>(null);
   const tooltipId = useId();
-  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
 
   function showTooltip() {
     const anchor = anchorRef.current;
@@ -44,14 +44,22 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
   }
 
   return (
-    <span
+    <button
       ref={anchorRef}
+      type="button"
       className="token-tooltip"
+      aria-label="Token 明细"
       data-label="Token"
       aria-describedby={placement ? tooltipId : undefined}
-      tabIndex={0}
-      role="button"
       aria-expanded={placement !== null}
+      onClick={() => placement ? hideTooltip() : showTooltip()}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          hideTooltip();
+        }
+      }}
       onMouseEnter={showTooltip}
       onMouseLeave={hideTooltip}
       onFocus={showTooltip}
@@ -104,7 +112,7 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
           </span>,
           document.body
         )}
-    </span>
+    </button>
   );
 }
 

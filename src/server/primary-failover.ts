@@ -110,7 +110,7 @@ export class PrimaryFailoverState {
 
   recordResult(
     selection: PrimaryRouteSelection,
-    resultOrStatus: PrimaryRouteResult | number,
+    resultOrStatus: PrimaryRouteResult | number | null,
     maybeErrorSummary?: string | null
   ): void {
     const candidateId = selection.candidateId ?? selection.profileId;
@@ -132,6 +132,8 @@ export class PrimaryFailoverState {
       reserved.inFlight = Math.max(0, reserved.inFlight - 1);
       this.reservations.set(selection, null);
     }
+    // Local preparation and cache replays release load, not upstream health.
+    if (result === null) return;
     const health = this.health.get(candidateId);
     if (!health || (reserved && reserved !== health) || selection.generation !== this.generation) {
       return;

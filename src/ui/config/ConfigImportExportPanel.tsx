@@ -4,7 +4,8 @@ import type { PublicConfig } from "../../shared/types.js";
 import type {
   ConfigImportSummary,
   ImportCandidate,
-  ImportState
+  ImportState,
+  ImportSubmission
 } from "./config-import-summary.js";
 
 type ImportSummaryItem = {
@@ -18,6 +19,7 @@ export function ConfigImportExportPanel({
   importCandidate,
   importState,
   importError,
+  importSubmission,
   onFileChange,
   onExportConfig,
   onExportSavedConfig,
@@ -28,6 +30,7 @@ export function ConfigImportExportPanel({
   importCandidate: ImportCandidate | null;
   importState: ImportState;
   importError: string | null;
+  importSubmission: ImportSubmission | null;
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onExportConfig: () => void | Promise<void>;
   onExportSavedConfig: () => void | Promise<void>;
@@ -81,10 +84,13 @@ export function ConfigImportExportPanel({
             onChange={onFileChange}
           />
 
-          {importError && <div className="error-banner">{importError}</div>}
-          {importState === "imported" && (
+          {importState === "reading" && <div role="status">正在读取文件… <button type="button" className="btn btn-sm btn-ghost" onClick={onClearImport}>取消读取</button></div>}
+          {importError && <div className="error-banner" role="alert">{importError}</div>}
+          {importSubmission?.status === "pending" && <div role="status">正在导入 {importSubmission.fileName}… 可以选择下一份文件，当前写入不会取消。</div>}
+          {importSubmission?.status === "error" && <div className="error-banner" role="alert">导入 {importSubmission.fileName} 失败：{importSubmission.error}</div>}
+          {importSubmission?.status === "success" && (
             <div className="inline-success" role="status">
-              导入完成，当前运行时配置已经刷新。
+              {importSubmission.fileName} 导入完成，当前运行时配置已经刷新。
             </div>
           )}
         </div>
@@ -113,10 +119,10 @@ export function ConfigImportExportPanel({
                 <button
                   type="button"
                   className="btn btn-danger"
-                  disabled={importState === "importing"}
+                  disabled={importSubmission?.status === "pending" || importState === "reading"}
                   onClick={() => void onConfirmImport()}
                 >
-                  {importState === "importing" ? "正在导入..." : "确认覆盖当前配置"}
+                  {importSubmission?.status === "pending" ? "等待当前导入完成…" : "确认覆盖当前配置"}
                 </button>
               </div>
             </>

@@ -258,6 +258,27 @@ describe("Claude key pool selection", () => {
     expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
   });
 
+  it("fixed selection overrides old session pins without erasing rotation health", () => {
+    const { state, config } = setup([key("k1", "synthetic-1"), key("k2", "synthetic-2")]);
+    config.claude.primary.key_strategy = "spread";
+    const pinned = state.select(config, "claude-a", HEADERS);
+    expect(pinned?.keyId).toBe("k2");
+    state.recordResult(pinned, { status: 200, responseHeaders: {} });
+    config.claude.primary.rotation_opt_out = true;
+    for (const headers of [HEADERS, {}]) {
+      const fixed = state.select(config, "claude-a", headers);
+      expect(fixed?.keyId).toBe("k1");
+      state.recordResult(fixed, { status: 429, responseHeaders: { "retry-after": "60" } });
+    }
+    const blocked = state.blockState("claude-a", "k1");
+    expect(blocked).not.toBeNull();
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
+    config.claude.primary.rotation_opt_out = false;
+    expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k2");
+    expect(state.select(config, "claude-a", {})?.keyId).toBe("k2");
+    expect(state.blockState("claude-a", "k1")).toBe(blocked);
+  });
+
   it("reserves a recovered key for its own sessions for sticky_reserve_seconds", () => {
     const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")]);
     config.claude.primary.sticky_reserve_seconds = 60;

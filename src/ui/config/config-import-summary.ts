@@ -1,7 +1,13 @@
 import type { ConfigProfileScope } from "../../shared/types.js";
 import { isRecord } from "../../shared/records.js";
 
-export type ImportState = "idle" | "ready" | "importing" | "imported" | "error";
+export type ImportState = "idle" | "reading" | "ready" | "error";
+
+export type ImportSubmission = {
+  fileName: string;
+  status: "pending" | "success" | "error";
+  error?: string;
+};
 
 export type ConfigImportSummary = {
   listen: string;

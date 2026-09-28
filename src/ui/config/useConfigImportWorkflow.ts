@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type * as React from "react";
 import { errorSummary } from "../shared/api.js";
 import {
   summarizeConfigImport,
   type ImportCandidate,
-  type ImportState
+  type ImportState,
+  type ImportSubmission
 } from "./config-import-summary.js";
 import { isRecord } from "../../shared/records.js";
 
@@ -16,6 +17,14 @@ export function useConfigImportWorkflow({
   const [importCandidate, setImportCandidate] = useState<ImportCandidate | null>(null);
   const [importState, setImportState] = useState<ImportState>("idle");
   const [importError, setImportError] = useState<string | null>(null);
+  const [importSubmission, setImportSubmission] = useState<ImportSubmission | null>(null);
+  const selectionVersion = useRef(0);
+  const submitting = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; selectionVersion.current++; };
+  }, []);
 
   async function handleImportFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
@@ -24,7 +33,9 @@ export function useConfigImportWorkflow({
       return;
     }
 
-    setImportState("idle");
+    const version = ++selectionVersion.current;
+    setImportState("reading");
+    setImportCandidate(null);
     setImportError(null);
 
     try {
@@ -33,6 +44,7 @@ export function useConfigImportWorkflow({
         throw new Error("导入文件必须是 JSON 对象。");
       }
       validateImportCandidateShape(parsed);
+      if (version !== selectionVersion.current) return;
 
       setImportCandidate({
         fileName: file.name,
@@ -42,6 +54,7 @@ export function useConfigImportWorkflow({
       });
       setImportState("ready");
     } catch (error) {
+      if (version !== selectionVersion.current) return;
       setImportCandidate(null);
       setImportState("error");
       setImportError(errorSummary(error));
@@ -49,29 +62,37 @@ export function useConfigImportWorkflow({
   }
 
   async function confirmImportConfig() {
+    if (submitting.current) return;
     if (!importCandidate) {
       setImportState("error");
       setImportError("请先选择一个 compactgate JSON 配置文件。");
       return;
     }
 
-    setImportState("importing");
+    const version = selectionVersion.current;
+    const fileName = importCandidate.fileName;
+    submitting.current = true;
+    setImportSubmission({ fileName, status: "pending" });
     setImportError(null);
 
     try {
       await onImportConfig(importCandidate.config);
-      // Drop the candidate: leaving it set kept the "about to import" summary and
-      // a live "overwrite current config" button on screen next to the success
-      // line, so one more click silently re-imported the same file.
-      setImportCandidate(null);
-      setImportState("imported");
+      if (!mounted.current) return;
+      setImportSubmission({ fileName, status: "success" });
+      // Completing A must not clear a newer selection B.
+      if (version === selectionVersion.current) {
+        setImportCandidate(null);
+        setImportState("idle");
+      }
     } catch (error) {
-      setImportState("error");
-      setImportError(errorSummary(error));
+      if (mounted.current) setImportSubmission({ fileName, status: "error", error: errorSummary(error) });
+    } finally {
+      submitting.current = false;
     }
   }
 
   function clearImportCandidate() {
+    selectionVersion.current++;
     setImportCandidate(null);
     setImportState("idle");
     setImportError(null);
@@ -83,6 +104,7 @@ export function useConfigImportWorkflow({
     handleImportFileChange,
     importCandidate,
     importError,
+    importSubmission,
     importState
   };
 }

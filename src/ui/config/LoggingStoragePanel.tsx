@@ -189,7 +189,7 @@ export function LoggingStoragePanel({
               id="logging-capture-dir"
               type="text"
               value={form.loggingCaptureDir}
-              disabled={storageMode !== "separated"}
+              disabled={storageMode === "sqlite"}
               placeholder={DEFAULT_CAPTURE_DIR}
               onChange={(event) =>
                 onFormChange((previous) => ({
@@ -200,7 +200,7 @@ export function LoggingStoragePanel({
               }
             />
             <small>
-              仅分离存储模式启用。接口与 Studio 都不会返回本机绝对路径。
+              填写目录启用分离存储；留空并保存将关闭抓包。SQLite 正文模式下请先切换存储模式。
             </small>
           </label>
 
