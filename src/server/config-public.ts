@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type {
   CompactGateConfig,
   ConfigProfileScope,
@@ -15,6 +16,10 @@ import { resolveRouteCredential, type ResolvedCredential } from "./credentials.j
 import { publicRouteUrlPreset } from "./config-route-presets.js";
 import { safeHost } from "./config-internals.js";
 import type { OAuthStore } from "./oauth-store.js";
+
+// A keyed, process-local equality token, not a reusable digest of a credential.
+// Invalidate catalogues on restart without exposing secrets or storing copies.
+const modelSourceKey = randomBytes(32);
 
 export function buildPublicConfig({
   config,
@@ -152,6 +157,12 @@ function publicUpstream(
 ): Omit<PublicUpstreamConfig, "model_override"> {
   const proxy = URL.parse(upstream.proxy_url);
   return {
+    model_source_revision: createHmac("sha256", modelSourceKey).update(JSON.stringify([
+      upstream.base_url, upstream.upstream_protocol, upstream.proxy_url,
+      Object.entries(upstream.extra_headers).sort(([left], [right]) => left.localeCompare(right)),
+      credential.apiKey, credential.oauthAccountId ?? null,
+      credential.oauthAccountId ? oauth?.status(credential.oauthAccountId) ?? "missing" : null
+    ])).digest("base64url"),
     base_url: upstream.base_url,
     api_key_env: upstream.api_key_env,
     api_key_priority: upstream.api_key_priority ?? 0,

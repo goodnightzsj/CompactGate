@@ -6,6 +6,7 @@ import type {
 } from "../shared/types.js";
 import {
   LOG_STANDALONE_ERROR_SQL,
+  LOG_EFFECTIVE_MODEL_SQL,
   normalizeRoute,
   readNullableNumber
 } from "./logger-helpers.js";
@@ -77,7 +78,7 @@ const ANALYTICS_ROWS_SQL = `
       ${DISPLAY_ENDPOINT} AS endpoint,
       source_model,
       target_model,
-      CASE WHEN response_model_source = 'target_fallback' THEN target_model ELSE response_model END AS response_model,
+      ${LOG_EFFECTIVE_MODEL_SQL} AS response_model,
       CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 1 ELSE 0 END AS is_error,
       CASE WHEN typeof(duration_ms) IN ('integer', 'real') AND duration_ms >= 0 THEN duration_ms END AS duration_ms,
       CASE WHEN typeof(first_token_ms) IN ('integer', 'real') AND first_token_ms >= 0 THEN first_token_ms END AS first_token_ms,

@@ -55,6 +55,7 @@ export function ConfigPage({
 }) {
   const [crossScopeDraft, setCrossScopeDraft] = useState<CrossScopeProfileDraft | null>(null);
   const [profileToLocate, setProfileToLocate] = useState<{ scope: ConfigProfileScope; id: string } | null>(null);
+  const [oauthExpanded, setOAuthExpanded] = useState(false);
   const visibleScope = configTab === "profiles" || displayScope !== "all" ? displayScope : "codex";
   const importWorkflow = useConfigImportWorkflow({
     onImportConfig: actions.importConfig
@@ -150,18 +151,11 @@ export function ConfigPage({
             role="tabpanel"
             aria-labelledby={`config-tab-${configTab}`}
           >
-            {configTab === "profiles" && (
-              <OAuthProfilesPanel config={config} onConfigChange={actions.receiveOAuthConfig}
-                onProfileLocate={(scope, id) => {
-                  setDisplayScope(scope);
-                  setProfileToLocate({ scope, id });
-                }} />
-            )}
           {configTab !== "logging" && configTab !== "portable" && (
             <div className="config-scope-heading">
               {configTab === "profiles" && <div>
                 <h3>配置档案</h3>
-                <p>按客户端管理；上方授权连接为全局共享。应用档案才会切换运行配置。</p>
+                <p>先选择档案，再应用到运行配置；选中不会切换连接。厂商授权在下方单独管理。</p>
               </div>}
               <div className="client-scope-switch" role="group" aria-label="配置展示客户端">
               {(configTab === "profiles"
@@ -218,13 +212,28 @@ export function ConfigPage({
               />
             )}
 
+            {configTab === "profiles" && (
+              <details className="config-advanced-settings" open={oauthExpanded}
+                onToggle={(event) => setOAuthExpanded(event.currentTarget.open)}>
+                <summary>厂商授权与连接管理 · Codex / Claude 共享</summary>
+                <OAuthProfilesPanel config={config} onConfigChange={actions.receiveOAuthConfig}
+                  onProfileLocate={(scope, id) => {
+                    setDisplayScope(scope);
+                    setProfileToLocate({ scope, id });
+                  }} />
+              </details>
+            )}
+
             {configTab === "routes" && (
               <RouteConfigPanel
                 config={config}
                 keyActivity={keyActivity}
                 form={form}
                 onFormChange={onFormChange}
-                onManageOAuth={() => onConfigTabChange("profiles")}
+                onManageOAuth={() => {
+                  setOAuthExpanded(true);
+                  onConfigTabChange("profiles");
+                }}
                 scope={displayScope === "all" ? "codex" : displayScope}
               />
             )}

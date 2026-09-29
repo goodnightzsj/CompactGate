@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry } from "../src/shared/types.js";
 import { DashboardRecentRequests } from "../src/ui/dashboard/DashboardRecentRequests.js";
+import { LogRowCells } from "../src/ui/logs/LogRowCells.js";
 import {
   CaptureRequestError,
   captureDownloadUrl,
@@ -16,12 +17,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("keeps essential log cells aligned and restores every diagnostic column", () => {
+  const entry = requestLog("none");
+  entry.key_name = "synthetic-key-label";
+  const render = (showAllColumns: boolean) => renderToStaticMarkup(<table><tbody><tr>
+    <LogRowCells entry={entry} showAllColumns={showAllColumns} />
+  </tr></tbody></table>);
+  expect(render(false).match(/<td>/g)).toHaveLength(7);
+  expect(render(true).match(/<td>/g)).toHaveLength(12);
+  expect(render(false)).toContain("上游凭据 · synthetic-key-label");
+  expect(render(true)).toContain("synthetic-key-label");
+});
+
+it("keeps response evidence, token breakdown and throughput in both log summaries", async () => {
+  const { LogMobileCard } = await import("../src/ui/logs/LogMobileCard.js");
+  const entry = { ...requestLog("none"), response_model: "declared-other", target_model: "target",
+    input_tokens: 100, output_tokens: 50, duration_ms: 2000 };
+  const desktop = renderToStaticMarkup(<table><tbody><tr><LogRowCells entry={entry} showAllColumns={false} /></tr></tbody></table>);
+  const mobile = renderToStaticMarkup(<LogMobileCard entry={entry} logKey="test" detailId="detail-test" expanded={false} onToggle={() => {}} />);
+  for (const markup of [desktop, mobile]) {
+    expect(markup).toContain("响应声明不同");
+    expect(markup).toContain("declared-other");
+    expect(markup).toContain("25 tok/s");
+    expect(markup).toContain("入 ");
+    expect(markup).toContain(" · 出 ");
+  }
+});
+
 it("offers one keyboard entry per recent request with full metadata and instructions", () => {
   const entry = requestLog("none");
   entry.source_model = "long-model-".repeat(20);
   entry.upstream_host = "long-host-".repeat(20);
   entry.endpoint = "/long-endpoint".repeat(20);
-  const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[entry]} listen="127.0.0.1:7865" />);
+    const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[entry]} totalCount={1} listen="127.0.0.1:7865" />);
   expect(markup.match(/tabindex="0"/g)).toHaveLength(1);
   expect(markup).toMatch(/<tr[^>]*aria-expanded="false"[^>]*aria-describedby=/);
   expect(markup).toContain("Enter / 空格查看完整信息");

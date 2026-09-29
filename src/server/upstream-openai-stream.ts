@@ -92,6 +92,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private retainedEventBytes = 0;
   private oversizedEvent = false;
   private discardingLine = false;
+  private hasCompletedResponseModel = false;
   private summary: OpenAiStreamSummary = {
     sawTerminalEvent: false,
     sawCompletedEvent: false,
@@ -197,7 +198,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   }
 
   private recordEvent(eventName: string | null, eventType: string | null, data: string): void {
-    this.recordMetadata(data);
+    this.recordMetadata(data, eventName === "response.completed" || eventType === "response.completed");
 
     if (this.protocol === "anthropic") {
       this.recordAnthropicEvent(eventName, eventType, data);
@@ -263,7 +264,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     }
   }
 
-  private recordMetadata(data: string): void {
+  private recordMetadata(data: string, completed: boolean): void {
     if (!data || data === "[DONE]") {
       return;
     }
@@ -273,7 +274,15 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       this.summary.usage = mergeUsage(this.summary.usage, usage);
     }
 
-    this.summary.responseModel ??= extractResponseModelFromText(data);
+    // Match full-response extraction: completed declaration wins; otherwise
+    // keep the latest observed declaration, including failed/incomplete streams.
+    if (!this.hasCompletedResponseModel) {
+      const model = extractResponseModelFromText(data);
+      if (model) {
+        this.summary.responseModel = model;
+        this.hasCompletedResponseModel = completed;
+      }
+    }
   }
 
   private readEventType(data: string): string | null {

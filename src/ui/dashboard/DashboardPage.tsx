@@ -14,6 +14,8 @@ export function DashboardPage({
   health,
   logs,
   logCounts,
+  logError,
+  onRetryLogs,
   saveState,
   hasPendingChanges,
   onExport
@@ -21,7 +23,9 @@ export function DashboardPage({
   config: PublicConfig | null;
   health: HealthResponse | null;
   logs: RequestLogEntry[];
-  logCounts: Record<"all" | RouteKind, number>;
+  logCounts: Record<"all" | RouteKind, number> | null;
+  logError: string | null;
+  onRetryLogs: () => void;
   saveState: SaveState;
   hasPendingChanges: boolean;
   onExport: () => void | Promise<void>;
@@ -44,13 +48,19 @@ export function DashboardPage({
         </div>
       </div>
 
+      {logError && <div className="error-banner" role="alert">
+        最近请求更新失败：{logError} {logCounts && "以下为上次取得的全局结果。"}
+        <button type="button" className="btn btn-sm" onClick={onRetryLogs}>重试日志</button>
+      </div>}
+
       <DashboardStatsGrid
         health={health}
         listen={listen}
         logCounts={logCounts}
       />
 
-      <DashboardRecentRequests logs={logs} listen={listen} />
+      {logCounts ? <DashboardRecentRequests logs={logs} totalCount={logCounts.all} listen={listen} /> :
+        <p role="status">{logError ? "尚未取得全局请求数据。" : "正在读取全局最近请求…"}</p>}
     </div>
   );
 }

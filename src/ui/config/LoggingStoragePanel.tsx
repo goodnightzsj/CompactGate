@@ -65,7 +65,7 @@ export function LoggingStoragePanel({
     <div className="logging-storage-panel">
       <section className="logging-storage-intro" aria-labelledby="logging-storage-title">
         <div>
-          <span className="profile-item-kicker">存储策略</span>
+          <span className="profile-item-kicker">存储策略草稿 · 保存后生效</span>
           <h3 id="logging-storage-title">{storageMode === "separated" ? "日志与原始请求分离存储" : storageMode === "metadata" ? "仅保留请求元数据" : "正文存入 SQLite"}</h3>
         </div>
         <div className="logging-storage-summary" aria-label="当前草稿存储状态">
@@ -142,6 +142,12 @@ export function LoggingStoragePanel({
           <div>
             <h3 id="logging-settings-title">容量与保留</h3>
             <p>界面使用 MiB 与 GiB，保存时会转换为精确字节数。</p>
+            <p id="logging-capture-scope" role="status">
+              {form.loggingCaptureDir.trim()
+                ? "抓包上限用于下方目录，不影响 SQLite 正文上限。"
+                : "当前草稿未启用抓包；下方抓包上限会保留，供下次启用使用。"}
+              环境变量可覆盖抓包目录与单段上限。
+            </p>
           </div>
         </div>
 
@@ -208,6 +214,7 @@ export function LoggingStoragePanel({
             <span>单段正文上限（MiB）</span>
             <input
               id="logging-capture-body-mib"
+              aria-describedby="logging-capture-scope"
               type="number"
               min="0.01"
               step="0.25"
@@ -226,6 +233,7 @@ export function LoggingStoragePanel({
             <span>抓包目录上限（GiB）</span>
             <input
               id="logging-capture-dir-gib"
+              aria-describedby="logging-capture-scope"
               type="number"
               min="0.01"
               step="0.25"

@@ -7,13 +7,16 @@ import { RequestLogger } from "../src/server/logger.js";
 import { createAnthropicStreamObserver, createOpenAiStreamObserver } from "../src/server/upstream-openai-stream.js";
 import { summarizeAnthropicStreamFailure, summarizeOpenAiStreamFailure } from "../src/server/upstream-client.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
+import { buildLogSampleGroups } from "../src/ui/logs/LogSampleGroups.js";
 import {
   logStatusKind,
   logStatusToneClass,
   responseModelDisplay,
   responseModelSourceLabel,
   compactionModeLabel,
-  compactionDetectionLabel
+  compactionDetectionLabel,
+  hasResponseModelMismatch,
+  averageOutputTokensPerSecond
 } from "../src/ui/logs/log-utils.js";
 import {
   cacheCreationInputTokens,
@@ -21,6 +24,32 @@ import {
 } from "../src/ui/logs/log-token-metrics.js";
 
 describe("UI log status helpers", () => {
+  it("groups only the supplied samples and retains the newest ten outcomes without key collisions", () => {
+    const entries = Array.from({ length: 12 }, (_, i) => requestLog({ request_id: String(i), status: i < 3 ? 502 : 200, key_name: "a::b" }));
+    const groups = buildLogSampleGroups([...entries,
+      requestLog({ key_name: "b", upstream_host: "a::muyuan.do" }),
+      requestLog({ key_name: "a::b", route: "compact" })]);
+    expect(groups).toHaveLength(3);
+    expect(groups[0]).toMatchObject({ count: 12, success: 9, recent: [false, false, false, true, true, true, true, true, true, true] });
+    expect(buildLogSampleGroups([])).toEqual([]);
+  });
+
+  it("compares only explicit response and target names, independently of request success", () => {
+    expect(hasResponseModelMismatch(requestLog({ source_model: "alias", target_model: "actual", response_model: "actual" }))).toBe(false);
+    expect(hasResponseModelMismatch(requestLog({ target_model: "actual", response_model: " actual " }))).toBe(false);
+    expect(hasResponseModelMismatch(requestLog({ target_model: "actual", response_model: "other", status: 502 }))).toBe(true);
+    expect(hasResponseModelMismatch(requestLog({ target_model: null, response_model: "other" }))).toBe(false);
+    expect(hasResponseModelMismatch(requestLog({ target_model: "actual", response_model: null, effective_response_model: "actual", response_model_source: "target_fallback" }))).toBe(false);
+  });
+
+  it("reports elapsed-time output throughput without inventing missing measurements", () => {
+    expect(averageOutputTokensPerSecond(requestLog({ output_tokens: 100, duration_ms: 2000 }))).toBe(50);
+    expect(averageOutputTokensPerSecond(requestLog({ output_tokens: 0, duration_ms: 2000 }))).toBe(0);
+    for (const input of [{ output_tokens: null }, { output_tokens: -1 }, { duration_ms: 0 }, { duration_ms: Infinity }]) {
+      expect(averageOutputTokensPerSecond(requestLog({ output_tokens: 100, duration_ms: 2000, ...input }))).toBeNull();
+    }
+  });
+
   it("treats a 2xx response with only a diagnostic summary as an error", () => {
     const entry = requestLog({
       status: 200,

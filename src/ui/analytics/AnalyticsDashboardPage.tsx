@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { StudioPage } from "../app-types.js";
+import type { LogDrilldownFilter } from "../../shared/types.js";
 import {
   formatCompactMetricNumber,
   formatDurationMs,
@@ -51,10 +52,11 @@ export interface AnalyticsPreferences {
   modelMeasure: DistributionMeasure;
 }
 
-export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNavigate }: {
+export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs }: {
   preferences: AnalyticsPreferences | null;
   onPreferencesChange: (preferences: AnalyticsPreferences) => void;
   onNavigate: (page: StudioPage) => void;
+  onOpenLogs: (filter: LogDrilldownFilter & { host?: string }) => void;
 }) {
   const current: AnalyticsPreferences = preferences ?? {
     preset: "24h", sourceDimension: "platform", sourceMeasure: "requests", modelMeasure: "requests"
@@ -99,6 +101,8 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
             ))}
           </div>
           <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={stats.refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
+          <button type="button" className="btn btn-sm" disabled={!stats.data}
+            onClick={() => stats.data && onOpenLogs(stats.data.range)}>查看该统计范围日志</button>
         </div>
       </div>
 
@@ -121,6 +125,15 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                     exactValue: formatMetricNumber(stats.data.summary.requests),
                     meta: `${dayLabel} ${formatCompactMetricNumber(stats.data.overview?.today.summary.requests ?? 0)} · 保留累计 ${formatCompactMetricNumber(stats.data.overview?.retained.summary.requests ?? 0)}`,
                     tone: "is-request"
+                  },
+                  {
+                    label: `${rangeLabel}错误`,
+                    value: formatCompactMetricNumber(stats.data.summary.error_requests),
+                    exactValue: formatMetricNumber(stats.data.summary.error_requests),
+                    meta: stats.data.summary.requests > 0
+                      ? `占请求 ${((stats.data.summary.error_requests / stats.data.summary.requests) * 100).toFixed(1)}%`
+                      : "所选范围暂无请求",
+                    tone: stats.data.summary.error_requests > 0 ? "is-error" : undefined
                   },
                   {
                     label: `${rangeLabel} Token`,
@@ -172,12 +185,12 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
               </div>
               <AnalyticsMetricGrid items={[
                 {
-                  label: "近 5 分钟首 Token P50 / P95",
+                  label: "近 5 分钟首响应 P50 / P95",
                   value: durationPair(
                     fiveMinutes?.first_token_p50_ms ?? null,
                     fiveMinutes?.first_token_p95_ms ?? null
                   ),
-                  meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_first_token_ms ?? null))}`
+                  meta: `平均 ${formatDurationMs(roundMetric(fiveMinutes?.average_first_token_ms ?? null))} · 首个响应数据块，非首个生成 Token`
                 },
                 {
                   label: "近 5 分钟总耗时 P50 / P95",
@@ -234,7 +247,9 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                     meta: sourceMeasure === "requests"
                       ? `${formatCompactMetricNumber(row.error_requests)} 错误 · ${formatCompactMetricNumber(row.total_tokens)} Token`
                       : `${formatCompactMetricNumber(row.requests)} 请求 · ${formatCompactMetricNumber(row.error_requests)} 错误`,
-                    tone: "tone" in row ? row.tone : undefined
+                    tone: "tone" in row ? row.tone : undefined,
+                    onOpenLogs: sourceDimension === "host"
+                      ? () => onOpenLogs({ ...stats.data!.range, host: row.label }) : undefined
                   }))} />
               </AnalyticsPanel>
               <AnalyticsPanel
@@ -251,6 +266,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                 <AnalyticsDistribution rows={stats.data.by_model.map((row) => ({
                   label: row.model ?? "未识别模型",
                   value: row[modelMeasure],
+                  onOpenLogs: () => onOpenLogs({ ...stats.data!.range, model: row.model }),
                   meta: modelMeasure === "requests"
                     ? `${formatCompactMetricNumber(row.total_tokens)} Token`
                     : `${formatCompactMetricNumber(row.requests)} 请求`

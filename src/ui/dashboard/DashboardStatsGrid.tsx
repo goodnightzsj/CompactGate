@@ -14,7 +14,7 @@ export function DashboardStatsGrid({
 }: {
   health: HealthResponse | null;
   listen: string;
-  logCounts: Record<"all" | RouteKind, number>;
+  logCounts: Record<"all" | RouteKind, number> | null;
 }) {
   const codexPrimaryOk = upstreamHealthBadge(health?.primary).tone === "good";
   const codexCompactOk = upstreamHealthBadge(health?.compact).tone === "good";
@@ -32,18 +32,18 @@ export function DashboardStatsGrid({
       </div>
 
       <div className="stat-card">
-        <div className="stat-card-label">最近流量</div>
+        <div className="stat-card-label">保留日志累计</div>
         <div className="dashboard-stat-count-grid">
           <div>
-            <div className="stat-card-value">{logCounts.primary}</div>
+            <div className="stat-card-value">{logCounts?.primary ?? "—"}</div>
             <div className="stat-card-meta">Codex 主路由</div>
           </div>
           <div>
-            <div className="stat-card-value">{logCounts.compact}</div>
+            <div className="stat-card-value">{logCounts?.compact ?? "—"}</div>
             <div className="stat-card-meta">Compact 压缩</div>
           </div>
           <div>
-            <div className="stat-card-value">{logCounts.claude}</div>
+            <div className="stat-card-value">{logCounts?.claude ?? "—"}</div>
             <div className="stat-card-meta">Claude 路由</div>
           </div>
         </div>

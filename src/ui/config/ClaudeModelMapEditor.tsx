@@ -9,10 +9,12 @@ const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 export function ClaudeModelMapEditor({
   modelMap,
   sourceKey,
+  sourceLabel,
   onModelMapChange
 }: {
   modelMap: ClaudeModelMap;
   sourceKey: string;
+  sourceLabel: string;
   onModelMapChange: (role: ClaudeModelMapRole, value: string) => void;
 }) {
   const inputIdPrefix = useId();
@@ -51,6 +53,10 @@ export function ClaudeModelMapEditor({
           </button>
         </div>
       </div>
+
+      <p className="model-catalog-state" aria-live="polite">
+        目录来源：{sourceLabel} · {fetchState === "idle" ? "尚未读取或连接已变化，请拉取模型" : fetchState === "loading" ? "正在读取已保存连接" : fetchState === "error" ? "读取失败，可继续手动输入" : "已读取已保存连接"}
+      </p>
 
       {fetchMeta && (
         <p

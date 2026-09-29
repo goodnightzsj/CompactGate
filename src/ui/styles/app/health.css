@@ -257,6 +257,8 @@
   font-size: 0.88rem;
 }
 
+.health-card-status .btn { grid-column: 2; justify-self: start; margin-top: 6px; }
+
 .health-card-status small {
   grid-column: 2;
   min-width: 0;

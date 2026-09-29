@@ -453,6 +453,10 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 
 HTTP 日志页与 SSE 插入共享 SQLite 序号，避免分页期间新增漏行、筛选统计重复计数；自动存储清理或手工正文/抓包清理后，按当前筛选重新读取连续首屏，放弃旧分页窗口。刷新失败时保留上次结果并暂停分页，可重试恢复。
 
+仪表盘和用量可按所展示统计的实际时间范围下钻到日志；响应模型与 Host 使用精确匹配，不用模糊搜索替代。日志页显示下钻范围，可移除时间/模型限定或清除全部筛选；离开日志页后，总览与路由仍使用全局记录。日志“样本分组”仅统计当前已加载记录，展示调用数、成功率和最近最多十次结果，不代表全库或上游健康探测。
+
+精简日志列合并模型链路、上游凭据、输入/输出 Token 与首响应/总耗时；“响应声明不同”只比较上游明确声明与目标模型，不把目标推断当证据，也不代表模型指纹鉴定。平均输出吞吐为输出 Token / 总耗时，非纯生成速度；桌面完整列与移动详情仍可查看全部诊断字段。
+
 正文清理已提交但 SQLite 空间回收失败时，仍通知页面刷新，并明确报告“正文已清、空间回收失败”。非 SQLite 模式下抓包目录可清空后继续编辑；留空保存将关闭抓包。日志表在中等宽度下可局部横向滚动，720px 及以下保留卡片布局；Token 明细支持键盘操作，复制失败会显示原因。
 
 仪表盘的时间范围、来源维度与度量，用量的日期/粒度与端点度量，以及配置客户端展示范围，在跨页返回时保留；刷新浏览器后恢复默认值。统计首次进入只加载一次，隐藏页面暂停轮询，重新可见时立即刷新。更改用量日期后若仍显示上次统计，会标明实际日期范围并禁用 CSV 导出，直到所选范围加载成功。没有请求时保留关键指标，将空图表与表格合并为一处操作提示。开启系统“减少动态效果”时实时日志立即显示，不等待逐条动画。
@@ -606,6 +610,8 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 `search` 使用字面子串匹配，`%`、`_` 和反斜杠不作为通配符；ASCII 字母不区分大小写，非 ASCII 字符按原文匹配。HTTP 查询与 SSE 实时筛选遵循相同规则。
 
+统计下钻使用成对的 RFC 3339 `from` / `to`，按请求开始时间左闭右开，最长 31 天。可同时指定 `model` 精确匹配统计中的有效响应模型（上游声明或已标记的目标推断），空值 `model=` 选择未识别模型；省略则不限模型。时间与模型条件同样约束通道、状态和 Host 分面计数；`all_total` 仍是全库保留总数。
+
 可以加筛选：
 
 ```text
@@ -721,7 +727,9 @@ Stream disconnected before completion: stream closed before response.completed
 
 如果日志同时显示 `status=502` 与 `Client disconnected before upstream response completed.`，需要继续查看 `upstream_status`、`stream_terminal_event`、`client_disconnect_phase` 和 `stream_outcome`。Remote V2 或 Remote V1 在已经收到 `response.completed`/`[DONE]` 后，Codex CLI 可能先关闭连接而上游 HTTP 流尚未发出 `end`;新版会保留真实上游状态和已缓冲响应，并记录 `stream_outcome=success`、`client_disconnect_phase=after_terminal`，不再把它当作压缩失败。终止事件之前关闭仍记录为客户端取消或未完成流；真实上游 5xx 仍保留为上游错误。
 
-日志中的 `response_model` 只表示上游响应正文明确返回的模型。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，`effective_response_model` 则在成功时使用 `target_model`，并由 `response_model_source=target_fallback` 标记为“目标模型推断”。Studio 主展示“有效响应模型”，同时单独显示“上游声明模型”，不会把推断值伪装成上游字段；只有明确读到上游模型时来源才是 `upstream`，失败、取消或未完成流则为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，并记录 `stream_oversized_event_count` 供诊断。
+日志中的 `response_model` 只表示响应中明确返回的模型。流式观察与全文解析均优先采用首次有效 `response.completed` 模型声明，否则保留最后一次有效声明。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，`effective_response_model` 则在成功时使用 `target_model`，并由 `response_model_source=target_fallback` 标记为“目标模型推断”。没有模型声明的失败、取消或未完成流标记为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，但不能据此推测未读取的模型，并记录 `stream_oversized_event_count` 供诊断。
+
+Studio 的“首响应”表示收到上游第一个响应数据块的耗时，可能是元信息或心跳，不等于首个生成 Token。历史 API/SQLite 字段仍名为 `first_token_ms`，统计中的同名前缀字段也沿用这一口径，不重新解释历史数据。
 
 当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的可读 summary 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会继续走 primary，但 CompactGate 会先把可读 compact 状态转换成 assistant summary message，再转发给 primary。
 

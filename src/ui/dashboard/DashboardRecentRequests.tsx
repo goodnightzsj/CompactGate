@@ -11,9 +11,11 @@ const DASHBOARD_REQUEST_LIMIT = 8;
 
 export function DashboardRecentRequests({
   logs,
+  totalCount,
   listen
 }: {
   logs: RequestLogEntry[];
+  totalCount: number;
   listen: string;
 }) {
   const narrowViewport = useNarrowViewport("(max-width: 760px)");
@@ -69,7 +71,7 @@ export function DashboardRecentRequests({
       <div className="card-header">
         <h3>最近请求</h3>
         {!narrowViewport && <span className="log-keyboard-hint" id={keyboardHintId}>点击请求行，或聚焦后按 Enter / 空格查看完整信息</span>}
-        <a className="dashboard-health-summary-link" href="/#logs">查看全部日志 · {logs.length} 条</a>
+        <a className="dashboard-health-summary-link" href="/#logs">查看日志 · 共保留 {totalCount} 条</a>
       </div>
       {logs.length === 0 ? (
         <div className="empty-state">

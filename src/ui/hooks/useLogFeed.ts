@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   HealthResponse,
   LogStatusKind,
+  LogDrilldownFilter,
   PublicConfig,
   RequestLogPage,
   RouteKind,
@@ -23,8 +24,10 @@ import {
 import {
   isCurrentLogPageRequest,
   isCurrentLogRequest,
+  isUnfilteredQuery,
   type LogPageQuery,
-  logPageQueryKey
+  logPageQueryKey,
+  logQueryForView
 } from "../logs/log-feed-query.js";
 import { errorSummary } from "../shared/api.js";
 
@@ -52,11 +55,6 @@ interface LogRequestError {
   operation: "first-page" | "refresh" | "more";
 }
 
-function isUnfilteredQuery(query: LogPageQuery): boolean {
-  return query.route === "all" && query.status === "all" &&
-    query.host === ALL_HOSTS_FILTER && query.search === "";
-}
-
 export async function fetchPendingLogPage(
   pending: PendingLogLoad,
   isCurrent: () => boolean
@@ -76,7 +74,8 @@ export async function fetchPendingLogPage(
     query.route,
     query.status,
     query.host,
-    query.search
+    query.search,
+    query.drilldown
   );
 }
 
@@ -92,7 +91,7 @@ export async function fetchMoreLogPage(
   // pending. Start from its original window and grow it before replaying.
   const merged = replayLiveLogEvents({
     ...appendLogPage(baseline, next), limit: baseline.logs.length + query.limit
-  }, pending.liveEvents, query.route, query.status, query.host, query.search);
+  }, pending.liveEvents, query.route, query.status, query.host, query.search, query.drilldown);
   return { ...merged, limit: query.limit };
 }
 
@@ -104,6 +103,7 @@ interface LogPresentationState {
 
 export function useLogFeed({
   enabled,
+  filterLogs,
   hasConfig,
   logPageLimit,
   applyRemoteConfig,
@@ -111,6 +111,7 @@ export function useLogFeed({
   setHealth
 }: {
   enabled: boolean;
+  filterLogs: boolean;
   hasConfig: boolean;
   logPageLimit: number;
   applyRemoteConfig: (config: PublicConfig) => void;
@@ -127,6 +128,7 @@ export function useLogFeed({
   const [statusFilter, setStatusFilter] = useState<"all" | LogStatusKind>("all");
   const [hostFilter, setHostFilter] = useState(ALL_HOSTS_FILTER);
   const [searchFilter, setSearchFilter] = useState("");
+  const [drilldown, setDrilldown] = useState<LogDrilldownFilter>();
   const [requestError, setRequestError] = useState<LogRequestError | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [keyActivity, setKeyActivity] = useState<StudioKeyActivityEvent[]>([]);
@@ -147,16 +149,18 @@ export function useLogFeed({
     limit: DEFAULT_LOG_PAGE_LIMIT
   });
   const [pageQueryKey, setPageQueryKey] = useState(() => logPageQueryKey(appliedQueryRef.current));
-  const hasStaleLogs = (requestError !== null && requestError.operation !== "more") || pageQueryKey !== logPageQueryKey({
-    route: routeFilter, status: statusFilter, host: hostFilter, search: searchFilter, limit: logPageLimit
-  });
+  const requestedQuery = logQueryForView({
+    route: routeFilter, status: statusFilter, host: hostFilter, search: searchFilter, drilldown, limit: logPageLimit
+  }, filterLogs);
+  const hasStaleLogs = (requestError !== null && requestError.operation !== "more") || pageQueryKey !== logPageQueryKey(requestedQuery);
 
   const logPage = logState.page;
 
-  const deferredFilter = useDeferredValue(routeFilter);
-  const deferredStatusFilter = useDeferredValue(statusFilter);
-  const deferredHostFilter = useDeferredValue(hostFilter);
-  const deferredSearchFilter = useDeferredValue(searchFilter);
+  const deferredFilter = useDeferredValue(requestedQuery.route);
+  const deferredStatusFilter = useDeferredValue(requestedQuery.status);
+  const deferredHostFilter = useDeferredValue(requestedQuery.host);
+  const deferredSearchFilter = useDeferredValue(requestedQuery.search);
+  const deferredDrilldown = useDeferredValue(requestedQuery.drilldown);
   const hostOptions = useMemo(
     () => buildHostFilterOptions(logPage.host_counts, hostFilter),
     [logPage.host_counts, hostFilter]
@@ -183,6 +187,7 @@ export function useLogFeed({
       status: deferredStatusFilter,
       host: deferredHostFilter,
       search: deferredSearchFilter,
+      drilldown: deferredDrilldown,
       limit: logPageLimit
     };
     isLoadingLogsRef.current = true;
@@ -230,7 +235,7 @@ export function useLogFeed({
     return () => {
       cancelled = true;
     };
-  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, enabled, hasConfig, logPageLimit, reloadToken]);
+  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, deferredDrilldown, enabled, hasConfig, logPageLimit, reloadToken]);
 
   useEffect(() => {
     setKeyActivity([]);
@@ -391,7 +396,8 @@ export function useLogFeed({
             appliedQuery.status,
             appliedQuery.host,
             appliedQuery.search,
-            operation
+            operation,
+            appliedQuery.drilldown
           );
           const existing = previous.page.logs.some(
             (entry) => entry.request_id === payload.entry.request_id
@@ -531,6 +537,11 @@ export function useLogFeed({
   return {
     keyActivity,
     logPage,
+    // Never present the previous filtered window as a global fact while the
+    // unfiltered query is loading or has failed. Reuse the same feed owner.
+    globalLogPage: logState.syncVersion > 0 && isUnfilteredQuery(appliedQueryRef.current) ? logPage : null,
+    globalLogError: (requestError?.queryKey === logPageQueryKey(logQueryForView(requestedQuery, false))
+      ? requestError.message : null) ?? streamError,
     logSyncVersion: logState.syncVersion,
     liveInsertIds: logState.liveInsertIds,
     pageQueryKey,
@@ -542,6 +553,8 @@ export function useLogFeed({
     setHostFilter,
     searchFilter,
     setSearchFilter,
+    drilldown,
+    setDrilldown,
     hostOptions,
     logError: requestError?.message ?? streamError,
     hasStaleLogs,

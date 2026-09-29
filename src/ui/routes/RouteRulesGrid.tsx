@@ -1,4 +1,5 @@
-import type { OpenAiCompactionMode, RouteKind } from "../../shared/types.js";
+import type { OpenAiCompactionMode, RouteKind, UpstreamProtocol } from "../../shared/types.js";
+import { upstreamProtocolLabel } from "../config/profile-utils.js";
 
 export type RouteHitSource = "preview" | "latest" | "none";
 
@@ -7,6 +8,9 @@ export function RouteRulesGrid({
   primaryHost,
   compactHost,
   claudePrimaryHost,
+  primaryProtocol,
+  compactProtocol,
+  claudeProtocol,
   currentModel,
   compactModel,
   compactMode,
@@ -18,6 +22,9 @@ export function RouteRulesGrid({
   primaryHost: string;
   compactHost: string;
   claudePrimaryHost: string;
+  primaryProtocol: UpstreamProtocol | null;
+  compactProtocol: UpstreamProtocol | null;
+  claudeProtocol: UpstreamProtocol | null;
   currentModel: string;
   compactModel: string;
   compactMode: "split" | "primary";
@@ -71,19 +78,20 @@ export function RouteRulesGrid({
           <div className="route-slot">
             <div className="route-slot-label">主路由</div>
             <div className="route-slot-host">{primaryHost}</div>
-            <div className="route-slot-hint">普通请求直通</div>
+            <div className="route-slot-hint">{upstreamProtocolLabel(primaryProtocol)} · 模型：{currentModel || "跟随请求"}</div>
           </div>
           <div className="route-slot">
             <div className="route-slot-label">压缩路由</div>
             <div className="route-slot-host">{compactTarget}</div>
             <div className="route-slot-hint">{compactMode === "split" ? "独立基础地址与密钥" : "复用主路由"}</div>
+            <div className="route-slot-hint">{upstreamProtocolLabel(compactMode === "split" ? compactProtocol : primaryProtocol)}</div>
           </div>
         </div>
 
         <div className="route-model-strip">
           Local / Remote V1 模型映射：{currentModel || "请求模型"} → {compactModel}
         </div>
-        <div className="route-note">Remote V2 保留原始模型与 Responses 请求，始终使用 Primary 上游。</div>
+        <div className="route-note">Remote V2 沿用 Primary 上游和模型设置，不使用独立压缩模型。</div>
       </div>
 
       <div className="route-rule claude">
@@ -107,6 +115,7 @@ export function RouteRulesGrid({
             <div className="route-slot-label">主路由</div>
             <div className="route-slot-host">{claudePrimaryHost}</div>
             <div className="route-slot-hint">普通请求、手动 compact 和重连请求统一走这里</div>
+            <div className="route-slot-hint">{upstreamProtocolLabel(claudeProtocol)} · 按角色映射模型，未设置时回退默认</div>
           </div>
         </div>
 

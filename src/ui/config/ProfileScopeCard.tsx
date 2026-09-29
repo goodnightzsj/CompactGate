@@ -195,6 +195,12 @@ export function ProfileScopeCard({
         <p>{description}</p>
       </div>
 
+      <div className="profile-card-status" aria-live="polite">
+        <span>当前 {scopeLabel} 运行时档案：<strong>{activeProfile?.name ?? "未绑定档案"}</strong></span>
+        <span>已保存：<strong>{profiles.length}</strong></span>
+        <span>{profileActionLabel(profileState)}</span>
+      </div>
+
       <div className="profile-card-controls">
         <Field label={`${scopeLabel} 档案名称`} hint={profileNameHint}>
           <input
@@ -405,20 +411,8 @@ export function ProfileScopeCard({
         </div>
       )}
 
-      <div className="profile-card-status" aria-live="polite">
-        <span>
-          当前 {scopeLabel} 运行时档案：
-          <strong>{activeProfile?.name ?? "未绑定档案"}</strong>
-        </span>
-        <span>
-          已保存：
-          <strong>{profiles.length}</strong>
-        </span>
-        <span>{profileActionLabel(profileState)}</span>
-      </div>
-
       {/*
-        Both messages sat outside the status region above, so neither was ever
+        Both messages sat outside the status region, so neither was ever
         announced — including the name collision, which is the one the user most
         needs to hear before retrying. The wrapper is always rendered: a live region
         has to exist before its content changes, or the first message is missed.

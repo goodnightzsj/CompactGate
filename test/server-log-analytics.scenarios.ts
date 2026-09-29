@@ -41,5 +41,21 @@ describe("log stats API", () => {
       `${app.url}/api/logs/stats?from=2026-06-01T00:00:00.000Z&to=2026-08-07T00:00:00.000Z`
     );
     expect(tooLong.status).toBe(400);
+
+    const range = { from: "2026-09-29T00:00:00+08:00", to: "2026-09-30T00:00:00+08:00" };
+    const invalidDrilldowns: Record<string, string>[] = [
+      { model: "exact" }, { from: range.from }, { ...range, from: "bad" },
+      { ...range, to: range.from }, { ...range, from: "2026-01-01T00:00:00Z" },
+      { ...range, model: "x".repeat(8193) }
+    ];
+    for (const query of invalidDrilldowns) {
+      const result = await fetch(`${app.url}/api/logs/recent?${new URLSearchParams(query)}`);
+      expect(result.status).toBe(400);
+    }
+    for (const model of ["", "exact + %_"]) {
+      const result = await fetch(`${app.url}/api/logs/recent?${new URLSearchParams({ ...range, model })}`);
+      expect(result.status).toBe(200);
+      await expect(result.json()).resolves.toMatchObject({ total: 0, logs: [] });
+    }
   });
 });

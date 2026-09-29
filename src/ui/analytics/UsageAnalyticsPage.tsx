@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { StudioPage } from "../app-types.js";
+import type { LogDrilldownFilter } from "../../shared/types.js";
 import { formatCompactMetricNumber, formatMetricNumber } from "../shared/format.js";
 import {
   AnalyticsDistribution,
@@ -32,10 +33,11 @@ export interface UsagePreferences {
   endpointMeasure: "requests" | "total_tokens";
 }
 
-export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigate }: {
+export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs }: {
   preferences: UsagePreferences | null;
   onPreferencesChange: (preferences: UsagePreferences) => void;
   onNavigate: (page: StudioPage) => void;
+  onOpenLogs: (filter: LogDrilldownFilter & { host?: string }) => void;
 }) {
   const defaults = useMemo(() => defaultUsageDates(), []);
   const current: UsagePreferences = preferences ?? { ...defaults, granularity: "day", endpointMeasure: "requests" };
@@ -76,6 +78,8 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
             导出 CSV
           </button>
           <button type="button" className="btn btn-sm analytics-refresh" disabled={stats.loading} onClick={stats.refresh}>{stats.loading ? "刷新中..." : "刷新"}</button>
+          <button type="button" className="btn btn-sm" disabled={!stats.data}
+            onClick={() => stats.data && onOpenLogs(stats.data.range)}>查看该统计范围日志</button>
         </div>
       </div>
 
@@ -230,8 +234,12 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
                   </thead>
                   <tbody>
                     {stats.data.by_model.map((row) => (
-                      <tr key={row.model ?? "unknown"}>
-                        <td><code>{row.model ?? "未识别模型"}</code></td>
+                      <tr key={JSON.stringify(row.model)}>
+                        <td><button type="button" className="analytics-drilldown"
+                          aria-label={`查看 ${row.model ?? "未识别模型"} 的请求日志`}
+                          onClick={() => onOpenLogs({ ...stats.data!.range, model: row.model })}>
+                          <code>{row.model ?? "未识别模型"} ↗</code>
+                        </button></td>
                         <td>{formatMetricNumber(row.requests)}</td>
                         <td>{formatMetricNumber(row.error_requests)}</td>
                         <td>{cacheHitRate(row.input_tokens, row.cache_read_tokens)}</td>

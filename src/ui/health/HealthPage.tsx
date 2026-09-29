@@ -1,4 +1,4 @@
-import type { HealthResponse } from "../../shared/types.js";
+import type { ConfigProfileScope, HealthResponse } from "../../shared/types.js";
 import { HealthDetailGrid } from "./HealthDetailGrid.js";
 import { HealthEndpointCard } from "./HealthEndpointCard.js";
 import { HealthHeroSection } from "./HealthHeroSection.js";
@@ -11,12 +11,14 @@ export function HealthPage({
   health,
   error,
   isRefreshing,
-  onRefresh
+  onRefresh,
+  onConfigure
 }: {
   health: HealthResponse | null;
   error: string | null;
   isRefreshing: boolean;
   onRefresh: () => void;
+  onConfigure: (scope: ConfigProfileScope) => void;
 }) {
   const primaryStatus = upstreamHealthBadge(health?.primary);
   const compactStatus = upstreamHealthBadge(health?.compact);
@@ -71,6 +73,7 @@ export function HealthPage({
           badgeLabel="Codex 主"
           summary="处理普通 OpenAI 兼容 /v1 请求"
           upstream={health?.primary}
+          onConfigure={() => onConfigure("codex")}
         />
         <HealthEndpointCard
           title="Codex 压缩路由"
@@ -79,6 +82,7 @@ export function HealthPage({
           badgeLabel="Codex 压缩"
             summary="处理 local/Remote V1；Remote V2 复用主路由"
           upstream={health?.compact}
+          onConfigure={() => onConfigure("codex")}
         />
         <HealthEndpointCard
           title="Claude 主路由"
@@ -87,6 +91,7 @@ export function HealthPage({
           badgeLabel="Claude 主"
           summary="处理所有 Anthropic Messages 请求"
           upstream={health?.claude.primary}
+          onConfigure={() => onConfigure("claude")}
         />
       </section>
 

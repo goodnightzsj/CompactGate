@@ -6,6 +6,17 @@ import { emptyForm, renderLinkedModel } from "../src/ui/config/config-form-state
 import type { ConfigFormState } from "../src/ui/config/types.js";
 
 describe("ConfigModelPanel", () => {
+  it("keeps manual input available before loading a catalogue and hides the inactive template", () => {
+    const form = { ...emptyForm(), modelMode: "custom" as const, modelTemplate: "{model}-kept" };
+    const markup = renderToStaticMarkup(<ConfigModelPanel config={null} form={form}
+      linkedCompactModel="linked" onFormChange={() => undefined}
+      onUnlockCompactModel={() => undefined} onRestoreLinkedMode={() => undefined} />);
+    expect(markup).toContain("尚未读取或连接已变化");
+    expect(markup).not.toContain('aria-label="上游模型"');
+    expect(markup).toContain('for="compact-model-template" hidden=""');
+    expect(markup).toContain('value="{model}-kept"');
+    expect(markup.match(/<input id="primary-model-override"[^>]*>/)?.[0]).not.toContain("disabled");
+  });
   it("labels the Compact model input without wrapping its action button", () => {
     const form = emptyForm();
     const setForm: Dispatch<SetStateAction<ConfigFormState>> = () => undefined;

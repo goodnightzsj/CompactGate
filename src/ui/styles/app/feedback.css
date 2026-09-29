@@ -74,7 +74,7 @@
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 700;
-  transition: all 120ms var(--ease);
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
 }
 
 .theme-switch button:hover {

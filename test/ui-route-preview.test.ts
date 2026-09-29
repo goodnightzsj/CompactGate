@@ -2,9 +2,22 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ConfigPreviewPanel } from "../src/ui/config/ConfigPreviewPanel.js";
+import { RouteRulesGrid } from "../src/ui/routes/RouteRulesGrid.js";
 import { isLatestPreviewRequest } from "../src/ui/hooks/useRoutePreviewAction.js";
 
 describe("route preview request ordering", () => {
+  it("describes Remote V2 as using Primary model settings, not the untouched client model", () => {
+    const markup = renderToStaticMarkup(createElement(RouteRulesGrid, {
+      listen: "127.0.0.1:0", primaryHost: "primary.invalid", compactHost: "compact.invalid", claudePrimaryHost: "claude.invalid",
+      currentModel: "overridden", compactModel: "summary", compactMode: "split", activeRoute: "compact",
+      primaryProtocol: "openai_chat", compactProtocol: "openai_responses", claudeProtocol: "anthropic_messages",
+      activeCompactionMode: "remote_v2", activeRouteSource: "preview"
+    }));
+    expect(markup).toContain("Remote V2 沿用 Primary 上游和模型设置");
+    expect(markup).not.toContain("保留原始模型");
+    expect(markup).toContain("OpenAI Chat · 模型：overridden");
+    expect(markup).not.toContain("普通请求直通");
+  });
   it("accepts only the latest preview response", () => {
     expect(isLatestPreviewRequest(2, 2)).toBe(true);
     expect(isLatestPreviewRequest(1, 2)).toBe(false);

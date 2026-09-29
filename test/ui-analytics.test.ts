@@ -28,7 +28,7 @@ import { DateRangePicker } from "../src/ui/analytics/DateRangePicker.js";
 import { formatCompactMetricNumber } from "../src/ui/shared/format.js";
 
 afterEach(() => vi.restoreAllMocks());
-const pageProps = { preferences: null, onPreferencesChange: vi.fn(), onNavigate: vi.fn() };
+const pageProps = { preferences: null, onPreferencesChange: vi.fn(), onNavigate: vi.fn(), onOpenLogs: vi.fn() };
 
 describe("analytics data helpers", () => {
   it("resolves rolling ranges on every request without moving fixed usage dates", async () => {
@@ -108,6 +108,8 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("缓存率");
     expect(markup).toContain("输入 1,000");
     expect(markup).toContain("缓存率 50.0%");
+    expect(markup).toContain("Token 体量");
+    expect(markup).toContain("缓存率 · 独立百分比刻度");
     expect(markup).toContain('type="range"');
     expect(markup).toContain('aria-label="Token 明细时段"');
   });
@@ -222,7 +224,8 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("21.2K TPM");
     expect(markup).toContain("近 5 分钟缓存命中");
     expect(markup).toContain("50.0%");
-    expect(markup).toContain("近 5 分钟首 Token P50 / P95");
+    expect(markup).toContain("近 5 分钟首响应 P50 / P95");
+    expect(markup).toContain("首个响应数据块，非首个生成 Token");
     expect(markup).toContain("近 5 分钟总耗时 P50 / P95");
     expect(markup).not.toContain("99.00 RPM");
     const latency = markup.match(/<section class="analytics-metric-section analytics-latency-metrics"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
@@ -231,7 +234,8 @@ describe("analytics data helpers", () => {
     expect(latency).toContain("200ms / 500ms");
     expect(latency).toContain("平均 40ms");
     expect(latency).toContain('<h3 id="analytics-latency-heading">响应耗时</h3>');
-    expect(markup.slice(0, markup.indexOf('<section class="analytics-metric-section analytics-latency-metrics"')).match(/<article /g)).toHaveLength(4);
+    expect(markup.slice(0, markup.indexOf('<section class="analytics-metric-section analytics-latency-metrics"')).match(/<article /g)).toHaveLength(5);
+    expect(markup).toContain("24 小时错误");
     expect(markup).not.toContain("<details");
     expect(markup).not.toContain("<summary");
   });

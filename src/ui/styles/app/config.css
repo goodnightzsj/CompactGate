@@ -117,6 +117,26 @@
   gap: 10px;
 }
 
+.config-advanced-settings {
+  margin-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.config-advanced-settings > summary {
+  min-height: 44px;
+  padding-block: 12px;
+  color: var(--muted);
+  font-size: var(--text-small);
+  cursor: pointer;
+}
+
+.config-advanced-settings > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.config-advanced-settings > .config-row { margin-bottom: 12px; }
+
 .route-compact-settings > summary {
   min-height: 40px;
   padding-block: 10px;
@@ -132,13 +152,17 @@
 }
 
 .route-compact-settings[open] > :not(summary),
+.config-advanced-settings[open] > :not(summary),
 .profile-item-more[open] > .profile-secondary-actions,
 .config-save-target[open] > span,
 .config-preview-headers[open] > .field,
 .config-preview-output > .config-preview-result,
 .config-import-summary {
-  animation: panel-fade-in 140ms var(--ease-out);
+  animation: panel-fade-in 160ms var(--ease-out);
 }
+
+.model-fetch-note,
+.config-portable-panel .inline-success { animation: panel-fade-in 160ms var(--ease-out); }
 
 .field-label-block {
   margin-bottom: 4px;
@@ -546,6 +570,19 @@
 .config-save-bar.is-dirty {
   border-color: color-mix(in srgb, var(--amber) 40%, var(--hairline));
 }
+
+/* With no draft to save, stay in document flow and leave the form unobscured. */
+.config-save-bar.is-clean {
+  position: static;
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: var(--surface);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.config-save-bar.is-clean .config-save-copy > span,
+.config-save-bar.is-clean .btn-primary { display: none; }
+.config-save-bar.is-clean .config-save-actions { display: flex; }
 
 .config-save-actions {
   display: flex;
@@ -1580,6 +1617,10 @@
 .primary-model-controls .custom-select-trigger {
   min-height: 48px;
 }
+
+.primary-model-controls > :only-child { grid-column: 1 / -1; }
+.model-config-block > [hidden] { display: none; }
+.model-catalog-state { overflow-wrap: anywhere; }
 
 .primary-model-controls .custom-select-copy strong,
 .primary-model-controls .custom-select-copy small {

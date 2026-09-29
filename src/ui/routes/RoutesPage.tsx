@@ -13,6 +13,7 @@ import { CodexProtocolStatus } from "./CodexProtocolStatus.js";
 import { RouteRulesGrid } from "./RouteRulesGrid.js";
 import type { RouteHitSource } from "./RouteRulesGrid.js";
 import { ConfigPreviewPanel } from "../config/ConfigPreviewPanel.js";
+import { logStatusKind } from "../logs/log-utils.js";
 
 export function RoutesPage({
   config,
@@ -24,6 +25,9 @@ export function RoutesPage({
   activeCompactionMode,
   activeRouteSource,
   latestLog,
+  hasLogSnapshot,
+  logError,
+  onRetryLogs,
   codexStatus,
   clientIdentity,
   previewPanel
@@ -37,6 +41,9 @@ export function RoutesPage({
   activeCompactionMode: OpenAiCompactionMode | null;
   activeRouteSource: RouteHitSource;
   latestLog: RequestLogEntry | null;
+  hasLogSnapshot: boolean;
+  logError: string | null;
+  onRetryLogs: () => void;
   codexStatus: CodexVersionStatus | null;
   clientIdentity: ClientIdentityStatus | null;
   previewPanel: ComponentProps<typeof ConfigPreviewPanel>;
@@ -45,6 +52,9 @@ export function RoutesPage({
   const primaryHost = config?.primary.host ?? "primary.example";
   const compactHost = config?.compact.host ?? "compact.example";
   const claudePrimaryHost = config?.claude.primary.host ?? "api.anthropic.com";
+  const hitTone = activeRouteSource === "latest" && hasLogSnapshot && latestLog
+    ? logStatusKind(latestLog) === "error" ? "is-bad" : "is-good"
+    : "";
 
   return (
     <div className="routes-page">
@@ -61,11 +71,18 @@ export function RoutesPage({
           >
             跳到路由试算 ↓
           </button>
-          <span className={`status-pill route-hit-summary ${activeRouteSource === "none" ? "" : "is-good"}`}>
-          {formatRouteHitStatus(activeRoute, activeRouteSource, latestLog)}
+          <span className={`status-pill route-hit-summary ${hitTone}`}>
+          {activeRouteSource !== "preview" && !hasLogSnapshot
+            ? logError ? "最近请求不可用" : "正在读取最近请求…"
+            : formatRouteHitStatus(activeRoute, activeRouteSource, latestLog)}
           </span>
         </div>
       </div>
+
+      {logError && <div className="error-banner" role="alert">
+        最近请求更新失败：{logError} {hasLogSnapshot && "最近命中保留上次全局结果；试算不受影响。"}
+        <button type="button" className="btn btn-sm" onClick={onRetryLogs}>重试日志</button>
+      </div>}
 
       {hasPendingChanges && (
         <p className="route-draft-notice" role="status">
@@ -78,6 +95,9 @@ export function RoutesPage({
         primaryHost={primaryHost}
         compactHost={compactHost}
         claudePrimaryHost={claudePrimaryHost}
+        primaryProtocol={config?.primary.upstream_protocol ?? null}
+        compactProtocol={config?.compact.upstream_protocol ?? null}
+        claudeProtocol={config?.claude.primary.upstream_protocol ?? null}
         currentModel={currentModel}
         compactModel={compactModel}
         compactMode={compactMode}

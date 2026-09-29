@@ -330,6 +330,8 @@ export interface PublicApiKeyEntry {
 }
 
 export interface PublicUpstreamConfig extends PublicCredentialState {
+  /** Opaque, process-local identity of the model catalogue connection. */
+  model_source_revision: string;
   base_url: string;
   host: string;
   extra_header_names: string[];
@@ -467,6 +469,7 @@ export interface RequestLogEntry {
   stream_oversized_event_count?: number;
   upstream_response_truncated?: boolean;
   duration_ms: number;
+  /** Time to the first upstream response data chunk, not the first generated token. */
   first_token_ms: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -601,6 +604,14 @@ export interface HostLogCount {
 
 export type ProviderLogCounts = Record<"all" | ProviderFamily, number>;
 export type StatusLogCounts = Record<"all" | LogStatusKind, number>;
+
+/** Analytics drilldown: start time in [from, to), exact effective response model. */
+export interface LogDrilldownFilter {
+  from: string;
+  to: string;
+  /** Omitted means all models; null selects the unobserved/unavailable group. */
+  model?: string | null;
+}
 
 export interface RequestLogPage {
   /** Highest persisted insert ID in this snapshot, across all filters. */

@@ -22,6 +22,10 @@ describe("RouteConfigPanel", () => {
     expect(markup).toContain(`aria-label="${client} 主路由 密钥使用顺序"`);
     expect(markup).toContain(`aria-label="${client} 主路由 直填密钥优先级"`);
     expect(markup).toContain("草稿 · 保存后生效");
+    const reserveId = markup.match(/<label for="([^"]+)">粘性保留时长（秒）<\/label>/)?.[1];
+    expect(reserveId).toBeTruthy();
+    expect(markup).toContain(`id="${reserveId}" aria-describedby="${reserveId}-hint"`);
+    expect(markup).toContain(`id="${reserveId}-hint">429 冷却结束后只接原会话的时长；0 关闭。`);
     expect(markup).toContain("首选不代表正在使用");
     expect(markup).toContain("3 把候选");
     expect(markup.match(/data-key-id="([^"]+)"/g)).toEqual([
@@ -47,12 +51,19 @@ describe("RouteConfigPanel", () => {
     const client = scope === "codex" ? "Codex" : "Claude";
     const otherClient = scope === "codex" ? "Claude" : "Codex";
     expect(markup).toContain(`${client} 主路由 上游格式`);
-    expect(markup).toContain(`${client} 压缩路由 上游格式`);
-    expect(markup).toContain(`${client} 压缩上游模式`);
     expect(markup).not.toContain(`${otherClient} 主路由`);
-    expect(markup.match(scope === "codex" ? /OpenAI Responses/g : /Anthropic Messages/g)).toHaveLength(2);
-    expect(markup).toContain(`https://${scope}-compact.example`);
-    expect(markup.match(/<details class="route-compact-settings"[^>]*>/)?.[0])
-      .toBe(scope === "codex" ? '<details class="route-compact-settings" open="">' : '<details class="route-compact-settings">');
+    if (scope === "codex") {
+      expect(markup).toContain("Codex 压缩路由 上游格式");
+      expect(markup).toContain("Codex 压缩上游模式");
+      expect(markup).toContain("https://codex-compact.example");
+      expect(markup).toContain('<details class="route-compact-settings" open="">');
+    } else {
+      expect(markup).not.toContain("Claude 压缩路由");
+      expect(markup).not.toContain("Claude 压缩上游模式");
+      expect(markup).not.toContain("https://claude-compact.example");
+      expect(markup).toContain("统一使用 Claude 主路由");
+      expect(markup).toContain("旧备份中的独立压缩字段仍会保留");
+    }
+    expect(form.claudeCompactBaseUrl).toBe("https://claude-compact.example");
   });
 });

@@ -2,6 +2,7 @@ import { routeProvider } from "../../shared/route-meta.js";
 import type {
   HostLogCount,
   LogStatusKind,
+  LogDrilldownFilter,
   RequestLogEntry,
   RequestLogPage,
   OpenAiCompactionMode,
@@ -57,6 +58,19 @@ export function responseModelSourceLabel(entry: RequestLogEntry): string {
   }
 
   return "未获得";
+}
+
+/** Compare declarations only; a target fallback is not evidence of agreement. */
+export function hasResponseModelMismatch(entry: RequestLogEntry): boolean {
+  const declared = entry.response_model?.trim();
+  const target = entry.target_model?.trim();
+  return Boolean(declared && target && declared !== target);
+}
+
+export function averageOutputTokensPerSecond(entry: RequestLogEntry): number | null {
+  return entry.output_tokens === null || !Number.isFinite(entry.output_tokens) || entry.output_tokens < 0 ||
+    !Number.isFinite(entry.duration_ms) || entry.duration_ms <= 0
+    ? null : entry.output_tokens * 1000 / entry.duration_ms;
 }
 
 export function compactionModeLabel(mode: OpenAiCompactionMode | null | undefined): string {
@@ -168,6 +182,7 @@ export async function fetchLogPage({
   status,
   host,
   search,
+  drilldown,
   limit,
   offset
 }: {
@@ -175,6 +190,7 @@ export async function fetchLogPage({
   status: "all" | LogStatusKind;
   host: string;
   search: string;
+  drilldown?: LogDrilldownFilter;
   limit: number;
   offset: number;
 }): Promise<RequestLogPage> {
@@ -196,6 +212,11 @@ export async function fetchLogPage({
   }
 
   const keyword = search.trim();
+  if (drilldown) {
+    params.set("from", drilldown.from);
+    params.set("to", drilldown.to);
+    if (drilldown.model !== undefined) params.set("model", drilldown.model ?? "");
+  }
   if (keyword.length > 0) {
     params.set("search", keyword);
   }
@@ -234,7 +255,8 @@ export function mergeLiveLogPage(
   statusFilter: "all" | LogStatusKind,
   hostFilter: string,
   searchFilter: string,
-  operation: "insert" | "update" = "insert"
+  operation: "insert" | "update" = "insert",
+  drilldown?: LogDrilldownFilter
 ): RequestLogPage {
   if (operation === "update") {
     const existingIndex = previous.logs.findIndex(
@@ -255,10 +277,10 @@ export function mergeLiveLogPage(
   const duplicate = (nextEntry.sequence !== undefined && previous.latest_sequence !== undefined &&
     nextEntry.sequence <= previous.latest_sequence) ||
     previous.logs.some((entry) => entry.request_id === nextEntry.request_id);
-  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter, searchFilter);
-  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter, searchFilter);
-  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter, searchFilter);
-  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER, searchFilter);
+  const matchesFilter = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, hostFilter, searchFilter, drilldown);
+  const matchesRouteCountScope = logEntryMatchesFilter(nextEntry, "all", statusFilter, hostFilter, searchFilter, drilldown);
+  const matchesStatusCountScope = logEntryMatchesFilter(nextEntry, routeFilter, "all", hostFilter, searchFilter, drilldown);
+  const matchesHostCountScope = logEntryMatchesFilter(nextEntry, routeFilter, statusFilter, ALL_HOSTS_FILTER, searchFilter, drilldown);
   const loadedWindowSize = Math.max(previous.limit, previous.logs.length);
   const nextLogs = matchesFilter
     ? mergeUniqueLogs([nextEntry, ...previous.logs.filter((entry) => entry.request_id !== nextEntry.request_id)])
@@ -300,7 +322,8 @@ export function replayLiveLogEvents(
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
   hostFilter: string,
-  searchFilter: string
+  searchFilter: string,
+  drilldown?: LogDrilldownFilter
 ): RequestLogPage {
   return events.reduce(
     (current, event) => mergeLiveLogPage(
@@ -310,7 +333,8 @@ export function replayLiveLogEvents(
       statusFilter,
       hostFilter,
       searchFilter,
-      event.operation ?? "insert"
+      event.operation ?? "insert",
+      drilldown
     ),
     page
   );
@@ -338,13 +362,19 @@ function logEntryMatchesFilter(
   routeFilter: "all" | RouteKind,
   statusFilter: "all" | LogStatusKind,
   hostFilter: string,
-  searchFilter: string
+  searchFilter: string,
+  drilldown?: LogDrilldownFilter
 ): boolean {
   const routeMatches = routeFilter === "all" || entry.route === routeFilter;
   const statusMatches = statusFilter === "all" || logStatusKind(entry) === statusFilter;
   const hostMatches = hostFilter === ALL_HOSTS_FILTER || entry.upstream_host === hostFilter;
   const searchMatches = logEntryMatchesSearch(entry, searchFilter);
-  return routeMatches && statusMatches && hostMatches && searchMatches;
+  const model = entry.response_model_source === "target_fallback" ? entry.target_model : entry.response_model;
+  const drilldownMatches = !drilldown || (
+    entry.time >= drilldown.from && entry.time < drilldown.to &&
+    (drilldown.model === undefined || model === drilldown.model)
+  );
+  return routeMatches && statusMatches && hostMatches && searchMatches && drilldownMatches;
 }
 
 function logEntryMatchesSearch(entry: RequestLogEntry, searchFilter: string): boolean {

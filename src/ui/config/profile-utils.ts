@@ -31,7 +31,6 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
     return [
       `Claude ${profile.claude_primary_host ?? "未配置"}`,
       `主 ${upstreamProtocolLabel(profile.claude_primary_upstream_protocol)}`,
-      `压缩 ${upstreamProtocolLabel(profile.claude_compact_upstream_protocol)}`,
       `主模型 ${primaryModel || "透传"}`,
       secretCopy
     ].join("；");

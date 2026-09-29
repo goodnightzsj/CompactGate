@@ -27,6 +27,42 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("keeps analytics drilldown, SQL facets, pagination and live inserts in the same exact scope", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-drilldown-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(20, path.join(dir, "logs.sqlite"));
+    const from = "2026-09-29T00:00:00.000Z";
+    const to = "2026-09-30T00:00:00.000Z";
+    const entries = [
+      { ...logEntry(0), time: from, response_model: "exact", response_model_source: "upstream" as const },
+      { ...logEntry(1), time: from, response_model: null, target_model: "exact", response_model_source: "target_fallback" as const, route: "claude" as const, status: 502 },
+      { ...logEntry(2), time: from, response_model: "exact-extra" },
+      { ...logEntry(3), time: to, response_model: "exact" },
+      { ...logEntry(4), time: from, response_model: null, response_model_source: "unavailable" as const },
+      { ...logEntry(5), time: from, response_model: "exact", upstream_host: "other.invalid" }
+    ];
+    try {
+      entries.forEach((entry) => logger.add(entry));
+      for (const model of [undefined, null, "exact", "exact-extra", "' OR 1=1 --"]) {
+        const drilldown = { from, to, ...(model !== undefined ? { model } : {}) };
+        for (const host of [undefined, entries[0].upstream_host]) {
+          const page = logger.page({ limit: 20, offset: 0, host, drilldown });
+          const live = entries.reduce((current, entry) => mergeLiveLogPage(current, entry,
+            "all", "all", host ?? ALL_HOSTS_FILTER, "", "insert", drilldown), emptyLogPage(20));
+          expect(page.logs.map((entry) => entry.request_id)).toEqual(live.logs.map((entry) => entry.request_id));
+          expect(page.total).toBe(live.total);
+          expect(page.counts).toEqual(live.counts);
+          expect(page.status_counts).toEqual(live.status_counts);
+          expect(page.host_counts).toEqual(live.host_counts);
+          if (model === "exact" && host) {
+            expect(page.total).toBe(2);
+            expect(logger.page({ limit: 1, offset: 1, host, drilldown }).logs[0].request_id).toBe(entries[0].request_id);
+          }
+        }
+      }
+    } finally { logger.close(); }
+  });
+
   it("matches HTTP and live search literally, including SQL wildcards and case folding", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-search-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

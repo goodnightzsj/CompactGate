@@ -5,6 +5,7 @@ import type {
   CompactionDiagnostics,
   ClientDisconnectPhase,
   LogStatusKind,
+  LogDrilldownFilter,
   ProviderLogCounts,
   ProviderStatePortabilityLog,
   RequestLogEntry,
@@ -25,6 +26,7 @@ export interface LogPageOptions {
   status?: LogStatusKind;
   host?: string;
   search?: string;
+  drilldown?: LogDrilldownFilter;
   limit: number;
   offset: number;
 }
@@ -70,12 +72,25 @@ export function providerCountsFromRouteCounts(
   return providerCounts;
 }
 
-export function buildWhereClause(options: Pick<LogPageOptions, "route" | "status" | "host" | "search">): {
+export const LOG_EFFECTIVE_MODEL_SQL = "CASE WHEN response_model_source = 'target_fallback' THEN target_model ELSE response_model END";
+
+export function buildWhereClause(options: Omit<LogPageOptions, "limit" | "offset">): {
   sql: string;
   params: Array<RouteKind | string>;
 } {
   const conditions: string[] = [];
   const params: Array<RouteKind | string> = [];
+
+  if (options.drilldown) {
+    conditions.push("time >= ? AND time < ?");
+    params.push(options.drilldown.from, options.drilldown.to);
+    const model = options.drilldown.model;
+    if (model === null) conditions.push(`(${LOG_EFFECTIVE_MODEL_SQL}) IS NULL`);
+    else if (model !== undefined) {
+      conditions.push(`(${LOG_EFFECTIVE_MODEL_SQL}) = ?`);
+      params.push(model);
+    }
+  }
 
   if (options.route) {
     conditions.push("route = ?");

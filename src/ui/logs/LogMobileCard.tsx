@@ -3,12 +3,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useMediaQuery } from "./useNarrowViewport.js";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
-import { formatDateTime, formatDurationMs, formatMetricNumber } from "../shared/format.js";
+import { formatDateTime } from "../shared/format.js";
+import { LogModelSummary, LogTokenSummary, LogTimingSummary, outputThroughputLabel } from "./LogSummary.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import {
   compactionModeClass,
   compactionModeLabel,
-  displayTotalTokens,
   logStatusKind,
   logStatusToneClass
 } from "./log-utils.js";
@@ -26,10 +26,6 @@ export const LogMobileCard = memo(function LogMobileCard({
   expanded: boolean;
   onToggle: (logKey: string) => void;
 }) {
-  const targetModel = entry.target_model ?? entry.source_model ?? "-";
-  const modelLabel = entry.source_model && entry.source_model !== targetModel
-    ? `${entry.source_model} → ${targetModel}`
-    : targetModel;
   const hasError = logStatusKind(entry) === "error";
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 
@@ -48,15 +44,17 @@ export const LogMobileCard = memo(function LogMobileCard({
           {entry.compaction_mode && <span className={`protocol-chip ${compactionModeClass(entry.compaction_mode)}`}>{compactionModeLabel(entry.compaction_mode)}</span>}
           <time>{formatDateTime(entry.time)}</time>
         </span>
-        <strong className="log-mobile-model">{modelLabel}</strong>
+        <span className="log-mobile-model"><LogModelSummary entry={entry} /></span>
         <span className="log-mobile-host">{entry.upstream_host}</span>
-        {entry.key_name && <span className="log-mobile-key">{entry.key_name}</span>}
+        {entry.key_name && <span className="log-mobile-key">上游凭据 · {entry.key_name}</span>}
         <span className="log-mobile-endpoint">{entry.endpoint}</span>
         <span className="log-mobile-metrics">
           <span>{entry.request_type}</span>
-          <span>{formatMetricNumber(displayTotalTokens(entry))} Token</span>
-          <span>{formatDurationMs(entry.duration_ms)}</span>
+          <LogTokenSummary entry={entry} />
+          <LogTimingSummary entry={entry} />
+          <span>平均 {outputThroughputLabel(entry)}</span>
         </span>
+        {hasError && <span className="log-error-hint">{entry.error_summary ?? entry.stream_outcome ?? "请求未成功"}</span>}
         <span className="log-mobile-disclosure" aria-hidden="true">{expanded ? "收起" : "详情"}</span>
       </button>
 

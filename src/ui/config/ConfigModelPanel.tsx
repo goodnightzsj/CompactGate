@@ -31,16 +31,10 @@ export function ConfigModelPanel({
   onRestoreLinkedMode: () => void;
   scope?: ConfigProfileScope;
 }) {
-  // No `last_saved_at`: it changes on *every* save, so editing an unrelated field
-  // like the log page size discarded the fetched model catalogue and greyed the
-  // pickers until the operator clicked 拉取模型 again. What actually invalidates the
-  // catalogue is the upstream URL, the credential, or the active profile — all
-  // three are already in the key.
+  // Track the actual catalogue connection, not every unrelated config save.
+  // Credential changes are identified by the server without exposing secrets.
   const primarySourceKey = [
-    config?.primary.base_url ?? "loading",
-    config?.primary.active_api_key_env ?? "",
-    config?.primary.api_key_source ?? "missing",
-    config?.primary.oauth_account_id ?? "",
+    config?.primary.model_source_revision ?? "loading",
     config?.profile_scopes.codex.active_profile_id ?? ""
   ].join("\n");
   const {
@@ -68,7 +62,7 @@ export function ConfigModelPanel({
             <div>
               <p className="eyebrow">Codex Primary</p>
               <h3 id="primary-model-title">模型与思考强度</h3>
-              <p>模型目录读取已保存的 Primary 上游；选择值用于覆盖普通 Responses 请求。</p>
+              <p>填写模型 ID，或拉取目录后选择；留空跟随客户端请求。</p>
             </div>
             <div className="model-config-actions">
               {models.length > 0 && <span className="map-counter">{models.length} 个模型</span>}
@@ -82,6 +76,10 @@ export function ConfigModelPanel({
               </button>
             </div>
           </div>
+
+          <p className="model-catalog-state" aria-live="polite">
+            目录来源：{config?.primary.host || "等待配置"} · {fetchState === "idle" ? "尚未读取或连接已变化，请拉取模型" : fetchState === "loading" ? "正在读取已保存连接" : fetchState === "error" ? "读取失败，可继续手动输入" : "已读取已保存连接"}
+          </p>
 
           {fetchMeta && (
             <p
@@ -97,30 +95,6 @@ export function ConfigModelPanel({
               当前仍保存旧值 none；请改为“跟随请求”或新的思考强度。
             </p>
           )}
-
-          <div className="primary-model-controls">
-            <CustomSelect
-              label="上游模型"
-              value={form.primaryModelOverride}
-              options={primaryModelOptions(models, form.primaryModelOverride)}
-              onChange={(primaryModelOverride) => onFormChange((previous) => ({
-                ...previous,
-                primaryModelOverride
-              }))}
-              disabled={models.length === 0}
-              wide
-            />
-            <CustomSelect
-              label="思考强度"
-              value={form.primaryReasoningEffort === "none" ? "" : form.primaryReasoningEffort}
-              options={primaryReasoningOptions()}
-              onChange={(primaryReasoningEffort) => onFormChange((previous) => ({
-                ...previous,
-                primaryReasoningEffort: primaryReasoningEffort as PrimaryReasoningEffort
-              }))}
-              wide
-            />
-          </div>
 
           <label className="model-precision-field" htmlFor="primary-model-override">
             <span className="field-label">精确模型 ID</span>
@@ -138,7 +112,25 @@ export function ConfigModelPanel({
             <span className="field-hint">可直接输入兼容上游的自定义模型；拉取列表不会覆盖旧值。</span>
           </label>
 
-          <p className="model-catalog-state">目录状态：{models.includes(form.primaryModelOverride) ? "当前上游模型" : form.primaryModelOverride ? "自定义模型" : "请求决定"}</p>
+          <div className="primary-model-controls">
+            {models.length > 0 && <CustomSelect
+              label="上游模型"
+              value={form.primaryModelOverride}
+              options={primaryModelOptions(models, form.primaryModelOverride)}
+              onChange={(primaryModelOverride) => onFormChange((previous) => ({ ...previous, primaryModelOverride }))}
+              wide
+            />}
+            <CustomSelect
+              label="思考强度"
+              value={form.primaryReasoningEffort === "none" ? "" : form.primaryReasoningEffort}
+              options={primaryReasoningOptions()}
+              onChange={(primaryReasoningEffort) => onFormChange((previous) => ({
+                ...previous,
+                primaryReasoningEffort: primaryReasoningEffort as PrimaryReasoningEffort
+              }))}
+              wide
+            />
+          </div>
         </section>
 
         <section className="model-config-block model-compact-block" aria-labelledby="compact-model-title">
@@ -189,7 +181,7 @@ export function ConfigModelPanel({
             </div>
           </div>
 
-          <label className="field" htmlFor="compact-model-template">
+          <label className="field" htmlFor="compact-model-template" hidden={form.modelMode !== "linked"}>
             <span className="field-label">联动模板</span>
             <input
               id="compact-model-template"
@@ -208,11 +200,9 @@ export function ConfigModelPanel({
 
       {scope === "claude" && <ClaudeModelMapEditor
         modelMap={form.claudeModelMap}
+        sourceLabel={config?.claude.primary.host || "等待配置"}
         sourceKey={[
-          config?.claude.primary.base_url ?? "loading",
-          config?.claude.primary.active_api_key_env ?? "",
-          config?.claude.primary.api_key_source ?? "missing",
-          config?.claude.primary.oauth_account_id ?? "",
+          config?.claude.primary.model_source_revision ?? "loading",
           config?.profile_scopes.claude.active_profile_id ?? ""
         ].join("\n")}
         onModelMapChange={updateClaudeModelMap}

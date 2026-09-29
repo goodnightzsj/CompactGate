@@ -110,7 +110,7 @@
   font-size: 0.8rem;
   font-weight: 700;
   white-space: nowrap;
-  transition: all 120ms var(--ease);
+  transition: background-color 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out), box-shadow 120ms var(--ease-out), transform 120ms var(--ease-out);
 }
 
 .log-error-filter:hover {
@@ -573,6 +573,82 @@
   white-space: nowrap;
 }
 
+.log-summary-stack {
+  display: inline-grid;
+  min-width: 0;
+  max-width: 100%;
+  gap: 3px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.log-sample-groups {
+  margin-bottom: 12px;
+  border-block: 1px solid var(--hairline);
+  font-size: 0.75rem;
+}
+
+.log-drilldown-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.log-sample-groups summary {
+  padding-block: 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.log-sample-groups p { color: var(--muted); }
+.log-sample-groups ul { margin: 0; padding: 0; list-style: none; }
+.log-sample-groups li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+.log-sample-groups strong,
+.log-sample-groups small { white-space: normal; overflow-wrap: anywhere; }
+.log-recent-pattern { display: inline-flex; gap: 3px; }
+.log-recent-pattern i { width: 5px; height: 16px; border-radius: 2px; }
+.log-recent-pattern .is-ok { background: var(--jade); }
+.log-recent-pattern .is-err { background: var(--brick); height: 10px; align-self: end; }
+
+.log-summary-stack > *,
+.log-model-cell .log-summary-stack > small {
+  grid-column: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-summary-stack small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.log-summary-stack .log-model-difference {
+  color: var(--amber);
+}
+
+.log-summary-stack .log-error-hint,
+.log-mobile-summary .log-error-hint {
+  color: var(--brick);
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
 .log-model-route-badges {
   display: flex;
   grid-row: 1 / span 2;
@@ -728,7 +804,7 @@
   font-family: var(--font-ui);
   font-size: 0.68rem;
   font-weight: 700;
-  transition: all 120ms var(--ease);
+  transition: background-color 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out);
 }
 
 .log-copy-button:hover {
@@ -880,6 +956,16 @@
 .log-table-full .log-col-token { width: 7%; }
 .log-table-full .log-col-first-token { width: 6%; }
 .log-table-full .log-col-duration { width: 6%; }
+
+/* Essential mode keeps the table readable; less frequent fields remain in details. */
+.log-table-full.is-essential .log-table-grid { min-width: 760px; }
+.log-table-full.is-essential .log-col-started { width: 16%; }
+.log-table-full.is-essential .log-col-status { width: 7%; }
+.log-table-full.is-essential .log-col-model-route { width: 25%; }
+.log-table-full.is-essential .log-col-host { width: 22%; }
+.log-table-full.is-essential .log-col-token { width: 10%; }
+.log-table-full.is-essential .log-col-first-token { width: 10%; }
+.log-table-full.is-essential .log-col-duration { width: 10%; }
 
 .log-table-summary .log-table-body {
   overflow-x: hidden;
@@ -1359,6 +1445,8 @@
 
 .log-mobile-head,
 .log-mobile-metrics {
+  column-gap: 12px;
+  align-items: start;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1399,12 +1487,6 @@
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.70rem;
-}
-
-.log-mobile-metrics span + span::before {
-  margin-right: 6px;
-  color: var(--hairline-strong);
-  content: "/";
 }
 
 .log-mobile-disclosure {

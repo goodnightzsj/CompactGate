@@ -135,7 +135,8 @@ describe("OAuth configuration UI contracts", () => {
     let form = formFromConfig(store.toPublicConfig());
     for (const [kind, , routeScope] of routes) if (routeScope === scope) form = formWithOAuthAccount(form, kind, account);
     const markup = renderToStaticMarkup(<RouteConfigPanel config={store.toPublicConfig()} scope={scope} form={form} onFormChange={() => {}} onManageOAuth={() => {}} />);
-    expect(markup.match(/class="oauth-route-summary"/g)).toHaveLength(2);
+    expect(markup.match(/class="oauth-route-summary"/g)).toHaveLength(scope === "codex" ? 2 : 1);
+    if (scope === "claude") expect(markup).toContain("旧备份中的独立压缩字段仍会保留");
     expect(markup).not.toContain('type="password"');
     expect(markup).toContain("管理授权连接");
     expect(markup).toContain(account.base_url);

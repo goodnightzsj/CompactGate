@@ -211,19 +211,21 @@ const TOKEN_SERIES = [
 export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTrendPoint[] }) {
   const cursor = useChartCursor(points);
   const { width } = cursor;
-  const height = 252;
+  const height = 340;
   const inset = { top: 18, right: 50, bottom: 30, left: 56 };
+  const tokenBottom = 202;
+  const rateTop = 246;
   const values = TOKEN_SERIES.flatMap((series) => points.map((point) => point[series.metric]));
   const max = Math.max(1, ...values);
   const x = (index: number) => inset.left +
     (points.length <= 1 ? 0 : index / (points.length - 1)) * (width - inset.left - inset.right);
   const tokenY = (value: number) => inset.top +
-    (1 - value / max) * (height - inset.top - inset.bottom);
+    (1 - value / max) * (tokenBottom - inset.top);
   const rate = (point: AnalyticsTrendPoint) => point.input_tokens === 0
     ? 0
     : Math.min(100, (point.cache_read_tokens / point.input_tokens) * 100);
-  const rateY = (value: number) => inset.top +
-    (1 - value / 100) * (height - inset.top - inset.bottom);
+  const rateY = (value: number) => rateTop +
+    (1 - value / 100) * (height - rateTop - inset.bottom);
   const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
   const markers = sampleMarkerIndexes(points, width, cursor.index);
@@ -253,6 +255,8 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
         onPointerMove={(event) => cursor.pickAt(event, inset)}
         onPointerDown={(event) => cursor.pickAt(event, inset)}
       >
+        <text x={inset.left} y={12}>Token 体量</text>
+        <text className="analytics-chart-rate-axis" x={inset.left} y={rateTop - 12}>缓存率 · 独立百分比刻度</text>
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
           const value = max * ratio;
           const tickY = tokenY(value);
@@ -262,17 +266,13 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
               <text x={inset.left - 8} y={tickY + 4} textAnchor="end">
                 {formatCompactMetricNumber(Math.round(value))}
               </text>
-              <text
-                className="analytics-chart-rate-axis"
-                x={width - inset.right + 8}
-                y={tickY + 4}
-                textAnchor="start"
-              >
-                {Math.round(ratio * 100)}%
-              </text>
             </g>
           );
         })}
+        {[0, 50, 100].map((value) => <g key={value}>
+          <line x1={inset.left} x2={width - inset.right} y1={rateY(value)} y2={rateY(value)} />
+          <text className="analytics-chart-rate-axis" x={width - inset.right + 8} y={rateY(value) + 4}>{value}%</text>
+        </g>)}
         {TOKEN_SERIES.map((series) => (
           <polyline
             className={`analytics-chart-line ${series.tone}`}
@@ -404,7 +404,7 @@ function ChartReadout({ label, points, index, onSelect, description }: {
 export function AnalyticsDistribution({
   rows
 }: {
-  rows: Array<{ label: string; value: number; meta?: string; tone?: string }>;
+  rows: Array<{ label: string; value: number; meta?: string; tone?: string; onOpenLogs?: () => void }>;
 }) {
   const max = Math.max(1, ...rows.map((row) => row.value));
   if (rows.length === 0) {
@@ -416,7 +416,10 @@ export function AnalyticsDistribution({
       {rows.map((row) => (
         <div className="analytics-distribution-row" key={row.label}>
           <div className="analytics-distribution-label">
-            <span title={row.label}>{row.label}</span>
+            {row.onOpenLogs
+              ? <button type="button" className="analytics-drilldown" title={row.label}
+                  aria-label={`查看 ${row.label} 的请求日志`} onClick={row.onOpenLogs}>{row.label} ↗</button>
+              : <span title={row.label}>{row.label}</span>}
             <strong title={formatMetricNumber(row.value)}>{formatCompactMetricNumber(row.value)}</strong>
           </div>
           <div className="analytics-distribution-track">

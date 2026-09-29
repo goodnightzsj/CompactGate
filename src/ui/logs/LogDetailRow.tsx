@@ -21,6 +21,8 @@ import {
   codexClientDisplay
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
+import { outputThroughputLabel } from "./LogSummary.js";
+import { hasResponseModelMismatch } from "./log-utils.js";
 
 function CopyValue({ value }: { value: string }) {
   const [copyResult, setCopyResult] = useState("");
@@ -127,7 +129,7 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value is-medium">{entry.response_model ?? "未声明"}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">模型来源</span>
+                <span className="log-detail-label">模型来源{hasResponseModelMismatch(entry) ? " · 响应声明不同" : ""}</span>
                 <span className="log-detail-value is-small">{responseModelSourceLabel(entry)}</span>
               </div>
               <div className="log-detail-item">
@@ -135,7 +137,7 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value">{entry.upstream_host}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">使用密钥</span>
+                <span className="log-detail-label">上游凭据标签</span>
                 <span className="log-detail-value">{entry.key_name ?? "—"}</span>
               </div>
               <div className="log-detail-item">
@@ -209,12 +211,16 @@ export function LogDetailPanel({ entry }: { entry: RequestLogEntry }) {
                 <span className="log-detail-value">{entry.request_type}</span>
               </div>
               <div className="log-detail-item">
-                <span className="log-detail-label">首 Token</span>
+                <span className="log-detail-label">首响应（首个数据块）</span>
                 <span className="log-detail-value">{formatDurationMs(entry.first_token_ms)}</span>
               </div>
               <div className="log-detail-item">
                 <span className="log-detail-label">总耗时</span>
                 <span className="log-detail-value">{formatDurationMs(entry.duration_ms)}</span>
+              </div>
+              <div className="log-detail-item is-full">
+                <span className="log-detail-label">平均输出吞吐</span>
+                <span className="log-detail-value">{outputThroughputLabel(entry)} · 输出 Token / 总耗时，包含等待，非纯生成速度</span>
               </div>
             </div>
           </section>

@@ -915,18 +915,19 @@ export class RequestLogger extends EventTarget {
       .run();
   }
 
-  private routeCounts(options: Pick<LogPageOptions, "status" | "host" | "search">): Record<"all" | RouteKind, number> {
+  private routeCounts(options: Omit<LogPageOptions, "limit" | "offset" | "route">): Record<"all" | RouteKind, number> {
     // Callers pass the whole LogPageOptions, so the counted dimension has to be
     // dropped explicitly rather than relied on being absent from the Pick type.
+    const raw = Boolean(options.search || options.drilldown);
     const facet = { status: options.status, host: options.host };
-    const where = options.search
-      ? buildWhereClause({ ...facet, search: options.search })
+    const where = raw
+      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
       : buildFacetWhereClause(facet);
     const rows = this.db
       .prepare(
         `
-          SELECT route, ${options.search ? "COUNT(*)" : "SUM(count)"} AS count
-          FROM ${options.search ? "request_logs" : "request_log_facets"}
+          SELECT route, ${raw ? "COUNT(*)" : "SUM(count)"} AS count
+          FROM ${raw ? "request_logs" : "request_log_facets"}
           ${where.sql}
           GROUP BY route
         `
@@ -953,19 +954,20 @@ export class RequestLogger extends EventTarget {
     return counts;
   }
 
-  private statusCounts(options: Pick<LogPageOptions, "route" | "host" | "search">): StatusLogCounts {
+  private statusCounts(options: Omit<LogPageOptions, "limit" | "offset" | "status">): StatusLogCounts {
+    const raw = Boolean(options.search || options.drilldown);
     const facet = { route: options.route, host: options.host };
-    const where = options.search
-      ? buildWhereClause({ ...facet, search: options.search })
+    const where = raw
+      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
       : buildFacetWhereClause(facet);
-    const statusColumn = options.search
+    const statusColumn = raw
       ? `CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END`
       : "log_status";
     const rows = this.db
       .prepare(
         `
-          SELECT ${statusColumn} AS status_kind, ${options.search ? "COUNT(*)" : "SUM(count)"} AS count
-          FROM ${options.search ? "request_logs" : "request_log_facets"}
+          SELECT ${statusColumn} AS status_kind, ${raw ? "COUNT(*)" : "SUM(count)"} AS count
+          FROM ${raw ? "request_logs" : "request_log_facets"}
           ${where.sql}
           GROUP BY status_kind
         `
@@ -988,21 +990,22 @@ export class RequestLogger extends EventTarget {
     return counts;
   }
 
-  private hostCounts(options: Pick<LogPageOptions, "route" | "status" | "search">): HostLogCount[] {
+  private hostCounts(options: Omit<LogPageOptions, "limit" | "offset" | "host">): HostLogCount[] {
+    const raw = Boolean(options.search || options.drilldown);
     const facet = { route: options.route, status: options.status };
-    const where = options.search
-      ? buildWhereClause({ ...facet, search: options.search })
+    const where = raw
+      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
       : buildFacetWhereClause(facet);
     const rows = this.db
       .prepare(
         `
           SELECT
             upstream_host AS host,
-            ${options.search ? "COUNT(*)" : "SUM(count)"} AS total,
-            SUM(CASE WHEN route = 'primary' THEN ${options.search ? "1" : "count"} ELSE 0 END) AS primary_count,
-            SUM(CASE WHEN route = 'compact' THEN ${options.search ? "1" : "count"} ELSE 0 END) AS compact_count,
-            SUM(CASE WHEN route = 'claude' THEN ${options.search ? "1" : "count"} ELSE 0 END) AS claude_count
-          FROM ${options.search ? "request_logs" : "request_log_facets"}
+            ${raw ? "COUNT(*)" : "SUM(count)"} AS total,
+            SUM(CASE WHEN route = 'primary' THEN ${raw ? "1" : "count"} ELSE 0 END) AS primary_count,
+            SUM(CASE WHEN route = 'compact' THEN ${raw ? "1" : "count"} ELSE 0 END) AS compact_count,
+            SUM(CASE WHEN route = 'claude' THEN ${raw ? "1" : "count"} ELSE 0 END) AS claude_count
+          FROM ${raw ? "request_logs" : "request_log_facets"}
           ${where.sql}
           GROUP BY upstream_host
           ORDER BY total DESC, upstream_host ASC
@@ -1019,14 +1022,15 @@ export class RequestLogger extends EventTarget {
     }));
   }
 
-  private facetTotal(options: Pick<LogPageOptions, "route" | "status" | "host" | "search">): number {
-    const where = options.search
+  private facetTotal(options: Omit<LogPageOptions, "limit" | "offset">): number {
+    const raw = Boolean(options.search || options.drilldown);
+    const where = raw
       ? buildWhereClause(options)
       : buildFacetWhereClause(options);
     return readCount(
       this.db
         .prepare(
-          `SELECT ${options.search ? "COUNT(*)" : "COALESCE(SUM(count), 0)"} AS count FROM ${options.search ? "request_logs" : "request_log_facets"} ${where.sql}`
+          `SELECT ${raw ? "COUNT(*)" : "COALESCE(SUM(count), 0)"} AS count FROM ${raw ? "request_logs" : "request_log_facets"} ${where.sql}`
         )
         .get(...where.params)
     );

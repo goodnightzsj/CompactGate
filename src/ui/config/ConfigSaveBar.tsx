@@ -33,9 +33,10 @@ export function ConfigSaveBar({
 }) {
   const [asNewOpen, setAsNewOpen] = useState(false);
   const applyTarget = activeProfileApplyTarget(config);
+  const isClean = Boolean(config) && !hasPendingChanges && !saveError && saveState !== "saving" && saveState !== "error";
 
   return (
-    <aside className={`config-save-bar ${hasPendingChanges ? "is-dirty" : ""}`} aria-label="配置保存">
+    <aside className={`config-save-bar ${hasPendingChanges ? "is-dirty" : ""} ${isClean ? "is-clean" : ""}`} aria-label="配置保存">
       {saveError && (
         <div className="error-banner config-save-error" role="alert">
           <span>{saveError}</span>

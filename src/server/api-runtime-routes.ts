@@ -33,7 +33,7 @@ import {
   type ClientIdentityPatch,
   type ClientIdentityStore
 } from "./client-identity-store.js";
-import type { ClientIdentityKind } from "../shared/types.js";
+import type { ClientIdentityKind, LogDrilldownFilter } from "../shared/types.js";
 import { resolveRequestScopedProfile } from "./request-profile.js";
 import { probeCompactCapability } from "./compact-capability-probe.js";
 
@@ -394,11 +394,24 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
   const status = parseStatusFilter(url.searchParams.get("status"));
   const host = parseHostFilter(url.searchParams.get("host"));
   const search = parseSearchFilter(url.searchParams.get("search"));
+  let drilldown: LogDrilldownFilter | undefined;
+  if (["from", "to", "model"].some((key) => url.searchParams.has(key))) {
+    if (!url.searchParams.get("from") || !url.searchParams.get("to")) {
+      throw new ConfigError("Log drilldown requires both from and to.");
+    }
+    const { from, to } = readLogStatsQuery(url);
+    drilldown = { from, to };
+    if (url.searchParams.has("model")) {
+      const model = url.searchParams.get("model")!;
+      if (model.length > 8192) throw new ConfigError("Log model filter is too long.");
+      drilldown.model = model === "" ? null : model;
+    }
+  }
   const keepRecent = configStore.get().logging.keep_recent;
   const requestedLimit = parsePositiveInteger(url.searchParams.get("limit"), keepRecent);
   const limit = Math.min(requestedLimit, keepRecent);
   const offset = parseNonNegativeInteger(url.searchParams.get("offset"), 0);
-  return { route, status, host, search, limit, offset };
+  return { route, status, host, search, drilldown, limit, offset };
 }
 
 const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;

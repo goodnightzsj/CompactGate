@@ -1,5 +1,6 @@
 import { Component, lazy, Suspense, useState, type ComponentProps, type ReactNode } from "react";
 import type { StudioPage } from "../app-types.js";
+import type { LogDrilldownFilter } from "../../shared/types.js";
 import { DashboardPage } from "../dashboard/DashboardPage.js";
 import type { ConfigDisplayScope } from "../config/ConfigPage.js";
 import type { UsagePreferences } from "../analytics/UsageAnalyticsPage.js";
@@ -17,12 +18,13 @@ export type StudioPageOutletProps = {
   currentPage: StudioPage;
   dashboardPage: ComponentProps<typeof DashboardPage>;
   healthMode: boolean;
-  healthPage: ComponentProps<typeof HealthPage>;
+  healthPage: Omit<ComponentProps<typeof HealthPage>, "onConfigure">;
   logsPage: ComponentProps<typeof LogsPage>;
   pageError: string | null;
   /** True when the failed refresh left previously loaded data on screen. */
   hasStaleData: boolean;
   onRetry: () => void;
+  onLogDrilldown: (filter: LogDrilldownFilter & { host?: string }) => void;
   routesPage: ComponentProps<typeof RoutesPage>;
 };
 
@@ -37,6 +39,7 @@ export function StudioPageOutlet({
   hasStaleData,
   onRetry,
   onNavigate,
+  onLogDrilldown,
   routesPage
 }: StudioPageOutletProps & { onNavigate: (page: StudioPage) => void }) {
   // Keep navigation preferences outside the keyed page boundary, without
@@ -44,7 +47,14 @@ export function StudioPageOutlet({
   const [configScope, setConfigScope] = useState<ConfigDisplayScope>("codex");
   const [usagePreferences, setUsagePreferences] = useState<UsagePreferences | null>(null);
   const [analyticsPreferences, setAnalyticsPreferences] = useState<AnalyticsPreferences | null>(null);
-  const content = healthMode ? <HealthPage {...healthPage} /> : (
+  const openLogs = (filter: LogDrilldownFilter & { host?: string }) => {
+    onLogDrilldown(filter);
+    onNavigate("logs");
+  };
+  const content = healthMode ? <HealthPage {...healthPage} onConfigure={(scope) => {
+    setConfigScope(scope);
+    configPage.onConfigTabChange("routes");
+  }} /> : (
     <div className={`page-appear ${currentPage === "logs" ? "page-appear-logs" : ""}`}>
       {pageError && (
         <div className="error-banner page-error-banner" role="alert">
@@ -60,9 +70,9 @@ export function StudioPageOutlet({
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}
 
-      {currentPage === "analytics" && <AnalyticsDashboardPage preferences={analyticsPreferences} onPreferencesChange={setAnalyticsPreferences} onNavigate={onNavigate} />}
+      {currentPage === "analytics" && <AnalyticsDashboardPage preferences={analyticsPreferences} onPreferencesChange={setAnalyticsPreferences} onNavigate={onNavigate} onOpenLogs={openLogs} />}
 
-      {currentPage === "usage" && <UsageAnalyticsPage preferences={usagePreferences} onPreferencesChange={setUsagePreferences} onNavigate={onNavigate} />}
+      {currentPage === "usage" && <UsageAnalyticsPage preferences={usagePreferences} onPreferencesChange={setUsagePreferences} onNavigate={onNavigate} onOpenLogs={openLogs} />}
 
       {currentPage === "routes" && <RoutesPage {...routesPage} />}
 

@@ -23,6 +23,15 @@ describe("ConfigSaveBar", () => {
     expect(markup).toContain("另存为新档案");
   });
 
+  it("uses the quiet layout only for saved, unchanged configuration", () => {
+    expect(renderSaveBar(false, [], null, profileConfig("codex", "Daily"))).toContain("is-clean");
+    expect(renderSaveBar(true, [], null, profileConfig("codex", "Daily"))).not.toContain("is-clean");
+    expect(renderSaveBar(false, [], "Failed", profileConfig("codex", "Daily"))).not.toContain("is-clean");
+    const clean = renderSaveBar(false, [], null, profileConfig("codex", "Daily"));
+    expect(clean).toContain("另存为新档案");
+    expect(clean).toContain("写入目标：当前运行时");
+  });
+
   it("announces a save failure without requiring focus to leave the save button", () => {
     const markup = renderSaveBar(true, [], "Synthetic save conflict");
     expect(markup).toMatch(/class="error-banner config-save-error" role="alert"><span>Synthetic save conflict<\/span>/);
@@ -84,10 +93,10 @@ describe("ConfigSaveBar", () => {
   });
 });
 
-function renderSaveBar(hasPendingChanges: boolean, changedAreas: string[] = [], saveError: string | null = null): string {
+function renderSaveBar(hasPendingChanges: boolean, changedAreas: string[] = [], saveError: string | null = null, config: PublicConfig | null = null): string {
   return renderToStaticMarkup(
     <ConfigSaveBar
-      config={null}
+      config={config}
       saveState="idle"
       saveError={saveError}
       saveConflict={false}

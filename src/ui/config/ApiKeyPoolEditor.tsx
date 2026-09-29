@@ -2,7 +2,6 @@ import { useId, useState, type DragEvent } from "react";
 import { DIRECT_API_KEY_ID, isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../../shared/api-key-priority.js";
 import type { PrimaryKeyStrategy } from "../../shared/types.js";
 import { CustomSelect } from "../shared/CustomSelect.js";
-import { Field } from "./Field.js";
 import { moveKeyInOrder, orderedKeys, type KeyPriorityEntry } from "./key-pool-order.js";
 import type { FormKeyPoolEntry } from "./types.js";
 
@@ -173,9 +172,11 @@ export function ApiKeyPoolEditor({
     <span className="key-order-announcement" role="status" aria-live="polite">{announcement}</span>
     <details className="key-order-advanced"><summary>高级设置</summary>
       <p>优先级 0–{MAX_API_KEY_PRIORITY}，越大越优先；拖动会自动生成严格顺序。单把数字可在展开项中调整。</p>
-      <Field label="粘性保留带宽（秒）" hint="429 冷却结束后只接原会话的时长；0 关闭。">
-        <input type="number" min={0} max={86400} value={stickyReserveSeconds} onChange={(event) => onStickyReserveChange(Number(event.target.value))} />
-      </Field>
+      <div className="field">
+        <label htmlFor={`${editorId}-reserve`}>粘性保留时长（秒）</label>
+        <input id={`${editorId}-reserve`} aria-describedby={`${editorId}-reserve-hint`} type="number" min={0} max={86400} value={stickyReserveSeconds} onChange={(event) => onStickyReserveChange(Number(event.target.value))} />
+        <small id={`${editorId}-reserve-hint`}>429 冷却结束后只接原会话的时长；0 关闭。</small>
+      </div>
       <label className="key-pool-policy-toggle"><input type="checkbox" checked={rotationOptOut} onChange={(event) => onRotationOptOutChange(event.target.checked)} />
         <span className="key-pool-track" aria-hidden="true"><span className="key-pool-thumb" /></span><span>不参与自动轮转</span></label>
     </details>

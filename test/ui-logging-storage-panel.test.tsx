@@ -6,6 +6,15 @@ import { LoggingStoragePanel } from "../src/ui/config/LoggingStoragePanel.js";
 import type { ConfigFormState } from "../src/ui/config/types.js";
 
 describe("LoggingStoragePanel", () => {
+  it("explains inactive capture limits without discarding their draft values", () => {
+    const markup = renderToStaticMarkup(<LoggingStoragePanel
+      form={{ ...emptyForm(), loggingCaptureDir: "", loggingPersistBody: false, loggingCaptureBodyMaxMiB: 12 }}
+      onFormChange={() => undefined} />);
+    expect(markup).toContain("当前草稿未启用抓包");
+    expect(markup).toContain("环境变量可覆盖");
+    expect(markup).toContain('aria-describedby="logging-capture-scope"');
+    expect(markup).toContain('value="12"');
+  });
   it("renders labeled storage controls and an explicit maintenance action", () => {
     const setForm: Dispatch<SetStateAction<ConfigFormState>> = () => undefined;
     const markup = renderToStaticMarkup(

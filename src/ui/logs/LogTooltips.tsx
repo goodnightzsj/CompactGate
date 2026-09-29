@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { CSSProperties, HTMLAttributes, ReactNode, RefObject } from "react";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { clamp, formatMetricNumber } from "../shared/format.js";
+import { LogTokenSummary } from "./LogSummary.js";
 import {
   cacheCreationInputTokens,
   cacheReadInputTokens,
@@ -107,7 +108,7 @@ export function TokenTooltip({ entry }: { entry: RequestLogEntry }) {
       onMouseEnter={showTooltip}
       onFocus={showTooltip}
     >
-      <span className="token-total-pill">{formatMetricNumber(displayTotalTokens(entry))}</span>
+      <LogTokenSummary entry={entry} />
       {placement && (
           <TooltipPanel
             anchorRef={anchorRef}

@@ -15,7 +15,9 @@ import {
 import {
   isCurrentLogPageRequest,
   isCurrentLogRequest,
-  logPageQueryKey
+  logPageQueryKey,
+  logQueryForView,
+  isUnfilteredQuery
 } from "../src/ui/logs/log-feed-query.js";
 
 vi.mock("../src/ui/logs/useNarrowViewport.js", () => ({
@@ -24,6 +26,27 @@ vi.mock("../src/ui/logs/useNarrowViewport.js", () => ({
 }));
 
 describe("log request generations", () => {
+  it("keeps drilldown preferences out of global views and distinguishes all from unknown models", () => {
+    const base = { route: "all" as const, status: "all" as const, host: ALL_HOSTS_FILTER, search: "", limit: 200 };
+    const range = { from: "2026-09-29T00:00:00.000Z", to: "2026-09-30T00:00:00.000Z" };
+    const query = { ...base, drilldown: { ...range, model: null } };
+    expect(logQueryForView(query, false)).toEqual(base);
+    expect(logQueryForView(query, true)).toBe(query);
+    expect(isUnfilteredQuery(query)).toBe(false);
+    expect(logPageQueryKey(query)).not.toBe(logPageQueryKey({ ...base, drilldown: range }));
+    expect(logPageQueryKey(query)).not.toBe(logPageQueryKey({ ...base, drilldown: { ...range, model: "exact" } }));
+    expect(isCurrentLogPageRequest(1, 1, query, base)).toBe(false);
+  });
+
+  it("uses an unfiltered scope outside Logs without clearing saved filters", () => {
+    const filters = { route: "compact" as const, status: "error" as const, host: "other.example", search: "missing", limit: 100 };
+    const global = logQueryForView(filters, false);
+    expect(global).toEqual({ route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 100 });
+    expect(isUnfilteredQuery(global)).toBe(true);
+    expect(isUnfilteredQuery(filters)).toBe(false);
+    expect(logQueryForView(filters, true)).toBe(filters);
+    expect(filters.search).toBe("missing");
+  });
   it("rejects stale pagination responses after the applied query changes", () => {
     expect(isCurrentLogRequest(1, 2, 4, 5)).toBe(false);
     expect(isCurrentLogRequest(2, 2, 4, 5)).toBe(false);
@@ -48,6 +71,33 @@ describe("log request generations", () => {
 });
 
 describe("live log page updates", () => {
+  it("carries exact model and time into loads, pagination and interleaved replay", async () => {
+    const drilldown = { from: "2026-09-29T00:00:00.000Z", to: "2026-09-30T00:00:00.000Z", model: "exact + %_" };
+    const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      generation: 1, query: { route: "all", status: "all", host: "selected.invalid", search: "", limit: 2, drilldown },
+      liveEvents: [], snapshot: null
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const params = new URL(String(url), "http://localhost").searchParams;
+      expect(params.get("model")).toBe(drilldown.model);
+      expect(params.get("from")).toBe(drilldown.from);
+      expect(params.get("to")).toBe(drilldown.to);
+      expect(params.get("host")).toBe("selected.invalid");
+      pending.liveEvents.push(...[
+        requestLog("included", { time: drilldown.from, response_model: drilldown.model, upstream_host: "selected.invalid" }),
+        requestLog("outside", { time: drilldown.to, response_model: drilldown.model, upstream_host: "selected.invalid" })
+      ].map((entry) => ({ operation: "insert" as const, entry })));
+      return new Response(JSON.stringify(emptyPage(2)));
+    });
+    try {
+      const page = await fetchPendingLogPage(pending, () => true);
+      expect(page.logs.map((entry) => entry.request_id)).toEqual(["included"]);
+      pending.liveEvents = [];
+      const more = await fetchMoreLogPage(pending, page, () => true);
+      expect(more.logs.map((entry) => entry.request_id)).toEqual(["included"]);
+      expect(String(fetcher.mock.calls[1][0])).toContain("offset=1");
+    } finally { fetcher.mockRestore(); }
+  });
   it.each([false, true])("preserves a continuous window when an insert crosses pagination (already counted=%s)", async (alreadyCounted) => {
     const row = (id: number) => requestLog(String(id), { sequence: id });
     const baseline = { ...emptyPage(2), logs: [row(4), row(3)], latest_sequence: 4, total: 4, all_total: 4, has_more: true };
@@ -274,7 +324,8 @@ describe("live log page updates", () => {
 describe("LogsPage loaded rows", () => {
   it.each([false, true])("uses the dashboard's CSS breakpoint with one mounted view (narrow=%s)", (narrow) => {
     vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
-    const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[requestLog("recent")]} listen="127.0.0.1:0" />);
+    const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[requestLog("recent")]} totalCount={250} listen="127.0.0.1:0" />);
+    expect(markup).toContain("查看日志 · 共保留 250 条");
     expect(useNarrowViewport).toHaveBeenLastCalledWith("(max-width: 760px)");
     expect(markup.includes("dashboard-request-table")).toBe(!narrow);
     expect(markup.includes("dashboard-request-list")).toBe(narrow);
@@ -319,7 +370,7 @@ describe("LogsPage loaded rows", () => {
   it.each([false, true])("mounts only the visible log tree when narrow=%s", (narrow) => {
     vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
     const markup = renderLogsPage([requestLog("viewport-row")]);
-    expect(markup.includes('class="log-table log-table-full"')).toBe(!narrow);
+    expect(markup.includes('class="log-table log-table-full is-essential"')).toBe(!narrow);
     expect(markup.includes('class="logs-mobile-list"')).toBe(narrow);
     expect(markup.match(/data-log-id="viewport-row"/g)).toHaveLength(1);
   });
@@ -328,7 +379,7 @@ describe("LogsPage loaded rows", () => {
     const markup = renderLogsPage([]);
 
     expect(markup).toContain("暂无请求记录");
-    expect(markup).toContain('class="log-table log-table-full" hidden=""');
+    expect(markup).toContain('class="log-table log-table-full is-essential" hidden=""');
   });
 
   it("renders every loaded row instead of hiding rows after the first 100", () => {
@@ -364,6 +415,7 @@ describe("LogsPage loaded rows", () => {
         statusFilter="all"
         hostFilter={ALL_HOSTS_FILTER}
         searchFilter=""
+        onClearDrilldown={() => undefined}
         onRouteFilterChange={() => undefined}
         onStatusFilterChange={() => undefined}
         onHostFilterChange={() => undefined}
@@ -402,6 +454,7 @@ function renderLogsPage(logs: RequestLogEntry[], overrides: Partial<ComponentPro
       statusFilter="all"
       hostFilter={ALL_HOSTS_FILTER}
       searchFilter=""
+      onClearDrilldown={() => undefined}
       onRouteFilterChange={() => undefined}
       onStatusFilterChange={() => undefined}
       onHostFilterChange={() => undefined}

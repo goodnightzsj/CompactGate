@@ -13,7 +13,8 @@ export function HealthEndpointCard({
   credentialScope,
   badgeLabel,
   summary,
-  upstream
+  upstream,
+  onConfigure
 }: {
   title: string;
   route: RouteKind;
@@ -21,6 +22,7 @@ export function HealthEndpointCard({
   badgeLabel: string;
   summary: string;
   upstream: HealthRouteCredentialConfig | null | undefined;
+  onConfigure: () => void;
 }) {
   const status = upstreamHealthBadge(upstream);
 
@@ -37,6 +39,9 @@ export function HealthEndpointCard({
       <div className="health-card-status">
         <span className={`health-card-led is-${status.tone}`} aria-hidden="true" />
         <strong>{status.label}</strong>
+        {upstream && status.tone !== "good" && <button type="button" className="btn btn-sm" onClick={onConfigure}>
+          配置{title} →
+        </button>}
       </div>
 
       <div className="health-kv">

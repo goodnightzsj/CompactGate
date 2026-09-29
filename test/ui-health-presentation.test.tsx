@@ -10,6 +10,7 @@ describe("health presentation", () => {
     const markup = renderToStaticMarkup(<HealthEndpointCard
       title="Codex 压缩路由" route="compact" credentialScope="compact"
       badgeLabel="Codex" summary="压缩请求"
+      onConfigure={() => undefined}
       upstream={{ status: "configured", base_url: "https://synthetic.example/v1", host: "synthetic.example",
         api_key_env: "UNUSED_SYNTHETIC_KEY", api_key_configured: configured, api_key_source: "oauth",
         stored_api_key: false, stored_api_key_tail: "", active_api_key_env: null,
@@ -42,6 +43,7 @@ describe("health presentation", () => {
     const markup = renderToStaticMarkup(<HealthEndpointCard
       title="Codex 主路由" route="primary" credentialScope="primary"
       badgeLabel="Codex" summary="普通请求" upstream={upstream}
+      onConfigure={() => undefined}
     />);
     expect(markup).toContain("https://synthetic.example/v1");
     expect(markup).toContain("当前读取");
@@ -53,6 +55,7 @@ describe("health presentation", () => {
       expect(tag).toContain("open");
       expect(markup).toContain("缺密钥");
       expect(markup).toContain("当前没有可用密钥。");
+      expect(markup).toContain("配置Codex 主路由 →");
     }
   });
 

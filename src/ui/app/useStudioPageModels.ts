@@ -9,7 +9,7 @@ import { useConfigActions } from "../hooks/useConfigActions.js";
 import { useHealthRefresh } from "../hooks/useHealthRefresh.js";
 import { useLogFeed } from "../hooks/useLogFeed.js";
 import { useStudioBootstrap } from "../hooks/useStudioBootstrap.js";
-import { DEFAULT_LOG_PAGE_LIMIT } from "../logs/log-utils.js";
+import { ALL_HOSTS_FILTER, DEFAULT_LOG_PAGE_LIMIT } from "../logs/log-utils.js";
 import { useStaggeredLogs } from "../logs/useStaggeredLogs.js";
 import type { HealthResponse } from "../../shared/types.js";
 import type { ProfileDeleteDialogHostProps } from "./ProfileDeleteDialogHost.js";
@@ -55,6 +55,7 @@ export function useStudioPageModels({
   const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
   const logFeed = useLogFeed({
     enabled: !healthMode,
+    filterLogs: currentPage === "logs",
     hasConfig,
     logPageLimit,
     applyRemoteConfig,
@@ -80,7 +81,8 @@ export function useStudioPageModels({
     currentPage === "logs" && !healthMode && documentVisible
   );
   const displayedLogs = staggeredLogs.logs;
-  const latestLog = logs[0] ?? null;
+  const globalLogs = logFeed.globalLogPage;
+  const latestLog = globalLogs?.logs[0] ?? null;
   const linkedCompactModel = renderLinkedModel(form.primaryModelOverride, form.modelTemplate);
   const configActions = useConfigActions({
     config,
@@ -122,6 +124,13 @@ export function useStudioPageModels({
       healthMode,
       pageError,
       onRetry: retryBootstrap,
+      onLogDrilldown: ({ host, ...filter }) => {
+        logFeed.setRouteFilter("all");
+        logFeed.setStatusFilter("all");
+        logFeed.setHostFilter(host ?? ALL_HOSTS_FILTER);
+        logFeed.setSearchFilter("");
+        logFeed.setDrilldown(filter);
+      },
       // Only the load path leaves stale data on screen; other page errors (a
       // failed export, say) sit over data that is perfectly current.
       hasStaleData: hasConfig && bootstrapFailed,
@@ -134,8 +143,10 @@ export function useStudioPageModels({
       dashboardPage: {
         config,
         health,
-        logs,
-        logCounts: logFeed.logPage.counts,
+        logs: globalLogs?.logs ?? [],
+        logCounts: globalLogs?.counts ?? null,
+        logError: logFeed.globalLogError,
+        onRetryLogs: logFeed.retryLogs,
         saveState: configActions.saveState,
         hasPendingChanges,
         onExport: configActions.exportConfig
@@ -152,6 +163,9 @@ export function useStudioPageModels({
           : latestLog?.compaction_mode ?? null,
         activeRouteSource: previewRoute ? "preview" : latestLog ? "latest" : "none",
         latestLog,
+        hasLogSnapshot: globalLogs !== null,
+        logError: logFeed.globalLogError,
+        onRetryLogs: logFeed.retryLogs,
         codexStatus: health?.codex ?? null,
         clientIdentity: health?.client_identity ?? null,
         previewPanel: {
@@ -196,6 +210,8 @@ export function useStudioPageModels({
         statusFilter: logFeed.statusFilter,
         hostFilter: logFeed.hostFilter,
         searchFilter: logFeed.searchFilter,
+        drilldown: logFeed.drilldown,
+        onClearDrilldown: () => logFeed.setDrilldown(undefined),
         onRouteFilterChange: logFeed.setRouteFilter,
         onStatusFilterChange: logFeed.setStatusFilter,
         onHostFilterChange: logFeed.setHostFilter,

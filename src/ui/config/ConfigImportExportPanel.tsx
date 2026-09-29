@@ -61,14 +61,16 @@ export function ConfigImportExportPanel({
           导出完整备份
         </button>
         <button type="button" className="btn btn-ghost" disabled={!config}
+          aria-describedby={`${fileInputId}-saved-export-note`}
           onClick={() => void onExportSavedConfig()}>仅导出已保存配置</button>
-        <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p></div>
+        <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p>
+        <p id={`${fileInputId}-saved-export-note`}>仅导出已保存配置不会包含当前草稿，但同样可能含明文密钥；迁移 OAuth 连接后需重新授权。</p></div>
       </div>
 
       <div className="config-portable-grid">
         <div className="config-portable-card">
           <label className="config-file-drop" htmlFor={fileInputId}>
-            <span>选择 compactgate.json</span>
+            <span>1 · 选择 compactgate.json</span>
             <strong>{importCandidate?.fileName ?? "尚未选择文件"}</strong>
             <small>
               {importCandidate
@@ -99,7 +101,7 @@ export function ConfigImportExportPanel({
           {importCandidate ? (
             <>
               <div className="config-import-summary-head">
-                <strong>即将导入的配置摘要</strong>
+                <strong>2 · 即将导入的配置摘要</strong>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={onClearImport}>
                   清除选择
                 </button>
@@ -114,7 +116,7 @@ export function ConfigImportExportPanel({
               </dl>
               <div className="config-import-confirm">
                 <p>
-                  导入会把文件作为新的完整配置保存，缺失字段由默认值补齐。这个操作不会增加 URL 预设使用次数。
+                  3 · 确认后整体替换运行配置与档案列表，不是合并。缺失字段由默认值补齐；不会增加 URL 预设使用次数。建议先导出当前配置。
                 </p>
                 <button
                   type="button"
@@ -147,7 +149,7 @@ function importSummaryItems(summary: ConfigImportSummary): ImportSummaryItem[] {
     { label: "Codex 档案", value: `${summary.codexProfileCount}` },
     { label: "Claude 档案", value: `${summary.claudeProfileCount}` },
     { label: "URL 预设", value: `${summary.presetCount}` },
-    { label: "保留日志", value: summary.keepRecent === null ? "默认或未声明" : `${summary.keepRecent} 条` },
+    { label: "每页日志", value: summary.keepRecent === null ? "默认或未声明" : `${summary.keepRecent} 条` },
     {
       label: "直填密钥",
       value: summary.hasDirectApiKeys ? "文件包含直填 API key；摘要已隐藏具体值。" : "未检测到直填 API key。",

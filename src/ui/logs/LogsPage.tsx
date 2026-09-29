@@ -5,6 +5,7 @@ import type { HTMLMotionProps } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
 import type {
   LogStatusKind,
+  LogDrilldownFilter,
   ProviderLogCounts,
   RequestLogEntry,
   RouteKind,
@@ -14,6 +15,7 @@ import { CustomSelect } from "../shared/CustomSelect.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import { LogMobileCard } from "./LogMobileCard.js";
 import { LogRowCells } from "./LogRowCells.js";
+import { LogSampleGroups } from "./LogSampleGroups.js";
 import {
   ALL_HOSTS_FILTER,
   type HostFilterOption,
@@ -69,7 +71,7 @@ export function LogsPage({
   logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs, hasStaleLogs,
-  routeFilter, statusFilter, hostFilter, searchFilter,
+  routeFilter, statusFilter, hostFilter, searchFilter, drilldown, onClearDrilldown,
   onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, onRetryLogs, error
 }: {
   logs: RequestLogEntry[];
@@ -80,6 +82,8 @@ export function LogsPage({
   hasMoreLogs: boolean; isLoadingLogs: boolean; isLoadingMoreLogs: boolean;
   hasStaleLogs: boolean;
   routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string; searchFilter: string;
+  drilldown?: LogDrilldownFilter;
+  onClearDrilldown: () => void;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
   onStatusFilterChange: (status: "all" | LogStatusKind) => void;
   onHostFilterChange: (host: string) => void;
@@ -88,6 +92,7 @@ export function LogsPage({
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [showAllColumns, setShowAllColumns] = useState(false);
   const keyboardHintId = useId();
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const narrowViewport = useNarrowViewport();
@@ -114,7 +119,7 @@ export function LogsPage({
     narrowViewport,
     onLoadMore
   });
-  const hasActiveFilters = routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
+  const hasActiveFilters = Boolean(drilldown) || routeFilter !== "all" || statusFilter !== "all" || hostFilter !== ALL_HOSTS_FILTER || searchFilter.trim().length > 0;
 
   // useCallback not for this function's own sake: LogMobileCard is memoized, so
   // a fresh onToggle identity on every render would defeat the memo and rerender
@@ -197,7 +202,7 @@ export function LogsPage({
             }}
             onKeyDown={(event) => handleRowKeyDown(event, logKey)}
           >
-            <LogRowCells entry={entry} />
+            <LogRowCells entry={entry} showAllColumns={showAllColumns} />
           </LogMotionRow>
         ];
 
@@ -212,7 +217,7 @@ export function LogsPage({
               className="log-detail-row"
               id={detailId}
             >
-              <td colSpan={12}>
+              <td colSpan={showAllColumns ? 12 : 7}>
                 {/* Height animates on this wrapper, not on the <tr>:
                     a row's specified height is only a minimum in
                     table layout, so the old collapse on the row did
@@ -236,7 +241,7 @@ export function LogsPage({
 
         return rows;
       })
-  ), [narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown, keyboardHintId]);
+  ), [narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown, keyboardHintId, showAllColumns]);
 
   const renderedLogs = useMemo(() => {
     // An exact tail trim cannot move surviving groups. All other changes retain
@@ -252,6 +257,7 @@ export function LogsPage({
     onStatusFilterChange("all");
     onHostFilterChange(ALL_HOSTS_FILTER);
     onSearchFilterChange("");
+    onClearDrilldown();
   }
 
   return (
@@ -263,6 +269,10 @@ export function LogsPage({
           {!narrowViewport && <span className="log-keyboard-hint" id={keyboardHintId}>点击请求行，或聚焦后按 Enter / 空格查看完整信息</span>}
         </div>
         <div className="logs-page-actions">
+          {!narrowViewport && <button type="button" className="btn btn-sm"
+            aria-pressed={showAllColumns} onClick={() => setShowAllColumns((value) => !value)}>
+            {showAllColumns ? "精简列" : "完整列"}
+          </button>}
           {/* The live region stays mounted and only its contents change: an
               aria-live element that enters the DOM already holding its text is
               normally not announced at all. */}
@@ -307,6 +317,12 @@ export function LogsPage({
         </div>
       </div>
 
+      {drilldown && <div className="log-drilldown-context">
+        <span>统计下钻 · 开始时间 [{new Date(drilldown.from).toLocaleString()}, {new Date(drilldown.to).toLocaleString()})
+          {drilldown.model !== undefined && ` · 有效响应模型：${drilldown.model ?? "未识别模型"}（精确）`}
+        </span>
+        <button type="button" className="btn btn-sm" onClick={onClearDrilldown}>移除时间与模型限定</button>
+      </div>}
       <div className="logs-toolbar">
         <details
           className="logs-filter-options"
@@ -437,8 +453,10 @@ export function LogsPage({
         )
       ) : null}
 
+      {logs.length > 0 && <LogSampleGroups logs={logs} stale={hasStaleLogs || isLoadingLogs} />}
+
       {!narrowViewport && (
-        <div className="log-table log-table-full" hidden={logs.length === 0}>
+        <div className={`log-table log-table-full ${showAllColumns ? "" : "is-essential"}`} hidden={logs.length === 0}>
           {/* layoutScroll: this is a scrollable ancestor of `layout` rows, so
               Motion has to be told to re-read its scroll offset — otherwise the
               FLIP measurements are off by scrollTop, and off again by whatever
@@ -455,12 +473,9 @@ export function LogsPage({
                 <col className="log-col-started" />
                 <col className="log-col-status" />
                 <col className="log-col-model-route" />
-                <col className="log-col-reasoning" />
-                <col className="log-col-response-model" />
+                {showAllColumns && <><col className="log-col-reasoning" /><col className="log-col-response-model" /></>}
                 <col className="log-col-host" />
-                <col className="log-col-key" />
-                <col className="log-col-endpoint" />
-                <col className="log-col-type" />
+                {showAllColumns && <><col className="log-col-key" /><col className="log-col-endpoint" /><col className="log-col-type" /></>}
                 <col className="log-col-token" />
                 <col className="log-col-first-token" />
                 <col className="log-col-duration" />
@@ -470,15 +485,12 @@ export function LogsPage({
                   <th scope="col">开始时间</th>
                   <th scope="col">状态</th>
                   <th scope="col">模型 / 通道</th>
-                  <th scope="col">思考</th>
-                  <th scope="col">响应模型</th>
+                  {showAllColumns && <><th scope="col">思考</th><th scope="col">响应模型</th></>}
                   <th scope="col">上游 Host</th>
-                  <th scope="col">密钥</th>
-                  <th scope="col">端点</th>
-                  <th scope="col">类型</th>
+                  {showAllColumns && <><th scope="col">上游凭据</th><th scope="col">端点</th><th scope="col">类型</th></>}
                   <th scope="col">Token</th>
-                  <th scope="col">首 Token</th>
-                  <th scope="col">耗时</th>
+                  <th scope="col">耗时 / 首响应</th>
+                  <th scope="col">平均吞吐</th>
                 </tr>
               </thead>
               <tbody>

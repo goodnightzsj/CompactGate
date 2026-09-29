@@ -276,7 +276,7 @@
   border-top: 1px solid var(--hairline);
 }
 
-.analytics-history-metrics .analytics-metric-grid,
+.analytics-history-metrics .analytics-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .analytics-recent-metrics .analytics-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .analytics-data-view { view-transition-name: analytics-data; }
@@ -325,6 +325,8 @@
 .analytics-metric.is-request > span { color: var(--accent); }
 .analytics-metric.is-token > span { color: var(--amber); }
 .analytics-metric.is-cache > span { color: var(--jade); }
+.analytics-metric.is-error > span,
+.analytics-metric.is-error > strong { color: var(--brick); }
 
 .usage-metric-grid .analytics-metric-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -617,6 +619,21 @@
   color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.72rem;
+}
+
+.analytics-drilldown {
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
 .analytics-distribution-track {

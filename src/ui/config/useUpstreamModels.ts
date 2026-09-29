@@ -15,6 +15,8 @@ export type UpstreamModelsLoadResult = {
 
 type FetchModels = (endpoint: string) => Promise<UpstreamModelsResponse>;
 
+const EMPTY_CATALOGUE = { models: [] as string[], fetchState: "idle" as const, fetchMeta: null };
+
 export function createUpstreamModelsLoader(
   fetchModels: FetchModels = (endpoint) => api<UpstreamModelsResponse>(endpoint)
 ) {
@@ -57,37 +59,39 @@ export function createUpstreamModelsLoader(
 }
 
 export function useUpstreamModels(endpoint: string, sourceKey: string) {
-  const [models, setModels] = useState<string[]>([]);
-  const [fetchState, setFetchState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
-  const [fetchMeta, setFetchMeta] = useState<string | null>(null);
+  const catalogueKey = `${endpoint}\n${sourceKey}`;
+  const [catalogue, setCatalogue] = useState<{
+    key: string; models: string[]; fetchState: "idle" | "loading" | "loaded" | "error"; fetchMeta: string | null;
+  }>({ key: catalogueKey, ...EMPTY_CATALOGUE });
   const loaderRef = useRef<ReturnType<typeof createUpstreamModelsLoader> | null>(null);
   loaderRef.current ??= createUpstreamModelsLoader();
   const loader = loaderRef.current;
 
   useEffect(() => {
     loader.invalidate();
-    setModels([]);
-    setFetchState("idle");
-    setFetchMeta(null);
-  }, [endpoint, loader, sourceKey]);
+    // Discard the old state so A -> B -> A cannot revive data or a canceled load.
+    setCatalogue({ key: catalogueKey, ...EMPTY_CATALOGUE });
+    return () => loader.invalidate();
+  }, [catalogueKey, loader]);
+
+  // Hide a previous source synchronously, including before effect cleanup or
+  // when an obsolete request resolves in the same commit as a source change.
+  const current = catalogue.key === catalogueKey ? catalogue : EMPTY_CATALOGUE;
 
   async function fetchModels() {
-    setFetchState("loading");
-    setFetchMeta(null);
+    setCatalogue({ key: catalogueKey, models: current.models, fetchState: "loading", fetchMeta: null });
     const result = await loader.load(endpoint);
     if (!result) {
       return;
     }
 
-    setModels(result.models);
-    setFetchState(result.fetchState);
-    setFetchMeta(result.fetchMeta);
+    setCatalogue({ key: catalogueKey, ...result });
   }
 
   return {
-    models,
-    fetchState,
-    fetchMeta,
+    models: current.models,
+    fetchState: current.fetchState,
+    fetchMeta: current.fetchMeta,
     fetchModels
   };
 }

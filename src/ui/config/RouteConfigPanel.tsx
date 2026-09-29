@@ -151,7 +151,7 @@ export function RouteConfigPanel({
           </details>
         </div>
       </div>}
-      {scope === "claude" && <div className="config-row">
+      {scope === "claude" && <div className="route-config-stack route-config-stack-narrow">
         <RouteCredentialFields
           key={`claude:${config ? profileScopeState(config, "claude").active_profile_id : ""}`}
           title="Claude 主路由" badge="Claude" tone="claude"
@@ -208,59 +208,10 @@ export function RouteConfigPanel({
           onRotationOptOutChange={(claudePrimaryRotationOptOut) => onFormChange((previous) => ({ ...previous, claudePrimaryRotationOptOut }))}
           onStickyReserveChange={(claudePrimaryStickyReserveSeconds) => onFormChange((previous) => ({ ...previous, claudePrimaryStickyReserveSeconds }))}
         />
-        <div className="route-config-stack route-compact-column">
-          <div>
-            <div className="field-label field-label-block">Claude 压缩上游模式</div>
-            <div className="toggle-group" role="group" aria-label="Claude 压缩上游模式">
-              <button type="button" aria-pressed={form.claudeCompactUpstreamMode === "split"} className={form.claudeCompactUpstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "split" }))}>独立分流</button>
-              <button type="button" aria-pressed={form.claudeCompactUpstreamMode === "primary"} className={form.claudeCompactUpstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, claudeCompactUpstreamMode: "primary" }))}>复用主路由</button>
-            </div>
-          </div>
-          <details className="route-compact-settings" open={form.claudeCompactUpstreamMode === "split"}>
-            <summary>独立压缩连接{form.claudeCompactUpstreamMode === "primary" && " · 未启用"}</summary>
-        <RouteCredentialFields
-          title="Claude 压缩路由" badge="压缩" tone="claude"
-          onManageOAuth={onManageOAuth}
-          oauthAccountId={form.claudeCompactOAuthAccountId} oauthAccounts={oauth.accounts}
-          onOAuthAccountChange={(account) => onFormChange((previous) => formWithOAuthAccount(previous, "claude_compact", account))}
-          baseUrlLabel="基础地址" baseUrlHint={form.claudeCompactUpstreamMode === "split" ? "填写压缩上游的主机或 API 根。" : "复用 Claude 主路由；切换为独立分流后使用这里的地址。"}
-          apiKeyLabel="访问密钥" apiKeyHint={directApiKeyHint("Claude 压缩路由", config?.claude.compact ?? null)}
-          upstreamProtocol={form.claudeCompactUpstreamProtocol}
-          baseUrl={form.claudeCompactBaseUrl} apiKey={form.claudeCompactApiKey}
-          storedApiKey={config?.claude.compact.stored_api_key ?? false}
-          clearApiKey={form.clearClaudeCompactApiKey}
-          routeUrlSuggestions={routeUrlSuggestions(config, "claude_compact")}
-          onBaseUrlChange={(value) => onFormChange((previous) => ({
-            ...previous,
-            claudeCompactBaseUrl: value,
-            claudeCompactCredentialPresetId: ""
-          }))}
-          onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
-            ...previous,
-            claudeCompactBaseUrl: suggestion.baseUrl,
-            claudeCompactCredentialPresetId: suggestion.credentialPresetId
-          }))}
-          onApiKeyChange={(value) => onFormChange((previous) => ({
-            ...previous,
-            claudeCompactApiKey: value,
-            clearClaudeCompactApiKey: false,
-            claudeCompactCredentialPresetId: ""
-          }))}
-          onUpstreamProtocolChange={(claudeCompactUpstreamProtocol) => onFormChange((previous) => ({
-            ...previous,
-            claudeCompactUpstreamProtocol
-          }))}
-          onToggleClearApiKey={() => onFormChange((previous) => ({
-            ...previous,
-            claudeCompactApiKey: "",
-            clearClaudeCompactApiKey: !previous.clearClaudeCompactApiKey,
-            claudeCompactCredentialPresetId: ""
-          }))}
-        />
-          </details>
-        </div>
+        <p className="field-hint">普通请求、手动 compact 和重连请求统一使用 Claude 主路由。旧备份中的独立压缩字段仍会保留，但不参与请求分流。</p>
       </div>}
-      {scope === "codex" && <div className="route-config-stack route-config-stack-narrow">
+      {scope === "codex" && <details className="config-advanced-settings">
+        <summary>高级路由策略 · 状态域、旧会话恢复与错误调度</summary>
         <div className="config-row">
           <label className="field" htmlFor="primary-state-domain-id">
             <span className="field-label">Codex 状态域</span>
@@ -322,7 +273,7 @@ export function RouteConfigPanel({
             <span>{form.autoSchedulePrimaryFailover ? "已开启" : "已关闭"}</span>
           </label>
         </section>
-      </div>}
+      </details>}
     </div>
   );
 }
