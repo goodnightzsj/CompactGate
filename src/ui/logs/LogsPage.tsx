@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { HTMLMotionProps } from "framer-motion";
 import { PROVIDER_LABELS, routeLabel } from "../../shared/route-meta.js";
@@ -21,7 +21,7 @@ import {
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useMediaQuery, useNarrowViewport } from "./useNarrowViewport.js";
-import { groupLogAnimations, ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
+import { groupLogAnimations, isLogTailTrim, ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
 
 function logEntryKey(entry: RequestLogEntry): string {
   return `${entry.request_id}-${entry.time}`;
@@ -53,6 +53,18 @@ function LogMotionCard({ reduceMotion, ...props }: HTMLMotionProps<"div"> & { re
     onViewportEnter={() => setVisible(true)} onViewportLeave={() => setVisible(false)} />;
 }
 
+type LogGroup = ReturnType<typeof groupLogAnimations>[number];
+
+const LogAnimationGroup = memo(function LogAnimationGroup({ group, render, initial }: {
+  group: LogGroup;
+  render: (group: LogGroup) => ReactNode;
+  initial: boolean;
+}) {
+  return <AnimatePresence initial={initial} propagate>{render(group)}</AnimatePresence>;
+}, (previous, next) => previous.render === next.render &&
+  // initial only controls newly mounted groups, not existing rows.
+  JSON.stringify(previous.group.logs) === JSON.stringify(next.group.logs));
+
 export function LogsPage({
   logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
@@ -82,6 +94,9 @@ export function LogsPage({
   const initialRender = useRef(true);
   useEffect(() => { initialRender.current = false; }, []);
   const logGroups = useMemo(() => groupLogAnimations(logs), [logs]);
+  const previousLogs = useRef(logs);
+  const tailTrim = useMemo(() => isLogTailTrim(previousLogs.current, logs), [logs]);
+  useLayoutEffect(() => { previousLogs.current = logs; }, [logs]);
   const effectiveRowTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : ROW_SPRING_TRANSITION;
   const effectiveDetailTransition = reduceMotion ? REDUCED_MOTION_TRANSITION : detailTransition;
   const {
@@ -131,10 +146,8 @@ export function LogsPage({
 
   // Status/filter bookkeeping must not re-diff every Motion child before the
   // displayed window changes. Keep the presence tree stable until its inputs do.
-  const renderedLogs = useMemo(() => narrowViewport ? (
-    <AnimatePresence initial={false}>
-      {logGroups.map((group) => <AnimatePresence key={group.key} initial={!initialRender.current} propagate>
-      {group.logs.map((entry) => {
+  const renderLogGroup = useCallback((group: LogGroup) => narrowViewport ? (
+      group.logs.map((entry) => {
         const logKey = logEntryKey(entry);
         return (
           <LogMotionCard
@@ -156,13 +169,9 @@ export function LogsPage({
             />
           </LogMotionCard>
         );
-      })}
-      </AnimatePresence>)}
-    </AnimatePresence>
+      })
   ) : (
-    <AnimatePresence initial={false}>
-      {logGroups.map((group) => <AnimatePresence key={group.key} initial={!initialRender.current} propagate>
-      {group.logs.flatMap((entry) => {
+      group.logs.flatMap((entry) => {
         const logKey = logEntryKey(entry);
         const detailId = `desktop-log-detail-${entry.request_id}`;
         const expanded = expandedLogKey === logKey;
@@ -226,10 +235,17 @@ export function LogsPage({
         }
 
         return rows;
-      })}
-      </AnimatePresence>)}
-    </AnimatePresence>
-  ), [logGroups, narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown, keyboardHintId]);
+      })
+  ), [narrowViewport, expandedLogKey, reduceMotion, effectiveRowTransition, effectiveDetailTransition, toggleLog, handleRowKeyDown, keyboardHintId]);
+
+  const renderedLogs = useMemo(() => {
+    // An exact tail trim cannot move surviving groups. All other changes retain
+    // presence-driven measurement, including the final frame of a group exit.
+    return <AnimatePresence initial={false} presenceAffectsLayout={!tailTrim}>
+      {logGroups.map((group) => <LogAnimationGroup key={group.key} group={group}
+        render={renderLogGroup} initial={!initialRender.current} />)}
+    </AnimatePresence>;
+  }, [logGroups, renderLogGroup, tailTrim]);
 
   function clearFilters() {
     onRouteFilterChange("all");

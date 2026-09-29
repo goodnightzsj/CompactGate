@@ -13,6 +13,52 @@ import { isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../../shared/api-key-pri
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * 1024 * 1024;
 
+// These fields do not select or restate a connection's hidden credentials.
+const IMPORT_INDEPENDENT_FIELDS: ReadonlyArray<keyof ConfigFormState> = [
+  "primaryModelOverride", "primaryReasoningEffort", "primaryStateDomainId", "primaryStatePortability",
+  "upstreamMode", "modelMode", "modelTemplate", "modelOverride", "claudeModelMap",
+  "claudeCompactModelOverride", "claudeCompactUpstreamMode", "autoSchedulePrimaryFailover",
+  "loggingPersistBody", "loggingKeepRecent", "loggingCaptureDir", "loggingCaptureBodyMaxMiB",
+  "loggingCaptureDirMaxGiB", "loggingMaxDatabaseMiB"
+];
+
+export const IMPORT_CONNECTION_CONFLICT_MESSAGE = "导入已完成，但导入期间的连接编辑仍基于旧凭据。输入已保留；请先采用已保存连接，再重新编辑连接。模型和日志编辑会保留。";
+
+export function formAfterConfigImport(
+  draft: ConfigFormState,
+  submittedDraft: ConfigFormState,
+  config: PublicConfig
+): ConfigFormState {
+  const saved = formFromConfig(config);
+  const next: Record<string, unknown> = { ...saved };
+  for (const field of Object.keys(saved) as Array<keyof ConfigFormState>) {
+    if (field === "importConnectionConflict" || JSON.stringify(draft[field]) === JSON.stringify(submittedDraft[field])) continue;
+    if (field === "claudeModelMap") {
+      next.claudeModelMap = { ...saved.claudeModelMap, ...Object.fromEntries(
+        Object.entries(draft.claudeModelMap).filter(([key, value]) => value !== submittedDraft.claudeModelMap[key as keyof typeof draft.claudeModelMap])
+      ) };
+      continue;
+    }
+    next[field] = draft[field];
+    // Even an unchanged URL can now own a different secret, invisible to the
+    // browser. Keep such edits readable but never silently rebase their keys.
+    if (!IMPORT_INDEPENDENT_FIELDS.includes(field) && JSON.stringify(draft[field]) !== JSON.stringify(saved[field])) {
+      next.importConnectionConflict = true;
+    }
+  }
+  return next as ConfigFormState;
+}
+
+export function adoptImportedConnections(draft: ConfigFormState, config: PublicConfig): ConfigFormState {
+  const next: Record<string, unknown> = { ...formFromConfig(config) };
+  for (const field of IMPORT_INDEPENDENT_FIELDS) next[field] = draft[field];
+  return next as ConfigFormState;
+}
+
+function assertImportResolved(form: ConfigFormState): void {
+  if (form.importConnectionConflict) throw new Error(IMPORT_CONNECTION_CONFLICT_MESSAGE);
+}
+
 /**
  * The form fields a profile save for each scope actually persists, mirroring
  * `extractScopedProfileConfig` on the server: `primary` + `compact` for codex,
@@ -105,6 +151,7 @@ export function formAfterScopedProfileChange(
 
 export function emptyForm(): ConfigFormState {
   return {
+    importConnectionConflict: false,
     codexPrimaryBaseUrl: "",
     codexPrimaryOAuthAccountId: "",
     codexPrimaryApiKey: "",
@@ -162,6 +209,7 @@ export function emptyForm(): ConfigFormState {
 
 export function formFromConfig(config: PublicConfig): ConfigFormState {
   return {
+    importConnectionConflict: false,
     codexPrimaryBaseUrl: config.primary.base_url,
     codexPrimaryOAuthAccountId: config.primary.oauth_account_id ?? "",
     codexPrimaryApiKey: "",
@@ -234,6 +282,7 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
 }
 
 export function formToPatch(form: ConfigFormState) {
+  assertImportResolved(form);
   const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
   const primary = {
     base_url: form.codexPrimaryBaseUrl,
@@ -349,6 +398,7 @@ export function applyDraftToConfigExport(
   config: CompactGateConfig,
   form: ConfigFormState
 ): CompactGateConfig {
+  assertImportResolved(form);
   const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
   const next: CompactGateConfig = {
     listen: config.listen,
@@ -498,6 +548,7 @@ function readUpstreamMode(value: unknown, fallback: "split" | "primary"): "split
 
 function draftComparisonState(form: ConfigFormState) {
   return {
+    importConnectionConflict: form.importConnectionConflict,
     codexPrimaryBaseUrl: form.codexPrimaryBaseUrl,
     codexPrimaryOAuthAccountId: form.codexPrimaryOAuthAccountId,
     codexPrimaryApiKey: normalizedApiKey(form.codexPrimaryApiKey),

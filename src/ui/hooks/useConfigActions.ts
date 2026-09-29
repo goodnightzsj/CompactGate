@@ -7,7 +7,7 @@ import type {
 } from "../../shared/types.js";
 import {
   applyDraftToConfigExport,
-  formFromConfig,
+  formAfterConfigImport,
   formToPatch
 } from "../config/config-form-state.js";
 import type { ConfigFormState, SaveState } from "../config/types.js";
@@ -117,17 +117,18 @@ export function useConfigActions({
   }
 
   async function importConfig(payload: unknown) {
+    const submittedDraft = form;
     const nextConfig = await api<PublicConfig>("/api/config/import", {
       method: "POST",
       body: JSON.stringify(payload)
     });
+    // Import replaces the baseline, unlike a patch of this form's own values.
     setConfig(nextConfig);
-    setForm(formFromConfig(nextConfig));
+    setForm((current) => formAfterConfigImport(current, submittedDraft, nextConfig));
     setSaveError(null);
     setSaveConflict(false);
-    setSaveState("saved");
+    setSaveState("idle");
     setPageError(null);
-    window.setTimeout(() => setSaveState((current) => current === "saved" ? "idle" : current), 1600);
     await refreshHealthAfterWrite();
   }
 

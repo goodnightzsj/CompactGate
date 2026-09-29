@@ -690,7 +690,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("routes remote v2 through primary without compact model rewriting or bridge synthesis", async () => {
+  it.each(["beta", "body"])("routes remote v2 through primary without bridge synthesis with %s follow-up metadata", async (metadataSource) => {
     const primaryRequests: CapturedRequest[] = [];
     const compactRequests: CapturedRequest[] = [];
     const primary = await startCapturedOpenAiUpstream(primaryRequests, (_req, res) => {
@@ -777,9 +777,12 @@ describe("CompactGate OpenAI routing", () => {
             role: "user",
             content: [{ type: "input_text", text: "continue after body-aware compact" }]
           }
-        ]
+        ],
+        ...(metadataSource === "body" ? { client_metadata: { "x-codex-turn-metadata": JSON.stringify({
+          request_kind: "turn", compaction: { implementation: "responses_compaction_v2" }
+        }) } } : {})
       },
-      { "x-codex-beta-features": "remote_compaction_v2" }
+      metadataSource === "beta" ? { "x-codex-beta-features": "remote_compaction_v2" } : {}
     );
 
     expect(followUpResponse.status).toBe(200);

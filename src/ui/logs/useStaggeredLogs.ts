@@ -34,6 +34,12 @@ export const INSTANT_THRESHOLD = Math.min(
   Math.floor(MAX_STAGGER_DURATION_MS / STAGGER_BASE_MS)
 );
 
+/** Only an unchanged prefix can skip sibling layout invalidation during exit. */
+export function isLogTailTrim(previous: RequestLogEntry[], next: RequestLogEntry[]): boolean {
+  return next.length < previous.length && next.every((entry, index) =>
+    entry === previous[index] || JSON.stringify(entry) === JSON.stringify(previous[index]));
+}
+
 /** Stable SQLite sequence ranges bound Motion's per-presence key comparisons. */
 export function groupLogAnimations(logs: RequestLogEntry[]): Array<{ key: string; logs: RequestLogEntry[] }> {
   const groups: Array<{ key: string; logs: RequestLogEntry[] }> = [];

@@ -31,6 +31,38 @@ export function DashboardRecentRequests({
     completedAt: formatDateTime(entry.completed_at),
     duration: formatDurationMs(entry.duration_ms)
   })), [recent]);
+  const expandedRow = rows.find(({ entry }) => entry.request_id === expandedId);
+  const detailId = `${keyboardHintId}-detail`;
+  const closeDetails = () => {
+    setExpandedId(null);
+    document.getElementById(`${keyboardHintId}-trigger-${expandedId}`)?.focus();
+  };
+  const detail = expandedRow && (
+    <dl key={expandedRow.entry.request_id} className="dashboard-request-detail" id={detailId} aria-label="最近请求完整信息"
+      onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeDetails(); } }}>
+      <div className="is-wide dashboard-request-detail-heading">
+        <dt>请求 ID</dt>
+        <dd><code>{expandedRow.entry.request_id}</code><button type="button" className="btn btn-sm btn-ghost"
+          aria-label="收起请求详情" onClick={closeDetails}>收起详情</button></dd>
+      </div>
+      {[
+        ["开始时间", expandedRow.startedAt],
+        ["完成时间", expandedRow.completedAt],
+        ["耗时", expandedRow.duration],
+        ["状态", String(expandedRow.entry.status)],
+        ["通道", routeLabel(expandedRow.entry.route)],
+        ["类型", expandedRow.entry.request_type],
+        ["模型", expandedRow.entry.source_model ?? "-"],
+        ["上游 Host", expandedRow.entry.upstream_host],
+        ["端点", expandedRow.entry.endpoint]
+      ].map(([label, value], index) => (
+        <div key={label} className={index >= 6 ? "is-wide" : undefined}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 
   return (
     <div className="card">
@@ -47,15 +79,24 @@ export function DashboardRecentRequests({
       ) : narrowViewport ? (
         <div className="dashboard-request-list" aria-label="最近请求摘要">
           {rows.map(({ entry, startedAt, duration }) => (
-            <article className="dashboard-request-item" key={`${entry.request_id}-mobile`}>
-              <div className="dashboard-request-item-head">
+            <article key={entry.request_id}>
+              <button type="button" className="dashboard-request-item"
+                id={`${keyboardHintId}-trigger-${entry.request_id}`}
+                aria-expanded={expandedId === entry.request_id}
+                aria-controls={expandedId === entry.request_id ? detailId : undefined}
+                onClick={() => toggleRow(entry.request_id)}
+                onKeyDown={(event) => { if (event.key === "Escape") setExpandedId(null); }}>
+              <span className="dashboard-request-item-head">
                 <span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span>
                 <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
                 <time>{startedAt}</time>
-              </div>
+              </span>
               <strong>{entry.source_model ?? "-"}</strong>
               <code>{entry.upstream_host}</code>
               <span className="dashboard-request-duration">{duration}</span>
+              <span className="dashboard-request-disclosure">{expandedId === entry.request_id ? "收起详情" : "查看详情"}</span>
+              </button>
+              {expandedId === entry.request_id && detail}
             </article>
           ))}
         </div>
@@ -92,9 +133,11 @@ export function DashboardRecentRequests({
                   <tr
                     key={entry.request_id}
                     className={`log-row is-clickable ${expandedId === entry.request_id ? "is-expanded" : ""}`}
+                    id={`${keyboardHintId}-trigger-${entry.request_id}`}
                     tabIndex={0}
                     aria-expanded={expandedId === entry.request_id}
                     aria-describedby={keyboardHintId}
+                    aria-controls={expandedId === entry.request_id ? detailId : undefined}
                     aria-label={`${entry.status} ${entry.source_model ?? "未知模型"}，${expandedId === entry.request_id ? "收起" : "查看"}完整信息`}
                     onClick={() => toggleRow(entry.request_id)}
                     onKeyDown={(event) => {
@@ -121,6 +164,7 @@ export function DashboardRecentRequests({
               </tbody>
             </table>
           </div>
+          {detail}
         </div>
       )}
     </div>

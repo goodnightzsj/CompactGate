@@ -61,6 +61,43 @@ describe("profile operations that do not submit a draft", () => {
 });
 
 describe("config writes and their health follow-up", () => {
+  it.each([[false, false], [false, true], [true, false], [true, true]])("commits import with earlier snapshot=%s and newer edits=%s", async (snapshotFirst, editDuringImport) => {
+    const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+    const dispatch = (action: StudioConfigAction) => { state = reduceStudioConfigState(state, action); };
+    dispatch({ type: "set_form", value: (form) => ({ ...form, primaryModelOverride: "old-draft-to-replace" }) });
+    const imported = structuredClone(store.toPublicConfig());
+    imported.revision = "imported-revision";
+    imported.primary.model_override = "imported-model";
+    imported.primary.base_url = "https://imported.example/v1";
+    let finishImport!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finishImport = resolve; });
+    vi.stubGlobal("fetch", vi.fn((url: string) => url === "/api/config/import" ? pending : Promise.resolve(new Response("{}"))));
+    vi.stubGlobal("window", { setTimeout: vi.fn() });
+    let actions!: ReturnType<typeof useConfigActions>;
+    function Harness() {
+      actions = useConfigActions({ ...state, linkedCompactModel: "synthetic",
+        commitConfig: (config, submittedRevision) => dispatch({ type: "commit_config", config, submittedRevision }),
+        rebaseFormRevision: () => dispatch({ type: "rebase_form_revision" }),
+        applyRemoteConfig: (config) => dispatch({ type: "remote_config", config }),
+        applyProfileConfig: () => undefined,
+        setConfig: (value) => dispatch({ type: "set_config", value }),
+        setForm: (value) => dispatch({ type: "set_form", value }),
+        setHealth: () => undefined, setPageError: () => undefined });
+      return null;
+    }
+    renderToStaticMarkup(createElement(Harness));
+    const importing = actions.importConfig({ primary: { model_override: "imported-model" } });
+    if (editDuringImport) dispatch({ type: "set_form", value: (form) => ({ ...form, primaryModelOverride: "edited-during-import" }) });
+    if (snapshotFirst) dispatch({ type: "remote_config", config: imported });
+    finishImport(new Response(JSON.stringify(imported)));
+    await importing;
+    expect(state.config).toEqual(imported);
+    expect(state.form).toEqual({ ...formFromConfig(imported),
+      primaryModelOverride: editDuringImport ? "edited-during-import" : "imported-model" });
+    expect(state.formRevision).toBe(imported.revision);
+  });
+
   it("pins exports to the draft revision and does not download a rejected snapshot", async () => {
     const { actions, config, callbacks, fetchMock } = await setup(409, 200);
     const createElementMock = vi.fn();
@@ -91,7 +128,7 @@ describe("config writes and their health follow-up", () => {
     if (operation === "save") expect(callbacks.commitConfig).toHaveBeenCalledWith(config, 3);
     else {
       expect(callbacks.setConfig).toHaveBeenCalledWith(config);
-      expect(callbacks.setForm).toHaveBeenCalledWith(formFromConfig(config));
+      expect(callbacks.setForm).toHaveBeenCalledOnce();
     }
     expect(callbacks.setHealth).toHaveBeenCalledWith(null);
     expect(callbacks.setPageError).toHaveBeenCalledWith(expect.stringContaining("配置已写入，但健康状态刷新失败：Synthetic health failure"));

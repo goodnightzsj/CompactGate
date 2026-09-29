@@ -85,7 +85,10 @@ export function hasRemoteV2CompactionState(
     return false;
   }
 
-  if (hasRemoteV2Metadata(parsed?.client_metadata)) {
+  const bodyMetadata = isRecord(parsed?.client_metadata)
+    ? parsed.client_metadata[CODEX_TURN_METADATA_KEY]
+    : undefined;
+  if (hasRemoteV2Metadata(bodyMetadata)) {
     return true;
   }
 

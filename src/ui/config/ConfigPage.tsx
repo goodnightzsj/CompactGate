@@ -8,7 +8,7 @@ import {
   ConfigImportExportPanel
 } from "./ConfigImportExportPanel.js";
 import { CONFIG_TABS } from "./config-tabs.js";
-import { changedConfigAreas } from "./config-form-state.js";
+import { adoptImportedConnections, changedConfigAreas, IMPORT_CONNECTION_CONFLICT_MESSAGE } from "./config-form-state.js";
 import { ConfigModelPanel } from "./ConfigModelPanel.js";
 import { ConfigProfilesPanel } from "./ConfigProfilesPanel.js";
 import { OAuthProfilesPanel } from "./OAuthProfilesPanel.js";
@@ -84,6 +84,15 @@ export function ConfigPage({
       </div>
 
       <div className="config-layout">
+        {form.importConnectionConflict && (
+          <div className="error-banner config-import-conflict" role="alert">
+            <span>{IMPORT_CONNECTION_CONFLICT_MESSAGE}</span>
+            <button type="button" className="btn btn-sm" disabled={!config}
+              onClick={() => config && onFormChange((current) => adoptImportedConnections(current, config))}>
+              采用已保存连接，保留其他编辑
+            </button>
+          </div>
+        )}
         <div
           className="config-section"
           onFocusCapture={(event) => {

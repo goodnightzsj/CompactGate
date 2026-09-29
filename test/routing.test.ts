@@ -409,6 +409,22 @@ describe("routing helpers", () => {
     });
   });
 
+  it.each(["object", "json", "zstd"])("recognizes body-only remote v2 state from %s input", (format) => {
+    const body = {
+      model: "synthetic-model",
+      input: [{ type: "compaction", encrypted_content: "Readable provider state. Keep its original compaction shape." }],
+      client_metadata: { "x-codex-turn-metadata": JSON.stringify({
+        request_kind: "turn", compaction: { implementation: "responses_compaction_v2" }
+      }) }
+    };
+    const raw = format === "object" ? body : format === "json" ? JSON.stringify(body) : zstdCompressSync(Buffer.from(JSON.stringify(body)));
+    expect(hasRemoteV2CompactionState("/v1/responses", raw, {})).toBe(true);
+    expect(classifyOpenAiRequest("/v1/responses", raw, {}).route).toBe("primary");
+    expect(hasRemoteV2CompactionState("/v1/chat/completions", raw, {})).toBe(false);
+    expect(hasRemoteV2CompactionState("/v1/responses", { ...body, input: [] }, {})).toBe(false);
+    expect(hasRemoteV2CompactionState("/v1/responses", { ...body, client_metadata: { "x-codex-turn-metadata": "{bad-json" } }, {})).toBe(false);
+  });
+
   it("recognizes provider-owned remote v2 state on a normal follow-up turn", () => {
     const body = {
       model: "gpt-5.5",

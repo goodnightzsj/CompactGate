@@ -130,9 +130,22 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px 10px;
   min-width: 0;
+  width: 100%;
+  min-height: 44px;
   padding: 11px 0;
+  border: 0;
   border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
+
+.dashboard-request-item[aria-expanded="true"] { background: var(--jade-soft); }
+.dashboard-request-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dashboard-request-disclosure { grid-column: 1 / -1; color: var(--accent); font-size: var(--text-small); }
+.dashboard-request-list .dashboard-request-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .dashboard-request-item-head {
   display: flex;

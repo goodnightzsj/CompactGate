@@ -41,6 +41,8 @@ export interface FormKeyPoolEntry {
 }
 
 export type ConfigFormState = {
+  /** Pending import-time connection edits cannot inherit the imported secrets. */
+  importConnectionConflict: boolean;
   codexPrimaryBaseUrl: string;
   codexPrimaryOAuthAccountId: string;
   codexPrimaryApiKey: string;

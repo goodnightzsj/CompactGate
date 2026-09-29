@@ -8,6 +8,8 @@
   gap: 16px;
 }
 
+.config-import-conflict .btn { min-height: 44px; }
+
 .config-section {
   width: 100%;
   min-width: 0;
