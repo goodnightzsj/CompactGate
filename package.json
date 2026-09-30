@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/server/main.ts",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
-    "build:launcher": "cc -O2 -o bin/compactgate scripts/launcher.c && codesign --force --sign - --identifier com.compactgate.launcher bin/compactgate",
+    "build:launcher": "mkdir -p bin && cc -O2 -o bin/compactgate scripts/launcher.c && codesign --force --sign - --identifier com.compactgate.launcher bin/compactgate",
     "start": "node dist/server/main.js",
     "restart": "bash scripts/restart-service.sh",
     "test": "vitest run",

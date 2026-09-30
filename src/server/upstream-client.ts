@@ -1,7 +1,6 @@
 import http, {
   type IncomingHttpHeaders,
   type IncomingMessage,
-  type RequestOptions,
   type ServerResponse
 } from "node:http";
 import https from "node:https";
@@ -14,7 +13,7 @@ import {
   type OpenAiStreamSummary
 } from "./upstream-openai-stream.js";
 import { parseRetryAfterMs } from "./primary-failover-result.js";
-import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
+import { resolveUpstreamAgent, type UpstreamRequestOptions } from "./upstream-proxy-agent.js";
 import {
   appendBufferedResponseChunk,
   normalizeMaxBufferedResponseBytes,
@@ -131,8 +130,11 @@ export function sendBufferedUpstreamRequest(
     let settled = false;
     let upstreamReq: http.ClientRequest | null = null;
     let activeResponse: ActiveUpstreamResponse | null = null;
+    const connectionAbort = new AbortController();
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
+      clearTimeout(deadlineTimer);
       options.res.off("close", handleClientClose);
       options.res.off("error", handleClientError);
       upstreamReq?.off("timeout", handleTimeout);
@@ -155,6 +157,7 @@ export function sendBufferedUpstreamRequest(
 
       settled = true;
       cleanup();
+      connectionAbort.abort();
       if (activeResponse?.responseTransform) {
         const transform = activeResponse.responseTransform.stream;
         activeResponse.response.unpipe(transform);
@@ -216,6 +219,10 @@ export function sendBufferedUpstreamRequest(
     }
 
     function handleUpstreamRequestError(error: Error) {
+      if (error.name === "TimeoutError") {
+        handleTimeout();
+        return;
+      }
       rejectOnce(new UpstreamRequestError(error.message, responseDetails("upstream_request_error", "none")));
     }
 
@@ -239,10 +246,20 @@ export function sendBufferedUpstreamRequest(
       ));
     }
 
-    const requestOptions: RequestOptions = {
+    const remainingMs = options.startedAt + options.timeoutMs - performance.now();
+    if (options.res.destroyed) {
+      rejectOnce(new UpstreamRequestError("Client disconnected before upstream response completed.", responseDetails("client_cancel", "before_headers")));
+      return;
+    }
+    if (remainingMs <= 0) {
+      handleTimeout();
+      return;
+    }
+    const requestOptions: UpstreamRequestOptions = {
       method: options.req.method,
       headers,
-      timeout: options.timeoutMs
+      proxyConnectSignal: connectionAbort.signal,
+      timeout: remainingMs
     };
     const agent = resolveUpstreamAgent(options.upstream, options.proxyUrl);
     if (agent) {
@@ -253,6 +270,7 @@ export function sendBufferedUpstreamRequest(
       options.upstream,
       requestOptions,
       (response) => {
+        if (settled) { response.destroy(); return; }
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
         const shouldDeferHttpError = options.deferHttpErrors === true && status >= 400;
@@ -449,6 +467,7 @@ export function sendBufferedUpstreamRequest(
     upstreamReq.once("timeout", handleTimeout);
     upstreamReq.once("error", handleUpstreamRequestError);
 
+    deadlineTimer = setTimeout(handleTimeout, remainingMs);
     upstreamReq.end(options.body);
   });
 }
@@ -478,13 +497,12 @@ export async function sendOpenAiUpstreamRequest(
   // timeout into a connection held for an hour. `sendRecoveringPrimaryRequest`
   // already spends the budget this way; the retry loop simply had not.
   const remainingTimeoutMs = () =>
-    Math.max(1, options.timeoutMs - Math.round(performance.now() - options.startedAt));
+    Math.max(0, options.timeoutMs - (performance.now() - options.startedAt));
 
   if (retryStatuses.size > 0 && maxStatusRetries > 0) {
     for (let retry = 0; retry < maxStatusRetries; retry += 1) {
       const result = await sendBufferedUpstreamRequest({
         ...options,
-        timeoutMs: remainingTimeoutMs(),
         deferRetryableStreamErrors: true
       });
       if (retryStatuses.has(result.status) && !result.responseBodyTruncated) {
@@ -511,7 +529,7 @@ export async function sendOpenAiUpstreamRequest(
       return finalResult;
     }
 
-    return sendBufferedUpstreamRequest({ ...options, timeoutMs: remainingTimeoutMs() });
+    return sendBufferedUpstreamRequest(options);
   }
 
   if (options.retryEmptyStreamError !== true) {
@@ -534,10 +552,7 @@ export async function sendOpenAiUpstreamRequest(
     return finalResult;
   }
 
-  const retryResult = await sendBufferedUpstreamRequest({
-    ...options,
-    timeoutMs: remainingTimeoutMs()
-  });
+  const retryResult = await sendBufferedUpstreamRequest(options);
   if (retryResult.errorSummary) {
     retryResult.errorSummary = `${retryResult.errorSummary} (retried after empty upstream stream)`;
   }

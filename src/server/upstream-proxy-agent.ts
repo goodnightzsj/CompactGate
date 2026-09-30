@@ -21,6 +21,11 @@ interface ConnectResponseHeaderRead {
   remainingBuffers: Buffer[];
 }
 
+export interface UpstreamRequestOptions extends RequestOptions {
+  // Node consumes its own signal before calling agent.createConnection.
+  proxyConnectSignal?: AbortSignal;
+}
+
 export function resolveUpstreamAgent(
   upstream: URL,
   explicitProxyUrl = ""
@@ -61,7 +66,7 @@ class HttpConnectHttpsAgent extends HttpsAgent {
   }
 
   override createConnection(
-    options: RequestOptions & { servername?: string },
+    options: UpstreamRequestOptions & { servername?: string },
     callback?: (error: Error | null, stream: Duplex) => void
   ): Duplex | null | undefined {
     const targetHost = String(options.hostname ?? options.host ?? "");
@@ -72,8 +77,14 @@ class HttpConnectHttpsAgent extends HttpsAgent {
     const complete = callback ?? (() => undefined);
     let responseBuffer: Buffer = Buffer.alloc(0);
     let completed = false;
+    let tlsSocket: tls.TLSSocket | undefined;
+    const signal = options.proxyConnectSignal;
+    const timer = setTimeout(() => fail(new DOMException("Proxy CONNECT timed out.", "TimeoutError")), options.timeout || 30_000);
 
     const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", handleAbort);
+      tlsSocket?.off("error", fail);
       proxySocket.off("connect", handleConnect);
       proxySocket.off("data", handleData);
       proxySocket.off("error", handleProxyError);
@@ -87,6 +98,7 @@ class HttpConnectHttpsAgent extends HttpsAgent {
 
       completed = true;
       cleanup();
+      tlsSocket?.destroy();
       proxySocket.destroy();
       complete(error, proxySocket);
     };
@@ -151,13 +163,13 @@ class HttpConnectHttpsAgent extends HttpsAgent {
       proxySocket.off("data", handleData);
       proxySocket.off("error", handleProxyError);
 
-      const tlsSocket = tls.connect(
+      tlsSocket = tls.connect(
         {
           socket: proxySocket,
           servername: typeof options.servername === "string" ? options.servername : targetHost,
           ALPNProtocols: ["http/1.1"]
         },
-        () => succeed(tlsSocket)
+        () => succeed(tlsSocket!)
       );
       tlsSocket.once("error", fail);
     };
@@ -170,10 +182,14 @@ class HttpConnectHttpsAgent extends HttpsAgent {
       fail(new Error("Proxy CONNECT connection closed before response."));
     };
 
+    const handleAbort = () => fail(new Error("Proxy CONNECT canceled."));
+
     proxySocket.once("connect", handleConnect);
     proxySocket.on("data", handleData);
     proxySocket.once("error", handleProxyError);
     proxySocket.once("close", handleProxyClose);
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    if (signal?.aborted) handleAbort();
 
     return undefined;
   }

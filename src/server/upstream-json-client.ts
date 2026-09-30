@@ -1,7 +1,7 @@
-import http, { type RequestOptions } from "node:http";
+import http from "node:http";
 import https from "node:https";
 import { decodeBodyText } from "./http-utils.js";
-import { resolveUpstreamAgent } from "./upstream-proxy-agent.js";
+import { resolveUpstreamAgent, type UpstreamRequestOptions } from "./upstream-proxy-agent.js";
 import { normalizeMaxJsonResponseBytes } from "./upstream-response-buffer.js";
 
 export interface RequestJsonOptions {
@@ -16,9 +16,11 @@ export function requestJson(
   options: RequestJsonOptions = {}
 ): Promise<unknown> {
   const client = upstream.protocol === "https:" ? https : http;
-  const requestOptions: RequestOptions = {
+  const connectionAbort = new AbortController();
+  const requestOptions: UpstreamRequestOptions = {
     method: "GET",
     headers,
+    proxyConnectSignal: connectionAbort.signal,
     timeout: timeoutMs
   };
   const agent = resolveUpstreamAgent(upstream, options.proxyUrl);
@@ -28,6 +30,7 @@ export function requestJson(
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const maxResponseBytes = normalizeMaxJsonResponseBytes(options.maxResponseBytes);
 
     const resolveOnce = (value: unknown) => {
@@ -36,6 +39,7 @@ export function requestJson(
       }
 
       settled = true;
+      clearTimeout(deadlineTimer);
       resolve(value);
     };
 
@@ -45,6 +49,8 @@ export function requestJson(
       }
 
       settled = true;
+      clearTimeout(deadlineTimer);
+      connectionAbort.abort();
       reject(error);
     };
 
@@ -86,6 +92,7 @@ export function requestJson(
 
     upstreamReq.once("timeout", () => upstreamReq.destroy(new Error("Upstream JSON request timed out.")));
     upstreamReq.once("error", rejectOnce);
+    deadlineTimer = setTimeout(() => upstreamReq.destroy(new Error("Upstream JSON request timed out.")), timeoutMs);
     upstreamReq.end();
   });
 }

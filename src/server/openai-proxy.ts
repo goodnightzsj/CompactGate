@@ -585,7 +585,7 @@ async function sendRecoveringPrimaryRequest(input: {
       res: input.res,
       upstream: input.upstream,
       startedAt: input.startedAt,
-      timeoutMs: Math.max(1, input.timeoutMs - Math.round(performance.now() - input.startedAt)),
+      timeoutMs: input.timeoutMs,
       timeoutMessage: input.timeoutMessage,
       requestHeaders: requestHeadersForCompiledBody(
         input.requestHeaders,
