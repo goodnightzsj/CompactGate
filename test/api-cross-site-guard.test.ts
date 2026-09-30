@@ -59,9 +59,11 @@ describe("admin API cross-site guard", () => {
   it("refuses an Origin it cannot parse instead of waving it through", () => {
     expect(crossSiteApiRejection(request({ origin: "not a url", host: "127.0.0.1:7865" })))
       .toMatch(/unparsable Origin/);
-    // A sandboxed iframe sends the literal "null"; treat it as no Origin, since
-    // it carries no host to compare and blocking it would break nothing today.
+    // An opaque sandbox origin is a browser origin, not an Origin-less CLI.
     expect(crossSiteApiRejection(request({ origin: "null", host: "127.0.0.1:7865" })))
-      .toBeNull();
+      .toMatch(/Origin/);
+    for (const origin of ["", "ftp://127.0.0.1", "file://localhost", "http://user@localhost"]) {
+      expect(crossSiteApiRejection(request({ origin, host: "127.0.0.1:7865" }))).toMatch(/Origin/);
+    }
   });
 });

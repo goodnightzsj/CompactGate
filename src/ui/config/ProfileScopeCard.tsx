@@ -205,6 +205,7 @@ export function ProfileScopeCard({
         <Field label={`${scopeLabel} 档案名称`} hint={profileNameHint}>
           <input
             ref={nameInputRef}
+            id={`${scope}-profile-name`}
             aria-label={`${scopeLabel} 档案名称`}
             value={profileName}
             onChange={(event) => onProfileNameChange(event.target.value)}

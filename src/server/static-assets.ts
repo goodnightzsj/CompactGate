@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { sendJson } from "./http-utils.js";
 
 const STATIC_MIME_TYPES: Record<string, string> = {
@@ -62,20 +64,28 @@ export async function serveStatic(
     return;
   }
 
-  res.statusCode = 200;
-  res.setHeader(
-    "content-type",
-    STATIC_MIME_TYPES[path.extname(targetPath)] ?? "application/octet-stream"
-  );
-  res.setHeader("content-length", String(stat.size));
-  res.setHeader("cache-control", cacheControlForTarget(targetPath, fallbackPath));
+  // Open before asset headers or pipeline own the response: an open failure
+  // needs an HTTP error without the asset's immutable cache policy.
+  const file = req.method === "HEAD" ? null : await open(targetPath, "r");
+  try {
+    res.statusCode = 200;
+    res.setHeader(
+      "content-type",
+      STATIC_MIME_TYPES[path.extname(targetPath)] ?? "application/octet-stream"
+    );
+    res.setHeader("content-length", String(stat.size));
+    res.setHeader("cache-control", cacheControlForTarget(targetPath, fallbackPath));
 
-  if (req.method === "HEAD") {
-    res.end();
-    return;
+    if (!file) {
+      res.end();
+      return;
+    }
+    if (!res.destroyed) {
+      await pipeline(createReadStream(targetPath, { fd: file }), res);
+    }
+  } finally {
+    await file?.close();
   }
-
-  createReadStream(targetPath).pipe(res);
 }
 
 function resolvePublicDir(): string {

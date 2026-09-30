@@ -192,7 +192,7 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/compactgate.plist
 | 进程崩溃 / 被 `kill -9` | `KeepAlive` 自动拉回（约数秒） |
 | 开机、登录 | `RunAtLoad` 自动启动 |
 | `npm run restart` | `launchctl kickstart -k`，先杀后起，不留空窗 |
-| 收到 SIGTERM | 优雅退出：先断空闲连接，3 秒后强制断开长连接（Studio 的 SSE 是永不结束的流，否则会挂住），再 checkpoint 数据库并以 `exit(0)` 收尾 |
+| 收到 SIGTERM / SIGINT | 结束 Studio SSE、关闭空闲连接，3 秒后强制关闭剩余 HTTP 连接；等待请求收尾、抓包清理及后台写入后关闭 SQLite，以 `exit(0)` 收尾。10 秒未排空或重复信号时非零退出；同步阻塞期间计时器无法执行 |
 
 `exit(0)` 与崩溃的区分正是 `KeepAlive{SuccessfulExit:false}` 的依据——正常停止不会被当成崩溃重新拉起。
 
@@ -455,7 +455,7 @@ HTTP 日志页与 SSE 插入共享 SQLite 序号，避免分页期间新增漏�
 
 仪表盘和用量可按所展示统计的实际时间范围下钻到日志；响应模型与 Host 使用精确匹配，不用模糊搜索替代。日志页显示下钻范围，可移除时间/模型限定或清除全部筛选；离开日志页后，总览与路由仍使用全局记录。日志“样本分组”仅统计当前已加载记录，展示调用数、成功率和最近最多十次结果，不代表全库或上游健康探测。
 
-精简日志列合并模型链路、上游凭据、输入/输出 Token 与首响应/总耗时；“响应声明不同”只比较上游明确声明与目标模型，不把目标推断当证据，也不代表模型指纹鉴定。平均输出吞吐为输出 Token / 总耗时，非纯生成速度；桌面完整列与移动详情仍可查看全部诊断字段。
+桌面日志默认沿用完整12列，保留独立的首响应与耗时；模型差异放在响应模型列，类型下方展示平均输出吞吐。可切换精简7列，合并模型链路、上游凭据、输入/输出 Token 与首响应/总耗时；“响应声明不同”只比较上游明确声明与目标模型，不把目标推断当证据，也不代表模型指纹鉴定。平均输出吞吐为输出 Token / 总耗时，非纯生成速度；移动详情仍可查看全部诊断字段。
 
 正文清理已提交但 SQLite 空间回收失败时，仍通知页面刷新，并明确报告“正文已清、空间回收失败”。非 SQLite 模式下抓包目录可清空后继续编辑；留空保存将关闭抓包。日志表在中等宽度下可局部横向滚动，720px 及以下保留卡片布局；Token 明细支持键盘操作，复制失败会显示原因。
 
@@ -551,6 +551,8 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 如果你想自己对接页面或脚本，可以用这些接口：
 
+管理接口仅接受 loopback Host；浏览器请求还必须来自 HTTP(S) loopback Origin，`Origin: null`、空值和跨站来源会被拒绝。没有 Origin 的本机命令行调用保持可用。
+
 ### `GET /api/health`
 
 查看服务和上下游状态。
@@ -575,7 +577,9 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 - `POST /api/config/backups/restore`：传 `{"backup_id":"...","confirm":true}` 恢复
 - `DELETE /api/config/backups`：传相同确认结构删除
 
-恢复前会先校验 JSON 和完整配置合同；失败不会改变内存或当前配置文件。
+恢复前会先校验 JSON 和完整配置合同；校验或提交前失败不会改变内存或当前配置文件。全量导入还会拒绝已知对象/数组容器的错误类型，不将它们静默当作省略字段。
+
+配置与 OAuth 文件在 rename 前设置权限并同步正文；rename 后若无法确认目录同步，返回明确的“已提交但耐久性未确认”错误。此时已保存内容和运行状态保持一致，新令牌不会被旧令牌覆盖；先检查存储，不要将 HTTP 500 直接理解为“没有保存”。
 
 ### `PATCH /api/config`
 
@@ -627,11 +631,11 @@ COMPACTGATE_CAPTURE_DIR=/path/to/captures npm start
 
 ### `GET /api/logs/:request_id/capture`
 
-按需读取受管抓包。写入中返回 202，从未保存返回 404，已清理或文件丢失返回 410，重复请求 ID 返回 409。
+按需读取受管抓包。写入中返回 202，从未保存返回 404，已清理或文件丢失返回 410，重复请求 ID 返回 409。gzip/br/deflate 显示解压限制为 8MiB，超限显示诊断提示，仍可下载原始字节。
 
 ### `GET /api/logs/:request_id/capture/download`
 
-下载同一条受管抓包的 JSON 文件，不暴露本机路径。
+下载同一条受管抓包的原始 JSON 文件，不派生或解压显示正文，不暴露本机路径。
 
 ### `POST /api/logs/maintenance/purge-bodies`
 

@@ -1043,6 +1043,7 @@ export class RequestLogger extends EventTarget {
 
     let changed = false;
     try {
+      if (this.databaseFootprintBytes() <= this.maxDatabaseBytes) return;
       // WAL pages can be reclaimed without deleting any saved body.
       this.checkpointSqliteStorage();
       if (this.databaseFootprintBytes() > this.maxDatabaseBytes) {

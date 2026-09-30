@@ -19,17 +19,26 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 const INTERNAL_REQUEST_HEADERS = new Set(["x-compactgate-profile"]);
 
+function hopByHopHeaders(headers: IncomingHttpHeaders): Set<string> {
+  const names = new Set(HOP_BY_HOP_HEADERS);
+  for (const token of (readHeaderString(headers.connection) ?? "").split(",")) {
+    names.add(token.trim().toLowerCase());
+  }
+  return names;
+}
+
 export function buildUpstreamHeaders(
   headers: IncomingHttpHeaders,
   apiKey: string | null,
   extraHeaders: Record<string, string> = {}
 ): Record<string, string> {
   const next: Record<string, string> = {};
+  const hopHeaders = hopByHopHeaders(headers);
 
   for (const [name, value] of Object.entries(headers)) {
     const lowerName = name.toLowerCase();
     if (
-      HOP_BY_HOP_HEADERS.has(lowerName) ||
+      hopHeaders.has(lowerName) ||
       INTERNAL_REQUEST_HEADERS.has(lowerName) ||
       lowerName === "host"
     ) {
@@ -53,8 +62,9 @@ export function buildUpstreamHeaders(
 }
 
 export function copyResponseHeaders(headers: IncomingHttpHeaders, res: ServerResponse): void {
+  const hopHeaders = hopByHopHeaders(headers);
   for (const [name, value] of Object.entries(headers)) {
-    if (HOP_BY_HOP_HEADERS.has(name.toLowerCase()) || value === undefined) {
+    if (hopHeaders.has(name.toLowerCase()) || value === undefined) {
       continue;
     }
 

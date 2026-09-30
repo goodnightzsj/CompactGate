@@ -1,14 +1,18 @@
-import { chmod, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore, DEFAULT_CONFIG } from "../src/server/config.js";
 import {
   listConfigBackups,
+  FileCommitError,
   readConfigBackup,
   writeConfigFile
 } from "../src/server/config-file-repository.js";
 import type { CompactGateConfig } from "../src/shared/types.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
+import { injectFileCommitFault } from "./helpers/file-commit-fault.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function withKeepRecent(value: number): CompactGateConfig {
   return {
@@ -21,6 +25,79 @@ function withKeepRecent(value: number): CompactGateConfig {
 }
 
 describe("config file repository", () => {
+  it.each(["file-chmod", "file-sync"] as const)("keeps saved state unchanged when %s fails before rename", async (stage) => {
+    const dir = await makeConfigDir();
+    const configPath = path.join(dir, "synthetic.json");
+    const store = await ConfigStore.load(configPath);
+    try {
+      await store.patch({ logging: { keep_recent: 21 } });
+      const before = store.get();
+      const revision = store.revision;
+      const savedAt = store.toPublicConfig().last_saved_at;
+      const persisted = await readFile(configPath, "utf8");
+      const fault = injectFileCommitFault(configPath, stage);
+
+      await expect(store.patch({ logging: { keep_recent: 22 } })).rejects.toBe(fault);
+
+      expect(store.get()).toEqual(before);
+      expect(store.revision).toBe(revision);
+      expect(store.toPublicConfig().last_saved_at).toBe(savedAt);
+      expect(await readFile(configPath, "utf8")).toBe(persisted);
+      expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+      await expect(store.patch({ logging: { keep_recent: 23 } })).resolves.toMatchObject({ logging: { keep_recent: 23 } });
+    } finally { store.oauth.close(); }
+  });
+
+  it.each(["directory-open", "directory-sync", "directory-close"] as const)("adopts committed state and reports %s failures", async (stage) => {
+    const configPath = path.join(await makeConfigDir(), "synthetic.json");
+    const store = await ConfigStore.load(configPath);
+    try {
+      await store.patch({ logging: { keep_recent: 21 } });
+      const revision = store.revision;
+      const fault = injectFileCommitFault(configPath, stage);
+      const result = store.patch({ logging: { keep_recent: 22 } });
+
+      await expect(result).rejects.toBeInstanceOf(FileCommitError);
+      await expect(result).rejects.toMatchObject({
+        filePath: configPath, status: 500, cause: fault,
+        message: expect.stringMatching(/committed.*durability.*Saved changes are active/)
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(store.get());
+      expect(store.get().logging.keep_recent).toBe(22);
+      expect(store.revision).not.toBe(revision);
+      expect(store.toPublicConfig().last_saved_at).not.toBeNull();
+      await expect(store.patch({ revision, logging: { keep_recent: 24 } })).rejects.toMatchObject({ status: 409 });
+      await expect(store.patch({ revision: store.revision, logging: { keep_recent: 23 } }))
+        .resolves.toMatchObject({ logging: { keep_recent: 23 } });
+    } finally { store.oauth.close(); }
+  });
+
+  it.each(["directory-open", "directory-sync", "directory-close"] as const)("does not advance the main config after backup %s failure", async (stage) => {
+    const configPath = path.join(await makeConfigDir(), "synthetic.json");
+    const store = await ConfigStore.load(configPath);
+    try {
+      await store.patch({ logging: { keep_recent: 31 } });
+      const before = store.get();
+      const revision = store.revision;
+      const persisted = await readFile(configPath, "utf8");
+      const fault = injectFileCommitFault(configPath, stage, true);
+      const result = store.patch({ logging: { keep_recent: 32 } });
+
+      await expect(result).rejects.not.toBeInstanceOf(FileCommitError);
+      await expect(result).rejects.toMatchObject({
+        message: expect.stringMatching(/Config was not changed.*backup/),
+        cause: expect.objectContaining({ cause: fault })
+      });
+      expect(store.get()).toEqual(before);
+      expect(store.revision).toBe(revision);
+      expect(await readFile(configPath, "utf8")).toBe(persisted);
+      const backups = await store.listBackups();
+      expect(backups).toHaveLength(1);
+      expect(await readFile(path.join(path.dirname(configPath), backups[0]!.id), "utf8")).toBe(persisted);
+      await expect(store.patch({ logging: { keep_recent: 33 } })).resolves.toMatchObject({ logging: { keep_recent: 33 } });
+    } finally { store.oauth.close(); }
+  });
+
   it.each(["null", "[]", '"broken"'])("rejects non-object %s on load and restore without changing saved state", async (json) => {
     const dir = await makeConfigDir();
     const invalidPath = path.join(dir, "invalid.json");

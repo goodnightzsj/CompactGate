@@ -193,7 +193,12 @@ function writeSseChunk(res: ServerResponse, chunk: string): boolean {
     // An unmeasurable buffer keeps the client — never disconnect over a number we
     // could not read.
     const buffered = res.writableLength;
-    return typeof buffered !== "number" || buffered <= MAX_STUDIO_EVENT_CLIENT_BUFFER_BYTES;
+    if (typeof buffered === "number" && buffered > MAX_STUDIO_EVENT_CLIENT_BUFFER_BYTES) {
+      // end() would retain the queued bytes until a stalled peer reads again.
+      res.destroy();
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }

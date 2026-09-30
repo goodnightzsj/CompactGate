@@ -286,7 +286,7 @@ async function sendCaptureResponse(
   }
 
   const capture = lookup.capturePath
-    ? await captureWriter.readCapture(lookup.capturePath, requestId)
+    ? await captureWriter.readCapture(lookup.capturePath, requestId, !download)
     : { status: "unavailable" as const };
   if (capture.status === "unavailable") {
     const updatedEntry = logger.markCapturePurgedByRequestId(requestId);

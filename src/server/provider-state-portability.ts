@@ -253,6 +253,11 @@ function applyCrossDomainCleanup(
       continue;
     }
 
+    stripPrivateMetadata(item, metrics);
+    if (Array.isArray(item.content)) {
+      for (const block of item.content) stripPrivateMetadata(block, metrics);
+    }
+
     if (item.type === "reasoning") {
       metrics.reasoningItemsRemoved += 1;
       fidelity = "degraded";
@@ -391,12 +396,6 @@ function removePreviousResponseIds(
 }
 
 function stripPrivateMetadata(value: unknown, metrics: ProviderStateMetrics): void {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      stripPrivateMetadata(item, metrics);
-    }
-    return;
-  }
   if (!isRecord(value)) {
     return;
   }
@@ -405,9 +404,7 @@ function stripPrivateMetadata(value: unknown, metrics: ProviderStateMetrics): vo
     if (key === "_passthrough" || key.startsWith("internal_")) {
       delete value[key];
       metrics.privateMetadataFieldsRemoved += 1;
-      continue;
     }
-    stripPrivateMetadata(value[key], metrics);
   }
 }
 

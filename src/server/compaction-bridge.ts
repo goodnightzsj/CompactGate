@@ -173,7 +173,7 @@ export class CompactionBridgeStore {
 
       const key = compactionKey(options.scope, item.encrypted_content);
       const fallbackItems = extractFallbackItems(output, item);
-      rememberMapEntry(this.knownCompactionStateByContent, item.encrypted_content, expiresAt);
+      rememberMapEntry(this.knownCompactionStateByContent, sha256(item.encrypted_content), expiresAt);
       if (fallbackItems.length === 0) {
         continue;
       }
@@ -238,7 +238,7 @@ export class CompactionBridgeStore {
       if (!synthesizedMessage) {
         rewrittenInput.push(item);
         remainingCompactionCount += 1;
-        knownMissingCompactionCount += this.knownCompactionStateByContent.has(item.encrypted_content) ? 1 : 0;
+        knownMissingCompactionCount += this.knownCompactionStateByContent.has(sha256(item.encrypted_content)) ? 1 : 0;
         continue;
       }
 
@@ -290,7 +290,7 @@ function compactionKey(scope: CompactionBridgeScope, encryptedContent: string): 
     scope.compactUpstream,
     scope.sourceModel ?? "",
     scope.targetModel ?? "",
-    encryptedContent
+    sha256(encryptedContent)
   ]);
 }
 

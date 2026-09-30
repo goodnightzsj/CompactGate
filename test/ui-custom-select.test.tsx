@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { selectMenuPlacement } from "../src/ui/shared/CustomSelect.js";
+import { renderToStaticMarkup } from "react-dom/server";
+import { CustomSelect, selectMenuPlacement } from "../src/ui/shared/CustomSelect.js";
+
+it("includes the selected value in the trigger's accessible name", () => {
+  const markup = renderToStaticMarkup(<CustomSelect label="Status" value="error"
+    options={[{ value: "all", label: "All" }, { value: "error", label: "Error" }]}
+    onChange={() => undefined} />);
+  expect(markup).toContain('aria-label="Status：Error"');
+});
 
 describe("select menu anchoring", () => {
   it("anchors short upward menus by their bottom edge rather than a 320px assumed height", () => {

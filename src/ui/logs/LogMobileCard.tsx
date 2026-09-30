@@ -33,6 +33,7 @@ export const LogMobileCard = memo(function LogMobileCard({
     <article className={`log-mobile-card ${hasError ? "has-error" : ""}`}>
       <button
         className="log-mobile-summary"
+        id={`${detailId}-trigger`}
         type="button"
         aria-expanded={expanded}
         aria-controls={detailId}
@@ -68,7 +69,10 @@ export const LogMobileCard = memo(function LogMobileCard({
             exit={{ opacity: 0, y: reduceMotion ? 0 : -4 }}
             transition={reduceMotion ? { duration: 0.01 } : { duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           >
-            <LogDetailPanel entry={entry} />
+            <LogDetailPanel entry={entry} onCollapse={() => {
+              onToggle(logKey);
+              document.getElementById(`${detailId}-trigger`)?.focus({ preventScroll: true });
+            }} />
           </motion.div>
         )}
       </AnimatePresence>

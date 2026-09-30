@@ -6,9 +6,11 @@ import type {
 } from "../shared/types.js";
 import { cloneConfig, ConfigError, isRecord } from "./config-internals.js";
 import { DEFAULT_CONFIG } from "./config-defaults.js";
+import { validateImportedConfigContainers } from "./config-import-validation.js";
 import { OAuthStore, type OAuthStoreOptions } from "./oauth-store.js";
 import {
   deleteConfigBackup,
+  FileCommitError,
   listConfigBackups,
   readConfigBackup,
   readConfigFile,
@@ -297,10 +299,19 @@ export class ConfigStore {
   }
 
   private async persist(next: CompactGateConfig): Promise<CompactGateConfig> {
-    const savedAt = await writeConfigFile(this.configPath, next);
+    let savedAt: string;
+    let commitError: FileCommitError | undefined;
+    try {
+      savedAt = await writeConfigFile(this.configPath, next);
+    } catch (error) {
+      if (!(error instanceof FileCommitError) || error.filePath !== this.configPath) throw error;
+      commitError = error;
+      savedAt = new Date().toISOString();
+    }
     this.current = next;
     this.lastSavedAt = savedAt;
     this.revisionCounter += 1;
+    if (commitError) throw commitError;
     return this.get();
   }
 }
@@ -390,6 +401,7 @@ function validateRouteUrlPreset(preset: RouteUrlPreset): void {
 function mergeConfig(base: CompactGateConfig, patch: unknown, strict = false): CompactGateConfig {
   if (!isRecord(patch)) throw new ConfigError("Config must be a JSON object.");
   const patchRecord = patch;
+  if (strict) validateImportedConfigContainers(patchRecord);
   const runtime = mergeRuntimeConfig(base, patchRecord);
   const profileScopes = mergeProfileScopes(base, patchRecord, strict);
 

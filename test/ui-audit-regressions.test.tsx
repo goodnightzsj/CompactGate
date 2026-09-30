@@ -4,6 +4,7 @@ import { CodexProtocolStatus } from "../src/ui/routes/CodexProtocolStatus.js";
 import { RouteRulesGrid } from "../src/ui/routes/RouteRulesGrid.js";
 import { ConfigSaveAsNewProfileDialog } from "../src/ui/config/ConfigSaveAsNewProfileDialog.js";
 import { ConfirmProfileOverwriteDialog } from "../src/ui/config/ConfirmProfileOverwriteDialog.js";
+import { ConfirmProfileDeleteDialog } from "../src/ui/config/ConfirmProfileDeleteDialog.js";
 import type { PublicConfigProfile } from "../src/ui/config/types.js";
 import { nextProfileNameSyncState } from "../src/ui/hooks/useScopedProfileControls.js";
 import { saveLabel } from "../src/ui/config/save-state.js";
@@ -38,7 +39,15 @@ describe("a failed profile write is visible from wherever it was started", () =>
       />
     );
 
-    expect(markup).toContain("Profile name already exists.");
+    expect(markup).toMatch(/role="alert"[\s\S]*Profile name already exists\./);
+  });
+
+  it.each([null, "Synthetic delete failure"])("keeps a live region mounted for deletion errors: %s", (error) => {
+    const markup = renderToStaticMarkup(<ConfirmProfileDeleteDialog
+      profile={{ name: "Synthetic" } as PublicConfigProfile}
+      isDeleting={false} error={error} onCancel={() => undefined} onConfirm={() => undefined} />);
+    expect(markup).toContain('role="alert"');
+    if (error) expect(markup).toMatch(/role="alert"[\s\S]*Synthetic delete failure/);
   });
 });
 
@@ -99,6 +108,17 @@ describe("route model inheritance is explicit", () => {
 });
 
 describe("an in-progress rename survives an action that renames nothing", () => {
+  it("keeps an unbound creation draft when its first profile arrives before the save response", () => {
+    expect(nextProfileNameSyncState({
+      profiles: [{ id: "created", name: "Submitted" }],
+      activeProfileId: null,
+      selectedId: "",
+      name: "Newer draft",
+      sourceProfileId: null,
+      dirty: true
+    })).toEqual({ selectedId: "", name: "Newer draft", sourceProfileId: null, dirty: true });
+  });
+
   it("keeps a dirty draft whose profile is still the selected one", () => {
     const profiles = [
       { id: "a", name: "Prod" },

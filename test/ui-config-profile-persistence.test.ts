@@ -38,6 +38,7 @@ describe("config profile persistence", () => {
       selectedId: "",
       state: "idle" as const,
       setName: vi.fn(),
+      commitSavedName: vi.fn(),
       setSelectedId: vi.fn(),
       setState: vi.fn(),
       setError: vi.fn()
@@ -56,6 +57,9 @@ describe("config profile persistence", () => {
     });
 
     await expect(actions.saveConfigProfile("claude", "Mapped")).resolves.toBe(true);
+    expect(accessors.commitSavedName).toHaveBeenCalledExactlyOnceWith(
+      { name: "", selectedId: "" }, "created", "Mapped"
+    );
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
 
@@ -101,6 +105,7 @@ describe("config profile persistence", () => {
       selectedId: "current",
       state: "idle" as const,
       setName: vi.fn(),
+      commitSavedName: vi.fn(),
       setSelectedId: vi.fn(),
       setState: vi.fn(),
       setError: vi.fn()
@@ -119,6 +124,9 @@ describe("config profile persistence", () => {
     });
 
     await actions.updateSelectedProfile("codex");
+    expect(accessors.commitSavedName).toHaveBeenCalledExactlyOnceWith(
+      { name: "1zzzcoding", selectedId: "current" }, "current", "1zzzcoding"
+    );
     const [url, request] = fetchMock.mock.calls[0] ?? [];
     const payload = JSON.parse(String(request?.body));
 
@@ -167,6 +175,7 @@ describe("config profile persistence", () => {
       selectedId: profileId,
       state: "idle" as const,
       setName: vi.fn(),
+      commitSavedName: vi.fn(),
       setSelectedId: vi.fn(),
       setState: vi.fn(),
       setError: vi.fn()

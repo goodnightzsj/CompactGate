@@ -165,8 +165,8 @@
 
 /* The expand/collapse spring animates this wrapper rather than the <tr> around
    it: a table row's specified height is only a minimum, so collapsing the row
-   never had any effect and the panel popped open instantly. Clipping is required
-   because .log-detail-panel's own margin does not shrink with the height. */
+   never had any effect and the panel popped open instantly. Keep the content
+   clipped while the wrapper collapses. */
 .log-detail-collapse {
   overflow: hidden;
 }
@@ -481,34 +481,108 @@
 .log-transport.http   { background: var(--jade-soft); color: var(--jade); }
 
 .log-detail-panel {
-  margin: 8px 12px 12px;
-  padding: 14px 16px;
-  background: var(--paper-warm);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 20px 28px;
+  margin: 0;
+  padding: 18px 22px;
+  background: var(--paper-warm);
+  text-align: left;
+  white-space: normal;
+}
+
+.log-detail-header,
+.log-detail-performance,
+.log-detail-error,
+.log-detail-diagnostics,
+.log-detail-section.is-capture {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.log-detail-header,
+.log-detail-title,
+.log-detail-request-id {
+  display: flex;
+  align-items: center;
   gap: 10px;
 }
 
-.log-detail-item {
-  display: grid;
-  gap: 2px;
-}
+.log-detail-header { align-items: flex-start; justify-content: space-between; }
+.log-detail-identity { min-width: 0; }
+.log-detail-title { flex-wrap: wrap; }
+.log-detail-title h3 { margin: 0; font: 600 0.88rem/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.log-detail-request-id { margin-top: 4px; color: var(--muted); font-size: 0.72rem; flex-wrap: wrap; }
+.log-detail-request-id > span:first-child { flex-shrink: 0; }
+.log-detail-request-id .log-copy-value { font-family: var(--font-mono); overflow-wrap: anywhere; }
 
-.log-detail-label {
-  font-size: 0.68rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.log-detail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--muted);
+  font: 600 0.72rem var(--font-ui);
+  cursor: pointer;
 }
 
-.log-detail-value {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--ink);
+.log-detail-close:hover { color: var(--ink); border-color: var(--hairline-strong); }
+.log-detail-close:focus-visible,
+.log-detail-diagnostics > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.log-detail-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brick) 25%, var(--hairline));
+  border-radius: var(--radius-sm);
+  background: var(--brick-soft);
+  color: var(--brick);
+  font-size: 0.76rem;
 }
+
+.log-detail-error p { margin: 3px 0 0; font-family: var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-detail-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.log-detail-metrics .log-detail-field { display: block; padding: 0; border: 0; }
+.log-detail-metrics .log-detail-field dd { margin-top: 4px; font-size: 1.06rem; font-weight: 600; }
+.log-detail-note { margin: 6px 0 0; color: var(--muted); font-size: 0.7rem; font-weight: 400; line-height: 1.5; }
+
+.log-detail-section { min-width: 0; }
+.log-detail-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hairline-strong);
+}
+
+.log-detail-section-head > div { min-width: 0; }
+.log-detail-section-head h3 { margin: 0; color: var(--ink); font: 600 0.8rem/1.5 var(--font-ui); overflow-wrap: anywhere; }
+.log-detail-section-head .log-detail-note { margin: 0; }
+.log-detail-kicker { color: var(--muted); font-size: 0.64rem; font-weight: 700; }
+.log-detail-total { margin-left: 8px; font-family: var(--font-mono); }
+.log-detail-fields { margin: 4px 0 0; }
+.log-detail-field { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--hairline); }
+.log-detail-field:last-child { border-bottom: 0; }
+.log-detail-field dt { color: var(--muted); font: 400 0.72rem/1.6 var(--font-ui); }
+.log-detail-field dd { min-width: 0; margin: 0; color: var(--ink); font-family: var(--font-mono); font-size: 0.74rem; line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
+.log-detail-model { color: var(--accent); font-weight: 600; }
+.log-detail-mismatch { display: inline-block; margin-left: 8px; color: var(--amber); font: 500 0.68rem/1.5 var(--font-ui); }
+.is-token-fields dd { text-align: right; font-variant-numeric: tabular-nums; }
+
+.log-detail-diagnostics { border-block: 1px solid var(--hairline); }
+.log-detail-diagnostics > summary { padding: 12px 0; color: var(--ink); cursor: pointer; font-size: 0.76rem; font-weight: 600; }
+.log-detail-diagnostics > summary span { margin-left: 12px; color: var(--muted); font-size: 0.7rem; font-weight: 400; }
+.log-detail-diagnostics .log-detail-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; margin: 0 0 12px; }
+
+.log-table .log-row[aria-expanded="true"] > td { background: var(--accent-soft); border-bottom-color: var(--hairline-strong); }
 
 /* Log model cell */
 .log-model-cell {
@@ -642,7 +716,39 @@
   color: var(--amber);
 }
 
-.log-summary-stack .log-error-hint,
+.log-table-full:not(.is-essential) .log-model-response {
+  display: none;
+}
+
+.log-token-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.log-token-head .token-total-pill {
+  flex-shrink: 0;
+  height: auto;
+  justify-content: flex-start;
+}
+
+.log-token-summary .log-cache-rate {
+  flex-shrink: 0;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--paper-warm);
+  color: var(--jade);
+  font-size: 0.62rem;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-token-summary .log-token-breakdown {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .log-mobile-summary .log-error-hint {
   color: var(--brick);
   font-size: 0.68rem;
@@ -823,62 +929,8 @@
   color: var(--jade);
 }
 
-.log-detail-value.is-small {
-  font-size: 0.72rem;
-}
-
-.log-detail-value.is-medium {
-  font-size: 0.74rem;
-}
-
-.log-detail-value.is-tiny {
-  font-size: 0.70rem;
-}
-
-/* Log table overrides: keep row cells dense while expanded details wrap long text. */
-.log-table .log-detail-row > td {
-  white-space: normal;
-}
-
-.log-table .log-detail-panel {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px 10px;
-  margin: 6px 8px 8px;
-  padding: 10px 12px;
-  overflow: hidden;
-}
-
-.log-table .log-detail-item {
-  min-width: 0;
-  gap: 1px;
-}
-
-.log-table .log-detail-value {
-  display: block;
-  min-width: 0;
-  font-size: 0.74rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.log-table .log-detail-value.is-small,
-.log-table .log-detail-value.is-medium,
-.log-table .log-detail-value.is-tiny {
-  font-size: 0.7rem;
-}
-
-.log-table .log-detail-value.is-emphasis {
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-weight: 800;
-}
-
-.log-table .log-detail-label {
-  font-size: 0.64rem;
-  line-height: 1.2;
-}
+/* Keep expanded fields wrapped without loosening the dense request rows. */
+.log-table .log-detail-row > td { white-space: normal; }
 
 .log-table .token-tooltip {
   display: inline;
@@ -946,14 +998,14 @@
    room — at the original 5% the duration text was clipped at every viewport. */
 .log-table-full .log-col-started { width: 11%; }
 .log-table-full .log-col-status { width: 5%; }
-.log-table-full .log-col-model-route { width: 14%; }
+.log-table-full .log-col-model-route { width: 16%; }
 .log-table-full .log-col-reasoning { width: 5%; }
 .log-table-full .log-col-response-model { width: 10%; }
-.log-table-full .log-col-host { width: 13%; }
-.log-table-full .log-col-key { width: 8%; }
-.log-table-full .log-col-endpoint { width: 8%; }
-.log-table-full .log-col-type { width: 7%; }
-.log-table-full .log-col-token { width: 7%; }
+.log-table-full .log-col-host { width: 10%; }
+.log-table-full .log-col-key { width: 6%; }
+.log-table-full .log-col-endpoint { width: 6%; }
+.log-table-full .log-col-type { width: 8%; }
+.log-table-full .log-col-token { width: 11%; }
 .log-table-full .log-col-first-token { width: 6%; }
 .log-table-full .log-col-duration { width: 6%; }
 
@@ -962,8 +1014,8 @@
 .log-table-full.is-essential .log-col-started { width: 16%; }
 .log-table-full.is-essential .log-col-status { width: 7%; }
 .log-table-full.is-essential .log-col-model-route { width: 25%; }
-.log-table-full.is-essential .log-col-host { width: 22%; }
-.log-table-full.is-essential .log-col-token { width: 10%; }
+.log-table-full.is-essential .log-col-host { width: 19%; }
+.log-table-full.is-essential .log-col-token { width: 13%; }
 .log-table-full.is-essential .log-col-first-token { width: 10%; }
 .log-table-full.is-essential .log-col-duration { width: 10%; }
 
@@ -990,101 +1042,6 @@
 
 .log-table-full .log-detail-row > td {
   overflow: visible;
-}
-
-.log-table-full .log-detail-panel {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.log-table-full .log-detail-section {
-  display: grid;
-  grid-column: span 4;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 76%, transparent), transparent),
-    color-mix(in srgb, var(--paper-warm) 78%, var(--surface));
-}
-
-.log-table-full .log-detail-section.is-primary,
-.log-table-full .log-detail-section.is-wide {
-  grid-column: span 6;
-}
-
-.log-table-full .log-detail-section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.log-table-full .log-detail-section-head > div {
-  min-width: 0;
-}
-
-.log-table-full .log-detail-section-head h3 {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  line-height: 1.3;
-}
-
-.log-table-full .log-detail-kicker {
-  color: var(--muted);
-  font-size: 0.64rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.log-table-full .log-detail-section-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 10px;
-  min-width: 0;
-}
-
-.log-table-full .log-detail-section-grid.is-token-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.log-table-full .log-detail-section .log-detail-item.is-wide,
-.log-table-full .log-detail-section .log-detail-item.is-full {
-  grid-column: 1 / -1;
-}
-
-.log-table-full .log-detail-section-head .token-total-pill,
-:root[data-theme] .log-table-full .log-detail-section-head .token-total-pill {
-  display: inline-flex;
-  align-items: center;
-  width: auto;
-  height: 22px;
-  min-width: max-content;
-  padding: 0 8px;
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 0.68rem;
-  font-weight: 800;
-  box-shadow: none;
-}
-
-.log-table-full .log-detail-item.is-full .log-detail-value {
-  max-inline-size: 100%;
-}
-
-.log-table-full .log-detail-section.is-capture {
-  grid-column: 1 / -1;
 }
 
 .log-capture-head {
@@ -1505,70 +1462,23 @@
 
 .logs-mobile-list .log-detail-panel {
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  margin: 0;
-  padding: 8px;
-  border: 0;
-  background: transparent;
+  gap: 18px;
+  padding: 14px 12px;
 }
 
-.logs-mobile-list .log-detail-section {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  padding: 11px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-
-.logs-mobile-list .log-detail-section-head {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--hairline);
-}
-
-.logs-mobile-list .log-detail-section-head h3 {
-  margin: 2px 0 0;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
-
-.logs-mobile-list .log-detail-kicker {
-  color: var(--muted);
-  font-size: 0.64rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.logs-mobile-list .log-detail-section-grid,
-.logs-mobile-list .log-detail-section-grid.is-token-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  min-width: 0;
-}
-
-.logs-mobile-list .log-detail-value {
-  overflow-wrap: anywhere;
-}
+.logs-mobile-list .log-detail-header { flex-wrap: wrap; gap: 8px; }
+.logs-mobile-list .log-detail-close,
+.logs-mobile-list .log-copy-button { min-height: 44px; }
+.logs-mobile-list .log-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.logs-mobile-list .log-detail-metrics .log-detail-field:last-child { grid-column: 1 / -1; }
+.logs-mobile-list .log-detail-field { grid-template-columns: 6rem minmax(0, 1fr); gap: 8px; }
+.logs-mobile-list .log-detail-metrics .log-detail-field { display: block; }
+.logs-mobile-list .log-detail-diagnostics .log-detail-fields { grid-template-columns: minmax(0, 1fr); }
+.logs-mobile-list .log-detail-diagnostics > summary span { display: block; margin: 4px 0 0; }
+.logs-mobile-list .log-detail-section-head { flex-wrap: wrap; }
 
 @media (max-width: 980px) {
-  .log-table-full .log-detail-panel {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .log-table-full .log-detail-section,
-  .log-table-full .log-detail-section.is-primary,
-  .log-table-full .log-detail-section.is-wide {
-    grid-column: 1 / -1;
-  }
+  .log-table-full .log-detail-panel { column-gap: 20px; padding: 16px; }
 }
 
 @media (max-width: 720px) {
@@ -1598,22 +1508,6 @@
     overflow-anchor: none;
     padding-right: 2px;
     overscroll-behavior: contain;
-  }
-
-  .log-table-full .log-detail-panel {
-    grid-template-columns: minmax(0, 1fr);
-    margin: 4px;
-    padding: 8px;
-  }
-
-  .log-table-full .log-detail-section-grid,
-  .log-table-full .log-detail-section-grid.is-token-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .log-table-full .log-detail-section-head {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .log-capture-statuses {

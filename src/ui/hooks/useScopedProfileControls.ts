@@ -2,7 +2,6 @@ import {
   type Dispatch,
   type SetStateAction,
   useEffect,
-  useRef,
   useState
 } from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
@@ -17,6 +16,7 @@ export type ScopedProfileAccessors = {
   selectedId: string;
   state: ProfileActionState;
   setName: (name: string) => void;
+  commitSavedName: (expected: Pick<ProfileNameSyncResult, "name" | "selectedId">, profileId: string, name: string) => void;
   setSelectedId: Dispatch<SetStateAction<string>>;
   setState: Dispatch<SetStateAction<ProfileActionState>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -62,11 +62,12 @@ export function useScopedProfileControls(config: PublicConfig | null) {
 }
 
 function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfileScope) {
-  const [name, setName] = useState("");
-  const [selectedId, setSelectedId] = useState("");
+  const [nameState, setNameState] = useState<ProfileNameSyncResult>({
+    name: "", selectedId: "", sourceProfileId: null, dirty: false
+  });
+  const { name, selectedId } = nameState;
   const [state, setState] = useState<ProfileActionState>("idle");
   const [error, setError] = useState<string | null>(null);
-  const syncRef = useRef({ sourceProfileId: null as string | null, dirty: false });
 
   useEffect(() => {
     if (!config) {
@@ -74,25 +75,17 @@ function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfile
     }
 
     const scopeState = profileScopeState(config, scope);
-    const next = nextProfileNameSyncState({
-      profiles: scopeState.profiles,
-      activeProfileId: scopeState.active_profile_id,
-      selectedId,
-      name,
-      sourceProfileId: syncRef.current.sourceProfileId,
-      dirty: syncRef.current.dirty
+    setNameState((current) => {
+      const next = nextProfileNameSyncState({
+        ...current,
+        profiles: scopeState.profiles,
+        activeProfileId: scopeState.active_profile_id
+      });
+      return next.name === current.name && next.selectedId === current.selectedId
+        && next.sourceProfileId === current.sourceProfileId && next.dirty === current.dirty
+        ? current : next;
     });
-    syncRef.current = {
-      sourceProfileId: next.sourceProfileId,
-      dirty: next.dirty
-    };
-    if (next.selectedId !== selectedId) {
-      setSelectedId(next.selectedId);
-    }
-    if (next.name !== name) {
-      setName(next.name);
-    }
-  }, [config, name, scope, selectedId]);
+  }, [config, nameState, scope]);
 
   return {
     error,
@@ -100,18 +93,34 @@ function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfile
     selectedId,
     state,
     setDraftName(nextName: string): void {
-      syncRef.current.dirty = true;
-      setName(nextName);
+      setNameState((current) => ({ ...current, name: nextName, dirty: true }));
     },
     accessors: {
       name,
       selectedId,
       state,
       setName(nextName: string): void {
-        syncRef.current = { sourceProfileId: null, dirty: false };
-        setName(nextName);
+        setNameState((current) => ({ ...current, name: nextName, sourceProfileId: null, dirty: false }));
       },
-      setSelectedId,
+      commitSavedName(expected, profileId, savedName): void {
+        setNameState((current) => {
+          // A response acknowledges its submitted draft, not a later selection
+          // or rename. New-profile saves rebind any newer draft to the saved ID.
+          if (current.selectedId !== expected.selectedId) return current;
+          const edited = current.name !== expected.name;
+          return {
+            selectedId: profileId,
+            sourceProfileId: profileId || null,
+            name: edited ? current.name : savedName,
+            dirty: edited
+          };
+        });
+      },
+      setSelectedId(value): void {
+        setNameState((current) => ({ ...current,
+          selectedId: typeof value === "function" ? value(current.selectedId) : value
+        }));
+      },
       setState,
       setError
     } satisfies ScopedProfileAccessors
@@ -119,6 +128,11 @@ function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfile
 }
 
 export function nextProfileNameSyncState(input: ProfileNameSyncInput): ProfileNameSyncResult {
+  // A first profile can arrive over SSE before its save response. Keep the
+  // unbound creation draft until that response or an explicit selection binds it.
+  if (input.dirty && !input.selectedId && input.sourceProfileId === null) {
+    return { selectedId: "", name: input.name, sourceProfileId: null, dirty: true };
+  }
   const selectedProfileExists = input.profiles.some((profile) => profile.id === input.selectedId);
   const selectedId = selectedProfileExists
     ? input.selectedId

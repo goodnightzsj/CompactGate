@@ -6,6 +6,7 @@ import { beginOAuthFlow, exchangeOAuthCode, requestOAuthJson } from "../src/serv
 import type { OAuthProviderId } from "../src/shared/oauth.js";
 import * as repository from "../src/server/config-file-repository.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
+import { injectFileCommitFault } from "./helpers/file-commit-fault.js";
 
 const stores: OAuthStore[] = [];
 afterEach(() => { stores.splice(0).forEach((store) => store.close()); vi.restoreAllMocks(); });
@@ -166,6 +167,92 @@ describe("OAuth connection lifecycle", () => {
     vi.spyOn(repository, "writeFileAtomically").mockRejectedValueOnce(new Error("synthetic disk failure"));
     expect((await f.store.poll(started.id)).status).toBe("error");
     expect(f.store.list()).toHaveLength(0);
+  });
+
+  it.each(["file-chmod", "file-sync"] as const)("does not publish new credentials after pre-commit %s failure", async (stage) => {
+    const f = await fixture();
+    const started = await f.start();
+    f.advance(5000);
+    f.fetcher.mockResolvedValueOnce(json(token()));
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    injectFileCommitFault(file, stage);
+
+    expect(await f.store.poll(started.id)).toMatchObject({ status: "error", account_id: null });
+    expect(f.store.list()).toEqual([]);
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["file-chmod", "file-sync"] as const)("preserves an existing connection after pre-commit disconnect %s failure", async (stage) => {
+    const f = await fixture();
+    const id = await f.connect();
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    const before = f.store.list();
+    const persisted = await readFile(file, "utf8");
+    const fault = injectFileCommitFault(file, stage);
+
+    await expect(f.store.disconnect(id)).rejects.toBe(fault);
+    expect(f.store.list()).toEqual(before);
+    expect(await readFile(file, "utf8")).toBe(persisted);
+    await expect(f.store.disconnect(id)).resolves.toBeUndefined();
+    expect(f.store.status(id)).toBe("disconnected");
+  });
+
+  it.each(["directory-open", "directory-sync", "directory-close"] as const)("retains the saved account ID when new authorization has a %s failure", async (stage) => {
+    const f = await fixture();
+    const started = await f.start();
+    f.advance(5000);
+    f.fetcher.mockResolvedValueOnce(json(token()));
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    injectFileCommitFault(file, stage);
+
+    const completed = await f.store.poll(started.id);
+
+    expect(completed).toMatchObject({ status: "error", error: expect.stringMatching(/committed.*durability.*Saved changes are active/) });
+    expect(completed.account_id).toEqual(expect.any(String));
+    expect(f.store.list()).toHaveLength(1);
+    expect(f.store.get(completed.account_id!)).toMatchObject({ status: "connected" });
+    const persisted = JSON.parse(await readFile(file, "utf8"));
+    expect(persisted.accounts).toMatchObject([{ id: completed.account_id, access_token: "synthetic-access", refresh_token: "synthetic-refresh" }]);
+    await expect(f.store.credentials(completed.account_id!)).resolves.toMatchObject({ access_token: "synthetic-access" });
+    await f.store.disconnect(completed.account_id!);
+    expect(f.store.status(completed.account_id!)).toBe("disconnected");
+  });
+
+  it.each(["directory-open", "directory-sync", "directory-close"] as const)("never overwrites rotated tokens after a refresh %s failure", async (stage) => {
+    const f = await fixture();
+    const id = await f.connect();
+    f.fetcher.mockResolvedValueOnce(json(token({ access_token: "synthetic-new-access", refresh_token: "synthetic-new-refresh" })));
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    const fault = injectFileCommitFault(file, stage);
+
+    await expect(f.store.refresh(id)).rejects.toMatchObject({ name: "FileCommitError", filePath: file, cause: fault });
+
+    const persisted = JSON.parse(await readFile(file, "utf8"));
+    expect(persisted.accounts).toMatchObject([{ id, access_token: "synthetic-new-access", refresh_token: "synthetic-new-refresh" }]);
+    await expect(f.store.credentials(id)).resolves.toMatchObject({ access_token: "synthetic-new-access", refresh_token: "synthetic-new-refresh" });
+    const reloaded = await OAuthStore.load(f.configPath, { fetcher: f.fetcher, now: f.now });
+    stores.push(reloaded);
+    await expect(reloaded.credentials(id)).resolves.toMatchObject({ refresh_token: "synthetic-new-refresh" });
+    f.fetcher.mockResolvedValueOnce(json(token({ access_token: "synthetic-next-access", refresh_token: "synthetic-next-refresh" })));
+    await expect(f.store.refresh(id)).resolves.toMatchObject({ refresh_token: "synthetic-next-refresh" });
+    expect(String(f.fetcher.mock.calls.at(-1)?.[1]?.body)).toContain("refresh_token=synthetic-new-refresh");
+  });
+
+  it.each(["directory-open", "directory-sync", "directory-close"] as const)("keeps disconnection committed after a %s failure", async (stage) => {
+    const f = await fixture();
+    const id = await f.connect();
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    const fault = injectFileCommitFault(file, stage);
+
+    await expect(f.store.disconnect(id)).rejects.toMatchObject({ name: "FileCommitError", filePath: file, cause: fault });
+
+    expect(f.store.status(id)).toBe("disconnected");
+    await expect(f.store.credentials(id)).rejects.toMatchObject({ status: 401 });
+    expect(JSON.parse(await readFile(file, "utf8")).accounts).toMatchObject([{ id, state: "disconnected", access_token: "", refresh_token: "" }]);
+    const reloaded = await OAuthStore.load(f.configPath, { fetcher: f.fetcher, now: f.now });
+    stores.push(reloaded);
+    expect(reloaded.status(id)).toBe("disconnected");
+    await expect(f.store.disconnect(id)).resolves.toBeUndefined();
   });
 
   it("deduplicates concurrent refreshes and keeps an omitted refresh token", async () => {

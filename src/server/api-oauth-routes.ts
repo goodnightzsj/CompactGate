@@ -36,7 +36,7 @@ export async function handleOAuthApi(
   if (req.method === "GET" && callback) {
     try {
       const result = await oauth.complete(callback[1], new URL(req.url!, `http://${req.headers.host}`).href);
-      if (result.status === "connected") notify();
+      if (result.account_id) notify();
       sendOAuthCallbackPage(res, result.status === "connected");
     } catch { sendOAuthCallbackPage(res, false); }
     return true;
@@ -55,7 +55,7 @@ export async function handleOAuthApi(
       const previous = oauth.session(session[1]).status;
       const result = session[2] === "poll" ? await oauth.poll(session[1])
         : await oauth.complete(session[1], requiredField(await readOAuthBody(req), "callback_url"));
-      if (result.status === "connected" && previous !== "connected") notify();
+      if (result.account_id && previous !== "connected" && previous !== "error") notify();
       sendJson(res, 200, result);
       return true;
     }

@@ -92,7 +92,7 @@ export function LogsPage({
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [showAllColumns, setShowAllColumns] = useState(false);
+  const [showAllColumns, setShowAllColumns] = useState(true);
   const keyboardHintId = useId();
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const narrowViewport = useNarrowViewport();
@@ -190,12 +190,13 @@ export function LogsPage({
             exit={{ opacity: 0 }}
             transition={effectiveRowTransition}
             data-log-id={entry.request_id}
+            id={`${detailId}-trigger`}
             className={`log-row is-clickable ${hasError ? "has-error" : ""}`}
             tabIndex={0}
             aria-expanded={expanded}
             aria-controls={detailId}
             aria-describedby={keyboardHintId}
-            aria-label={`${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
+            aria-label={`${hasError ? "请求异常，" : ""}${entry.status} ${routeLabel(entry.route)} ${entry.source_model ?? "未知模型"}，${expanded ? "收起详情" : "展开详情"}`}
             onClick={(event) => {
               if ((event.target as Element).closest("button, a, input, select, textarea, [role='button']")) return;
               toggleLog(logKey);
@@ -232,7 +233,10 @@ export function LogsPage({
                   exit={{ height: 0 }}
                   transition={effectiveDetailTransition}
                 >
-                  <LogDetailPanel entry={entry} />
+                  <LogDetailPanel entry={entry} onCollapse={() => {
+                    toggleLog(logKey);
+                    document.getElementById(`${detailId}-trigger`)?.focus({ preventScroll: true });
+                  }} />
                 </MotionDiv>
               </td>
             </MotionTr>
@@ -487,10 +491,10 @@ export function LogsPage({
                   <th scope="col">模型 / 通道</th>
                   {showAllColumns && <><th scope="col">思考</th><th scope="col">响应模型</th></>}
                   <th scope="col">上游 Host</th>
-                  {showAllColumns && <><th scope="col">上游凭据</th><th scope="col">端点</th><th scope="col">类型</th></>}
+                  {showAllColumns && <><th scope="col">上游凭据</th><th scope="col">端点</th><th scope="col">类型 / 吞吐</th></>}
                   <th scope="col">Token</th>
-                  <th scope="col">耗时 / 首响应</th>
-                  <th scope="col">平均吞吐</th>
+                  <th scope="col">{showAllColumns ? "首响应" : "耗时 / 首响应"}</th>
+                  <th scope="col">{showAllColumns ? "耗时" : "平均吞吐"}</th>
                 </tr>
               </thead>
               <tbody>

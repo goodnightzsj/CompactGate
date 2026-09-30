@@ -20,7 +20,8 @@ import {
 } from "../src/ui/logs/log-utils.js";
 import {
   cacheCreationInputTokens,
-  displayInputTokens
+  displayInputTokens,
+  formatCacheHitRate
 } from "../src/ui/logs/log-token-metrics.js";
 
 describe("UI log status helpers", () => {
@@ -282,6 +283,17 @@ describe("UI log status helpers", () => {
 });
 
 describe("UI cache token metrics", () => {
+  it("removes trailing zeros after rounding while preserving cache-rate precision", () => {
+    for (const [input_tokens, cached_input_tokens, expected] of [
+      [1000, 300, "30%"], [1001, 300, "30%"], [1003, 300, "29.9%"],
+      [100000, 99004, "99%"], [100000, 99900, "99.9%"],
+      [100000, 99990, "99.99%"], [100000, 99999, "100%"],
+      [1000, 0, "0%"], [1000, 1000, "100%"], [0, 0, "-"], [1000, null, "-"]
+    ] as const) {
+      expect(formatCacheHitRate(requestLog({ input_tokens, cached_input_tokens }))).toBe(expected);
+    }
+  });
+
   it("reports the cache write for both usage dialects", () => {
     // The additive flag decides whether the cache is *added* to the input total,
     // not whether the upstream told us how much it wrote. Gating the number on it

@@ -39,14 +39,15 @@ import { CodexVersionMonitor } from "./codex-version.js";
  */
 export function crossSiteApiRejection(req: IncomingMessage): string | null {
   const origin = req.headers.origin;
-  if (typeof origin === "string" && origin.length > 0 && origin !== "null") {
-    let originHost: string;
+  if (origin !== undefined) {
+    let originUrl: URL;
     try {
-      originHost = new URL(origin).hostname;
+      originUrl = new URL(origin);
     } catch {
       return "Admin API rejected a request with an unparsable Origin.";
     }
-    if (!isLoopbackHostname(originHost)) {
+    if (!/^https?:$/.test(originUrl.protocol) || originUrl.origin === "null" ||
+      originUrl.username || originUrl.password || !isLoopbackHostname(originUrl.hostname)) {
       return "Admin API is reachable from this machine only; cross-site Origin refused.";
     }
   }
@@ -100,6 +101,8 @@ export function createRequestLogger(configStore: ConfigStore): RequestLogger {
  */
 const CAPTURE_PURGE_SNAPSHOT_THRESHOLD = 50;
 
+export type CompactGateServer = http.Server & { shutdown(graceMs?: number): Promise<void> };
+
 export function createClientIdentityStore(configStore: ConfigStore): ClientIdentityStore {
   return new ClientIdentityStore({
     statePath: resolveClientIdentityStatePath(configStore.getConfigPath())
@@ -145,7 +148,7 @@ export async function createCompactGateServer(
   studioEvents = new StudioEventBroadcaster(),
   codexVersionMonitor = new CodexVersionMonitor(),
   clientIdentity = createClientIdentityStore(configStore)
-): Promise<http.Server> {
+): Promise<CompactGateServer> {
   await clientIdentity.load();
   const actualLogger = logger ?? createRequestLogger(configStore);
   const notifyLogPrune = () => studioEvents.broadcastSnapshot({
@@ -173,8 +176,9 @@ export async function createCompactGateServer(
   void clientIdentity.start().catch((error) => {
     console.error("Client identity startup refresh failed.", error);
   });
+  const requests = new Set<Promise<void>>();
   const server = http.createServer((req, res) => {
-    void routeRequest(
+    const request = routeRequest(
       req,
       res,
       configStore,
@@ -187,6 +191,12 @@ export async function createCompactGateServer(
       claudeKeyPool,
       clientIdentity
     );
+    requests.add(request);
+    void request.then(() => requests.delete(request), (error) => {
+      requests.delete(request);
+      console.error("CompactGate request finalization failed.", error);
+      res.destroy();
+    });
   });
   server.on("upgrade", (_req, socket) => {
     socket.end(
@@ -195,16 +205,47 @@ export async function createCompactGateServer(
       "Content-Length: 0\r\n\r\n"
     );
   });
-  server.once("close", () => {
+  let resourceClose: Promise<void> | undefined;
+  function closeResources(): Promise<void> {
+    resourceClose ??= drainResources();
+    return resourceClose;
+  }
+  async function drainResources(): Promise<void> {
     stopIdentityUpdates();
-    actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
-    actualLogger.close();
     studioEvents.close();
     codexVersionMonitor.close();
     clientIdentity.close();
     configStore.oauth.close();
+    // HTTP completion is earlier than proxy finally/capture persistence.
+    await Promise.all(requests);
+    await actualCaptureWriter.flush();
+    await Promise.all([clientIdentity.flush(), configStore.oauth.flush()]);
+    actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
+    actualLogger.close();
+  }
+  server.once("close", () => {
+    void closeResources().catch((error) => console.error("CompactGate resource shutdown failed.", error));
   });
-  return server;
+  let shutdown: Promise<void> | undefined;
+  return Object.assign(server, {
+    shutdown(graceMs = 3_000): Promise<void> {
+      shutdown ??= (async () => {
+        const closed = new Promise<void>((resolve, reject) => {
+          server.close((error) => error ? reject(error) : resolve());
+        });
+        studioEvents.close();
+        server.closeIdleConnections();
+        const deadline = setTimeout(() => server.closeAllConnections(), graceMs);
+        try {
+          await closed;
+          await closeResources();
+        } finally {
+          clearTimeout(deadline);
+        }
+      })();
+      return shutdown;
+    }
+  });
 }
 
 async function routeRequest(

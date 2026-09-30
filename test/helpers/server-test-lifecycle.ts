@@ -130,6 +130,7 @@ export function listen(server: Server): Promise<void> {
 }
 
 export function close(server: Server): Promise<void> {
+  if ("shutdown" in server && typeof server.shutdown === "function") return server.shutdown();
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });

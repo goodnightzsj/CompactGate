@@ -141,14 +141,14 @@ describe("OAuth configuration UI contracts", () => {
     expect(markup).toContain("管理授权连接");
     expect(markup).toContain(account.base_url);
     expect(markup).not.toContain("<select");
-    expect(markup).toContain(`aria-label="${scope === "codex" ? "Codex" : "Claude"} 主路由 认证来源"`);
+    expect(markup).toContain(`aria-label="${scope === "codex" ? "Codex" : "Claude"} 主路由 认证来源：OAuth · 连接待加载或缺失"`);
   });
 
   it("renders project OAuth controls and explains the separate connection and profile steps", () => {
     const markup = renderToStaticMarkup(<OAuthProfilesPanel config={null} onConfigChange={() => {}} onProfileLocate={() => {}} />);
     expect(markup).not.toMatch(/<(select|datalist)\b/);
     expect(markup).not.toContain('type="radio"');
-    expect(markup).toContain('aria-label="模型厂商"');
+    expect(markup).toContain('aria-label="模型厂商：OpenAI · ChatGPT Codex"');
     expect(markup).toContain('aria-haspopup="listbox"');
     expect(markup).toContain('class="toggle-group"');
     expect(markup).toContain("授权只新增连接");

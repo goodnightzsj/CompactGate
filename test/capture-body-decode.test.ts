@@ -1,4 +1,4 @@
-import { brotliCompressSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   captureRecordWithDecodedBodies,
@@ -13,6 +13,21 @@ import type { CaptureRecord } from "../src/shared/types.js";
  * the copy that survives. Readable text is derived on the way out instead.
  */
 describe("capture bodies are stored as bytes and decoded on read", () => {
+  it.each([
+    ["br", brotliCompressSync],
+    ["gzip", gzipSync],
+    ["deflate", deflateSync]
+  ] as const)("bounds expanded %s captures without changing the stored bytes", (encoding, compress) => {
+    const compressed = compress(Buffer.alloc(8 * 1024 * 1024 + 1, "a"));
+    const stored = serializeBody(compressed);
+    const decoded = decodeCaptureBody(stored, { "content-encoding": encoding });
+    expect(decoded.text).toMatch(/^\[compactgate\].*解压后.*上限/);
+    expect(decoded.text!.length).toBeLessThan(200);
+    const { text: _text, ...unchanged } = decoded;
+    expect(unchanged).toEqual(stored);
+    expect(stored.truncated).toBe(false);
+  });
+
   it("writes no text field to disk", () => {
     const body = serializeBody(Buffer.from('{"model":"gpt-5.5"}'));
 

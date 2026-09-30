@@ -34,13 +34,17 @@ describe("a Studio client that stops reading is dropped instead of buffered fore
     // bounded its buffer. Measured 41 MB held for one dead tab after 40 broadcasts.
     const res = responses[0];
     expect(res).toBeTruthy();
-    for (let round = 0; round < 80 && !res.writableEnded; round += 1) {
+    for (let round = 0; round < 80 && !res.destroyed; round += 1) {
       broadcaster.broadcastLog(bulkyLogEntry(round));
     }
 
-    expect(res.writableEnded).toBe(true);
-    expect(res.writableLength).toBeLessThan(64 * 1024 * 1024);
-    socket.destroy();
+    try {
+      expect(res.destroyed).toBe(true);
+      expect(res.socket?.destroyed).toBe(true);
+    } finally {
+      socket.destroy();
+      server.closeAllConnections();
+    }
   });
 });
 

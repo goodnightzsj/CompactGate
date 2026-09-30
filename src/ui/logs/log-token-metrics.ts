@@ -128,9 +128,5 @@ export function hasAdditiveCachedOutput(entry: RequestLogEntry): boolean {
 }
 
 function formatPercentRate(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-
-  return value >= 99 ? value.toFixed(2) : value.toFixed(1);
+  return String(Number(value.toFixed(value >= 99 ? 2 : 1)));
 }

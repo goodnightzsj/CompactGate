@@ -229,7 +229,7 @@ export function CustomSelect({
         type="button"
         disabled={disabled}
         aria-haspopup="listbox"
-        aria-label={label}
+        aria-label={`${label}：${selected.label}`}
         aria-expanded={open}
         aria-controls={listId}
         onClick={() => !disabled && setOpen((current) => !current)}

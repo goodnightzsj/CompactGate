@@ -37,6 +37,7 @@ export function createConfigProfilePersistenceActions({
     nameOverride?: string
   ): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
+    const submittedName = { name: accessors.name, selectedId: accessors.selectedId };
     const trimmedName = (nameOverride ?? accessors.name).trim();
     if (!trimmedName) {
       accessors.setState("error");
@@ -84,8 +85,7 @@ export function createConfigProfilePersistenceActions({
           1600
         );
       }
-      accessors.setSelectedId(savedProfile?.id ?? nextScope.active_profile_id ?? "");
-      accessors.setName(savedProfile?.name ?? trimmedName);
+      accessors.commitSavedName(submittedName, savedProfile?.id ?? nextScope.active_profile_id ?? "", savedProfile?.name ?? trimmedName);
       accessors.setState("saved");
       window.setTimeout(
         () => accessors.setState((current) => current === "saved" ? "idle" : current),
@@ -146,6 +146,7 @@ export function createConfigProfilePersistenceActions({
 
   async function updateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
     const accessors = scopedProfileAccessors(scope);
+    const submittedName = { name: accessors.name, selectedId: accessors.selectedId };
     const targetProfileId = profileId ?? accessors.selectedId;
     if (!targetProfileId) {
       accessors.setState("error");
@@ -189,8 +190,8 @@ export function createConfigProfilePersistenceActions({
           1600
         );
       }
-      accessors.setSelectedId(targetProfileId);
-      accessors.setName(nextScope.profiles.find((profile) => profile.id === targetProfileId)?.name ?? trimmedName);
+      accessors.commitSavedName(submittedName, targetProfileId,
+        nextScope.profiles.find((profile) => profile.id === targetProfileId)?.name ?? trimmedName);
       accessors.setState("updated");
       window.setTimeout(
         () => accessors.setState((current) => current === "updated" ? "idle" : current),

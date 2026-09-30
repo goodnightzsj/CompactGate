@@ -25,6 +25,42 @@ const WELFARE_CAPTURE_PATH = path.resolve(
 const welfareFixtureIt = existsSync(WELFARE_CAPTURE_PATH) ? it : it.skip;
 
 describe("provider state portability", () => {
+  it.each(["cross_domain", "error_400"] as const)("preserves caller-owned schemas and data during %s cleanup", (strategy) => {
+    const schema = {
+      type: "object",
+      properties: {
+        internal_id: { type: "string", enum: ["internal_value"] },
+        _passthrough: { type: "object", default: { internal_value: "keep" } }
+      },
+      required: ["internal_id", "_passthrough"],
+      additionalProperties: false
+    };
+    const body = {
+      tools: [{ type: "function", name: "lookup", parameters: schema }],
+      text: { format: { type: "json_schema", name: "result", schema } },
+      metadata: { internal_id: "caller-owned", _passthrough: "caller-owned" },
+      internal_trace: "provider-owned",
+      input: [{
+        type: "message", role: "user", _passthrough: "provider-owned",
+        content: [{ type: "input_text", text: "continue", internal_note: "provider-owned" }]
+      }]
+    };
+    const canonical = Buffer.from(JSON.stringify(body));
+    const result = compileProviderStateAttempt(canonical, {
+      strategy, priorStrategy: "cross_domain", errorCode: "invalid_encrypted_content"
+    });
+    const parsed = parseBody(result.body);
+    expect(parsed.tools).toEqual(body.tools);
+    expect(parsed.text).toEqual(body.text);
+    expect(parsed.metadata).toEqual(body.metadata);
+    expect(parsed).not.toHaveProperty("internal_trace");
+    expect(parsed.input).toEqual([{
+      type: "message", role: "user", content: [{ type: "input_text", text: "continue" }]
+    }]);
+    expect(result.metrics.privateMetadataFieldsRemoved).toBe(3);
+    expect(parseBody(canonical)).toEqual(body);
+  });
+
   it("recognizes the GPT reasoning transport envelope without claiming decryptability", () => {
     expect(validEncryptedContent()).toMatch(/^gAAAA/);
     expect(isValidGptReasoningEncryptedContent(validEncryptedContent())).toBe(true);

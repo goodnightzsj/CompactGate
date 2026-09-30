@@ -2,7 +2,7 @@ import { afterEach } from "vitest";
 import { cleanup, cleanupEnvKeys } from "./server-test-utils.js";
 
 afterEach(async () => {
-  await Promise.all(cleanup.splice(0).map((fn) => fn()));
+  for (const fn of cleanup.splice(0).reverse()) await fn();
   for (const key of cleanupEnvKeys) {
     delete process.env[key];
   }

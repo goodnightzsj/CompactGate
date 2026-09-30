@@ -147,6 +147,23 @@ describe("DebugCaptureWriter header redaction", () => {
 });
 
 describe("DebugCaptureWriter safe reads", () => {
+  it("can read a raw download without deriving display text", async () => {
+    const dir = await makeCaptureDir();
+    const writer = DebugCaptureWriter.fromConfig(dir);
+    const requestId = "00000000-0000-0000-0000-000000000010";
+    const record = captureRecord(requestId);
+    record.incoming_request.body = writer.serializeBody(Buffer.from("raw capture"));
+    const capturePath = await writer.write(record);
+    const raw = await writer.readCapture(capturePath!, requestId, false);
+    expect(raw.status).toBe("found");
+    if (raw.status !== "found") throw new Error("Synthetic capture is missing");
+    expect(raw.record).toEqual(record);
+    expect(raw.content.toString("utf8")).toBe(`${JSON.stringify(record, null, 2)}\n`);
+    await expect(writer.readCapture(capturePath!, requestId)).resolves.toMatchObject({
+      status: "found", record: { incoming_request: { body: { text: "raw capture" } } }
+    });
+  });
+
   it("reads only managed regular captures with a matching request ID", async () => {
     const dir = await makeCaptureDir();
     const writer = DebugCaptureWriter.fromConfig(dir);

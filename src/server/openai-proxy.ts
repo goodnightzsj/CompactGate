@@ -11,6 +11,7 @@ import {
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
 import { ConfigError, type ConfigStore } from "./config.js";
+import { FileCommitError } from "./config-file-repository.js";
 import { enabledApiKeyPool } from "./credentials.js";
 import type { OAuthProviderId } from "../shared/oauth.js";
 import { prepareOAuthRequest } from "./oauth-transport.js";
@@ -725,10 +726,18 @@ async function syncScheduledPrimaryProfile({
     return;
   }
 
-  await configStore.applyProfile("codex", selectedProfileId);
-  studioEvents.broadcastSnapshot(
-    createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
-  );
+  let committed = false;
+  try {
+    await configStore.applyProfile("codex", selectedProfileId);
+    committed = true;
+  } catch (error) {
+    committed = error instanceof FileCommitError && error.filePath === configStore.getConfigPath();
+    throw error;
+  } finally {
+    if (committed) studioEvents.broadcastSnapshot(
+      createStudioSnapshot(configStore, logger, codexVersionMonitor, clientIdentity)
+    );
+  }
 }
 
 async function proxyCompactRequest(

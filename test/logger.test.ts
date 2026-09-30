@@ -27,6 +27,25 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("does not checkpoint for deferred maintenance while below the storage cap", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-checkpoint-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(20, path.join(dir, "logs.sqlite"), { deferStoragePrune: true });
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      for (let index = 0; index < 3; index++) {
+        logger.add(logEntry(index));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(logger.page({ limit: 20, offset: 0 }).total).toBe(3);
+      expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
+      expect(prepare.mock.calls.filter(([sql]) => sql.includes("wal_checkpoint"))).toHaveLength(0);
+    } finally {
+      prepare.mockRestore();
+      logger.close();
+    }
+  });
+
   it("keeps analytics drilldown, SQL facets, pagination and live inserts in the same exact scope", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-drilldown-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

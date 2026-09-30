@@ -12,7 +12,7 @@ import {
 } from "../shared/oauth.js";
 import type { UpstreamConfig } from "../shared/types.js";
 import { ConfigError, isRecord } from "./config-internals.js";
-import { readConfigFile, writeFileAtomically } from "./config-file-repository.js";
+import { FileCommitError, readConfigFile, writeFileAtomically } from "./config-file-repository.js";
 import {
   assertTrustedApiUrl,
   beginOAuthFlow,
@@ -277,6 +277,10 @@ export class OAuthStore {
     this.sessions.clear();
   }
 
+  async flush(): Promise<void> {
+    await this.writeQueue;
+  }
+
   private async refreshAccount(account: StoredOAuthAccount, signal: AbortSignal): Promise<OAuthTokens> {
     try {
       const tokens = await refreshOAuthTokens(account.input, tokensOf(account), this.fetcher, signal, this.now());
@@ -318,15 +322,18 @@ export class OAuthStore {
       ...tokens, id: randomUUID(), input: session.input, state: "active",
       created_at: timestamp, updated_at: timestamp, error: null
     };
-    await this.mutate((current) => {
-      this.assertPending(session);
-      // From this atomic commit point, cancellation becomes disconnection.
-      session.status = "saving";
-      const next = new Map(current);
-      next.set(account.id, account);
-      return next;
-    });
-    session.accountId = account.id;
+    try {
+      await this.mutate((current) => {
+        this.assertPending(session);
+        // From this atomic commit point, cancellation becomes disconnection.
+        session.status = "saving";
+        const next = new Map(current);
+        next.set(account.id, account);
+        return next;
+      });
+    } finally {
+      if (this.accounts.get(account.id) === account) session.accountId = account.id;
+    }
     this.finish(session, "connected");
   }
 
@@ -336,7 +343,12 @@ export class OAuthStore {
       const next = build(this.accounts);
       if (next === this.accounts) return;
       await mkdir(path.dirname(this.filePath), { recursive: true });
-      await writeFileAtomically(this.filePath, `${JSON.stringify({ version: 1, accounts: [...next.values()] }, null, 2)}\n`);
+      try {
+        await writeFileAtomically(this.filePath, `${JSON.stringify({ version: 1, accounts: [...next.values()] }, null, 2)}\n`);
+      } catch (error) {
+        if (error instanceof FileCommitError && error.filePath === this.filePath) this.accounts = next;
+        throw error;
+      }
       this.accounts = next;
     });
     this.writeQueue = operation.then(() => undefined, () => undefined);

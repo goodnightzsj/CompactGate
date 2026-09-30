@@ -115,7 +115,7 @@ export class DebugCaptureWriter {
     return serializeBody(buffer, this.maxBodyBytes);
   }
 
-  async readCapture(capturePath: string, requestId: string): Promise<CaptureReadResult> {
+  async readCapture(capturePath: string, requestId: string, decodeBodies = true): Promise<CaptureReadResult> {
     if (!path.isAbsolute(capturePath)) {
       return { status: "unavailable" };
     }
@@ -143,7 +143,9 @@ export class DebugCaptureWriter {
           status: "found",
           // Shape is trusted: this process wrote the file. The real gates are the
           // managed-filename pattern, O_NOFOLLOW, isFile(), and the request_id match.
-          record: captureRecordWithDecodedBodies(parsed as unknown as CaptureRecord),
+          record: decodeBodies
+            ? captureRecordWithDecodedBodies(parsed as unknown as CaptureRecord)
+            : parsed as unknown as CaptureRecord,
           content
         };
       } finally {
@@ -196,6 +198,15 @@ export class DebugCaptureWriter {
     // this process did not fill (captures left by an earlier run, a second
     // instance, files dropped in by hand) stay unbounded forever.
     return this.requestPrune(captureDir, this.maxDirBytes, { trustEstimate: false });
+  }
+
+  /** Called after request writers drain, before their SQLite callback owner closes. */
+  async flush(): Promise<void> {
+    for (;;) {
+      const pending = [...this.pruneStates.values()].flatMap((state) => state.promise ? [state.promise] : []);
+      if (pending.length === 0) return;
+      await Promise.all(pending);
+    }
   }
 
   /**

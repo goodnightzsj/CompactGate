@@ -6,9 +6,8 @@ import tls from "node:tls";
 import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
 /**
- * Keyed rather than single-slot: alternating between profiles with different
- * proxy_url values rebuilt the agent on every request, discarding its whole
- * connection pool each time and defeating the point of having one.
+ * Reuse agent instances across profiles without tying active request lifetimes
+ * to cache residency. Connections are not pooled (keepAlive is disabled).
  */
 const httpsProxyAgents = new Map<string, HttpsAgent>();
 const MAX_CACHED_PROXY_AGENTS = 8;
@@ -44,12 +43,11 @@ export function resolveUpstreamAgent(
     return cached;
   }
   const agent = new HttpConnectHttpsAgent(proxy);
-  // Bounded so a config that cycles through many proxies cannot grow the map for
-  // the process's lifetime; the evicted agent's sockets close with it.
+  // Eviction only drops the cache reference, not sockets owned by live requests.
+  // With keepAlive disabled, Node closes those sockets when their requests end.
   if (httpsProxyAgents.size >= MAX_CACHED_PROXY_AGENTS) {
     const oldest = httpsProxyAgents.keys().next().value;
     if (oldest !== undefined) {
-      httpsProxyAgents.get(oldest)?.destroy();
       httpsProxyAgents.delete(oldest);
     }
   }

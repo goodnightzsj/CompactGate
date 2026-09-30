@@ -3,8 +3,9 @@ import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import { profileScopeState } from "./profile-utils.js";
 
 // Stable identity: an inline arrow would re-attach (and re-open) on every render.
-function openAsModal(node: HTMLDialogElement | null): void {
+function openAsModal(node: HTMLDialogElement | null) {
   node?.showModal();
+  return () => node?.close();
 }
 
 export function ConfigSaveAsNewProfileDialog({
@@ -113,7 +114,7 @@ export function ConfigSaveAsNewProfileDialog({
         />
         {nameTaken && <small className="confirm-field-error">{scopeLabel} 已有同名档案，请换个名字。</small>}
       </div>
-      {writeError && <p className="error-note">{writeError}</p>}
+      <div role="alert">{writeError && <p className="error-note">{writeError}</p>}</div>
       <div className="confirm-actions">
         <button className="ghost-button" type="button" disabled={submitting} onClick={onCancel}>
           取消

@@ -1,9 +1,5 @@
+import { useCallback } from "react";
 import type { PublicConfigProfile } from "./types.js";
-
-// Stable identity: an inline arrow would re-attach (and re-open) on every render.
-function openAsModal(node: HTMLDialogElement | null): void {
-  node?.showModal();
-}
 
 export function ConfirmProfileDeleteDialog({
   profile,
@@ -23,6 +19,19 @@ export function ConfirmProfileDeleteDialog({
   onCancel: () => void;
   onConfirm: () => void | Promise<void>;
 }) {
+  const openAsModal = useCallback((node: HTMLDialogElement | null) => {
+    const trigger = document.activeElement;
+    node?.showModal();
+    return () => {
+      node?.close();
+      // Successful deletion removes the trigger before this ref is cleaned up.
+      // The scope's name field remains available even after its last profile.
+      if (trigger && !trigger.isConnected) {
+        document.getElementById(`${profile.scope}-profile-name`)?.focus({ preventScroll: true });
+      }
+    };
+  }, [profile.scope]);
+
   return (
     <dialog
       ref={openAsModal}
@@ -45,7 +54,7 @@ export function ConfirmProfileDeleteDialog({
           这个操作只会删除 CompactGate 内保存的档案，不会删除当前运行时配置，也不会改动全局 Claude 或 Codex 配置文件。
         </p>
       </div>
-      {error && <p className="error-note">{error}</p>}
+      <div role="alert">{error && <p className="error-note">{error}</p>}</div>
       <div className="confirm-actions">
         <button className="ghost-button" type="button" disabled={isDeleting} onClick={onCancel}>
           取消

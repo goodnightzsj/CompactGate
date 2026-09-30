@@ -370,7 +370,7 @@ describe("LogsPage loaded rows", () => {
   it.each([false, true])("mounts only the visible log tree when narrow=%s", (narrow) => {
     vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
     const markup = renderLogsPage([requestLog("viewport-row")]);
-    expect(markup.includes('class="log-table log-table-full is-essential"')).toBe(!narrow);
+    expect(markup.includes('class="log-table log-table-full "')).toBe(!narrow);
     expect(markup.includes('class="logs-mobile-list"')).toBe(narrow);
     expect(markup.match(/data-log-id="viewport-row"/g)).toHaveLength(1);
   });
@@ -379,7 +379,7 @@ describe("LogsPage loaded rows", () => {
     const markup = renderLogsPage([]);
 
     expect(markup).toContain("暂无请求记录");
-    expect(markup).toContain('class="log-table log-table-full is-essential" hidden=""');
+    expect(markup).toContain('class="log-table log-table-full " hidden=""');
   });
 
   it("renders every loaded row instead of hiding rows after the first 100", () => {

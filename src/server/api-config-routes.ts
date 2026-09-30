@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ConfigProfileScope } from "../shared/types.js";
+import type { CompactGateConfig, ConfigProfileScope } from "../shared/types.js";
 import { ConfigError, type ConfigStore } from "./config.js";
+import { FileCommitError } from "./config-file-repository.js";
 import {
   isRecord,
   readJsonBody,
@@ -26,9 +27,36 @@ export async function handleConfigApi(
   primaryFailover: PrimaryFailoverState,
   clientIdentity: ClientIdentityStore
 ): Promise<boolean> {
-  if (await handleOAuthApi(req, res, url, configStore, () =>
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity)
-  )) return true;
+  try {
+    if (await handleOAuthApi(req, res, url, configStore, () =>
+      broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity)
+    )) return true;
+  } catch (error) {
+    if (error instanceof FileCommitError) {
+      broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    }
+    throw error;
+  }
+
+  async function commit(
+    write: () => Promise<CompactGateConfig>,
+    syncLogging = false,
+    afterCommit?: (config: CompactGateConfig) => void
+  ): Promise<void> {
+    let next: CompactGateConfig;
+    let commitError: FileCommitError | undefined;
+    try {
+      next = await write();
+    } catch (error) {
+      if (!(error instanceof FileCommitError) || error.filePath !== configStore.getConfigPath()) throw error;
+      next = configStore.get();
+      commitError = error;
+    }
+    // Post-rename failure must not leave runtime consumers on the old config.
+    afterCommit?.(next);
+    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity, syncLogging);
+    if (commitError) throw commitError;
+  }
 
   if (req.method === "GET" && url.pathname === "/api/config") {
     sendJson(res, 200, configStore.toPublicConfig());
@@ -63,8 +91,7 @@ export async function handleConfigApi(
 
   if (req.method === "POST" && url.pathname === "/api/config/backups/restore") {
     const body = requireBackupConfirmation(await readJsonBody(req), "restore");
-    await configStore.restoreBackup(body.backup_id);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity, true);
+    await commit(() => configStore.restoreBackup(body.backup_id), true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -78,16 +105,14 @@ export async function handleConfigApi(
 
   if (req.method === "POST" && url.pathname === "/api/config/import") {
     const importedConfig = await readJsonBody(req);
-    await configStore.importConfig(importedConfig);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity, true);
+    await commit(() => configStore.importConfig(importedConfig), true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
 
   if (req.method === "PATCH" && url.pathname === "/api/config") {
     const patch = await readJsonBody(req);
-    await configStore.patch(patch);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity, true);
+    await commit(() => configStore.patch(patch), true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -98,15 +123,15 @@ export async function handleConfigApi(
     if (typeof record.name !== "string") {
       throw new ConfigError("config profile save requires a name string.");
     }
+    const name = record.name;
 
     const profilePatch = Object.hasOwn(record, "config") ? record.config : {};
-    await configStore.saveProfile(
+    await commit(() => configStore.saveProfile(
       readProfileScope(record, url),
-      record.name,
+      name,
       profilePatch,
       record.revision
-    );
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    ));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -117,14 +142,13 @@ export async function handleConfigApi(
       "config profile update requires a profile id."
     );
     const profilePatch = Object.hasOwn(body, "config") ? body.config : undefined;
-    await configStore.updateProfile(
+    await commit(() => configStore.updateProfile(
       readProfileScope(body, url),
       readProfileId(body, "update"),
       typeof body.name === "string" ? body.name : undefined,
       profilePatch,
       body.revision
-    );
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    ));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -139,8 +163,7 @@ export async function handleConfigApi(
       throw new ConfigError("config profile reorder requires a profile id list.");
     }
 
-    await configStore.reorderProfiles(readProfileScope(body, url), profileIds);
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    await commit(() => configStore.reorderProfiles(readProfileScope(body, url), profileIds));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -150,13 +173,12 @@ export async function handleConfigApi(
       await readJsonBody(req),
       "config profile duplicate requires a profile id."
     );
-    await configStore.duplicateProfile(
+    await commit(() => configStore.duplicateProfile(
       readProfileScope(body, url),
       readProfileId(body, "duplicate"),
       typeof body.name === "string" ? body.name : undefined,
       readOptionalProfileScope(body.target_scope)
-    );
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    ));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -166,8 +188,7 @@ export async function handleConfigApi(
       await readJsonBody(req),
       "config profile delete requires a profile id."
     );
-    await configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete"));
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity);
+    await commit(() => configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete")));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -179,11 +200,9 @@ export async function handleConfigApi(
     );
     const scope = readProfileScope(body, url);
     const profileId = readProfileId(body, "apply");
-    const applied = await configStore.applyProfile(scope, profileId);
-    if (scope === "codex") {
-      primaryFailover.forceNextProfileSelection(applied, profileId);
-    }
-    broadcastConfigSnapshot(configStore, logger, captureWriter, studioEvents, codexVersionMonitor, clientIdentity, true);
+    await commit(() => configStore.applyProfile(scope, profileId), true, (applied) => {
+      if (scope === "codex") primaryFailover.forceNextProfileSelection(applied, profileId);
+    });
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }

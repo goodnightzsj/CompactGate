@@ -6,6 +6,8 @@ import type {
   CaptureSerializedBody
 } from "../shared/types.js";
 
+const MAX_DECODED_CAPTURE_BYTES = 8 * 1024 * 1024;
+
 /**
  * Captures store bodies as base64 only. Readable text is derived here rather
  * than on disk, because a compressed body's UTF-8 decode is lossy — and the
@@ -51,7 +53,10 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
       if (out.byteLength > 0) {
         return out.toString("utf8");
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ERR_BUFFER_TOO_LARGE") {
+        return `[compactgate] ${encoding} 正文解压后超过 ${MAX_DECODED_CAPTURE_BYTES} 字节上限；原始字节仍可下载。`;
+      }
       // Fall through to the next strategy.
     }
   }
@@ -74,22 +79,29 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
 function decompressors(encoding: string): Array<(input: Buffer) => Buffer> {
   if (encoding.includes("br")) {
     return [
-      (input) => zlib.brotliDecompressSync(input),
+      (input) => zlib.brotliDecompressSync(input, { maxOutputLength: MAX_DECODED_CAPTURE_BYTES }),
       (input) => zlib.brotliDecompressSync(input, {
+        maxOutputLength: MAX_DECODED_CAPTURE_BYTES,
         finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH
       })
     ];
   }
   if (encoding.includes("gzip")) {
     return [
-      (input) => zlib.gunzipSync(input),
-      (input) => zlib.gunzipSync(input, { finishFlush: zlib.constants.Z_SYNC_FLUSH })
+      (input) => zlib.gunzipSync(input, { maxOutputLength: MAX_DECODED_CAPTURE_BYTES }),
+      (input) => zlib.gunzipSync(input, {
+        maxOutputLength: MAX_DECODED_CAPTURE_BYTES,
+        finishFlush: zlib.constants.Z_SYNC_FLUSH
+      })
     ];
   }
   if (encoding.includes("deflate")) {
     return [
-      (input) => zlib.inflateSync(input),
-      (input) => zlib.inflateSync(input, { finishFlush: zlib.constants.Z_SYNC_FLUSH })
+      (input) => zlib.inflateSync(input, { maxOutputLength: MAX_DECODED_CAPTURE_BYTES }),
+      (input) => zlib.inflateSync(input, {
+        maxOutputLength: MAX_DECODED_CAPTURE_BYTES,
+        finishFlush: zlib.constants.Z_SYNC_FLUSH
+      })
     ];
   }
   return [];

@@ -3,8 +3,9 @@ import type { ConfigProfileScope } from "../../shared/types.js";
 import type { PublicConfigProfile } from "./types.js";
 
 // Stable identity: an inline arrow would re-attach (and re-open) on every render.
-function openAsModal(node: HTMLDialogElement | null): void {
+function openAsModal(node: HTMLDialogElement | null) {
   node?.showModal();
+  return () => node?.close();
 }
 
 export function ConfirmProfileOverwriteDialog({

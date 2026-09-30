@@ -61,35 +61,32 @@ server.listen(port, host, () => {
  * closes SQLite ran on shutdown paths that never happened, leaving the -wal file
  * for the next boot to recover.
  */
+let shuttingDown = false;
 function shutdown(signal: NodeJS.Signals): void {
-  console.log(`Received ${signal}; shutting down.`);
-
-  // A second signal means the graceful path is stuck (a synchronous VACUUM on a
-  // large database cannot be interrupted) — honour the operator instead of hanging.
-  process.once(signal, () => {
+  // A second signal skips the remaining asynchronous drain. Like the deadline,
+  // it can only run once any synchronous database work returns to the event loop.
+  if (shuttingDown) {
     console.error(`Received ${signal} again during shutdown; exiting immediately.`);
     process.exit(1);
-  });
+  }
+  shuttingDown = true;
+  console.log(`Received ${signal}; shutting down.`);
 
-  server.close((error) => {
-    if (error) {
-      console.error("CompactGate failed to shut down cleanly.", error);
-      process.exit(1);
-    }
+  const deadline = setTimeout(() => {
+    console.error("CompactGate shutdown timed out before persistence drained.");
+    process.exit(1);
+  }, 10_000);
+  void server.shutdown(SHUTDOWN_GRACE_MS).then(() => {
+    clearTimeout(deadline);
     process.exit(0);
+  }, (error) => {
+    console.error("CompactGate failed to shut down cleanly.", error);
+    process.exit(1);
   });
-
-  // Studio holds a long-lived SSE stream on /api/events that never ends on its
-  // own, so `close` would wait forever and never reach the callback above — no
-  // WAL checkpoint, and launchd would report a signal death instead of a clean
-  // stop. Drop idle keep-alives at once, then force whatever is left after a
-  // short grace period so an in-flight proxied request can still finish.
-  server.closeIdleConnections();
-  setTimeout(() => server.closeAllConnections(), SHUTDOWN_GRACE_MS).unref();
 }
 
-process.once("SIGTERM", () => shutdown("SIGTERM"));
-process.once("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 function describeListener(port: number): string | null {  const result = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], {
     encoding: "utf8"
