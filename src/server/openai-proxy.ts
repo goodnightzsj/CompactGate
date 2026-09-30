@@ -10,7 +10,7 @@ import {
   CompactionBridgeStore,
   UnresolvedCompactionStateError
 } from "./compaction-bridge.js";
-import { ConfigError, type ConfigStore } from "./config.js";
+import { ConfigError, ConfigRevisionError, type ConfigStore } from "./config.js";
 import { FileCommitError } from "./config-file-repository.js";
 import { enabledApiKeyPool } from "./credentials.js";
 import type { OAuthProviderId } from "../shared/oauth.js";
@@ -219,12 +219,18 @@ async function proxyPrimaryRequest(
   };
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
-  const configRevision = configStore.revision;
+  let configRevision = configStore.revision;
   let providerStatePortability: ProviderStatePortabilityLog | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
   try {
     transaction.rawBody = await readRawBody(req);
+    // A slow body must not reconcile shared health back to an obsolete config.
+    // Explicit profiles keep their isolated snapshot and never mutate that state.
+    if (!requestProfile) {
+      config = configStore.get();
+      configRevision = configStore.revision;
+    }
     transaction.requestMetadata = extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     classification = classifyOpenAiRequest(url.pathname, transaction.rawBody, req.headers);
@@ -706,10 +712,9 @@ async function syncScheduledPrimaryProfile({
     return;
   }
 
-  // Read the live config rather than this request's snapshot: the snapshot was
-  // taken before the body was read, so comparing against its
-  // `active_profile_id` both re-applied switches that had already landed and
-  // missed ones it had not seen.
+  // Other writes may have landed while this request prepared its upstream.
+  // This live check avoids unnecessary work; the queued revision check below
+  // is authoritative for writes that have started but not committed yet.
   const current = configStore.get();
   if (
     !current.primary_failover.auto_schedule ||
@@ -728,9 +733,12 @@ async function syncScheduledPrimaryProfile({
 
   let committed = false;
   try {
-    await configStore.applyProfile("codex", selectedProfileId);
+    await configStore.applyProfile("codex", selectedProfileId, configRevision);
     committed = true;
   } catch (error) {
+    // The chosen upstream remains valid for this request. A newer global
+    // choice only makes its automatic synchronization obsolete.
+    if (error instanceof ConfigRevisionError) return;
     committed = error instanceof FileCommitError && error.filePath === configStore.getConfigPath();
     throw error;
   } finally {
@@ -764,7 +772,7 @@ async function proxyCompactRequest(
   }
 ): Promise<void> {
   const route: RouteKind = "compact";
-  const configRevision = configStore.revision;
+  let configRevision = configStore.revision;
   let upstream = new URL(config.compact.base_url);
   let attemptedUpstream = false;
   let primarySelection: PrimaryRouteSelection | null = null;
@@ -772,6 +780,11 @@ async function proxyCompactRequest(
 
   try {
     transaction.rawBody = prepared?.rawBody ?? await readRawBody(req);
+    // Covers both direct /compact requests and primary's local-compact handoff.
+    if (!requestProfile) {
+      config = configStore.get();
+      configRevision = configStore.revision;
+    }
     transaction.requestMetadata = prepared?.requestMetadata ?? extractRequestMetadata(url.pathname, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     const selectedPrimary = !requestProfile && config.compact.upstream_mode === "primary"

@@ -50,6 +50,13 @@ export { ConfigError } from "./config-internals.js";
 export { DEFAULT_CONFIG } from "./config-defaults.js";
 export { parseListenAddress } from "./config-runtime.js";
 
+export class ConfigRevisionError extends ConfigError {
+  constructor() {
+    // Keep the ConfigError name, status and message used by existing clients.
+    super("Config patch was built from a superseded revision. Reload the config and reapply the change.", 409);
+  }
+}
+
 export class ConfigStore {
   private current: CompactGateConfig;
 
@@ -203,8 +210,8 @@ export class ConfigStore {
     return this.mutate(() => reorderConfigProfiles(this.current, scope, orderedProfileIds));
   }
 
-  async applyProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {
-    return this.mutate(() => applyConfigProfile(this.current, scope, profileId));
+  async applyProfile(scope: ConfigProfileScope, profileId: string, revision?: string): Promise<CompactGateConfig> {
+    return this.mutate(() => applyConfigProfile(this.current, scope, profileId), revision);
   }
 
   async listBackups(): Promise<ConfigBackupMetadata[]> {
@@ -259,10 +266,7 @@ export class ConfigStore {
       // lost a race and has an override path ("save my draft anyway"). The
       // message text is load-bearing for older clients that detect the conflict
       // by matching it, so it must not change.
-      throw new ConfigError(
-        "Config patch was built from a superseded revision. Reload the config and reapply the change.",
-        409
-      );
+      throw new ConfigRevisionError();
     }
   }
 

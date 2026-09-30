@@ -91,9 +91,7 @@ export async function proxyClaudeRequest(
   if (clientIdentity && isNativeClaudeUserAgent(inboundUserAgent)) {
     clientIdentity.observeCliUserAgent("claude", inboundUserAgent);
   }
-  const baseConfig = configStore.get();
-  const configRevision = configStore.revision;
-  let config = baseConfig;
+  let config = configStore.get();
   const route: RouteKind = "claude";
   const requestId = randomUUID();
   const strippedUpstreamPath = url.pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
@@ -111,6 +109,10 @@ export async function proxyClaudeRequest(
     // Above `readRawBody`'s 10 MiB default because long-context routing keys off the
     // body size: a body large enough to route must still be readable.
     transaction.rawBody = await readRawBody(req, MAX_CLAUDE_LONG_CONTEXT_BYTES);
+    // Select and reserve from one current generation, never the pre-body
+    // snapshot that may now contain replaced credentials.
+    const baseConfig = configStore.get();
+    const configRevision = configStore.revision;
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
