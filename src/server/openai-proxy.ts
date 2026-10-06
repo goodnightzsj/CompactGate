@@ -522,6 +522,7 @@ async function proxyPrimaryRequest(
       primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
+        streamOutcome: transaction.streamOutcome,
         responseBody: transaction.responseBody,
         responseHeaders: transaction.responseHeaders,
         firstTokenMs: transaction.firstTokenMs,
@@ -983,6 +984,7 @@ async function proxyCompactRequest(
       primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
         status: transaction.status,
         errorSummary: transaction.errorSummary,
+        streamOutcome: transaction.streamOutcome,
         responseBody: transaction.responseBody,
         responseHeaders: transaction.responseHeaders,
         firstTokenMs: transaction.firstTokenMs,

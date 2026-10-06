@@ -1,5 +1,5 @@
 import type { IncomingHttpHeaders } from "node:http";
-import type { CompactGateConfig } from "../shared/types.js";
+import type { CompactGateConfig, StreamOutcome } from "../shared/types.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
 
 export type PrimaryResultCategory =
@@ -40,6 +40,7 @@ export interface PrimaryRouteSelection {
 export interface PrimaryRouteResult {
   status: number;
   errorSummary: string | null;
+  streamOutcome?: StreamOutcome | null;
   responseHeaders?: IncomingHttpHeaders;
   responseBody?: Buffer;
   firstTokenMs?: number | null;

@@ -94,9 +94,10 @@ export interface UpstreamFailureDetails {
 export class UpstreamRequestError extends Error {
   constructor(
     message: string,
-    readonly details: UpstreamFailureDetails
+    readonly details: UpstreamFailureDetails,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "UpstreamRequestError";
   }
 }
@@ -207,23 +208,24 @@ export function sendBufferedUpstreamRequest(
     }
 
     function handleClientError(error: Error) {
-      rejectOnce(new UpstreamRequestError(error.message, responseDetails("client_cancel", "none")));
+      rejectOnce(new UpstreamRequestError(error.message, responseDetails("client_cancel", "none"), { cause: error }));
     }
 
-    function handleTimeout() {
+    function handleTimeout(cause?: Error) {
       const error = new UpstreamRequestError(
         options.timeoutMessage,
-        responseDetails("timeout", activeResponse ? "before_terminal" : "before_headers")
+        responseDetails("timeout", activeResponse ? "before_terminal" : "before_headers"),
+        cause ? { cause } : undefined
       );
       rejectOnce(error);
     }
 
     function handleUpstreamRequestError(error: Error) {
       if (error.name === "TimeoutError") {
-        handleTimeout();
+        handleTimeout(error);
         return;
       }
-      rejectOnce(new UpstreamRequestError(error.message, responseDetails("upstream_request_error", "none")));
+      rejectOnce(new UpstreamRequestError(error.message, responseDetails("upstream_request_error", "none"), { cause: error }));
     }
 
     function handleUpstreamResponseAborted() {
@@ -242,7 +244,8 @@ export function sendBufferedUpstreamRequest(
       }
       rejectOnce(new UpstreamRequestError(
         error.message,
-        responseDetails("upstream_stream_incomplete", "before_terminal")
+        responseDetails("upstream_stream_incomplete", "before_terminal"),
+        { cause: error }
       ));
     }
 
@@ -292,7 +295,8 @@ export function sendBufferedUpstreamRequest(
           response.resume();
           rejectOnce(new UpstreamRequestError(
             error instanceof Error ? error.message : "Upstream response transform failed.",
-            responseDetails("upstream_request_error", "before_headers")
+            responseDetails("upstream_request_error", "before_headers"),
+            { cause: error }
           ));
           return;
         }
@@ -315,7 +319,8 @@ export function sendBufferedUpstreamRequest(
           responseTransformCompletion = finished(responseTransform.stream, { cleanup: true }).catch((error: unknown) => {
             rejectOnce(new UpstreamRequestError(
               error instanceof Error ? error.message : "Upstream response transform failed.",
-              responseDetails("upstream_stream_incomplete", "before_terminal")
+              responseDetails("upstream_stream_incomplete", "before_terminal"),
+              { cause: error }
             ));
           });
         }

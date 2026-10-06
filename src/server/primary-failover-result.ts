@@ -12,7 +12,12 @@ const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
 export function classifyPrimaryRouteResult(result: PrimaryRouteResult): PrimaryResultCategory {
   const summary = result.errorSummary?.toLowerCase() ?? "";
 
-  if (isClientCancelSummary(summary)) {
+  // Explicit transport ownership wins over text from an upstream error body.
+  if (
+    result.streamOutcome === "client_cancel" ||
+    result.streamOutcome === "client_cancel_after_terminal" ||
+    (result.streamOutcome == null && isClientCancelSummary(summary))
+  ) {
     return "client_cancel";
   }
 
