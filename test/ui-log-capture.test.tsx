@@ -112,8 +112,9 @@ it("defaults to the original twelve columns with separate first-response and dur
     totalLogCount={1} allLogCount={1} hostOptions={[]} hasMoreLogs={false}
     isLoadingLogs={false} isLoadingMoreLogs={false} hasStaleLogs={false}
     routeFilter="all" statusFilter="all" hostFilter="__all_hosts__" searchFilter="" error={null}
-    onClearDrilldown={() => {}} onRouteFilterChange={() => {}} onStatusFilterChange={() => {}}
+    onDrilldownChange={() => {}} onRouteFilterChange={() => {}} onStatusFilterChange={() => {}}
     onHostFilterChange={() => {}} onSearchFilterChange={() => {}} onLoadMore={() => {}} onRetryLogs={() => {}}
+    onOpenSamples={() => {}}
   />);
   expect([...markup.matchAll(/<th scope="col">(.*?)<\/th>/g)].map((match) => match[1])).toEqual([
     "开始时间", "状态", "模型 / 通道", "思考", "响应模型", "上游 Host",

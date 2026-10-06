@@ -23,6 +23,7 @@ describe("UI routing helpers", () => {
     ["/", "#routes", "routes"],
     ["/", "#config", "config"],
     ["/", "#logs", "logs"],
+    ["/", "#samples", "samples"],
     ["/config/profiles", "", "config"],
     ["/config/routes", "", "config"],
     ["/config/model", "", "config"],
@@ -47,6 +48,7 @@ describe("UI routing helpers", () => {
     expect(pagePathForStudioPage("config")).toBe("/config/profiles");
     expect(pagePathForStudioPage("config", "routes")).toBe("/config/routes");
     expect(pagePathForStudioPage("logs")).toBe("/#logs");
+    expect(pagePathForStudioPage("samples")).toBe("/#samples");
     expect(pagePathForStudioPage("health")).toBe("/health");
   });
 

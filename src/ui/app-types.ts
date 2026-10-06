@@ -9,6 +9,7 @@ export type StudioPage =
   | "routes"
   | "config"
   | "logs"
+  | "samples"
   | "health";
 
 export type PageMode = StudioPage;

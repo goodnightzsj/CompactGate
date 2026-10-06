@@ -10,6 +10,7 @@ export function useDocumentTitle(pageMode: PageMode) {
       routes: "路由",
       config: "配置",
       logs: "日志",
+      samples: "样本概览",
       health: "健康"
     };
 

@@ -133,6 +133,7 @@ export function StudioSidebar({
     { page: "routes", label: "路由", icon: <IconRoutes /> },
     { page: "config", label: "配置", icon: <IconConfig /> },
     { page: "logs", label: "日志", icon: <IconLogs /> },
+    { page: "samples", label: "样本概览", icon: <IconAnalytics /> },
     { page: "health", label: "健康", icon: <IconHealth /> }
   ];
 

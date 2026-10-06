@@ -10,6 +10,7 @@ const AnalyticsDashboardPage = lazy(() => import("../analytics/AnalyticsDashboar
 const UsageAnalyticsPage = lazy(() => import("../analytics/UsageAnalyticsPage.js").then((page) => ({ default: page.UsageAnalyticsPage })));
 const HealthPage = lazy(() => import("../health/HealthPage.js").then((page) => ({ default: page.HealthPage })));
 const LogsPage = lazy(() => import("../logs/LogsPage.js").then((page) => ({ default: page.LogsPage })));
+const LogSamplesPage = lazy(() => import("../logs/LogSamplesPage.js").then((page) => ({ default: page.LogSamplesPage })));
 const RoutesPage = lazy(() => import("../routes/RoutesPage.js").then((page) => ({ default: page.RoutesPage })));
 const ConfigPage = lazy(() => import("../config/ConfigPage.js").then((page) => ({ default: page.ConfigPage })));
 
@@ -19,7 +20,7 @@ export type StudioPageOutletProps = {
   dashboardPage: ComponentProps<typeof DashboardPage>;
   healthMode: boolean;
   healthPage: Omit<ComponentProps<typeof HealthPage>, "onConfigure">;
-  logsPage: ComponentProps<typeof LogsPage>;
+  logsPage: Omit<ComponentProps<typeof LogsPage>, "onOpenSamples">;
   pageError: string | null;
   /** True when the failed refresh left previously loaded data on screen. */
   hasStaleData: boolean;
@@ -78,7 +79,9 @@ export function StudioPageOutlet({
 
       {currentPage === "config" && <ConfigPage {...configPage} displayScope={configScope} onDisplayScopeChange={setConfigScope} />}
 
-      {currentPage === "logs" && <LogsPage {...logsPage} />}
+      {currentPage === "logs" && <LogsPage {...logsPage} onOpenSamples={() => onNavigate("samples")} />}
+
+      {currentPage === "samples" && <LogSamplesPage {...logsPage} onBack={() => onNavigate("logs")} />}
     </div>
   );
 

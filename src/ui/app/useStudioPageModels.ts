@@ -55,7 +55,7 @@ export function useStudioPageModels({
   const logPageLimit = config?.logging.keep_recent ?? DEFAULT_LOG_PAGE_LIMIT;
   const logFeed = useLogFeed({
     enabled: !healthMode,
-    filterLogs: currentPage === "logs",
+    filterLogs: currentPage === "logs" || currentPage === "samples",
     hasConfig,
     logPageLimit,
     applyRemoteConfig,
@@ -194,7 +194,8 @@ export function useStudioPageModels({
         onConfigTabChange
       },
       logsPage: {
-        logs: displayedLogs,
+        // Samples use the live snapshot, not the inactive request-row animation queue.
+        logs: currentPage === "samples" ? logs : displayedLogs,
         pendingLogCount: staggeredLogs.pendingCount,
         logCounts: logFeed.logPage.counts,
         providerCounts: logFeed.logPage.provider_counts,
@@ -211,7 +212,7 @@ export function useStudioPageModels({
         hostFilter: logFeed.hostFilter,
         searchFilter: logFeed.searchFilter,
         drilldown: logFeed.drilldown,
-        onClearDrilldown: () => logFeed.setDrilldown(undefined),
+        onDrilldownChange: logFeed.setDrilldown,
         onRouteFilterChange: logFeed.setRouteFilter,
         onStatusFilterChange: logFeed.setStatusFilter,
         onHostFilterChange: logFeed.setHostFilter,

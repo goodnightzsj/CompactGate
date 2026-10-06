@@ -15,7 +15,6 @@ import { CustomSelect } from "../shared/CustomSelect.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import { LogMobileCard } from "./LogMobileCard.js";
 import { LogRowCells } from "./LogRowCells.js";
-import { LogSampleGroups } from "./LogSampleGroups.js";
 import {
   ALL_HOSTS_FILTER,
   type HostFilterOption,
@@ -71,8 +70,8 @@ export function LogsPage({
   logs, pendingLogCount = 0,
   logCounts, providerCounts, statusCounts, totalLogCount, allLogCount,
   hostOptions, hasMoreLogs, isLoadingLogs, isLoadingMoreLogs, hasStaleLogs,
-  routeFilter, statusFilter, hostFilter, searchFilter, drilldown, onClearDrilldown,
-  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, onRetryLogs, error
+  routeFilter, statusFilter, hostFilter, searchFilter, drilldown, onDrilldownChange,
+  onRouteFilterChange, onStatusFilterChange, onHostFilterChange, onSearchFilterChange, onLoadMore, onRetryLogs, onOpenSamples, error
 }: {
   logs: RequestLogEntry[];
   pendingLogCount?: number;
@@ -83,17 +82,19 @@ export function LogsPage({
   hasStaleLogs: boolean;
   routeFilter: "all" | RouteKind; statusFilter: "all" | LogStatusKind; hostFilter: string; searchFilter: string;
   drilldown?: LogDrilldownFilter;
-  onClearDrilldown: () => void;
+  onDrilldownChange: (filter: LogDrilldownFilter | undefined) => void;
   onRouteFilterChange: (route: "all" | RouteKind) => void;
   onStatusFilterChange: (status: "all" | LogStatusKind) => void;
   onHostFilterChange: (host: string) => void;
   onSearchFilterChange: (search: string) => void;
+  onOpenSamples: () => void;
   onLoadMore: () => void; onRetryLogs: () => void; error: string | null;
 }) {
   const [expandedLogKey, setExpandedLogKey] = useState<string | null>(null);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [showAllColumns, setShowAllColumns] = useState(true);
   const keyboardHintId = useId();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const narrowViewport = useNarrowViewport();
   const initialRender = useRef(true);
@@ -261,7 +262,12 @@ export function LogsPage({
     onStatusFilterChange("all");
     onHostFilterChange(ALL_HOSTS_FILTER);
     onSearchFilterChange("");
-    onClearDrilldown();
+    clearDrilldown();
+  }
+
+  function clearDrilldown() {
+    onDrilldownChange(undefined);
+    searchInputRef.current?.focus({ preventScroll: true });
   }
 
   return (
@@ -273,6 +279,7 @@ export function LogsPage({
           {!narrowViewport && <span className="log-keyboard-hint" id={keyboardHintId}>点击请求行，或聚焦后按 Enter / 空格查看完整信息</span>}
         </div>
         <div className="logs-page-actions">
+          <button type="button" className="btn btn-sm" onClick={onOpenSamples}>样本概览</button>
           {!narrowViewport && <button type="button" className="btn btn-sm"
             aria-pressed={showAllColumns} onClick={() => setShowAllColumns((value) => !value)}>
             {showAllColumns ? "精简列" : "完整列"}
@@ -321,13 +328,34 @@ export function LogsPage({
         </div>
       </div>
 
-      {drilldown && <div className="log-drilldown-context">
-        <span>统计下钻 · 开始时间 [{new Date(drilldown.from).toLocaleString()}, {new Date(drilldown.to).toLocaleString()})
-          {drilldown.model !== undefined && ` · 有效响应模型：${drilldown.model ?? "未识别模型"}（精确）`}
-        </span>
-        <button type="button" className="btn btn-sm" onClick={onClearDrilldown}>移除时间与模型限定</button>
-      </div>}
       <div className="logs-toolbar">
+        {drilldown && <div className="logs-drilldown-filters" role="group" aria-label="统计下钻筛选">
+          <CustomSelect
+            label="响应模型"
+            value={drilldown.model === undefined ? "all" : "selected"}
+            options={[
+              ...(drilldown.model === undefined ? [] : [{
+                value: "selected", label: drilldown.model ?? "未识别模型", meta: "有效响应模型 · 精确匹配"
+              }]),
+              { value: "all", label: "全部响应模型", meta: "保留时间范围及其他筛选" }
+            ]}
+            onChange={(value) => {
+              if (value === "all") onDrilldownChange({ from: drilldown.from, to: drilldown.to });
+            }}
+            wide
+          />
+          <CustomSelect
+            label="开始时间范围"
+            value="selected"
+            options={[
+              { value: "selected", label: `${new Date(drilldown.from).toLocaleString()} → ${new Date(drilldown.to).toLocaleString()}`,
+                meta: "本地时间 · 含起点，不含终点" },
+              { value: "all", label: "移除时间与模型限定", meta: "保留通道、状态、上游和搜索条件" }
+            ]}
+            onChange={(value) => { if (value === "all") clearDrilldown(); }}
+            wide
+          />
+        </div>}
         <details
           className="logs-filter-options"
           open={!narrowViewport || filtersExpanded}
@@ -338,6 +366,8 @@ export function LogsPage({
           <summary>
             筛选
             <span>{[
+              drilldown?.model !== undefined ? `响应模型：${drilldown.model ?? "未识别模型"}` : null,
+              drilldown ? "已限定时间" : null,
               routeFilter !== "all" ? routeLabel(routeFilter) : null,
               statusFilter !== "all" ? (statusFilter === "error" ? "错误" : "正常") : null,
               hostFilter !== ALL_HOSTS_FILTER ? hostFilter : null
@@ -383,6 +413,7 @@ export function LogsPage({
         <label className="logs-search">
           <span className="logs-search-label">搜索</span>
           <input
+            ref={searchInputRef}
             className="logs-search-input"
             type="search"
             value={searchFilter}
@@ -444,7 +475,7 @@ export function LogsPage({
         hasActiveFilters ? (
           <div className="empty-state">
             <strong>当前筛选条件下无记录</strong>
-            <span>没有请求匹配当前通道 / 状态 / 上游筛选。</span>
+            <span>没有请求匹配当前筛选条件，请调整模型、时间范围或其他筛选。</span>
             <button className="btn empty-state-action" type="button" onClick={clearFilters}>
               清除筛选
             </button>
@@ -456,8 +487,6 @@ export function LogsPage({
           </div>
         )
       ) : null}
-
-      {logs.length > 0 && <LogSampleGroups logs={logs} stale={hasStaleLogs || isLoadingLogs} />}
 
       {!narrowViewport && (
         <div className={`log-table log-table-full ${showAllColumns ? "" : "is-essential"}`} hidden={logs.length === 0}>

@@ -5,6 +5,8 @@ import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
 import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
 import { fetchPendingLogPage, fetchMoreLogPage, mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
+import { LogSampleGroups } from "../src/ui/logs/LogSampleGroups.js";
+import { LogSamplesPage } from "../src/ui/logs/LogSamplesPage.js";
 import { DashboardRecentRequests } from "../src/ui/dashboard/DashboardRecentRequests.js";
 import { useNarrowViewport } from "../src/ui/logs/useNarrowViewport.js";
 import {
@@ -322,6 +324,81 @@ describe("live log page updates", () => {
 });
 
 describe("LogsPage loaded rows", () => {
+  it.each([false, true])("exposes sample groups and diagnostic values without expanding anything (stale=%s)", (stale) => {
+    const markup = renderToStaticMarkup(<LogSampleGroups stale={stale} logs={[
+      requestLog("latest-failure", { status: 502 }), requestLog("previous-success")
+    ]} />);
+    expect(markup).not.toContain("<details");
+    expect(markup).toContain("分组明细");
+    expect(markup).toContain(`${stale ? "上次结果" : "当前筛选"} · 已加载 2 条 · 1 个分组 · 非全库`);
+    expect(markup).toContain("<dt>调用</dt><dd>2</dd>");
+    expect(markup).toContain('<dt>失败</dt><dd class="is-err">1</dd>');
+    expect(markup).toContain("<dt>成功率</dt><dd>50.0%</dd>");
+    expect(markup).toContain('aria-label="最近 2 次，从旧到新：成功、失败"');
+    expect(markup).toContain('aria-label="样本分组明细"');
+    expect(markup).not.toContain("is-scrollable");
+    expect(markup).toContain("同名凭据无法区分");
+    expect(markup).toContain("不代表上游健康状态");
+  });
+
+  it("keeps only the samples entry on the request page", () => {
+    const markup = renderLogsPage([requestLog("request")]);
+    expect(markup).toMatch(/<button[^>]*>样本概览<\/button>/);
+    expect(markup).not.toContain("log-sample-groups");
+    expect(markup).toContain('data-log-id="request"');
+  });
+
+  it.each(["response-model", null, undefined])("shows the inherited scope on the separate samples page (model=%s)", (model) => {
+    const markup = renderSamplesPage([requestLog("sample")], {
+      drilldown: { from: "2026-09-24T00:00:00.000Z", to: "2026-10-01T00:00:00.000Z", model },
+      routeFilter: "primary", statusFilter: "error", hostFilter: "example.invalid", searchFilter: "needle"
+    });
+    expect(markup).toContain("<h2>样本概览</h2>");
+    expect(markup).toContain("返回请求日志");
+    expect(markup).toContain("含起点、不含终点");
+    expect(markup).toContain("错误 · 上游：example.invalid · 搜索：needle");
+    expect(markup).toContain("已加载 1 条 · 1 个分组 · 非全库");
+    if (model === undefined) expect(markup).not.toContain("响应模型：");
+    else expect(markup).toContain(`响应模型：${model ?? "未识别模型"}（精确）`);
+  });
+
+  it("keeps stale samples with retry and disables further pagination", () => {
+    const markup = renderSamplesPage([requestLog("previous")], {
+      hasStaleLogs: true, hasMoreLogs: true, error: "Synthetic sample failure"
+    });
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Synthetic sample failure");
+    expect(markup).toContain("重试日志");
+    expect(markup).toContain("上次结果 · 已加载 1 条");
+    expect(markup).toMatch(/<button[^>]+disabled=""[^>]*>加载更早日志/);
+  });
+
+  it.each([
+    [{ isLoadingLogs: true }, "正在加载样本..."],
+    [{ error: "Synthetic sample failure" }, "尚无可显示的样本"],
+    [{}, "暂无请求样本"]
+  ])("distinguishes samples loading, failure and empty results (%j)", (state, expected) => {
+    const markup = renderSamplesPage([], state);
+    expect(markup).toContain(expected);
+    expect(markup).not.toContain("log-sample-groups");
+  });
+
+  it.each([false, true])("shows exact drilldown values as controls outside collapsed filters (narrow=%s)", (narrow) => {
+    for (const model of ["cline-pass/deepseek-v4.1-flash", null, undefined]) {
+      vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
+      const markup = renderLogsPage([], {
+        drilldown: { from: "2026-09-24T00:00:00.000Z", to: "2026-10-01T00:00:00.000Z", model }
+      });
+      const controls = markup.slice(markup.indexOf('aria-label="统计下钻筛选"'), markup.indexOf('<details'));
+      expect(controls).toContain(`aria-label="响应模型：${model === undefined ? "全部响应模型" : model ?? "未识别模型"}"`);
+      expect(controls).toContain('aria-label="开始时间范围：');
+      expect(controls).toContain("含起点，不含终点");
+      expect(markup).not.toContain("log-drilldown-context");
+      expect(markup).toContain('aria-label="搜索日志" value=""');
+      if (model !== undefined) expect(markup).toContain(`响应模型：${model ?? "未识别模型"} · 已限定时间`);
+    }
+  });
+
   it.each([false, true])("uses the dashboard's CSS breakpoint with one mounted view (narrow=%s)", (narrow) => {
     vi.mocked(useNarrowViewport).mockReturnValueOnce(narrow);
     const markup = renderToStaticMarkup(<DashboardRecentRequests logs={[requestLog("recent")]} totalCount={250} listen="127.0.0.1:0" />);
@@ -415,13 +492,14 @@ describe("LogsPage loaded rows", () => {
         statusFilter="all"
         hostFilter={ALL_HOSTS_FILTER}
         searchFilter=""
-        onClearDrilldown={() => undefined}
+        onDrilldownChange={() => undefined}
         onRouteFilterChange={() => undefined}
         onStatusFilterChange={() => undefined}
         onHostFilterChange={() => undefined}
         onSearchFilterChange={() => undefined}
         onLoadMore={() => undefined}
         onRetryLogs={() => undefined}
+        onOpenSamples={() => undefined}
         error={null}
       />
     );
@@ -454,17 +532,28 @@ function renderLogsPage(logs: RequestLogEntry[], overrides: Partial<ComponentPro
       statusFilter="all"
       hostFilter={ALL_HOSTS_FILTER}
       searchFilter=""
-      onClearDrilldown={() => undefined}
+      onDrilldownChange={() => undefined}
       onRouteFilterChange={() => undefined}
       onStatusFilterChange={() => undefined}
       onHostFilterChange={() => undefined}
       onSearchFilterChange={() => undefined}
       onLoadMore={() => undefined}
       onRetryLogs={() => undefined}
+      onOpenSamples={() => undefined}
       error={null}
       {...overrides}
     />
   );
+}
+
+function renderSamplesPage(logs: RequestLogEntry[], overrides: Partial<ComponentProps<typeof LogSamplesPage>> = {}): string {
+  return renderToStaticMarkup(<LogSamplesPage
+    logs={logs} totalLogCount={logs.length} hasMoreLogs={false} isLoadingLogs={false}
+    isLoadingMoreLogs={false} hasStaleLogs={false} error={null}
+    routeFilter="all" statusFilter="all" hostFilter={ALL_HOSTS_FILTER} searchFilter=""
+    onBack={() => undefined} onRetryLogs={() => undefined} onLoadMore={() => undefined}
+    {...overrides}
+  />);
 }
 
 function emptyPage(limit: number): RequestLogPage {
