@@ -140,9 +140,11 @@ export function compileProviderStateAttempt(
   } else if (options.strategy === "cross_domain") {
     fidelity = applyCrossDomainCleanup(parsed, metrics, options.targetStateDomain);
   } else {
-    fidelity = options.priorStrategy === "cross_domain"
-      ? applyCrossDomainCleanup(parsed, metrics, options.targetStateDomain)
-      : (applyCpaCleanup(parsed, metrics), "exact");
+    if (options.priorStrategy === "cross_domain") {
+      fidelity = applyCrossDomainCleanup(parsed, metrics, options.targetStateDomain);
+    } else if (options.priorStrategy === "cpa") {
+      applyCpaCleanup(parsed, metrics);
+    }
     applyErrorRecovery(parsed, metrics, options.errorCode);
     if (metrics.compactionItemsRemoved > 0) {
       fidelity = "degraded";

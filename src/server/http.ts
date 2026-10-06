@@ -156,18 +156,31 @@ export async function createCompactGateServer(
     logs_invalidated: true
   });
   actualLogger.addEventListener("storage-pruned", notifyLogPrune);
-  const actualCaptureWriter =
-    captureWriter ??
-    createDebugCaptureWriter(
-      configStore,
-      actualLogger,
-      studioEvents,
-      codexVersionMonitor,
-      clientIdentity
+  let pendingCaptureWriter: DebugCaptureWriter | undefined;
+  try {
+    pendingCaptureWriter = captureWriter ?? createDebugCaptureWriter(
+      configStore, actualLogger, studioEvents, codexVersionMonitor, clientIdentity
     );
+    codexVersionMonitor.start();
+  } catch (error) {
+    // Ownership transfers only when construction succeeds. Undo our listener
+    // and finish startup pruning before releasing a logger created here.
+    codexVersionMonitor.close();
+    actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
+    try {
+      try {
+        if (!captureWriter) await pendingCaptureWriter?.flush();
+      } finally {
+        if (!logger) actualLogger.close();
+      }
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "CompactGate startup and cleanup failed.", { cause: error });
+    }
+    throw error;
+  }
+  const actualCaptureWriter = pendingCaptureWriter;
   const primaryFailover = new PrimaryFailoverState();
   const claudeKeyPool = new ClaudeKeyPoolState();
-  codexVersionMonitor.start();
   const stopIdentityUpdates = clientIdentity.subscribe(() => {
     studioEvents.broadcastSnapshot(
       createStudioSnapshot(configStore, actualLogger, codexVersionMonitor, clientIdentity)

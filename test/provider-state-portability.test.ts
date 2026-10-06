@@ -243,6 +243,43 @@ describe("provider state portability", () => {
     })))).toBeNull();
   });
 
+  it.each(["invalid_responses_request", "previous_response_not_found"] as const)(
+    "does not apply unrequested CPA cleanup during direct %s recovery", (errorCode) => {
+      const reasoning = { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] };
+      const compaction = { type: "compaction", encrypted_content: "opaque-state" };
+      const canonical = { store: false, previous_response_id: "resp_old", input: [reasoning, compaction] };
+      const body = Buffer.from(JSON.stringify(canonical));
+      const recovery = compileProviderStateAttempt(body, {
+        strategy: "error_400", priorStrategy: "original", errorCode
+      });
+
+      expect(parseBody(recovery.body)).toEqual(errorCode === "invalid_responses_request"
+        ? { ...canonical, input: [reasoning] }
+        : { store: false, input: [reasoning, compaction] });
+      expect(recovery.metrics.encryptedReasoningFieldsRemoved).toBe(0);
+      expect(recovery.metrics.providerItemIdsRemoved).toBe(0);
+      expect(parseBody(body)).toEqual(canonical);
+    }
+  );
+
+  it.each(["cpa", "cross_domain"] as const)("retains prior %s cleanup during compaction recovery", (priorStrategy) => {
+    const body = Buffer.from(JSON.stringify({
+      store: false,
+      input: [
+        { type: "reasoning", id: "rs_old", encrypted_content: null, summary: [] },
+        { type: "compaction", encrypted_content: "OPAQUE_STATE_0123456789" }
+      ]
+    }));
+    const recovery = compileProviderStateAttempt(body, {
+      strategy: "error_400", priorStrategy, errorCode: "invalid_responses_request"
+    });
+    expect(parseBody(recovery.body).input).toEqual(priorStrategy === "cpa"
+      ? [{ type: "reasoning", summary: [] }]
+      : []);
+    expect(recovery.metrics.compactionItemsRemoved).toBe(1);
+    expect(recovery.fidelity).toBe("degraded");
+  });
+
   it("removes an invalid previous_response_id when input is not an item array", () => {
     const canonicalBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",

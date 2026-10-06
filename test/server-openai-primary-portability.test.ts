@@ -214,6 +214,7 @@ describe("primary provider-state error recovery", () => {
     const body = JSON.stringify({
       model: "gpt-5.5",
       input: [
+        { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] },
         { type: "compaction", encrypted_content: "opaque-provider-state" },
         { type: "message", role: "user", content: "continue" }
       ]
@@ -229,6 +230,7 @@ describe("primary provider-state error recovery", () => {
     expect(requests).toHaveLength(2);
     expect(requests[0].body).toBe(body);
     expect(JSON.parse(requests[1].body).input).toEqual([
+      { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] },
       { type: "message", role: "user", content: "continue" }
     ]);
     const log = await waitForLogEntry(
