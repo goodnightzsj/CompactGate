@@ -188,10 +188,6 @@ export function sendBufferedUpstreamRequest(
         return;
       }
 
-      if (activeResponse?.responseResolutionStarted) {
-        return;
-      }
-
       if (settleAfterTerminal("client")) {
         return;
       }
@@ -208,6 +204,11 @@ export function sendBufferedUpstreamRequest(
     }
 
     function handleClientError(error: Error) {
+      // A late sink error must not replace an upstream result already observed
+      // or being resolved (including an adapter's asynchronous flush).
+      if (settled || settleAfterTerminal("client")) {
+        return;
+      }
       rejectOnce(new UpstreamRequestError(error.message, responseDetails("client_cancel", "none"), { cause: error }));
     }
 
@@ -440,9 +441,19 @@ export function sendBufferedUpstreamRequest(
 
     function settleAfterTerminal(disconnected: "client" | "upstream"): boolean {
       const responseState = activeResponse;
+      if (settled || !responseState) {
+        return false;
+      }
+      if (responseState.responseResolutionStarted) {
+        if (disconnected === "client" && responseState.responseTransform) {
+          // The broken sink no longer drains the adapter. Let its pending flush
+          // finish so the existing resolution can observe its result or error.
+          responseState.responseTransform.stream.unpipe(options.res);
+          responseState.responseTransform.stream.resume();
+        }
+        return true;
+      }
       if (
-        settled || !responseState ||
-        responseState.responseResolutionStarted ||
         !(responseState.responseTransform?.sawTerminalEvent ??
           (responseState.clientStreamObserver ?? responseState.streamObserver)?.snapshot().sawTerminalEvent)
       ) {
