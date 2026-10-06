@@ -69,7 +69,7 @@ export function ApiKeyPoolEditor({
 
   return <section className="key-pool-editor" aria-label={`${title} 密钥池`}>
     <div className="key-order-heading">
-      <div><h5>API Key 使用顺序</h5><p>同一档案内，从上到下优先使用；不可用时跳过。</p></div>
+      <div><h4>API Key 使用顺序</h4><p>同一档案内，从上到下优先使用；不可用时跳过。</p></div>
       <span className="route-chip primary">{eligible.length} 把候选</span>
     </div>
     <div className="key-order-policy">

@@ -99,7 +99,6 @@ describe("UI config profile actions", () => {
     const markup = renderToStaticMarkup(createElement(ProfileScopeCard, {
       scope: "codex",
       title: "Codex 配置档案",
-      eyebrow: "Codex",
       description: "",
       emptyTitle: "",
       emptyDescription: "",

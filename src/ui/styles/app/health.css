@@ -5,6 +5,12 @@
   gap: 16px;
 }
 
+.health-workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
 .health-page-header {
   align-items: center;
 }

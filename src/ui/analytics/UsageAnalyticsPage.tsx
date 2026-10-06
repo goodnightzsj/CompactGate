@@ -26,6 +26,8 @@ import {
 } from "./analytics-data.js";
 import { DateRangePicker } from "./DateRangePicker.js";
 
+const TABLE_PAGE_SIZE = 24;
+
 export interface UsagePreferences {
   from: string;
   to: string;
@@ -50,6 +52,11 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
     () => stats.data ? groupTrend(stats.data, granularity) : [],
     [granularity, stats.data]
   );
+  const tableKey = `${stats.data?.range.from}/${stats.data?.range.to}/${granularity}`;
+  const [tablePosition, setTablePosition] = useState({ key: "", page: 0 });
+  const pageCount = Math.max(1, Math.ceil(trend.length / TABLE_PAGE_SIZE));
+  const tablePage = tablePosition.key === tableKey ? Math.min(tablePosition.page, pageCount - 1) : 0;
+  const selectTablePage = (page: number) => setTablePosition({ key: tableKey, page });
 
   function applyRange(from: string, to: string) {
     try {
@@ -140,16 +147,7 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
               exactValue: formatMetricNumber(stats.data.summary.requests),
               meta: `${formatCompactMetricNumber(stats.data.summary.error_requests)} 错误`,
               tone: "is-request"
-            }
-            ]} />
-          </section>
-
-          <section className="analytics-metric-section usage-token-metrics" aria-labelledby="usage-token-heading">
-            <div className="analytics-metric-section-header">
-              <h3 id="usage-token-heading">Token 构成</h3>
-              <span>输入、输出与缓存</span>
-            </div>
-            <AnalyticsMetricGrid items={[
+            },
             {
               label: "总输入",
               value: formatCompactMetricNumber(stats.data.summary.input_tokens),
@@ -179,13 +177,20 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
 
           {stats.data.summary.requests === 0 ? (
             <AnalyticsEmptyState hasRetainedLogs={stats.data.retained_range.oldest_at !== null} onNavigate={onNavigate} />
-          ) : <>
+          ) : <div className="usage-data-grid">
           <AnalyticsPanel title="Token 趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
             <AnalyticsTokenBreakdownChart points={trend} />
           </AnalyticsPanel>
 
-          <AnalyticsPanel title="时段明细" meta={`${trend.length} 个${granularity === "hour" ? "小时" : "日期"}`}>
-            <div className="analytics-table-scroll">
+          <AnalyticsPanel title="时段明细" meta={`${trend.length} 个${granularity === "hour" ? "小时" : "日期"} · CSV 包含全部时段`}
+            actions={pageCount > 1 && <div className="analytics-pagination" role="group" aria-label="时段明细分页">
+              <button className="btn btn-sm" type="button" disabled={tablePage === 0} onClick={() => selectTablePage(tablePage - 1)} aria-label="上一页时段">←</button>
+              <select className="input" aria-label="时段页码" value={tablePage} onChange={(event) => selectTablePage(Number(event.target.value))}>
+                {Array.from({ length: pageCount }, (_, page) => <option key={page} value={page}>第 {page + 1} / {pageCount} 页</option>)}
+              </select>
+              <button className="btn btn-sm" type="button" disabled={tablePage === pageCount - 1} onClick={() => selectTablePage(tablePage + 1)} aria-label="下一页时段">→</button>
+            </div>}>
+            <div className="analytics-table-scroll" role="region" aria-label="时段数据，可横向滚动" tabIndex={0}>
               <table className="analytics-table analytics-usage-table">
                 <thead>
                   <tr>
@@ -200,7 +205,7 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
                   </tr>
                 </thead>
                 <tbody>
-                  {trend.map((point) => (
+                  {trend.slice(tablePage * TABLE_PAGE_SIZE, (tablePage + 1) * TABLE_PAGE_SIZE).map((point) => (
                     <tr key={point.key}>
                       <td><time dateTime={point.key}>{point.label}</time></td>
                       <td>{formatMetricNumber(point.requests)}</td>
@@ -252,6 +257,7 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
             </AnalyticsPanel>
             <AnalyticsPanel
               title="端点分布"
+              meta="请求量 Top 8 · 占当前范围"
               actions={(
                 <AnalyticsSegmented
                   label="端点分布度量"
@@ -264,7 +270,7 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
                 />
               )}
             >
-              <AnalyticsDistribution rows={stats.data.by_endpoint.map((row) => ({
+              <AnalyticsDistribution total={stats.data.summary[endpointMeasure]} rows={stats.data.by_endpoint.map((row) => ({
                 label: row.endpoint,
                 value: row[endpointMeasure],
                 meta: endpointMeasure === "requests"
@@ -273,7 +279,7 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
               }))} />
             </AnalyticsPanel>
           </div>
-          </>}
+          </div>}
 
           <RetainedRange stats={stats.data} />
         </>

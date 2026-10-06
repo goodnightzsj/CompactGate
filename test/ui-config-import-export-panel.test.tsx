@@ -12,4 +12,6 @@ it("keeps the complete-backup sensitivity and unsaved-draft boundary beside expo
   expect(markup).toContain("可能含直填 API key");
   expect(markup).toContain("OAuth 仅含连接引用，不含授权令牌");
   expect(markup).toMatch(/aria-describedby="[^"]+-export-note"/);
+  expect(markup).toContain('class="config-portable-grid is-awaiting-file"');
+  expect(markup).not.toContain("确认覆盖当前配置");
 });

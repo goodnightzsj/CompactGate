@@ -44,14 +44,14 @@ export function ConfigImportExportPanel({
     <section className="config-portable-panel" aria-labelledby="config-portable-title">
       <div className="config-portable-head">
         <div>
-          <p className="eyebrow">Portable Config</p>
-          <h3 id="config-portable-title">配置导入导出</h3>
+          <p className="eyebrow">导出备份</p>
+          <h3 id="config-portable-title">选择要保留的版本</h3>
           <p>
             备份当前配置，或从文件恢复。导入前先核对摘要，确认后才会覆盖当前运行配置。
             导入摘要不会显示任何 API key 值。
           </p>
         </div>
-        <div className="config-export-action"><button
+        <div className="config-export-action"><div className="config-export-option"><button
           type="button"
           className="btn btn-primary"
           disabled={!config}
@@ -60,14 +60,16 @@ export function ConfigImportExportPanel({
         >
           导出完整备份
         </button>
+        <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p></div>
+        <div className="config-export-option">
         <button type="button" className="btn btn-ghost" disabled={!config}
           aria-describedby={`${fileInputId}-saved-export-note`}
           onClick={() => void onExportSavedConfig()}>仅导出已保存配置</button>
-        <p id={`${fileInputId}-export-note`}>包含已保存配置和当前未保存草稿，可能含直填 API key，请妥善保管。OAuth 仅含连接引用，不含授权令牌。</p>
-        <p id={`${fileInputId}-saved-export-note`}>仅导出已保存配置不会包含当前草稿，但同样可能含明文密钥；迁移 OAuth 连接后需重新授权。</p></div>
+        <p id={`${fileInputId}-saved-export-note`}>仅导出已保存配置不会包含当前草稿，但同样可能含明文密钥；迁移 OAuth 连接后需重新授权。</p></div></div>
       </div>
 
-      <div className="config-portable-grid">
+      <div className="config-import-heading"><h3>从文件恢复</h3><p>选择文件 → 核对摘要 → 确认覆盖。选择文件本身不会更改当前配置。</p></div>
+      <div className={`config-portable-grid ${importCandidate ? "has-candidate" : "is-awaiting-file"}`}>
         <div className="config-portable-card">
           <label className="config-file-drop" htmlFor={fileInputId}>
             <span>1 · 选择 compactgate.json</span>

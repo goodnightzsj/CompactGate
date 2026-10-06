@@ -42,7 +42,7 @@ export function RouteConfigPanel({
   return (
     <div className="route-config-stack">
       {oauth.error && <p role="alert" className="error-note">{oauth.error} <button className="ghost-button" type="button" onClick={oauth.reload}>重试授权连接</button></p>}
-      {scope === "codex" && <div className="config-row">
+      {scope === "codex" && <div className="route-connection-sections">
         <RouteCredentialFields
           key={`codex:${config ? profileScopeState(config, "codex").active_profile_id : ""}`}
           title="Codex 主路由" badge="Codex" tone="primary"
@@ -99,9 +99,10 @@ export function RouteConfigPanel({
           onRotationOptOutChange={(codexPrimaryRotationOptOut) => onFormChange((previous) => ({ ...previous, codexPrimaryRotationOptOut }))}
           onStickyReserveChange={(codexPrimaryStickyReserveSeconds) => onFormChange((previous) => ({ ...previous, codexPrimaryStickyReserveSeconds }))}
         />
-        <div className="route-config-stack route-compact-column">
+        <section className="route-config-stack route-compact-section" aria-label="Codex 压缩策略">
           <div>
-            <div className="field-label field-label-block">Codex 压缩上游模式</div>
+            <h3>压缩策略</h3>
+            <p>Local/Remote V1 可独立分流；Remote V2 始终使用主路由。</p>
             <div className="toggle-group" role="group" aria-label="Codex 压缩上游模式">
               <button type="button" aria-pressed={form.upstreamMode === "split"} className={form.upstreamMode === "split" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "split" }))}>独立分流</button>
               <button type="button" aria-pressed={form.upstreamMode === "primary"} className={form.upstreamMode === "primary" ? "is-active" : ""} onClick={() => onFormChange((previous) => ({ ...previous, upstreamMode: "primary" }))}>复用主路由</button>
@@ -149,9 +150,9 @@ export function RouteConfigPanel({
           }))}
         />
           </details>
-        </div>
+        </section>
       </div>}
-      {scope === "claude" && <div className="route-config-stack route-config-stack-narrow">
+      {scope === "claude" && <div className="route-config-stack">
         <RouteCredentialFields
           key={`claude:${config ? profileScopeState(config, "claude").active_profile_id : ""}`}
           title="Claude 主路由" badge="Claude" tone="claude"

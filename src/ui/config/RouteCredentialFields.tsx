@@ -156,11 +156,8 @@ export function RouteCredentialFields({
   }, [showSuggestions, visibleSuggestions.length]);
 
   /**
-   * `.config-section` and (on narrow screens) `.route-config-card` both clip
-   * their overflow, and the animated page wrapper keeps a transform, so an
-   * absolutely positioned list was cut off with no way to scroll to the rest of
-   * it. Same treatment as `.custom-select-menu`: portal it out and place it in
-   * viewport coordinates.
+   * Match `.custom-select-menu`: keep suggestions in viewport coordinates so
+   * scrolling the form or animating its parent cannot clip or offset the list.
    */
   useLayoutEffect(() => {
     if (!showSuggestions) {
@@ -242,7 +239,7 @@ export function RouteCredentialFields({
   return (
     <section className={`route-config-card tone-${tone}`} aria-label={title}>
       <div className="route-config-card-head">
-        <h4>{title}</h4>
+        <h3>{title}</h3>
         <span className={`route-chip ${tone}`}>{badge}</span>
       </div>
 

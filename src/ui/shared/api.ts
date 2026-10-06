@@ -7,10 +7,16 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
     }
   });
 
-  const payload = (await response.json()) as T | { error?: string };
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    if (response.ok || !(cause instanceof SyntaxError)) throw cause;
+    throw new Error(`HTTP ${response.status} ${response.statusText}`.trim(), { cause });
+  }
 
   if (!response.ok) {
-    throw new Error(readApiError(payload) ?? response.statusText);
+    throw new Error(readApiError(payload) ?? `HTTP ${response.status} ${response.statusText}`.trim());
   }
 
   return payload as T;

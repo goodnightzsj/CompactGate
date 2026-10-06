@@ -704,6 +704,21 @@
 .log-sample-heading h3 { margin: 0; font-size: 0.85rem; }
 .log-sample-heading p { margin: 0; color: var(--muted); font-size: 0.72rem; }
 
+.log-sample-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 8px 0 16px; }
+.log-sample-toolbar label { display: grid; gap: 6px; color: var(--muted); font-size: var(--text-caption); }
+.log-sample-toolbar label:first-child { flex: 1 1 220px; }
+.log-sample-toolbar input,
+.log-sample-toolbar select { min-height: 44px; }
+.log-sample-toolbar > span { align-self: center; color: var(--muted); }
+.log-sample-no-results { padding: 20px 0; color: var(--muted); }
+.log-sample-groups li:hover { background: var(--paper-warm); }
+.logs-filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 12px; font-size: var(--text-caption); animation: panel-fade-in 160ms var(--ease-out); }
+.logs-filter-chips > span { color: var(--muted); margin-right: 4px; }
+.logs-filter-chips button { max-width: 100%; min-height: 36px; padding: 6px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--surface); color: var(--accent); font: inherit; cursor: pointer; transition: background-color 120ms var(--ease-out); }
+.logs-filter-chips button:hover { background: var(--accent-soft); }
+.logs-filter-chips button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (pointer: coarse) { .logs-filter-chips button { min-height: 44px; } }
+
 .log-sample-scope {
   margin: 12px 0;
   color: var(--muted);

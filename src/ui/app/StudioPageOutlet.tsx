@@ -17,7 +17,7 @@ const ConfigPage = lazy(() => import("../config/ConfigPage.js").then((page) => (
 export type StudioPageOutletProps = {
   configPage: Omit<ComponentProps<typeof ConfigPage>, "displayScope" | "onDisplayScopeChange">;
   currentPage: StudioPage;
-  dashboardPage: ComponentProps<typeof DashboardPage>;
+  dashboardPage: Omit<ComponentProps<typeof DashboardPage>, "onNavigate">;
   healthMode: boolean;
   healthPage: Omit<ComponentProps<typeof HealthPage>, "onConfigure">;
   logsPage: Omit<ComponentProps<typeof LogsPage>, "onOpenSamples">;
@@ -56,7 +56,7 @@ export function StudioPageOutlet({
     setConfigScope(scope);
     configPage.onConfigTabChange("routes");
   }} /> : (
-    <div className={`page-appear ${currentPage === "logs" ? "page-appear-logs" : ""}`}>
+    <div className={`page-appear page-appear-${currentPage}`}>
       {pageError && (
         <div className="error-banner page-error-banner" role="alert">
           <span>
@@ -69,7 +69,7 @@ export function StudioPageOutlet({
         </div>
       )}
 
-      {currentPage === "dashboard" && <DashboardPage {...dashboardPage} />}
+      {currentPage === "dashboard" && <DashboardPage {...dashboardPage} onNavigate={onNavigate} />}
 
       {currentPage === "analytics" && <AnalyticsDashboardPage preferences={analyticsPreferences} onPreferencesChange={setAnalyticsPreferences} onNavigate={onNavigate} onOpenLogs={openLogs} />}
 

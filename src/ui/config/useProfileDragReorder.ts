@@ -63,7 +63,7 @@ export function useProfileDragReorder({
   }
 
   function runProfileAutoScroll() {
-    const list = profileListRef.current;
+    const list = profileListRef.current?.closest<HTMLElement>(".main-content");
     const speed = profileAutoScrollRef.current.speed;
     if (!list || speed === 0) {
       stopProfileAutoScroll();
@@ -88,7 +88,7 @@ export function useProfileDragReorder({
   }
 
   function updateProfileAutoScroll(event: React.DragEvent<HTMLElement>) {
-    const list = profileListRef.current;
+    const list = profileListRef.current?.closest<HTMLElement>(".main-content");
     if (!list || list.scrollHeight <= list.clientHeight) {
       stopProfileAutoScroll();
       return;

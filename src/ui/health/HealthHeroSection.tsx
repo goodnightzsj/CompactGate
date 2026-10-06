@@ -33,8 +33,8 @@ export function HealthHeroSection({
       <div className="health-hero-readout">
         <div className="health-mini-card">
           <span>配置就绪</span>
-          <strong aria-live="polite">{readyRoutes}/{totalRoutes}</strong>
-          <small aria-live="polite">{failedRoutes > 0 ? `${failedRoutes} 条异常；` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全；` : "地址与凭据已装配；"}未验证连通性</small>
+          <strong aria-live="polite">{refreshedAt ? `${readyRoutes}/${totalRoutes}` : "—"}</strong>
+          <small aria-live="polite">{!refreshedAt ? "尚未取得配置状态；" : failedRoutes > 0 ? `${failedRoutes} 条异常；` : attentionRoutes > 0 ? `${attentionRoutes} 条需要补全；` : "地址与凭据已装配；"}未验证连通性</small>
         </div>
         <div className="health-mini-card">
           <span>监听地址</span>

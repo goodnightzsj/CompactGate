@@ -48,10 +48,6 @@ export function RoutesPage({
   clientIdentity: ClientIdentityStatus | null;
   previewPanel: ComponentProps<typeof ConfigPreviewPanel>;
 }) {
-  const listen = config?.listen ?? "127.0.0.1:7865";
-  const primaryHost = config?.primary.host ?? "primary.example";
-  const compactHost = config?.compact.host ?? "compact.example";
-  const claudePrimaryHost = config?.claude.primary.host ?? "api.anthropic.com";
   const hitTone = activeRouteSource === "latest" && hasLogSnapshot && latestLog
     ? logStatusKind(latestLog) === "error" ? "is-bad" : "is-good"
     : "";
@@ -62,6 +58,7 @@ export function RoutesPage({
         <div>
           <p className="eyebrow">路由规则</p>
           <h2>分流逻辑</h2>
+          <p className="page-description">先核对已生效规则，再用请求试算定位分流；试算不会发送上游请求。</p>
         </div>
         <div className="route-header-actions">
           <button
@@ -90,11 +87,12 @@ export function RoutesPage({
         </p>
       )}
 
-      <RouteRulesGrid
-        listen={listen}
-        primaryHost={primaryHost}
-        compactHost={compactHost}
-        claudePrimaryHost={claudePrimaryHost}
+      <div className="routes-workspace" role="region" aria-label="路由规则与试算" tabIndex={0}>
+      {config ? <RouteRulesGrid
+        listen={config.listen}
+        primaryHost={config.primary.host}
+        compactHost={config.compact.host}
+        claudePrimaryHost={config.claude.primary.host}
         primaryProtocol={config?.primary.upstream_protocol ?? null}
         compactProtocol={config?.compact.upstream_protocol ?? null}
         claudeProtocol={config?.claude.primary.upstream_protocol ?? null}
@@ -104,7 +102,7 @@ export function RoutesPage({
         activeRoute={activeRoute}
         activeCompactionMode={activeCompactionMode}
         activeRouteSource={activeRouteSource}
-      />
+      /> : <div className="panel" role="status">等待配置数据，尚未取得已生效的路由规则。</div>}
 
       <section className="route-preview-section" aria-labelledby="route-preview-title">
         <h3 id="route-preview-title" tabIndex={-1}>路由试算</h3>
@@ -119,6 +117,7 @@ export function RoutesPage({
         <summary>客户端 UA 改写 <span>{clientIdentity ? (clientIdentity.enabled ? "已启用 · 修改即时生效" : "已关闭") : "读取中"}</span></summary>
         <ClientIdentityPanel status={clientIdentity} />
       </details>
+      </div>
     </div>
   );
 }

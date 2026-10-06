@@ -1,12 +1,25 @@
 /* ═══════════════════════════════════════════════════
    Config Page
    ═══════════════════════════════════════════════════ */
+.page-appear-config {
+  max-width: 1080px;
+  margin-inline: auto;
+}
+
 .config-layout {
   display: grid;
   width: 100%;
   min-width: 0;
-  gap: 16px;
+  gap: 24px;
 }
+
+.config-page-header { align-items: flex-start; flex-wrap: wrap; gap: 16px 24px; margin-bottom: 24px; }
+.config-page-copy { flex: 1 1 420px; min-width: 0; }
+.config-page-copy .page-description { max-width: 64ch; }
+.config-page-tools { display: grid; justify-items: end; gap: 10px; min-width: 0; max-width: 100%; }
+.config-page-header .status-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.config-running-context { margin: 10px 0 0; color: var(--muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.config-running-context strong { color: var(--ink-soft); font-weight: 600; }
 
 .config-import-conflict .btn { min-height: 44px; }
 
@@ -14,7 +27,6 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
   padding: 0;
 }
 
@@ -22,7 +34,10 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  padding-top: 24px;
 }
+
+.config-tab-bar { margin-bottom: 0; }
 
 /* Animate the existing content nodes, not a keyed form wrapper. */
 .config-section > [role="tabpanel"] > .route-config-stack > *,
@@ -37,25 +52,13 @@
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  margin: 16px 0 12px;
+  margin: 0;
   padding: 3px;
   gap: 2px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--paper-warm);
 }
-
-.config-scope-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px 24px;
-  margin-bottom: 16px;
-}
-
-.config-scope-heading p { margin: 4px 0 0; }
-.config-scope-heading .client-scope-switch { margin-block: 16px 0; }
 
 .client-scope-switch button {
   min-height: 40px;
@@ -110,11 +113,12 @@
 
 .route-config-stack {
   display: grid;
-  gap: 14px;
+  gap: 24px;
 }
 
-.route-config-stack-narrow {
-  gap: 10px;
+.route-connection-sections {
+  display: grid;
+  gap: 32px;
 }
 
 .config-advanced-settings {
@@ -185,13 +189,7 @@
   display: grid;
   gap: 12px;
   min-width: 0;
-  padding: 16px 0 0;
-  overflow: hidden;
-  border-top: 2px solid var(--accent);
-}
-
-.profile-card-claude {
-  border-color: var(--jade);
+  padding: 0;
 }
 
 .profile-card-copy h3 {
@@ -256,9 +254,6 @@
   position: relative;
   display: grid;
   gap: 10px;
-  max-height: min(58vh, 720px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
   scroll-padding-block: 56px;
 }
 
@@ -575,7 +570,11 @@
 .config-save-bar.is-clean {
   position: static;
   grid-template-columns: minmax(0, 1fr) auto;
-  background: var(--surface);
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
   backdrop-filter: none;
 }
@@ -736,7 +735,7 @@
   justify-content: space-between;
 }
 
-.route-config-card-head h4 {
+.route-config-card-head h3 {
   margin: 0;
   color: var(--ink);
   line-height: 1.24;
@@ -744,40 +743,26 @@
 
 .route-config-card {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
   align-content: start;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--hairline);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  gap: 16px 24px;
 }
 
-.route-config-card.tone-primary {
-  border-left-color: var(--accent);
+.route-config-card > :not(.custom-select) { grid-column: 1 / -1; }
+
+.route-compact-section {
+  padding-top: 24px;
+  border-top: 1px solid var(--hairline);
 }
 
-.route-config-card.tone-compact {
-  border-left-color: var(--amber);
-}
+.route-compact-section .toggle-group { max-width: 560px; }
+.route-compact-section .toggle-group button { flex: 1 1 0; }
 
-.route-config-card.tone-claude {
-  border-left-color: var(--jade);
+@media (max-width: 600px) {
+  .route-config-card { grid-template-columns: minmax(0, 1fr); }
+  .config-page-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 }
-
-.route-compact-column {
-  padding: 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-}
-
-.route-compact-column .route-config-card {
-  padding: 0;
-  border: 0;
-}
-
-.route-compact-column .toggle-group button { flex: 1 1 0; }
 
 .auto-schedule-card {
   display: flex;
@@ -1049,16 +1034,16 @@
 
 .config-portable-panel {
   display: grid;
-  max-width: 1000px;
+  width: 100%;
   gap: 16px;
   padding: 0;
 }
 
 .config-portable-head {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: 24px;
+  align-items: start;
 }
 
 .config-portable-head > div {
@@ -1067,9 +1052,19 @@
 
 .config-export-action {
   display: grid;
-  justify-items: start;
-  gap: 8px;
-  flex: 0 1 340px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.config-export-option { display: grid; align-content: start; gap: 10px; padding: 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--surface); }
+.config-export-option .btn { min-height: 44px; white-space: normal; }
+.config-import-heading { padding-top: 24px; border-top: 1px solid var(--hairline); }
+
+@media (max-width: 1100px) {
+  .config-portable-head { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 540px) {
+  .config-export-action { grid-template-columns: minmax(0, 1fr); }
 }
 
 .config-portable-head .config-export-action p {
@@ -1098,6 +1093,10 @@
   grid-template-columns: minmax(220px, 0.78fr) minmax(0, 1.22fr);
   gap: 12px;
 }
+
+.config-portable-grid.is-awaiting-file { grid-template-columns: minmax(0, 1fr); }
+.is-awaiting-file .config-file-drop { min-height: 100px; }
+.is-awaiting-file .config-import-empty { min-height: 0; padding: 0; border: 0; background: transparent; font-size: var(--text-small); }
 
 .config-portable-card,
 .config-import-summary {
@@ -2194,7 +2193,7 @@
   gap: 12px;
 }
 
-.key-order-heading h5 { margin: 0; font-size: var(--text-body); }
+.key-order-heading h4 { margin: 0; font-size: var(--text-body); }
 .key-order-heading p,
 .key-order-policy-note,
 .key-order-observation,

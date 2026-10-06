@@ -59,7 +59,9 @@ export function AnalyticsPanel({
           </div>
         )}
       </div>
-      {children}
+      <div className="analytics-panel-body" role="region" aria-label={title} tabIndex={0}>
+        {children}
+      </div>
     </section>
   );
 }
@@ -210,22 +212,22 @@ const TOKEN_SERIES = [
 
 export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTrendPoint[] }) {
   const cursor = useChartCursor(points);
+  const [hiddenSeries, setHiddenSeries] = useState<string[]>([]);
+  const visibleSeries = TOKEN_SERIES.filter((series) => !hiddenSeries.includes(series.metric));
   const { width } = cursor;
-  const height = 340;
-  const inset = { top: 18, right: 50, bottom: 30, left: 56 };
-  const tokenBottom = 202;
-  const rateTop = 246;
+  const height = 252;
+  const inset = { top: 28, right: 50, bottom: 30, left: 56 };
   const values = TOKEN_SERIES.flatMap((series) => points.map((point) => point[series.metric]));
-  const max = Math.max(1, ...values);
+  const max = Math.max(1, ...visibleSeries.flatMap((series) => points.map((point) => point[series.metric])));
   const x = (index: number) => inset.left +
     (points.length <= 1 ? 0 : index / (points.length - 1)) * (width - inset.left - inset.right);
   const tokenY = (value: number) => inset.top +
-    (1 - value / max) * (tokenBottom - inset.top);
+    (1 - value / max) * (height - inset.top - inset.bottom);
   const rate = (point: AnalyticsTrendPoint) => point.input_tokens === 0
     ? 0
     : Math.min(100, (point.cache_read_tokens / point.input_tokens) * 100);
-  const rateY = (value: number) => rateTop +
-    (1 - value / 100) * (height - rateTop - inset.bottom);
+  const rateY = (value: number) => inset.top +
+    (1 - value / 100) * (height - inset.top - inset.bottom);
   const tickIndexes = [...new Set(width < 480 ? [0, points.length - 1] : [0, Math.floor((points.length - 1) / 2), points.length - 1])]
     .filter((index) => index >= 0);
   const markers = sampleMarkerIndexes(points, width, cursor.index);
@@ -241,22 +243,29 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
 
   return (
     <div className="analytics-chart-wrap" ref={cursor.setContainer}>
-      <div className="analytics-chart-legend is-token-breakdown" aria-hidden="true">
+      <div className="analytics-chart-legend is-token-breakdown" role="group" aria-label="显示的 Token 系列">
         {TOKEN_SERIES.map((series) => (
-          <span className={series.tone} key={series.metric}>{series.label}</span>
+          <button type="button" className={series.tone} key={series.metric}
+            aria-pressed={!hiddenSeries.includes(series.metric)}
+            disabled={visibleSeries.length === 1 && visibleSeries[0].metric === series.metric}
+            onClick={() => setHiddenSeries((current) => current.includes(series.metric)
+              ? current.filter((metric) => metric !== series.metric) : [...current, series.metric])}>
+            {series.label}
+          </button>
         ))}
         <span className="is-cache-rate">缓存率</span>
       </div>
+      <p className="analytics-chart-hint">点击图例对比系列；左轴为 Token，右轴为缓存率（0–100%）。下方保留全部精确读数。</p>
       <svg
         className="analytics-chart analytics-token-chart"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label="输入、输出、缓存读取、缓存创建与缓存命中率趋势"
+        aria-label={`${visibleSeries.map((series) => series.label).join("、")}与缓存命中率趋势`}
         onPointerMove={(event) => cursor.pickAt(event, inset)}
         onPointerDown={(event) => cursor.pickAt(event, inset)}
       >
-        <text x={inset.left} y={12}>Token 体量</text>
-        <text className="analytics-chart-rate-axis" x={inset.left} y={rateTop - 12}>缓存率 · 独立百分比刻度</text>
+        <text x={inset.left} y={12}>Token</text>
+        <text className="analytics-chart-rate-axis" x={width - inset.right} y={12} textAnchor="end">缓存率 (%)</text>
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
           const value = max * ratio;
           const tickY = tokenY(value);
@@ -269,11 +278,10 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
             </g>
           );
         })}
-        {[0, 50, 100].map((value) => <g key={value}>
-          <line x1={inset.left} x2={width - inset.right} y1={rateY(value)} y2={rateY(value)} />
-          <text className="analytics-chart-rate-axis" x={width - inset.right + 8} y={rateY(value) + 4}>{value}%</text>
-        </g>)}
-        {TOKEN_SERIES.map((series) => (
+        {[0, 50, 100].map((value) => (
+          <text key={value} className="analytics-chart-rate-axis" x={width - inset.right + 8} y={rateY(value) + 4}>{value}%</text>
+        ))}
+        {visibleSeries.map((series) => (
           <polyline
             className={`analytics-chart-line ${series.tone}`}
             points={points.map((point, index) => `${x(index)},${tokenY(point[series.metric])}`).join(" ")}
@@ -289,7 +297,7 @@ export function AnalyticsTokenBreakdownChart({ points }: { points: AnalyticsTren
           <circle
             className="analytics-chart-hit-target"
             cx={x(index)}
-            cy={tokenY(point.cache_read_tokens)}
+            cy={tokenY(point[visibleSeries[0].metric])}
             r="7"
             key={point.key}
           >
@@ -402,11 +410,12 @@ function ChartReadout({ label, points, index, onSelect, description }: {
 }
 
 export function AnalyticsDistribution({
-  rows
+  rows,
+  total
 }: {
   rows: Array<{ label: string; value: number; meta?: string; tone?: string; onOpenLogs?: () => void }>;
+  total: number;
 }) {
-  const max = Math.max(1, ...rows.map((row) => row.value));
   if (rows.length === 0) {
     return <div className="analytics-inline-empty">暂无分布数据</div>;
   }
@@ -420,12 +429,14 @@ export function AnalyticsDistribution({
               ? <button type="button" className="analytics-drilldown" title={row.label}
                   aria-label={`查看 ${row.label} 的请求日志`} onClick={row.onOpenLogs}>{row.label} ↗</button>
               : <span title={row.label}>{row.label}</span>}
-            <strong title={formatMetricNumber(row.value)}>{formatCompactMetricNumber(row.value)}</strong>
+            <strong title={formatMetricNumber(row.value)}>{formatCompactMetricNumber(row.value)}
+              <small className="analytics-share-label">{total > 0 ? `${(row.value / total * 100).toFixed(1)}%` : "—"}</small>
+            </strong>
           </div>
           <div className="analytics-distribution-track">
             <span
               className={row.tone ?? ""}
-              style={{ "--analytics-share": `${(row.value / max) * 100}%` } as CSSProperties}
+              style={{ "--analytics-share": `${total > 0 ? row.value / total * 100 : 0}%` } as CSSProperties}
             />
           </div>
           {row.meta && <small>{row.meta}</small>}

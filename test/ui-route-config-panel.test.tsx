@@ -53,6 +53,9 @@ describe("RouteConfigPanel", () => {
     expect(markup).toContain(`${client} 主路由 上游格式`);
     expect(markup).not.toContain(`${otherClient} 主路由`);
     if (scope === "codex") {
+      expect(markup).toContain('class="route-connection-sections"');
+      expect(markup).toContain('aria-label="Codex 压缩策略"');
+      expect(markup.indexOf("API Key 使用顺序")).toBeLessThan(markup.indexOf('aria-label="Codex 压缩策略"'));
       expect(markup).toContain("Codex 压缩路由 上游格式");
       expect(markup).toContain("Codex 压缩上游模式");
       expect(markup).toContain("https://codex-compact.example");

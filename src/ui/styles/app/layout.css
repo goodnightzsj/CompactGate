@@ -9,7 +9,9 @@
   --sidebar-width: 212px;
   display: grid;
   grid-template-columns: var(--sidebar-width) 1fr;
-  min-height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── Sidebar ── */
@@ -17,7 +19,7 @@
   position: sticky;
   top: 0;
   width: var(--sidebar-width);
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -66,6 +68,8 @@
   flex: 1;
   padding: 6px 10px;
   align-content: start;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sidebar-nav-item {
@@ -205,10 +209,9 @@
 
 .main-content {
   min-width: 0;
-  padding: var(--space-lg) var(--space-xl) 40px;
-  display: grid;
-  gap: var(--space-lg);
-  align-content: start;
+  min-height: 0;
+  padding: var(--space-md) var(--space-lg);
+  overflow: auto;
   background: var(--paper);
   scroll-margin-top: 80px;
 }
@@ -257,6 +260,15 @@
 }
 
 .page-header > * { min-width: 0; }
+
+.page-description {
+  max-width: 72ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: var(--text-small);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 
 .page-header h2 {
   margin: 0;

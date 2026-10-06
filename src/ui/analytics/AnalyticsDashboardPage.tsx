@@ -205,7 +205,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
 
             {stats.data.summary.requests === 0 ? (
               <AnalyticsEmptyState hasRetainedLogs={stats.data.retained_range.oldest_at !== null} onNavigate={onNavigate} />
-            ) : <>
+            ) : <div className="analytics-detail-grid">
             <div className="analytics-chart-grid">
               <AnalyticsPanel title="请求趋势" meta={granularity === "hour" ? "按小时" : "按天"}>
                 <AnalyticsTrendChart points={trend} metric="requests" />
@@ -218,6 +218,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
             <div className="analytics-breakdown-grid">
               <AnalyticsPanel
                 title="来源分布"
+                meta={sourceDimension === "host" ? "请求量 Top 12 · 占当前范围" : "占当前范围"}
                 actions={(
                   <div className="analytics-panel-controls">
                     <AnalyticsSegmented
@@ -235,7 +236,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                   </div>
                 )}
               >
-                <AnalyticsDistribution rows={(sourceDimension === "platform"
+                <AnalyticsDistribution total={stats.data.summary[sourceMeasure]} rows={(sourceDimension === "platform"
                   ? platforms.map((row) => ({
                       ...row,
                       tone: row.label === "Claude" ? "is-claude" : "is-primary"
@@ -254,6 +255,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
               </AnalyticsPanel>
               <AnalyticsPanel
                 title="响应模型"
+                meta="请求量 Top 12 · 占当前范围"
                 actions={(
                   <AnalyticsSegmented
                     label="模型分布度量"
@@ -263,7 +265,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                   />
                 )}
               >
-                <AnalyticsDistribution rows={stats.data.by_model.map((row) => ({
+                <AnalyticsDistribution total={stats.data.summary[modelMeasure]} rows={stats.data.by_model.map((row) => ({
                   label: row.model ?? "未识别模型",
                   value: row[modelMeasure],
                   onOpenLogs: () => onOpenLogs({ ...stats.data!.range, model: row.model }),
@@ -274,7 +276,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
               </AnalyticsPanel>
             </div>
 
-            <AnalyticsPanel title="模型路径" meta="Host · 请求模型 → 上游模型 → 响应模型">
+            <AnalyticsPanel title="模型路径" meta="请求量 Top 20 · 请求 → 上游 → 响应；点击响应模型查看该 Host 日志">
               {stats.data.model_mappings.length === 0 ? (
                 <div className="analytics-inline-empty">暂无模型映射数据</div>
               ) : (
@@ -298,7 +300,11 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                           <td><code>{row.host}</code></td>
                           <td><code>{row.source_model ?? "-"}</code></td>
                           <td><code>{row.target_model ?? "-"}</code></td>
-                          <td><code>{row.response_model ?? "-"}</code></td>
+                          <td><button type="button" className="analytics-drilldown"
+                            aria-label={`查看 ${row.host} 上 ${row.response_model ?? "未识别模型"} 的请求日志`}
+                            onClick={() => onOpenLogs({ ...stats.data!.range, host: row.host, model: row.response_model })}>
+                            <code title={row.response_model ?? "未识别模型"}>{row.response_model ?? "未识别模型"} ↗</code>
+                          </button></td>
                           <td>{formatMetricNumber(row.requests)}</td>
                           <td className={row.error_requests > 0 ? "is-error" : undefined}>
                             {formatMetricNumber(row.error_requests)}
@@ -312,7 +318,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
                 </div>
               )}
             </AnalyticsPanel>
-            </>}
+            </div>}
 
             <RetainedRange stats={stats.data} />
           </div>

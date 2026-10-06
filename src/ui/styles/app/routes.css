@@ -4,6 +4,12 @@
   gap: 16px;
 }
 
+.routes-workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
 .route-header-actions {
   display: flex;
   flex-wrap: wrap;

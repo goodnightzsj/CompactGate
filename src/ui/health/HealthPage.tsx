@@ -30,7 +30,7 @@ export function HealthPage({
     { label: "Claude 主路由", status: claudePrimaryStatus }
   ];
   const readyRoutes = routeStatuses.filter((item) => item.status.tone === "good").length;
-  const attentionRoutes = routeStatuses.filter((item) => item.status.tone === "warn").length;
+  const attentionRoutes = health ? routeStatuses.filter((item) => item.status.tone === "warn").length : 0;
   const failedRoutes = routeStatuses.filter((item) => item.status.tone === "bad").length;
   const totalRoutes = routeStatuses.length;
   const listenUrl = health ? `http://${health.listen}` : "读取中...";
@@ -43,6 +43,7 @@ export function HealthPage({
         <div>
           <p className="eyebrow">健康检查</p>
           <h2>上游装配状态</h2>
+          <p className="page-description">检查地址与凭据装配。实际请求是否成功，请结合请求日志判断。</p>
         </div>
 
         <div className="health-page-actions">
@@ -52,8 +53,9 @@ export function HealthPage({
         </div>
       </div>
 
-      {error && <p className="error-banner" role="alert">{error}</p>}
+      {error && <p className="error-banner" role="alert">{error} {health ? "以下为上次成功采样，当前状态尚未确认。" : "尚未取得健康数据。"}</p>}
 
+      <div className="health-workspace" role="region" aria-label="健康检查详情" tabIndex={0}>
       <HealthHeroSection
         overallStatus={overallStatus}
         readyRoutes={readyRoutes}
@@ -113,6 +115,7 @@ export function HealthPage({
         failedRoutes={failedRoutes}
         attentionRoutes={attentionRoutes}
       />
+      </div>
     </div>
   );
 }

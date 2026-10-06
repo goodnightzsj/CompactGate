@@ -270,6 +270,11 @@ export function LogsPage({
     searchInputRef.current?.focus({ preventScroll: true });
   }
 
+  function removeFilter(update: () => void) {
+    update();
+    searchInputRef.current?.focus({ preventScroll: true });
+  }
+
   return (
     <>
       <div className="page-header">
@@ -454,6 +459,16 @@ export function LogsPage({
           <span className="route-chip claude">{PROVIDER_LABELS.claude}: {providerCounts.claude}</span>
         </div>
       </div>
+
+      {hasActiveFilters && <div className="logs-filter-chips" role="group" aria-label="当前筛选，点击移除单项">
+        <span>筛选范围</span>
+        {routeFilter !== "all" && <button type="button" onClick={() => removeFilter(() => onRouteFilterChange("all"))} aria-label="移除通道筛选">{routeLabel(routeFilter)} ×</button>}
+        {statusFilter !== "all" && <button type="button" onClick={() => removeFilter(() => onStatusFilterChange("all"))} aria-label="移除状态筛选">{statusFilter === "error" ? "错误" : "正常"} ×</button>}
+        {hostFilter !== ALL_HOSTS_FILTER && <button type="button" title={hostFilter} onClick={() => removeFilter(() => onHostFilterChange(ALL_HOSTS_FILTER))} aria-label={`移除上游筛选 ${hostFilter}`}>{hostFilter} ×</button>}
+        {searchFilter.trim() && <button type="button" title={searchFilter} onClick={() => removeFilter(() => onSearchFilterChange(""))} aria-label="移除搜索条件">搜索：{searchFilter} ×</button>}
+        {drilldown?.model !== undefined && <button type="button" onClick={() => removeFilter(() => onDrilldownChange({ from: drilldown.from, to: drilldown.to }))} aria-label="移除响应模型筛选">{drilldown.model ?? "未识别模型"} ×</button>}
+        {drilldown && <button type="button" onClick={clearDrilldown} aria-label="移除时间与模型范围">限定时间与模型 ×</button>}
+      </div>}
 
       {error && (
         <div className="error-banner page-error-banner" role="alert">

@@ -49,7 +49,7 @@ export function HealthEndpointCard({
         <strong>{upstream?.base_url ?? "读取中..."}</strong>
       </div>
 
-      <details className="health-credential-details" open={status.tone !== "good"}>
+      {upstream ? <details className="health-credential-details" open={status.tone !== "good"}>
         <summary>凭据详情 <span>{credentialSourceLabel(upstream?.api_key_source)}</span></summary>
       <div className="health-kv-grid">
         <div className="health-kv">
@@ -71,7 +71,7 @@ export function HealthEndpointCard({
         <span className="health-led" aria-hidden="true" />
         {credentialFlagCopy(credentialScope, upstream)}
       </div>
-      </details>
+      </details> : <p className="health-kv" role="status">{credentialFlagCopy(credentialScope, upstream)}</p>}
     </section>
   );
 }

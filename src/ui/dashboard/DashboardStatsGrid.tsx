@@ -13,7 +13,7 @@ export function DashboardStatsGrid({
   logCounts
 }: {
   health: HealthResponse | null;
-  listen: string;
+  listen: string | null;
   logCounts: Record<"all" | RouteKind, number> | null;
 }) {
   const codexPrimaryOk = upstreamHealthBadge(health?.primary).tone === "good";
@@ -27,8 +27,10 @@ export function DashboardStatsGrid({
     <div className="dashboard-grid">
       <div className="stat-card">
         <div className="stat-card-label">服务端点</div>
-        <EndpointDisplay key={`openai-${listen}`} label="OpenAI" tone="codex" endpoint={`http://${listen}/v1`} />
-        <EndpointDisplay key={`claude-${listen}`} label="Claude" tone="claude" endpoint={`http://${listen}/anthropic`} />
+        {listen ? <>
+          <EndpointDisplay key={`openai-${listen}`} label="OpenAI" tone="codex" endpoint={`http://${listen}/v1`} />
+          <EndpointDisplay key={`claude-${listen}`} label="Claude" tone="claude" endpoint={`http://${listen}/anthropic`} />
+        </> : <p role="status">等待配置数据</p>}
       </div>
 
       <div className="stat-card">
@@ -52,9 +54,9 @@ export function DashboardStatsGrid({
       <div className="stat-card">
         <div className="stat-card-label">上游配置</div>
         <div className={`dashboard-health-summary ${allReady ? "is-good" : "is-warn"}`}>
-          <div className="dashboard-health-summary-value">{readyRoutes}/{totalRoutes}</div>
+          <div className="dashboard-health-summary-value">{health ? `${readyRoutes}/${totalRoutes}` : "—"}</div>
           <div className="dashboard-health-summary-meta">
-            {allReady ? "全部配置就绪" : `${totalRoutes - readyRoutes} 条路由需要关注`}
+            {!health ? "等待健康数据" : allReady ? "全部配置就绪" : `${totalRoutes - readyRoutes} 条路由需要关注`}
           </div>
           <a className="dashboard-health-summary-link" href={pagePathForStudioPage("health")}>查看详情 →</a>
         </div>

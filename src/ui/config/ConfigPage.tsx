@@ -57,6 +57,11 @@ export function ConfigPage({
   const [profileToLocate, setProfileToLocate] = useState<{ scope: ConfigProfileScope; id: string } | null>(null);
   const [oauthExpanded, setOAuthExpanded] = useState(false);
   const visibleScope = configTab === "profiles" || displayScope !== "all" ? displayScope : "codex";
+  const hasClientScope = configTab !== "logging" && configTab !== "portable";
+  const tab = CONFIG_TABS.find((item) => item.id === configTab)!;
+  const changedAreas = config ? changedConfigAreas(config, form) : [];
+  const scopeState = config && visibleScope !== "all" ? profileScopeState(config, visibleScope) : null;
+  const activeProfile = scopeState?.profiles.find((profile) => profile.id === scopeState.active_profile_id);
   const importWorkflow = useConfigImportWorkflow({
     onImportConfig: actions.importConfig
   });
@@ -78,9 +83,33 @@ export function ConfigPage({
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <h2>配置管理</h2>
+      <div className="page-header config-page-header">
+        <div className="config-page-copy">
+          <h2>{tab.title}</h2>
+          <p className="page-description">{tab.description}</p>
+          {hasClientScope && configTab !== "profiles" && (
+            <p className="config-running-context">
+              当前运行：<strong>{!config ? "等待运行配置" : activeProfile?.name ?? "独立运行配置"}</strong>
+            </p>
+          )}
+        </div>
+        <div className="config-page-tools">
+          {hasClientScope && (
+            <div className="client-scope-switch" role="group" aria-label="配置展示客户端">
+              {(configTab === "profiles"
+                ? ([["all", "全部"], ["codex", "Codex"], ["claude", "Claude"]] as const)
+                : ([["codex", "Codex"], ["claude", "Claude"]] as const)
+              ).map(([scope, label]) => (
+                <button key={scope} type="button" className={visibleScope === scope ? "is-active" : ""}
+                  aria-pressed={visibleScope === scope} onClick={() => setDisplayScope(scope)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        <span className={`status-pill ${hasPendingChanges ? "is-warn" : ""}`}>
+          {!config ? "等待配置数据" : hasPendingChanges ? `待应用：${changedAreas.join(" / ") || "配置改动"}` : "与已保存配置一致"}
+        </span>
         </div>
       </div>
 
@@ -151,37 +180,6 @@ export function ConfigPage({
             role="tabpanel"
             aria-labelledby={`config-tab-${configTab}`}
           >
-          {configTab !== "logging" && configTab !== "portable" && (
-            <div className="config-scope-heading">
-              {configTab === "profiles" && <div>
-                <h3>配置档案</h3>
-                <p>先选择档案，再应用到运行配置；选中不会切换连接。厂商授权在下方单独管理。</p>
-              </div>}
-              <div className="client-scope-switch" role="group" aria-label="配置展示客户端">
-              {(configTab === "profiles"
-                ? ([
-                    ["all", "全部"],
-                    ["codex", "Codex"],
-                    ["claude", "Claude"]
-                  ] as const)
-                : ([
-                    ["codex", "Codex"],
-                    ["claude", "Claude"]
-                  ] as const)
-              ).map(([scope, label]) => (
-                <button
-                  key={scope}
-                  type="button"
-                  className={visibleScope === scope ? "is-active" : ""}
-                  aria-pressed={visibleScope === scope}
-                  onClick={() => setDisplayScope(scope)}
-                >
-                  {label}
-                </button>
-              ))}
-              </div>
-            </div>
-          )}
             {configTab === "profiles" && (
               <ConfigProfilesPanel
                 config={config}
@@ -278,7 +276,7 @@ export function ConfigPage({
             saveError={actions.saveError}
             saveConflict={actions.saveConflict}
             hasPendingChanges={hasPendingChanges}
-            changedAreas={config ? changedConfigAreas(config, form) : []}
+            changedAreas={changedAreas}
             profileErrors={profileErrors}
             onSaveConfig={actions.saveConfig}
             onOverrideSaveConflict={actions.overrideSaveConflict}

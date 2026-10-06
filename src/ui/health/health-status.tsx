@@ -41,6 +41,8 @@ export function credentialFlagCopy(
   scope: CredentialScope,
   upstream?: HealthRouteCredentialConfig | null
 ): string {
+  if (!upstream) return "等待健康数据，尚未确认凭据状态。";
+
   if (upstream?.api_key_source === "oauth") {
     const status = upstream.oauth_status ?? "missing";
     const label = oauthStatusLabel[status];

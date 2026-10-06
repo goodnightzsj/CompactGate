@@ -17,7 +17,6 @@ import { useProfileDragReorder } from "./useProfileDragReorder.js";
 export function ProfileScopeCard({
   scope,
   title,
-  eyebrow,
   description,
   emptyTitle,
   emptyDescription,
@@ -39,7 +38,6 @@ export function ProfileScopeCard({
 }: {
   scope: ConfigProfileScope;
   title: string;
-  eyebrow: string;
   description: string;
   emptyTitle: string;
   emptyDescription: string;
@@ -190,7 +188,6 @@ export function ProfileScopeCard({
   return (
     <section className={`profile-card profile-card-${scope}`} aria-labelledby={titleId} hidden={hidden}>
       <div className="profile-card-copy">
-        <p className="eyebrow">{eyebrow}</p>
         <h3 id={titleId}>{title}</h3>
         <p>{description}</p>
       </div>

@@ -17,6 +17,7 @@ import {
 } from "../src/ui/analytics/analytics-data.js";
 import * as analyticsData from "../src/ui/analytics/analytics-data.js";
 import {
+  AnalyticsDistribution,
   AnalyticsRefreshStatus,
   AnalyticsTokenBreakdownChart,
   AnalyticsTrendChart,
@@ -31,6 +32,33 @@ afterEach(() => vi.restoreAllMocks());
 const pageProps = { preferences: null, onPreferencesChange: vi.fn(), onNavigate: vi.fn(), onOpenLogs: vi.fn() };
 
 describe("analytics data helpers", () => {
+  it("uses the full snapshot denominator rather than the truncated ranking total", () => {
+    const markup = renderToStaticMarkup(createElement(AnalyticsDistribution, {
+      total: 100,
+      rows: [{ label: "first", value: 25 }, { label: "second", value: 10 }]
+    }));
+    expect(markup).toContain("25.0%");
+    expect(markup).toContain("10.0%");
+    expect(markup).toContain("--analytics-share:25%");
+    const empty = renderToStaticMarkup(createElement(AnalyticsDistribution, { total: 0, rows: [{ label: "no usage", value: 0 }] }));
+    expect(empty).not.toMatch(/NaN|Infinity/);
+    expect(empty).toContain("--analytics-share:0%");
+  });
+
+  it("paginates long usage tables without truncating CSV data", () => {
+    const data = snapshot([{ bucket_start: "2026-08-07T00:00:00.000Z", ...metric({ requests: 1 }) }]);
+    data.range = dateInputsToRange("2026-08-01", "2026-08-07");
+    data.summary.requests = 1;
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data, loading: false, error: null, refresh: vi.fn() });
+    const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
+      preferences: { from: "2026-08-01", to: "2026-08-07", granularity: "hour", endpointMeasure: "requests" }
+    }));
+    const table = markup.split('analytics-usage-table')[1].split('</table>')[0];
+    expect(table.match(/<tr>/g)).toHaveLength(25);
+    expect(markup).toContain('aria-label="时段页码"');
+    expect(markup).toContain("第 1 / 7 页");
+    expect(usageCsv(groupTrend(data, "hour")).trim().split("\n")).toHaveLength(169);
+  });
   it("resolves rolling ranges on every request without moving fixed usage dates", async () => {
     const fixed = dateInputsToRange("2026-08-01", "2026-08-07");
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
@@ -108,10 +136,37 @@ describe("analytics data helpers", () => {
     expect(markup).toContain("缓存率");
     expect(markup).toContain("输入 1,000");
     expect(markup).toContain("缓存率 50.0%");
-    expect(markup).toContain("Token 体量");
-    expect(markup).toContain("缓存率 · 独立百分比刻度");
+    expect(markup).toContain("左轴为 Token，右轴为缓存率");
+    expect(markup).toContain(">缓存率 (%)</text>");
     expect(markup).toContain('type="range"');
     expect(markup).toContain('aria-label="Token 明细时段"');
+    expect(markup).toContain('aria-label="显示的 Token 系列"');
+    expect(markup.match(/aria-pressed="true"/g)).toHaveLength(4);
+  });
+
+  it("overlays cache percentages on the full token plot with independent scales", () => {
+    const markup = renderToStaticMarkup(createElement(AnalyticsTokenBreakdownChart, {
+      points: [0, 500, 1_000].map((cached, index) => ({
+        ...metric({ input_tokens: 1_000, output_tokens: 500, cache_read_tokens: cached }),
+        key: String(index), label: String(index)
+      }))
+    }));
+    const coordinates = (tone: string) => {
+      const points = markup.match(new RegExp(`<polyline class="analytics-chart-line ${tone}" points="([^"]+)"`));
+      expect(points).not.toBeNull();
+      return points![1].split(" ").map((point) => point.split(",").map(Number));
+    };
+    const input = coordinates("is-input");
+    const output = coordinates("is-output");
+    const zero = coordinates("is-cache-creation");
+    expect(coordinates("is-cache-rate")).toEqual([
+      [input[0][0], zero[0][1]],
+      [input[1][0], output[1][1]],
+      [input[2][0], input[2][1]]
+    ]);
+    expect(markup).toContain(">0%</text>");
+    expect(markup).toContain(">100%</text>");
+    expect(markup).toContain("缓存率 100.0%");
   });
 
   it("exposes an exact, keyboard-operable request readout", () => {
@@ -159,20 +214,18 @@ describe("analytics data helpers", () => {
     expect(markup).not.toContain("统计已更新");
   });
 
-  it("keeps all exact token components visible below the three usage metrics", () => {
+  it("combines all seven usage metrics while preserving exact token components", () => {
     const stats = snapshot([]);
     stats.summary.total_tokens = 1_900_000;
     stats.summary.input_tokens = 1_800_000;
     vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, pageProps));
     const primary = markup.match(/<section class="usage-metric-grid"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
-    const details = markup.match(/<section class="analytics-metric-section usage-token-metrics"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
-    expect(primary.match(/<article /g)).toHaveLength(3);
+    expect(primary.match(/<article /g)).toHaveLength(7);
     expect(primary).toContain('title="1,900,000"');
-    expect(details.match(/<article /g)).toHaveLength(4);
-    expect(details).toContain('title="1,800,000"');
-    for (const label of ["总输入", "输出", "缓存读取", "缓存创建"]) expect(details).toContain(label);
-    expect(details).toContain('<h3 id="usage-token-heading">Token 构成</h3>');
+    expect(primary).toContain('title="1,800,000"');
+    for (const label of ["总 Token", "缓存率", "请求", "总输入", "输出", "缓存读取", "缓存创建"]) expect(primary).toContain(label);
+    expect(markup).not.toContain("usage-token-metrics");
     expect(markup).not.toContain("<details");
     expect(markup).not.toContain("<summary");
   });
