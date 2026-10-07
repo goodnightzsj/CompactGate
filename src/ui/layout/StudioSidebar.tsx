@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { HealthResponse } from "../../shared/types.js";
 import type { StudioPage, ThemeMode } from "../app-types.js";
 import { upstreamHealthBadge } from "../health/health-status.js";
@@ -126,14 +126,14 @@ export function StudioSidebar({
   const compactStatus = upstreamHealthBadge(health?.compact);
   const claudePrimaryStatus = upstreamHealthBadge(health?.claude?.primary);
 
-  const navItems: Array<{ page: StudioPage; label: string; icon: ReactNode }> = [
-    { page: "dashboard", label: "总览", icon: <IconDashboard /> },
-    { page: "analytics", label: "仪表盘", icon: <IconAnalytics /> },
+  const navItems: Array<{ page: StudioPage; label: string; icon: ReactNode; group?: string }> = [
+    { page: "dashboard", label: "总览", icon: <IconDashboard />, group: "概况" },
+    { page: "analytics", label: "仪表盘", icon: <IconAnalytics />, group: "观测" },
     { page: "usage", label: "用量", icon: <IconUsage /> },
-    { page: "routes", label: "路由", icon: <IconRoutes /> },
-    { page: "config", label: "配置", icon: <IconConfig /> },
     { page: "logs", label: "日志", icon: <IconLogs /> },
     { page: "samples", label: "样本概览", icon: <IconAnalytics /> },
+    { page: "routes", label: "路由", icon: <IconRoutes />, group: "管理" },
+    { page: "config", label: "配置", icon: <IconConfig /> },
     { page: "health", label: "健康", icon: <IconHealth /> }
   ];
 
@@ -146,15 +146,17 @@ export function StudioSidebar({
 
       <nav className="sidebar-nav" aria-label="主导航" ref={navRef}>
         {navItems.map((item) => (
-          <button
-            key={item.page}
-            className={`sidebar-nav-item ${currentPage === item.page ? "is-active" : ""}`}
-            aria-current={currentPage === item.page ? "page" : undefined}
-            onClick={() => onNavigate(item.page)}
-          >
-            <span className="sidebar-nav-icon">{item.icon}</span>
-            {item.label}
-          </button>
+          <Fragment key={item.page}>
+            {item.group && <span className="sidebar-group-label">{item.group}</span>}
+            <button
+              className={`sidebar-nav-item ${currentPage === item.page ? "is-active" : ""}`}
+              aria-current={currentPage === item.page ? "page" : undefined}
+              onClick={() => onNavigate(item.page)}
+            >
+              <span className="sidebar-nav-icon">{item.icon}</span>
+              {item.label}
+            </button>
+          </Fragment>
         ))}
       </nav>
 

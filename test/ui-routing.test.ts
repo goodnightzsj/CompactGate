@@ -14,8 +14,24 @@ import { planStudioNavigation } from "../src/ui/app/useStudioNavigation.js";
 import type { PageMode } from "../src/ui/app-types.js";
 import type { ConfigTab } from "../src/ui/config/types.js";
 import { CONFIG_TABS } from "../src/ui/config/config-tabs.js";
+import { StudioSidebar } from "../src/ui/layout/StudioSidebar.js";
 
 describe("UI routing helpers", () => {
+  it("keeps navigation groups while retaining the original labels and status area", () => {
+    const markup = renderToStaticMarkup(createElement(StudioSidebar, {
+      currentPage: "analytics", onNavigate: vi.fn(), health: null,
+      themeMode: "light", onThemeModeChange: vi.fn()
+    }));
+    expect([...markup.matchAll(/class="sidebar-group-label">([^<]+)</g)].map((match) => match[1]))
+      .toEqual(["概况", "观测", "管理"]);
+    for (const label of ["总览", "仪表盘", "用量", "日志", "样本概览", "路由", "配置", "健康"]) {
+      expect(markup).toContain(`>${label}</button>`);
+    }
+    expect(markup.indexOf(">日志</button>")).toBeLessThan(markup.indexOf(">路由</button>"));
+    expect(markup.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(markup).not.toContain("sidebar-health-status");
+  });
+
   it.each([
     ["/health", "", "health"],
     ["/", "#analytics", "analytics"],

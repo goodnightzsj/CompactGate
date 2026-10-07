@@ -169,6 +169,8 @@
    three top-level page grids collapse to one column. The two blocks below keep
    only the row-vs-column delta. */
 @media (max-width: 1180px) {
+  .sidebar-group-label { display: none; }
+
   .sidebar {
     position: sticky;
     top: 0;
