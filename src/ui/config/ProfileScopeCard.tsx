@@ -326,9 +326,10 @@ export function ProfileScopeCard({
                   <span className="profile-item-copy">
                     <span className="profile-item-kicker">
                       {isActive ? "当前运行时" : isSelected ? "已选中" : "可选档案"}
+                      {isActive && isSelected && " · 已选中"}
                     </span>
                     <strong>{profile.name}</strong>
-                    <small>{profileSummary(profile)}</small>
+                    <small className="profile-item-summary">{profileSummary(profile).map((item) => <span key={item}>{item}</span>)}</small>
                     {(profile.oauth_account_id || profile.compact_oauth_account_id) && <small>OAuth 连接</small>}
                     <span>更新于 {formatClock(profile.updated_at)}</span>
                   </span>

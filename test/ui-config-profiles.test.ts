@@ -119,6 +119,9 @@ describe("UI config profile actions", () => {
     }));
 
     expect(markup).toContain("重命名并应用当前 Codex 档案");
+    expect(markup).toContain("当前运行时 · 已选中");
+    expect(markup).toContain('class="profile-item-summary"');
+    expect(markup).toContain("<span>主 OpenAI Responses</span><span>压缩 OpenAI Responses</span>");
     expect(markup).not.toContain("保存当前 Codex 草稿为新档案");
     expect(markup).toContain(`id="${profileItemId("codex", current.id)}" tabindex="-1" aria-label="Codex 档案 zzzcoding"`);
   });

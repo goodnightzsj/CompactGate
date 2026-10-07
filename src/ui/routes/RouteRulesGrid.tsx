@@ -133,7 +133,7 @@ function RouteHitMarker({ source }: { source: RouteHitSource }) {
   }
 
   return (
-    <span className="route-hit-marker">
+    <span className={`route-hit-marker is-${source}`}>
       {source === "preview" ? "预览命中" : "最近命中"}
     </span>
   );

@@ -64,11 +64,11 @@
   .analytics-latency-metrics .analytics-metric-grid { gap: 12px; }
 
   .analytics-data-view > .analytics-detail-grid {
-    flex: 1;
-    min-height: 0;
+    flex: 1 0 auto;
+    min-height: min-content;
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1.4fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(200px, 1fr);
     gap: 12px;
   }
   .analytics-detail-grid > .analytics-chart-grid { grid-column: 1; grid-row: 1; }
@@ -100,7 +100,9 @@
   .analytics-panel > .card-header { flex-shrink: 0; gap: 8px; margin-bottom: 8px; }
   .analytics-panel-body { flex: 1; min-height: 0; overflow: auto; }
   .analytics-panel-body > .analytics-table-scroll { overflow: visible; }
-  .analytics-detail-grid .analytics-chart { height: auto; }
+  /* Keep the plot and its keyboard readout together; only long data tables scroll. */
+  .analytics-chart-grid .analytics-panel-body { flex: none; overflow: visible; }
+  .analytics-detail-grid .analytics-chart { height: 236px; }
   .analytics-detail-grid .analytics-chart-readout { min-height: 0; }
   .analytics-table th { position: sticky; top: 0; background: var(--surface); }
 }
@@ -269,7 +271,7 @@
   }
 
   .claude-model-map-row {
-    grid-template-columns: minmax(180px, 0.8fr) auto minmax(0, 1fr);
+    grid-template-columns: minmax(180px, 0.8fr) 76px minmax(0, 1fr);
   }
 
   .model-control-cell {
@@ -387,8 +389,12 @@
   .analytics-recent-metrics .analytics-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-metric { padding: 8px 0; gap: 6px; }
   .analytics-metric > strong { font-size: 1.5rem; }
-  .usage-metric-grid .analytics-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .usage-metric-grid .analytics-metric { padding: 12px 0; }
+  .usage-metric-grid .analytics-metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px 12px; }
+  .usage-metric-grid .analytics-metric { grid-column: span 3; padding: 6px 0; gap: 4px; }
+  .usage-metric-grid .analytics-metric:nth-child(-n+3) { grid-column: span 2; }
+  .usage-metric-grid .analytics-metric:nth-child(n+4) { border-top: 1px solid var(--hairline); }
+  .usage-metric-grid .analytics-metric:nth-child(n+4) > strong { font-size: 1.25rem; }
+  .usage-granularity-field { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
 
   .analytics-chart-grid,
   .analytics-breakdown-grid,

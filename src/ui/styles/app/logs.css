@@ -600,6 +600,9 @@
 
 .log-table .log-model-cell {
   display: inline-grid;
+  grid-template-columns: minmax(0, 1fr);
+  inline-size: 100%;
+  row-gap: 4px;
   justify-items: stretch;
   max-inline-size: 100%;
   overflow: hidden;
@@ -721,6 +724,8 @@
 
 .log-sample-scope {
   margin: 12px 0;
+  padding-block: 8px;
+  border-block: 1px solid var(--hairline);
   color: var(--muted);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
@@ -745,6 +750,7 @@
 .log-sample-identity strong { font-weight: 650; }
 
 .log-sample-metrics { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 12px; margin: 0; }
+.log-sample-metrics > div { text-align: right; }
 .log-sample-metrics dt { color: var(--muted); font-size: 0.68rem; }
 .log-sample-metrics dd { margin: 3px 0 0; font-size: 0.85rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .log-sample-metrics .is-err { color: var(--brick); }
@@ -828,6 +834,12 @@
   gap: 3px;
   min-width: 0;
   max-inline-size: 12ch;
+}
+
+.log-table .log-model-route-badges {
+  grid-row: auto;
+  max-inline-size: 100%;
+  align-items: center;
 }
 
 .log-model-route-badges .protocol-chip {
@@ -1046,6 +1058,11 @@
 .log-table-summary .log-cell-code,
 .log-table-summary .log-cell-model {
   max-inline-size: 100%;
+}
+
+.log-table .log-cell-code:has(.log-summary-stack) {
+  display: grid;
+  min-width: 0;
 }
 
 .log-table-full .log-status {

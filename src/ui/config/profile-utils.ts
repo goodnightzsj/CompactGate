@@ -20,7 +20,7 @@ export function profileItemId(scope: ConfigProfileScope, profileId: string): str
   return `profile-${scope}-${encodeURIComponent(profileId)}`;
 }
 
-export function profileSummary(profile: PublicConfig["profiles"][number]): string {
+export function profileSummary(profile: PublicConfig["profiles"][number]): string[] {
   const secretCopy =
     profile.stored_api_key_count > 0
       ? `含 ${profile.stored_api_key_count} 个直填密钥`
@@ -33,7 +33,7 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
       `主 ${upstreamProtocolLabel(profile.claude_primary_upstream_protocol)}`,
       `主模型 ${primaryModel || "透传"}`,
       secretCopy
-    ].join("；");
+    ];
   }
 
   return [
@@ -42,7 +42,7 @@ export function profileSummary(profile: PublicConfig["profiles"][number]): strin
     `压缩 ${upstreamProtocolLabel(profile.compact_upstream_protocol)}`,
     `Codex compact ${compactModeLabel(profile.compact_upstream_mode ?? "primary")}`,
     secretCopy
-  ].join("；");
+  ];
 }
 
 export function upstreamProtocolLabel(protocol: UpstreamProtocol | null): string {

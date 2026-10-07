@@ -410,6 +410,18 @@
   line-height: 1.42;
 }
 
+.profile-item-copy .profile-item-summary {
+  display: grid;
+  gap: 2px 16px;
+  line-height: 1.65;
+}
+
+.profile-item:not(.is-active):not(.is-selected) .profile-item-kicker {
+  color: var(--muted);
+  background: var(--paper-warm);
+  border-color: var(--hairline);
+}
+
 .profile-item-copy > span:last-child {
   color: var(--muted);
   font-size: 0.72rem;
@@ -535,6 +547,9 @@
   .profile-item-copy strong { grid-column: 1; grid-row: 1; }
   .profile-item-copy small,
   .profile-item-copy > span:last-child { grid-column: 1 / -1; }
+
+  .profile-item-copy .profile-item-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .profile-item-summary > span:first-child { grid-column: 1 / -1; }
 
   .profile-item-actions {
     grid-column: 3;
@@ -733,11 +748,14 @@
   gap: 10px;
   align-items: flex-start;
   justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hairline);
 }
 
 .route-config-card-head h3 {
   margin: 0;
   color: var(--ink);
+  font-size: var(--text-section);
   line-height: 1.24;
 }
 
@@ -1109,14 +1127,15 @@
 .config-file-drop {
   display: grid;
   min-height: 128px;
-  place-items: center;
+  justify-items: start;
+  align-content: center;
   gap: 4px;
   padding: 16px;
   border: 1px dashed color-mix(in srgb, var(--jade) 38%, var(--hairline));
   border-radius: var(--radius-md);
   background: var(--jade-soft);
   color: var(--ink);
-  text-align: center;
+  text-align: left;
   cursor: pointer;
   transition:
     border-color 120ms var(--ease),
@@ -1215,13 +1234,14 @@
   color: var(--ink);
   font-size: 0.8rem;
   font-weight: 750;
+  font-variant-numeric: tabular-nums;
   line-height: 1.38;
   overflow-wrap: anywhere;
 }
 
 .config-import-confirm {
-  padding-top: 8px;
-  border-top: 1px solid var(--hairline);
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-strong);
 }
 
 .config-import-confirm p {
@@ -1638,6 +1658,8 @@
 
 .model-catalog-state {
   margin: 0;
+  padding-block: 8px;
+  border-block: 1px solid var(--hairline);
   color: var(--muted);
   font-size: 0.72rem;
 }
@@ -1801,7 +1823,7 @@
 
 .claude-model-map-row {
   display: grid;
-  grid-template-columns: minmax(150px, 0.72fr) auto minmax(220px, 1fr);
+  grid-template-columns: minmax(140px, 0.72fr) 76px minmax(0, 1fr);
   gap: 8px 10px;
   align-items: center;
   padding: 10px;
@@ -1810,7 +1832,7 @@
 
 .claude-model-map-row.is-default {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--paper-warm);
 }
 
 .model-role-cell {
@@ -1851,7 +1873,7 @@
 
 .model-control-cell {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.52fr);
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.52fr);
   gap: 8px;
   align-items: end;
   min-width: 0;
@@ -2122,7 +2144,15 @@
 }
 
 .logging-maintenance-section {
+  margin-top: 16px;
+  padding-top: 24px;
   border-color: color-mix(in srgb, var(--brick) 22%, var(--hairline));
+}
+
+.logging-maintenance-section .profile-item-kicker {
+  border-color: var(--hairline);
+  background: var(--paper-warm);
+  color: var(--muted);
 }
 
 .logging-cleanup-button {

@@ -16,6 +16,8 @@ describe("route preview request ordering", () => {
     expect(markup).toContain("Remote V2 沿用 Primary 上游和模型设置");
     expect(markup).not.toContain("保留原始模型");
     expect(markup).toContain("OpenAI Chat · 模型：overridden");
+    expect(markup).toContain('class="route-hit-marker is-preview"');
+    expect(markup).toContain("预览命中");
     expect(markup).not.toContain("普通请求直通");
   });
   it("accepts only the latest preview response", () => {

@@ -340,6 +340,14 @@
 
 .health-credential-details .health-flag { margin-top: 8px; }
 
+.health-credential-details .health-kv strong {
+  font-family: inherit;
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+.health-credential-details .health-kv-grid { gap: 0 16px; }
+
 .health-credential-details[open] > :not(summary) {
   animation: panel-fade-in 140ms var(--ease-out);
 }

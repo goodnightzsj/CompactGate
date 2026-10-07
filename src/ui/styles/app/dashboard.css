@@ -34,12 +34,12 @@
 .dashboard-routing-header p,
 .dashboard-next-actions > span { margin: 5px 0 0; color: var(--muted); font-size: var(--text-caption); }
 .dashboard-routing-rows { margin-block: 16px; }
-.dashboard-routing-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr); gap: 16px; align-items: center; padding-block: 14px; border-top: 1px solid var(--hairline); }
+.dashboard-routing-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr); gap: 16px; align-items: start; padding-block: 14px; border-top: 1px solid var(--hairline); }
 .dashboard-routing-row > div { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
 .dashboard-routing-row .route-chip { justify-self: start; }
 .dashboard-routing-row small { color: var(--muted); font-size: var(--text-caption); }
 .dashboard-routing-row strong,
-.dashboard-routing-row code { font-size: var(--text-small); }
+.dashboard-routing-row code { font-size: var(--text-small); line-height: 1.5; }
 .dashboard-next-actions { justify-content: flex-start; }
 .dashboard-next-actions > span { margin-right: auto; }
 

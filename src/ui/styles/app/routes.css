@@ -209,7 +209,7 @@
 
 .route-mapping-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) 76px 72px;
   gap: 4px 8px;
   align-items: center;
   padding: 6px 8px;
@@ -224,6 +224,8 @@
 
 .route-hit-marker {
   display: inline-flex;
+  grid-column: 1 / -1;
+  justify-self: end;
   min-height: 22px;
   align-items: center;
   padding: 0 7px;
@@ -233,6 +235,11 @@
   font-size: 0.68rem;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.route-hit-marker.is-preview {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .route-mapping-row code {
