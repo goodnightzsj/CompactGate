@@ -55,6 +55,7 @@ interface ScoredCandidate {
 }
 
 interface PrimaryFailoverOptions {
+  /** Test clock; production keeps cooldown and affinity time sources separate. */
   now?: () => number;
   random?: () => number;
   maxStickyEntries?: number;
@@ -69,10 +70,12 @@ export class PrimaryFailoverState {
   private readonly reservations = new WeakMap<PrimaryRouteSelection, ProfileHealth | null>();
   private readonly stickiness: PrimaryStickinessStore;
   private readonly now: () => number;
+  private readonly elapsedNow: () => number;
   private readonly random: () => number;
 
   constructor(options: PrimaryFailoverOptions = {}) {
     this.now = options.now ?? Date.now;
+    this.elapsedNow = options.now ?? (() => performance.now());
     this.random = options.random ?? Math.random;
     this.health = new PrimaryProfileHealthStore(options.maxModelCooldownEntries);
     this.stickiness = new PrimaryStickinessStore(options.maxStickyEntries);
@@ -97,14 +100,14 @@ export class PrimaryFailoverState {
     if (this.reservations.has(selection)) throw new Error("Primary route selection was already reserved.");
     this.reservations.set(selection, health);
 
-    const now = this.now();
+    const now = this.elapsedNow();
     if (candidateId === this.forcedProfileId || selection.profileId === this.forcedProfileId) {
       this.forcedProfileId = null;
     }
     health.inFlight += 1;
     health.lastSelectedAt = now;
     if (rememberRequestStickiness) {
-      this.stickiness.rememberRequest(selection.context, candidateId, now);
+      this.stickiness.rememberRequest(selection.context, candidateId, this.now());
     }
   }
 
@@ -139,7 +142,7 @@ export class PrimaryFailoverState {
       return;
     }
 
-    const now = this.now();
+    const now = this.elapsedNow();
     const category = classifyPrimaryRouteResult(result);
     const staleSuccess = category === "success" && selection.healthVersion !== health.version;
     const countsAsProfileFailure =
@@ -174,7 +177,7 @@ export class PrimaryFailoverState {
           }
           health.version += 1;
         }
-        this.stickiness.rememberResponse(selection, result, now, candidateId);
+        this.stickiness.rememberResponse(selection, result, this.now(), candidateId);
         break;
       case "auth":
       case "quota": {
@@ -202,7 +205,7 @@ export class PrimaryFailoverState {
         const cooldownFailureCount = Math.max(1, health.rateLimitFailures);
         health.rateLimitUntil = Math.max(
           health.rateLimitUntil,
-          now + rateLimitCooldownMs(result, cooldownFailureCount, now)
+          now + rateLimitCooldownMs(result, cooldownFailureCount, Date.now())
         );
         const reserveMs = (selection.config.primary.sticky_reserve_seconds ?? 0) * 1000;
         if (reserveMs > 0) {
@@ -271,7 +274,7 @@ export class PrimaryFailoverState {
   }
 
   boundProfileId(context: PrimaryRouteRequestContext): string | null {
-    const now = this.now();
+    const now = this.elapsedNow();
     this.cleanupExpiredState(now);
     return this.stickiness.findProfileId(normalizeRequestContext(context));
   }
@@ -398,7 +401,7 @@ export class PrimaryFailoverState {
       };
     }
 
-    const now = this.now();
+    const now = this.elapsedNow();
     this.cleanupExpiredState(now);
 
     const selected = this.selectCandidate(candidates, normalizedContext, now);
@@ -557,7 +560,7 @@ export class PrimaryFailoverState {
   }
 
   private cleanupExpiredState(now: number): void {
-    this.stickiness.cleanup(now);
+    this.stickiness.cleanup(this.now());
     this.health.cleanupExpiredModelCooldowns(now);
   }
 }

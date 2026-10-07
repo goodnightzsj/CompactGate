@@ -291,6 +291,12 @@ export function finalizeFromTransaction(
 export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransactionInput): Promise<void> {
   const completedAtIso = new Date().toISOString();
   const captureEnabled = input.captureWriter.isEnabled();
+  const endpoint = input.requestMetadata?.endpoint ?? endpointFromPath(input.url.pathname);
+  // Token-count endpoints return prompt estimates, not generation usage.
+  // Apply this at settlement so failure paths cannot record estimates either.
+  const usage = endpoint === "/messages/count_tokens" || endpoint === "/responses/input_tokens"
+    ? emptyUsageMetrics()
+    : input.usage;
   const compactionDiagnostics = input.compactionMode
     ? buildCompactionDiagnostics({
         mode: input.compactionMode,
@@ -316,7 +322,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     startedAt: input.startedAt,
     startedAtIso: input.startedAtIso,
     completedAtIso,
-    endpoint: input.requestMetadata?.endpoint ?? endpointFromPath(input.url.pathname),
+    endpoint,
     requestType: input.requestType,
     reasoningEffort: input.requestMetadata?.reasoningEffort ?? null,
     requestSummary: input.requestMetadata?.requestSummary ?? null,
@@ -334,7 +340,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     targetModel: input.targetModel,
     responseModel: input.responseModel,
     firstTokenMs: input.firstTokenMs,
-    usage: input.usage,
+    usage,
     errorSummary: input.errorSummary,
     providerStatePortability: input.providerStatePortability ?? null,
     compactResponseNormalized: input.compactResponseNormalized,

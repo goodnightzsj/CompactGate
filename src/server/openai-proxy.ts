@@ -113,6 +113,7 @@ import {
 import type { CodexVersionMonitor } from "./codex-version.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import { isNativeCodexUserAgent } from "./client-identity.js";
+import { mergeUsage } from "./usage-merge.js";
 
 export async function proxyOpenAiRequest(
   req: IncomingMessage,
@@ -441,10 +442,8 @@ async function proxyPrimaryRequest(
 
     applyOpenAiProxyUpstreamResult(transaction, result);
     applyClientResult(transaction, result, plan, transaction.requestMetadata.requestType === "stream");
-    const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
-    transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
     providerStatePortability = buildProviderStatePortabilityLog({
       enabled: recoveryEnabled,
       conversationHash: conversationIdentityHash,
@@ -929,7 +928,6 @@ async function proxyCompactRequest(
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
-    transaction.usage = extractResponseUsage(clientResponseBody, clientResponseHeaders);
     if (
       transaction.status >= 200 &&
       transaction.status < 300 &&
@@ -1057,6 +1055,12 @@ function applyClientResult(
   const clientResult = responseWasTransformed
     ? { ...result, streamSummary: result.clientStreamSummary ?? null }
     : result;
+  // Either decoder can reach its limit: merge same-protocol observations,
+  // letting the full body supply final usage from oversized terminal events.
+  transaction.usage = mergeUsage(clientResult.streamSummary?.usage ?? null, extractResponseUsage(
+    result.clientResponseBody ?? result.responseBody,
+    result.clientResponseHeaders ?? result.responseHeaders
+  ));
   const anthropic = !responseWasTransformed && plan.upstreamProtocol === "anthropic_messages";
   if (clientResult.streamSummary || expectStream) {
     transaction.errorSummary ??= anthropic
@@ -1103,5 +1107,6 @@ function applyCachedCompactResponse(
   transaction.compactResponseNormalized = cached.compactResponseNormalized;
   transaction.compactResponseNormalizeReason = cached.compactResponseNormalizeReason;
   transaction.compactResponseSyntheticSource = cached.compactResponseSyntheticSource;
-  transaction.firstTokenMs = cached.firstTokenMs;
+  // A replay has no new upstream response sample.
+  transaction.firstTokenMs = null;
 }

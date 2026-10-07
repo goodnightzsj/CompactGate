@@ -69,10 +69,12 @@ export class ClaudeKeyPoolState {
   private readonly sessionStickiness = new Map<string, { keyId: string; expiresAt: number }>();
 
   private readonly now: () => number;
+  private readonly elapsedNow: () => number;
   private readonly random: () => number;
 
   constructor(options: { now?: () => number; random?: () => number } = {}) {
     this.now = options.now ?? Date.now;
+    this.elapsedNow = options.now ?? (() => performance.now());
     this.random = options.random ?? Math.random;
   }
 
@@ -92,8 +94,9 @@ export class ClaudeKeyPoolState {
       return null;
     }
 
-    const now = this.now();
-    this.cleanupStickiness(now);
+    const now = this.elapsedNow();
+    const stickyNow = this.now();
+    this.cleanupStickiness(stickyNow);
     const sessionKey = extractClaudeSessionKey(headers);
     // Explicit fixed selection overrides affinity, even while the key is cooling.
     if (config.claude.primary.rotation_opt_out === true) {
@@ -101,7 +104,7 @@ export class ClaudeKeyPoolState {
     }
     if (sessionKey) {
       const pin = this.sessionStickiness.get(sessionKey);
-      if (pin && pin.expiresAt > now) {
+      if (pin && pin.expiresAt > stickyNow) {
         const pinned = entries.find((entry) => `${profileId}#${entry.id}` === pin.keyId);
         if (pinned && !this.isBlocked(`${profileId}#${pinned.id}`, now)) {
           return this.reserve(pinned, profileId, sessionKey, config, now);
@@ -179,7 +182,7 @@ export class ClaudeKeyPoolState {
     // reservation exactly once, never a newly enabled instance with the same ID.
     health.inFlight = Math.max(0, health.inFlight - 1);
     if (!result || this.health.get(composite) !== health) return;
-    const now = this.now();
+    const now = this.elapsedNow();
     const status = result.status;
     if (result.streamOutcome === "client_cancel" || result.streamOutcome === "client_cancel_after_terminal") return;
     const streamFailed = Boolean(result.errorSummary) ||
@@ -195,7 +198,7 @@ export class ClaudeKeyPoolState {
       health.cooldownUntil = 0;
       health.stickyOnlyUntil = 0;
       if (sessionKey) {
-        this.rememberSessionPin(sessionKey, composite, now);
+        this.rememberSessionPin(sessionKey, composite, this.now());
       }
       return;
     }
@@ -218,7 +221,7 @@ export class ClaudeKeyPoolState {
       health.version += 1;
       health.rateLimitUntil = Math.max(
         health.rateLimitUntil,
-        now + retryAfterCooldownMs(result.responseHeaders, now)
+        now + retryAfterCooldownMs(result.responseHeaders, Date.now())
       );
       // Same reasoning as the codex route: when the cooldown expires the upstream
       // has only said "try me later", not "I am whole again", so the key stays
