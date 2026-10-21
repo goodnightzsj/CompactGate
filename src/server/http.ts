@@ -28,6 +28,7 @@ import { isV1Path } from "./routing.js";
 import { serveStatic } from "./static-assets.js";
 import { createStudioSnapshot, StudioEventBroadcaster } from "./studio-events.js";
 import { CodexVersionMonitor } from "./codex-version.js";
+import { retainUpstreamProxyAgents } from "./upstream-proxy-agent.js";
 
 /**
  * Why a rejection reason rather than a boolean: the two headers fail for different
@@ -179,6 +180,7 @@ export async function createCompactGateServer(
     throw error;
   }
   const actualCaptureWriter = pendingCaptureWriter;
+  const releaseUpstreamAgents = retainUpstreamProxyAgents();
   const primaryFailover = new PrimaryFailoverState();
   const claudeKeyPool = new ClaudeKeyPoolState();
   const stopIdentityUpdates = clientIdentity.subscribe(() => {
@@ -230,7 +232,11 @@ export async function createCompactGateServer(
     clientIdentity.close();
     configStore.oauth.close();
     // HTTP completion is earlier than proxy finally/capture persistence.
-    await Promise.all(requests);
+    try {
+      await Promise.all(requests);
+    } finally {
+      releaseUpstreamAgents();
+    }
     await actualCaptureWriter.flush();
     await Promise.all([clientIdentity.flush(), configStore.oauth.flush()]);
     actualLogger.removeEventListener("storage-pruned", notifyLogPrune);

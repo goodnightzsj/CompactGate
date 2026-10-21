@@ -421,6 +421,24 @@ my-compact-model
 值不会从 `GET /api/config` 返回，抓包也按配置头名动态脱敏。`proxy_url` 仅接受
 HTTP CONNECT 代理，显式配置优先于环境代理且非法值直接失败，不会静默直连。
 
+HTTPS CONNECT 隧道会复用：每个目标最多保留 2 条空闲连接，每个代理最多 8 条，
+代理缓存最多 8 项，空闲 4 秒后关闭。缓存淘汰不打断在途请求，最后一个服务关闭后
+释放空闲隧道；活动请求仍遵循原有总超时，不因连接复用自动重发失败的模型 POST。
+
+排查冷/热连接耗时时，可对公开、无鉴权的 HTTPS 地址执行：
+
+```bash
+npx tsx scripts/upstream-latency.ts https://example.com/ http://127.0.0.1:7897
+```
+
+脚本连续发送 3 次 GET，输出实际复用标记及连接就绪（含 CONNECT/TLS）、发送完成、
+响应头、首个正文块和结束时刻，时间单位为毫秒，均相对本次请求开始；`body_ms`
+单独表示收到响应头后的耗时。每次最多 10 秒、正文最多 1 MiB，不输出正文或头，
+不读项目配置，不接受带凭据的 URL 或带 query/fragment 的目标，不自动跟随重定向。
+这用于定位连接成本，不代替真实模型生成吞吐，也不改变现有日志或 Token 统计口径。
+失败仅输出脱敏错误码：参数非法为 `PROBE_INVALID_URL`，正文超限为
+`PROBE_RESPONSE_TOO_LARGE`，总超时为 `ABORT_ERR`；其他网络错误保留其错误码。
+
 ### Claude 场景路由
 
 `claude.scene_map` 可为 `long_context`、`background`、`web_search`、`thinking`、

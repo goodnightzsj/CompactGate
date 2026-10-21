@@ -1,16 +1,29 @@
-import { Agent as HttpAgent, type RequestOptions } from "node:http";
+import { Agent as HttpAgent, type ClientRequest, type RequestOptions } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
-/**
- * Reuse agent instances across profiles without tying active request lifetimes
- * to cache residency. Connections are not pooled (keepAlive is disabled).
- */
-const httpsProxyAgents = new Map<string, HttpsAgent>();
+const httpsProxyAgents = new Map<string, HttpConnectHttpsAgent>();
 const MAX_CACHED_PROXY_AGENTS = 8;
+const MAX_IDLE_SOCKETS_PER_TARGET = 2;
+const MAX_IDLE_SOCKETS_PER_AGENT = 8;
+const IDLE_SOCKET_TIMEOUT_MS = 4_000;
+let poolOwners = 0;
+
+export function retainUpstreamProxyAgents(): () => void {
+  poolOwners += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    // Several in-process servers share this cache; only the last one retires it.
+    if (--poolOwners !== 0) return;
+    for (const agent of httpsProxyAgents.values()) agent.retire();
+    httpsProxyAgents.clear();
+  };
+}
 
 export const DEFAULT_MAX_PROXY_CONNECT_RESPONSE_HEADER_BYTES = 64 * 1024;
 const CONNECT_HEADER_END = Buffer.from("\r\n\r\n", "latin1");
@@ -48,11 +61,10 @@ export function resolveUpstreamAgent(
     return cached;
   }
   const agent = new HttpConnectHttpsAgent(proxy);
-  // Eviction only drops the cache reference, not sockets owned by live requests.
-  // With keepAlive disabled, Node closes those sockets when their requests end.
   if (httpsProxyAgents.size >= MAX_CACHED_PROXY_AGENTS) {
     const oldest = httpsProxyAgents.keys().next().value;
     if (oldest !== undefined) {
+      httpsProxyAgents.get(oldest)?.retire();
       httpsProxyAgents.delete(oldest);
     }
   }
@@ -61,8 +73,46 @@ export function resolveUpstreamAgent(
 }
 
 class HttpConnectHttpsAgent extends HttpsAgent {
+  private retired = false;
+  private readonly idleTimers = new Map<net.Socket, ReturnType<typeof setTimeout>>();
+
   constructor(private readonly proxy: URL) {
-    super({ keepAlive: false });
+    super({ keepAlive: true, maxFreeSockets: MAX_IDLE_SOCKETS_PER_TARGET });
+    this.on("free", (socket: net.Socket) => {
+      // Node's listener runs first; queued requests must not receive an idle timer.
+      if (!Object.values(this.freeSockets).some((sockets) => sockets?.includes(socket))) return;
+      if (this.retired) { socket.destroy(); return; }
+      this.clearIdleTimer(socket);
+      if (this.idleTimers.size >= MAX_IDLE_SOCKETS_PER_AGENT) {
+        const oldest = this.idleTimers.keys().next().value;
+        if (oldest) { this.clearIdleTimer(oldest); oldest.destroy(); }
+      }
+      const timer = setTimeout(() => {
+        this.idleTimers.delete(socket);
+        socket.destroy();
+      }, IDLE_SOCKET_TIMEOUT_MS);
+      timer.unref();
+      this.idleTimers.set(socket, timer);
+    });
+  }
+
+  override reuseSocket(socket: net.Socket, request: ClientRequest): void {
+    this.clearIdleTimer(socket);
+    super.reuseSocket(socket, request);
+  }
+
+  private clearIdleTimer(socket: net.Socket): void {
+    clearTimeout(this.idleTimers.get(socket));
+    this.idleTimers.delete(socket);
+  }
+
+  retire(): void {
+    this.retired = true;
+    // The free listener closes retired sockets after the current response ends.
+    for (const socket of this.idleTimers.keys()) {
+      this.clearIdleTimer(socket);
+      socket.destroy();
+    }
   }
 
   override createConnection(
@@ -110,6 +160,7 @@ class HttpConnectHttpsAgent extends HttpsAgent {
 
       completed = true;
       cleanup();
+      socket.once("close", () => this.clearIdleTimer(socket));
       complete(null, socket);
     };
 
