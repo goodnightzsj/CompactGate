@@ -331,7 +331,7 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
-  it("marks non-SSE 200 primary stream responses as incomplete", async () => {
+  it("rejects HTML 200 primary responses before forwarding headers", async () => {
     const primary = await startUpstream(async (req, res) => {
       await captureBody(req);
       res.writeHead(200, { "content-type": "text/html" });
@@ -348,15 +348,17 @@ describe("CompactGate OpenAI routing", () => {
       body: JSON.stringify({ model: "gpt-5.5", stream: true, input: "html instead of sse" }),
       headers: JSON_HEADERS
     });
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("not an event stream");
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("Upstream returned HTML");
 
     const [entry] = await fetchRecentLogs(app.url);
     expect(entry).toMatchObject({
       route: "primary",
-      status: 200,
+      status: 502,
+      upstream_status: 200,
+      stream_outcome: "upstream_request_error",
       upstream_host: new URL(primary.url).host,
-      error_summary: "OpenAI stream response was not text/event-stream."
+      error_summary: expect.stringContaining("Upstream returned HTML")
     });
   });
 

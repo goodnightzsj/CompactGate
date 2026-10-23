@@ -18,16 +18,17 @@ function writeSse(res: ServerResponse, events: unknown[]): void {
 }
 
 describe("observed response stream classification", () => {
-  it("keeps the outcome consistent with a missing-SSE diagnostic", async () => {
+  it("keeps the outcome consistent with a rejected HTML response", async () => {
     const upstream = await startUpstream(async (req, res) => {
       await captureBody(req);
       res.writeHead(200, { "content-type": "text/html" }).end("synthetic non-stream response");
     });
     const app = await startApp(upstream.url, upstream.url, { primary: manual, compact: manual });
     const response = await postJson(app.url, "/v1/responses", { model: "synthetic-model", input: "synthetic", stream: true });
-    await response.text();
-    const log = await waitForLogEntry(app.url, (entry) => entry.request_id === response.headers.get("x-compactgate-request-id"));
-    expect(log).toMatchObject({ status: 200, stream_outcome: "upstream_stream_incomplete", error_summary: "OpenAI stream response was not text/event-stream." });
+    expect(response.status).toBe(502);
+    const body = await response.json() as { request_id: string };
+    const log = await waitForLogEntry(app.url, (entry) => entry.request_id === body.request_id);
+    expect(log).toMatchObject({ status: 502, upstream_status: 200, stream_outcome: "upstream_request_error", error_summary: expect.stringContaining("Upstream returned HTML") });
   });
 
   it.each([true, false, undefined])("fails over token-bearing SSE failures when request stream is %s", async (stream) => {

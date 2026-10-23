@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   postJson,
   startApp,
-  startClaudeUpstream
+  startClaudeUpstream,
+  waitForLogEntry
 } from "./helpers/server-test-utils.js";
 import {
   fetchJson,
@@ -250,4 +251,81 @@ describe("CompactGate Claude routing", () => {
       expect(agents).toEqual(["codex-cli/8.8.8", undefined]);
     }
   );
+});
+
+describe.each([
+  ["", "/v1/models"],
+  ["/v1", "/v1/models"],
+  ["/vendor", "/vendor/v1/models"],
+  ["/vendor/v1/", "/vendor/v1/models"]
+])("external Claude model discovery with base path %s", (basePath, expectedPath) => {
+  it.each(["/models", "/v1/models"])("forwards GET %s without changing the catalogue or logged path", async (clientPath) => {
+    const requestedUrls: string[] = [];
+    const catalogue = { object: "list", data: [{ id: "synthetic-claude", display_name: "Synthetic" }], has_more: false };
+    const claude = await startClaudeUpstream((req, res) => {
+      requestedUrls.push(req.url ?? "");
+      if (new URL(req.url ?? "/", "http://upstream.test").pathname !== expectedPath) {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end("<!doctype html><title>Console</title>");
+        return;
+      }
+      expect(req.method).toBe("GET");
+      expect(req.headers.authorization).toBe("Bearer synthetic-models-key");
+      expect(req.headers["anthropic-api-key"]).toBe("synthetic-models-key");
+      expect(req.headers["anthropic-version"]).toBe("2023-06-01");
+      const body = gzipSync(JSON.stringify(catalogue));
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" });
+      res.end(body);
+    });
+    const app = await startApp(undefined, undefined, { claude: { primary: {
+      base_url: `${claude.url}${basePath}?base_flag=keep&client_version=old`,
+      api_key: "synthetic-models-key"
+    } } });
+    const query = "?client_version=pi&tag=a&tag=b&after_id=cursor";
+    const response = await fetch(`${app.url}/anthropic${clientPath}${query}`, {
+      headers: { "anthropic-version": "2023-06-01" }
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.json()).toEqual(catalogue);
+    expect(requestedUrls).toEqual([`${expectedPath}?base_flag=keep&client_version=pi&tag=a&tag=b&after_id=cursor`]);
+    const entry = await waitForLogEntry(app.url, (log) => log.request_id === response.headers.get("x-compactgate-request-id"));
+    expect(entry).toMatchObject({ method: "GET", route: "claude", path: `${clientPath}${query}`, status: 200 });
+  });
+});
+
+describe("external Claude model alias boundaries", () => {
+  it.each([
+    ["POST", "/models"],
+    ["HEAD", "/models"],
+    ["GET", "/models/other"],
+    ["GET", "/models/"],
+    ["GET", "/models-extra"],
+    ["POST", "/v1/messages"]
+  ])("preserves %s %s", async (method, pathname) => {
+    const requests: string[] = [];
+    const claude = await startClaudeUpstream((req, res) => {
+      requests.push(`${req.method} ${req.url}`);
+      writeJsonResponse(res, { data: [] });
+    });
+    const app = await startApp(undefined, undefined, { claude: { primary: { base_url: claude.url } } });
+    const response = await fetch(`${app.url}/anthropic${pathname}?client_version=pi`, { method });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(requests).toEqual([`${method} ${pathname}?client_version=pi`]);
+  });
+
+  it.each([401, 404, 405, 500])("preserves an upstream %s without fallback or retry", async (status) => {
+    const requestedUrls: string[] = [];
+    const error = { error: { type: "synthetic_error", message: "Model directory unavailable" } };
+    const claude = await startClaudeUpstream((req, res) => {
+      requestedUrls.push(req.url ?? "");
+      writeJsonResponse(res, error, status);
+    });
+    const app = await startApp(undefined, undefined, { claude: { primary: { base_url: claude.url } } });
+    const response = await fetch(`${app.url}/anthropic/models`);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual(error);
+    expect(requestedUrls).toEqual(["/v1/models"]);
+  });
 });

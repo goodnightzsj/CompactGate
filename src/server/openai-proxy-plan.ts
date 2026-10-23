@@ -24,14 +24,16 @@ import {
   compactUpstreamBaseUrl,
   deriveCompactModel,
   rewriteCompactBody,
-  rewritePrimaryBody
+  rewritePrimaryBody,
+  upstreamPathForEndpoint
 } from "./routing.js";
 import {
   responsesRequestToChat,
   responsesRemoteV2CompactionToChat,
   responsesCompactRequestToAnthropic,
   responsesRequestToAnthropic,
-  ProtocolConversionError
+  ProtocolConversionError,
+  UnsupportedClientProtocolError
 } from "./protocol-conversion.js";
 
 const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
@@ -52,6 +54,7 @@ export interface OpenAiProxyPlan {
   sensitiveHeaderNames: string[];
   proxyUrl: string;
   compactionFallback: "chat_synthesis" | null;
+  translateResponses: boolean;
 }
 
 export function buildPrimaryOpenAiProxyPlan({
@@ -60,6 +63,7 @@ export function buildPrimaryOpenAiProxyPlan({
   headers,
   rawBody,
   endpoint,
+  method = "POST",
   compactionBridge,
   primaryFailover,
   preserveRemoteV2State = false,
@@ -73,6 +77,7 @@ export function buildPrimaryOpenAiProxyPlan({
   headers: IncomingHttpHeaders;
   rawBody: Buffer;
   endpoint: string;
+  method?: string;
   compactionBridge: CompactionBridgeStore;
   primaryFailover: PrimaryFailoverState;
   preserveRemoteV2State?: boolean;
@@ -94,9 +99,20 @@ export function buildPrimaryOpenAiProxyPlan({
     targetModel: sourceModel ? deriveCompactModel(sourceModel, config) : null
   };
   const upstreamProtocol = selectedPrimaryConfig.primary.upstream_protocol;
+  const translateResponses = method === "POST" && endpoint === "/responses";
+  if (endpoint === "/chat/completions" && upstreamProtocol !== "openai_chat") {
+    throw new UnsupportedClientProtocolError(
+      "Chat Completions requires an openai_chat upstream. Select a Chat profile, or use /v1/responses with Responses format."
+    );
+  }
+  if (endpoint === "/messages" || endpoint === "/messages/count_tokens") {
+    throw new UnsupportedClientProtocolError(
+      "Anthropic Messages requires the /anthropic/v1/messages endpoint and Messages format."
+    );
+  }
   const splitCompactMode = config.compact.upstream_mode === "split";
   const preserveProviderState = preserveRemoteV2State && upstreamProtocol === "openai_responses";
-  const bridgeResult = preserveProviderState
+  const bridgeResult = !translateResponses || preserveProviderState
     ? {
         body: modelRewrite.body,
         replacedCompactionCount: 0,
@@ -123,12 +139,8 @@ export function buildPrimaryOpenAiProxyPlan({
     upstreamProtocol === "openai_chat";
   const upstreamBody = chatCompactionFallback
     ? responsesRemoteV2CompactionToChat(modelRewrite.body)
-    : translateOpenAiRequest(bridgeResult.body, upstreamProtocol);
-  const upstreamPath = upstreamProtocol === "anthropic_messages"
-    ? "/v1/messages"
-    : upstreamProtocol === "openai_chat"
-      ? "/v1/chat/completions"
-      : url.pathname;
+    : translateResponses ? translateOpenAiRequest(bridgeResult.body, upstreamProtocol) : modelRewrite.body;
+  const upstreamPath = upstreamPathForEndpoint(method, url.pathname, "openai", upstreamProtocol);
 
   const plan = withRequestHeaders(
     headers,
@@ -150,7 +162,8 @@ export function buildPrimaryOpenAiProxyPlan({
       primarySelection,
       upstreamProtocol,
       proxyUrl: selectedPrimaryConfig.primary.proxy_url,
-      compactionFallback: chatCompactionFallback ? "chat_synthesis" : null
+      compactionFallback: chatCompactionFallback ? "chat_synthesis" : null,
+      translateResponses
     },
     clientIdentity
   );
@@ -202,7 +215,8 @@ export function buildCompactOpenAiProxyPlan({
     primarySelection: null,
     upstreamProtocol,
     proxyUrl: upstreamConfig.proxy_url,
-    compactionFallback: null
+    compactionFallback: null,
+    translateResponses: true
   }, clientIdentity);
   if (config.compact.upstream_mode === "split" && !credential.apiKeyConfigured) {
     delete plan.requestHeaders.authorization;

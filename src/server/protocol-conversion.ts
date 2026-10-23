@@ -8,6 +8,13 @@ export class ProtocolConversionError extends Error {
   }
 }
 
+export class UnsupportedClientProtocolError extends ProtocolConversionError {
+  constructor(message: string) {
+    super(message, 400);
+    this.name = "UnsupportedClientProtocolError";
+  }
+}
+
 const COMPACT_GATE_STATE_PREFIX = "cg1_";
 const MAX_COMPACT_GATE_STATE_BYTES = 1024 * 1024;
 const ANTHROPIC_COMPACTION_TRIGGER_TOKENS = 50_000;

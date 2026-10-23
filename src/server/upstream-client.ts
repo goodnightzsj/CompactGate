@@ -37,6 +37,7 @@ export interface BufferedUpstreamOptions {
   deferHttpErrors?: boolean;
   deferRetryableStreamErrors?: boolean;
   maxBufferedResponseBytes?: number;
+  rejectHtmlResponse?: boolean;
   maxDeferredHttpErrorBytes?: number;
   maxObservedStreamEventBytes?: number;
   streamProtocol?: "openai" | "anthropic";
@@ -289,6 +290,10 @@ export function sendBufferedUpstreamRequest(
             : Number.POSITIVE_INFINITY;
         let responseTransform: UpstreamResponseTransform | null = null;
         try {
+          if (options.rejectHtmlResponse && status >= 200 && status < 300 &&
+            /^(text\/html|application\/xhtml\+xml)(?:\s*;|$)/i.test(String(response.headers["content-type"] ?? ""))) {
+            throw new Error("Upstream returned HTML instead of an API response. Check the upstream base_url and endpoint protocol.");
+          }
           responseTransform = shouldWriteResponse
             ? options.responseTransform?.(status, response.headers) ?? null
             : null;
@@ -296,7 +301,7 @@ export function sendBufferedUpstreamRequest(
           response.resume();
           rejectOnce(new UpstreamRequestError(
             error instanceof Error ? error.message : "Upstream response transform failed.",
-            responseDetails("upstream_request_error", "before_headers"),
+            { ...responseDetails("upstream_request_error", "before_headers"), status, responseHeaders: response.headers },
             { cause: error }
           ));
           return;

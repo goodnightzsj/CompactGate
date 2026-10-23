@@ -3,9 +3,10 @@ import type {
   CompactGateConfig,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
-  RoutePreviewResponse
+  RoutePreviewResponse,
+  UpstreamProtocol
 } from "../shared/types.js";
-import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { endpointFromPath, isRecord, parseJsonRecord } from "./http-utils.js";
 import {
   buildClaudeUpstreamUrl,
   resolveClaudeMappedModel,
@@ -230,6 +231,27 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.primary.base_url;
 }
 
+export function upstreamPathForEndpoint(
+  method: string,
+  pathname: string,
+  ingress: "openai" | "anthropic",
+  upstreamProtocol: UpstreamProtocol
+): string {
+  const endpoint = endpointFromPath(pathname);
+  if (method === "GET" && endpoint === "/models") return "/v1/models";
+  if (method !== "POST") return pathname;
+  if (ingress === "openai") {
+    if (endpoint === "/chat/completions") return "/v1/chat/completions";
+    if (endpoint !== "/responses" && endpoint !== "/responses/compact") return pathname;
+    return upstreamProtocol === "anthropic_messages" ? "/v1/messages"
+      : upstreamProtocol === "openai_chat" ? "/v1/chat/completions" : pathname;
+  }
+  if (endpoint !== "/messages" && endpoint !== "/messages/count_tokens") return pathname;
+  return upstreamProtocol === "anthropic_messages" ? `/v1${endpoint}`
+    : upstreamProtocol === "openai_chat" ? "/v1/chat/completions"
+      : endpoint === "/messages/count_tokens" ? "/v1/responses/input_tokens" : "/v1/responses";
+}
+
 export function previewRoute(
   method: string,
   path: string,
@@ -249,16 +271,13 @@ export function previewRoute(
       ? config.compact
       : config.primary;
   const upstreamBase = upstreamConfig.base_url;
-  const upstreamPath = upstreamConfig.upstream_protocol === "anthropic_messages"
-    ? "/v1/messages"
-    : upstreamConfig.upstream_protocol === "openai_chat"
-      ? "/v1/chat/completions"
-      : parsedUrl.pathname;
+  const upstreamPath = upstreamPathForEndpoint(method, parsedUrl.pathname, "openai", upstreamConfig.upstream_protocol);
   const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? buildClaudeUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search)
     : buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
-  const ingressProtocol = "openai_responses" as const;
-  const translationMode = upstreamConfig.upstream_protocol === ingressProtocol ? "passthrough" : "translate";
+  const endpoint = endpointFromPath(parsedUrl.pathname);
+  const ingressProtocol = endpoint === "/chat/completions" ? "openai_chat" : "openai_responses";
+  const translationMode = endpoint === "/models" || upstreamConfig.upstream_protocol === ingressProtocol ? "passthrough" : "translate";
 
   if (usesPrimaryPlan) {
     const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config, parsedUrl.pathname);
@@ -314,7 +333,6 @@ function previewClaudeRoute(
   headers?: IncomingHttpHeaders
 ): RoutePreviewResponse {
   const requestPath = parsedUrl.pathname.slice(ANTHROPIC_PROXY_PREFIX.length) || "/";
-  const countTokens = requestPath === "/v1/messages/count_tokens" || requestPath === "/messages/count_tokens";
   const rawBody = previewBodyToBuffer(body);
   const parsedBody = parseJsonBody(body);
   const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
@@ -326,13 +344,7 @@ function previewClaudeRoute(
     "127.0.0.1"
   );
   const upstreamConfig = routing.config.claude.primary;
-  const upstreamPath = upstreamConfig.upstream_protocol === "anthropic_messages"
-    ? requestPath
-    : upstreamConfig.upstream_protocol === "openai_chat"
-      ? "/v1/chat/completions"
-      : countTokens
-        ? "/v1/responses/input_tokens"
-        : "/v1/responses";
+  const upstreamPath = upstreamPathForEndpoint(method, requestPath, "anthropic", upstreamConfig.upstream_protocol);
   const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? buildClaudeUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search)
     : buildUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search);
@@ -349,7 +361,7 @@ function previewClaudeRoute(
     upstream_host: upstream.host,
     ingress_protocol: "anthropic_messages",
     upstream_protocol: upstreamConfig.upstream_protocol,
-    translation_mode: upstreamConfig.upstream_protocol === "anthropic_messages" ? "passthrough" : "translate",
+    translation_mode: endpointFromPath(requestPath) === "/models" || upstreamConfig.upstream_protocol === "anthropic_messages" ? "passthrough" : "translate",
     source_model: sourceModel,
     target_model: targetModel,
     body_rewritten: Boolean(sourceModel && targetModel && sourceModel !== targetModel),

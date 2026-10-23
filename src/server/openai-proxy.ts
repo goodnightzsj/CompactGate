@@ -76,7 +76,7 @@ import {
   type BufferedUpstreamResult,
   type UpstreamResponseTransform
 } from "./upstream-client.js";
-import { ProtocolConversionError } from "./protocol-conversion.js";
+import { ProtocolConversionError, UnsupportedClientProtocolError } from "./protocol-conversion.js";
 import {
   createAnthropicToResponsesCompactionResponseTransform,
   createAnthropicToResponsesResponseTransform,
@@ -216,7 +216,11 @@ async function proxyPrimaryRequest(
   let attemptedUpstream = false;
   const sendUpstream: typeof sendOpenAiUpstreamRequest = (options) => {
     attemptedUpstream = true;
-    return sendOpenAiUpstreamRequest(options);
+    return sendOpenAiUpstreamRequest({
+      ...options,
+      rejectHtmlResponse: options.req.method === "GET" && transaction.requestMetadata?.endpoint === "/models" ||
+        options.req.method === "POST" && ["/responses", "/chat/completions"].includes(transaction.requestMetadata?.endpoint ?? "")
+    });
   };
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
@@ -291,6 +295,7 @@ async function proxyPrimaryRequest(
       headers: req.headers,
       rawBody: transaction.rawBody,
       endpoint: transaction.requestMetadata.endpoint,
+      method: req.method,
       compactionBridge,
       primaryFailover,
       preserveRemoteV2State: hasRemoteV2CompactionState(url.pathname, transaction.rawBody, req.headers),
@@ -358,7 +363,7 @@ async function proxyPrimaryRequest(
     };
     const targetHealthKey = providerStateTargetHealthKey(targetScope);
     const targetStateFreeSuccess = logger.hasProviderStateRecoveryEvidence(targetHealthKey);
-    const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error" &&
+    const recoveryEnabled = plan.translateResponses && config.primary_failover.state_portability === "recover_on_error" &&
       plan.upstreamProtocol === "openai_responses";
     studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? null,
       primarySelection?.keyId ?? enabledApiKeyPool(primarySelection?.config.primary ?? config.primary)[0]?.id ?? null,
@@ -427,6 +432,7 @@ async function proxyPrimaryRequest(
       extraResponseHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       retryEmptyStreamError: classification.route !== "compact" &&
+        plan.translateResponses &&
         plan.upstreamProtocol === "openai_responses" &&
         transaction.requestType === "stream",
       retryHttpStatuses: classification.route === "compact" ? [502, 503, 504] : undefined,
@@ -508,7 +514,12 @@ async function proxyPrimaryRequest(
         : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
-      sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
+      sendJson(res, transaction.status, {
+        error: error instanceof UnsupportedClientProtocolError
+          ? { type: "invalid_request_error", code: "unsupported_protocol", message: transaction.errorSummary }
+          : transaction.errorSummary,
+        request_id: requestId
+      });
     } else {
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
@@ -1016,11 +1027,12 @@ async function proxyCompactRequest(
  * returned factory so the stream flag reflects the request at response time.
  */
 function pickResponseTransform(
-  plan: Pick<OpenAiProxyPlan, "upstreamProtocol" | "compactionFallback">,
+  plan: Pick<OpenAiProxyPlan, "upstreamProtocol" | "compactionFallback" | "translateResponses">,
   nativeCompaction: boolean,
   transaction: OpenAiProxyTransactionState,
   oauthProvider: OAuthProviderId | null = null
 ): ((status: number, headers: IncomingHttpHeaders) => UpstreamResponseTransform | null) | undefined {
+  if (!plan.translateResponses) return undefined;
   if (oauthProvider === "openai-codex") {
     return (status, headers) => createCodexResponseTransform(status, headers, transaction.requestType === "stream");
   }

@@ -328,7 +328,9 @@ async function routeRequest(
       return;
     }
 
-    if (isV1Path(url.pathname)) {
+    if (isV1Path(url.pathname) ||
+      (req.method === "GET" && url.pathname === "/models") ||
+      (req.method === "POST" && url.pathname === "/chat/completions")) {
       await proxyOpenAiRequest(
         req,
         res,

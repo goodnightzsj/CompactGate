@@ -311,10 +311,26 @@ Claude 的 `claude.primary.base_url` 表示上游主机或供应商前缀，例�
 | Codex `/v1/responses/compact` | 直通 | 原生或可移植压缩转换 | 明确拒绝 |
 | Claude `/anthropic/v1/messages` | 转换 | 直通 | 转换 |
 | Claude `/anthropic/v1/messages/count_tokens` | 转换为 `/v1/responses/input_tokens` | 直通 | 返回 501 |
+| 其他 agent `/v1/chat/completions` | 返回 400 | 返回 400 | 直通 |
+
+其他 agent 不需要伪装成 Codex 或 Claude Code。请按客户端协议配置：OpenAI
+Chat 使用 `http://127.0.0.1:7865/v1` 并选择 `openai_chat` 上游；Responses
+使用同一 OpenAI API 根；Anthropic Messages 使用 `http://127.0.0.1:7865/anthropic`。
+兼容 `POST /chat/completions` 和 `POST /anthropic/messages`（含 `/messages/count_tokens`）别名。
+把 Chat/Responses 请求发到 `/anthropic`，或把 Chat 请求交给非 Chat 上游，会在出站前
+返回结构化 `unsupported_protocol` 400；尚未实现 Chat 客户端到其他协议的双向转换。
+
+模型探测支持 `GET /v1/models`、`GET /models`、`GET /anthropic/v1/models` 和
+`GET /anthropic/models`，使用对应路由的上游与凭据，不进入生成协议转换。
+上游目录、分页、查询参数和错误原样保留，不伪造目录、不猜测其他路径重试；
+供应商专有目录格式仍由该供应商决定。成功状态的 HTML 不是模型/生成 API 响应，
+会返回 502 并记录真实上游状态，提示检查 `base_url` 与协议。
+400 不触发网关重试，但第三方客户端若自行重发所有错误，仍需调整其重试或连接配置。
+现场证据、修复边界与验证见[通用 agent 兼容方案](docs/2026-10-24-agent-protocol-compatibility.md)。
 
 协议转换覆盖文本、图片、自定义 function tools、tool result、JSON/SSE、usage
 和错误响应。Responses 与 Messages 之间还会保留可移植的 reasoning/compaction
-状态；无法安全移植的 provider-private 状态会明确失败。Chat 路径只承诺无状态的
+状态；无法安全移植的 provider-private 状态会明确失败。转换到 Chat 的路径只承诺无状态的
 文本、图片和 function tool 交互；reasoning、compaction、structured output、
 provider tools 和多 choice 不会被静默丢弃，而是在请求发送前或流解析时返回明确错误。
 

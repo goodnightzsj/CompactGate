@@ -59,7 +59,8 @@ import {
 import {
   anthropicRequestToChat,
   anthropicRequestToResponses,
-  ProtocolConversionError
+  ProtocolConversionError,
+  UnsupportedClientProtocolError
 } from "./protocol-conversion.js";
 import {
   createAnthropicPassthroughResponseTransform,
@@ -67,7 +68,7 @@ import {
   createOpenAiInputTokensToAnthropicResponseTransform,
   createResponsesToAnthropicResponseTransform
 } from "./protocol-stream.js";
-import { buildUpstreamUrl } from "./routing.js";
+import { buildUpstreamUrl, upstreamPathForEndpoint } from "./routing.js";
 
 export const ANTHROPIC_PROXY_PREFIX = "/anthropic";
 
@@ -96,6 +97,8 @@ export async function proxyClaudeRequest(
   const requestId = randomUUID();
   const strippedUpstreamPath = url.pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
   const upstreamPath = strippedUpstreamPath || "/";
+  const modelList = req.method === "GET" && (upstreamPath === "/models" || upstreamPath === "/v1/models");
+  const messagesRequest = req.method === "POST" && ["/messages", "/v1/messages", "/messages/count_tokens", "/v1/messages/count_tokens"].includes(upstreamPath);
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
   let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
@@ -115,6 +118,11 @@ export async function proxyClaudeRequest(
     const configRevision = configStore.revision;
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
+    if (["/chat/completions", "/responses", "/responses/compact"].includes(transaction.requestMetadata.endpoint)) {
+      throw new UnsupportedClientProtocolError(
+        "The /anthropic endpoint accepts Anthropic Messages, not OpenAI requests. Use /v1/chat/completions with an openai_chat upstream, or /v1/responses with Responses format."
+      );
+    }
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
     routing = resolveClaudeRequestRouting(
       baseConfig,
@@ -166,6 +174,7 @@ export async function proxyClaudeRequest(
       resolveClaudeMappedModel(transaction.sourceModel, config, transaction.rawBody) ??
       transaction.sourceModel;
     const upstreamProtocol = config.claude.primary.upstream_protocol;
+    const normalizedUpstreamPath = upstreamPathForEndpoint(req.method ?? "POST", upstreamPath, "anthropic", upstreamProtocol);
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
     const openAiUpstream = upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat";
     transaction.upstreamBody = rewriteClaudeModelBody(
@@ -184,17 +193,14 @@ export async function proxyClaudeRequest(
       transaction.upstreamBody = stripClaudeToolReferenceBlocks(transaction.upstreamBody);
     }
     if (openAiUpstream) {
-      const conversion = upstreamProtocol === "openai_chat"
-        ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
-        : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });
-      transaction.upstreamBody = conversion;
+      if (messagesRequest) {
+        transaction.upstreamBody = upstreamProtocol === "openai_chat"
+          ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
+          : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });
+      }
       upstream = buildUpstreamUrl(
         config.claude.primary.base_url,
-        upstreamProtocol === "openai_chat"
-          ? "/v1/chat/completions"
-          : countTokens
-            ? "/v1/responses/input_tokens"
-            : "/v1/responses",
+        normalizedUpstreamPath,
         url.search
       );
       const auth = resolveClaudeCredential(config);
@@ -204,7 +210,7 @@ export async function proxyClaudeRequest(
         config.claude.primary.extra_headers
       );
     } else {
-      upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
+      upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, normalizedUpstreamPath, url.search);
       const auth = resolveClaudeCredential(config);
       transaction.requestHeaders = buildAnthropicUpstreamHeaders(
         req.headers,
@@ -290,9 +296,10 @@ export async function proxyClaudeRequest(
       body: transaction.upstreamBody,
       extraResponseHeaders: routeHeaders,
       maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      rejectHtmlResponse: modelList || messagesRequest,
       streamProtocol: upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       writeResponse: true,
-      responseTransform: oauthProvider === "openai-codex" && !countTokens
+      responseTransform: !messagesRequest ? undefined : oauthProvider === "openai-codex" && !countTokens
         ? (status, headers) => createCodexResponseTransform(status, headers, transaction.requestType === "stream", true)
           ?? createResponsesToAnthropicResponseTransform(status, headers)
         : upstreamProtocol === "openai_responses"
@@ -355,7 +362,12 @@ export async function proxyClaudeRequest(
         : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
-      sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
+      sendJson(res, transaction.status, {
+        error: error instanceof UnsupportedClientProtocolError
+          ? { type: "invalid_request_error", code: "unsupported_protocol", message: transaction.errorSummary }
+          : transaction.errorSummary,
+        request_id: requestId
+      });
     } else {
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
