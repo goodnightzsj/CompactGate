@@ -37,8 +37,9 @@ const MAX_PERSISTED_BODY_CHARS = 8 * 1024 * 1024;
  * to VACUUM the whole file back down. The marker keeps a truncated row honest
  * rather than looking like a body that legitimately ended there.
  */
-function persistedBodyText(body: Buffer): string {
+function persistedBodyText(body: Buffer, truncated = false): string {
   const text = decodeBodyText(body);
+  if (truncated) return `${text.slice(0, MAX_PERSISTED_BODY_CHARS)}\n[CompactGate] diagnostic body truncated before persistence.`;
   if (text.length <= MAX_PERSISTED_BODY_CHARS) {
     return text;
   }
@@ -87,6 +88,7 @@ export function addLog(
     upstreamResponseBody: Buffer;
     upstreamResponseHeaders?: IncomingHttpHeaders;
     clientResponseBody: Buffer | null;
+    clientResponseBodyTruncated?: boolean;
     clientResponseHeaders?: IncomingHttpHeaders | null;
     persistBody: boolean;
     upstreamHost: string;
@@ -136,8 +138,8 @@ export function addLog(
     request_summary: input.requestSummary,
     incoming_request_body: input.persistBody ? persistedBodyText(input.incomingRequestBody) : null,
     upstream_request_body: input.persistBody ? persistedBodyText(input.upstreamRequestBody) : null,
-    upstream_response_body: input.persistBody ? persistedBodyText(input.upstreamResponseBody) : null,
-    client_response_body: input.persistBody && input.clientResponseBody ? persistedBodyText(input.clientResponseBody) : null,
+    upstream_response_body: input.persistBody ? persistedBodyText(input.upstreamResponseBody, input.upstreamResponseTruncated) : null,
+    client_response_body: input.persistBody && input.clientResponseBody ? persistedBodyText(input.clientResponseBody, input.clientResponseBodyTruncated) : null,
     body_status: input.persistBody ? "present" : "none",
     compact_response_normalized: input.compactResponseNormalized,
     compact_response_normalize_reason: input.compactResponseNormalizeReason,

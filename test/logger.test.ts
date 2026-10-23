@@ -111,8 +111,9 @@ describe("RequestLogger", () => {
     logger.addEventListener("storage-pruned", notify);
     try {
       for (let index = 0; index < 150; index++) logger.add(logEntry(index, "body".repeat(1_000)));
+      const pruned = new Promise<void>((resolve) => logger.addEventListener("storage-pruned", () => resolve(), { once: true }));
       logger.configure({ keepRecent: 200, maxDatabaseBytes: 128 * 1024 });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await pruned;
       expect(logger.page({ limit: 200, offset: 0 }).total).toBeLessThan(150);
       expect(notify).toHaveBeenCalledTimes(1);
       logger.configure({ keepRecent: 200, maxDatabaseBytes: 10 * 1024 * 1024 });
@@ -121,8 +122,113 @@ describe("RequestLogger", () => {
     } finally { logger.close(); }
   });
 
+  it.each(["continue", "close", "disable", "new-write"] as const)("yields after a committed body purge and handles %s between maintenance steps", async (action) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-prune-step-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "logs.sqlite");
+    const logger = new RequestLogger(200, databasePath, { maxDatabaseBytes: Infinity, deferStoragePrune: true });
+    for (let index = 0; index < 150; index++) logger.add(logEntry(index, "x".repeat(4000)));
+    const order: string[] = [];
+    const prepare = DatabaseSync.prototype.prepare;
+    const exec = DatabaseSync.prototype.exec;
+    let inserted = false;
+    const prepared = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql) {
+      const statement = prepare.call(this, sql);
+      if (/UPDATE request_logs\s+SET\s+incoming_request_body/.test(sql)) {
+        const run = statement.run.bind(statement);
+        vi.spyOn(statement, "run").mockImplementation((...args) => {
+          const result = run(...args);
+          if (Number(result.changes) > 0) {
+            order.push("clear");
+            setImmediate(() => {
+              order.push("tick");
+              if (action === "close") logger.close();
+              if (action === "disable") logger.configure({ keepRecent: 200, maxDatabaseBytes: Infinity });
+              if (action === "new-write" && !inserted) {
+                inserted = true;
+                logger.add(logEntry(151, "x".repeat(256 * 1024)));
+              }
+            });
+          }
+          return result;
+        });
+      }
+      return statement;
+    });
+    const executed = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === "VACUUM;") order.push("vacuum");
+      return exec.call(this, sql);
+    });
+    const notify = vi.fn();
+    logger.addEventListener("storage-pruned", notify);
+    try {
+      logger.configure({ keepRecent: 200, maxDatabaseBytes: 512 * 1024 });
+      await vi.waitFor(() => expect(notify).toHaveBeenCalled(), { interval: 5, timeout: 2000 });
+      expect(order.slice(0, 2)).toEqual(["clear", "tick"]);
+      if (action === "close" || action === "disable") {
+        expect(order).not.toContain("vacuum");
+      } else {
+        await vi.waitFor(() => expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(512 * 1024), { interval: 5 });
+        expect(order).toContain("vacuum");
+      }
+      const inspect = new DatabaseSync(databasePath);
+      try {
+        expect(inspect.prepare("SELECT COUNT(*) AS count FROM request_logs").get()!.count).toBe(action === "new-write" ? 151 : 150);
+        expect(inspect.prepare("SELECT COUNT(incoming_request_body) AS count FROM request_logs").get()!.count).toBe(0);
+      } finally { inspect.close(); }
+      expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
+      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(action === "new-write" ? 2 : 1), { interval: 5 });
+    } finally {
+      prepared.mockRestore();
+      executed.mockRestore();
+      logger.close();
+    }
+  });
+
   it("defaults the persisted SQLite database cap to 1 GiB", () => {
     expect(DEFAULT_MAX_LOG_DATABASE_BYTES).toBe(1024 * 1024 * 1024);
+  });
+
+  it("makes quota progress while metadata-only inserts arrive between maintenance steps", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-prune-progress-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, "logs.sqlite");
+    const logger = new RequestLogger(200, databasePath, { maxDatabaseBytes: Infinity, deferStoragePrune: true });
+    for (let index = 0; index < 150; index++) logger.add({ ...logEntry(index), request_summary: "x".repeat(4000) });
+    const scheduled = new Set<NodeJS.Immediate>();
+    let stopped = false;
+    let writes = 0;
+    const prepare = DatabaseSync.prototype.prepare;
+    const spy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (this: DatabaseSync, sql) {
+      const statement = prepare.call(this, sql);
+      if (sql === "PRAGMA wal_checkpoint(TRUNCATE);") {
+        const get = statement.get.bind(statement);
+        vi.spyOn(statement, "get").mockImplementation((...args) => {
+          const result = get(...args);
+          const immediate = setImmediate(() => {
+            scheduled.delete(immediate);
+            if (!stopped) logger.add(logEntry(1000 + writes++));
+          });
+          scheduled.add(immediate);
+          return result;
+        });
+      }
+      return statement;
+    });
+    const notify = vi.fn(() => { stopped = true; });
+    logger.addEventListener("storage-pruned", notify);
+    try {
+      logger.configure({ keepRecent: 200, maxDatabaseBytes: 128 * 1024 });
+      await vi.waitFor(() => expect(notify).toHaveBeenCalled(), { interval: 5, timeout: 1000 });
+      expect(writes).toBeGreaterThan(0);
+      await vi.waitFor(() => expect(databaseFootprintBytes(databasePath)).toBeLessThanOrEqual(128 * 1024), { interval: 5 });
+      expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
+    } finally {
+      stopped = true;
+      for (const immediate of scheduled) clearImmediate(immediate);
+      spy.mockRestore();
+      logger.close();
+    }
   });
 
   it("persists only hashed provider-state bindings across logger restarts", async () => {

@@ -13,9 +13,13 @@ import {
   type OpenAiStreamSummary
 } from "./upstream-openai-stream.js";
 import { parseRetryAfterMs } from "./primary-failover-result.js";
-import { resolveUpstreamAgent, type UpstreamRequestOptions } from "./upstream-proxy-agent.js";
+import { drainUpstreamResponse, resolveUpstreamAgent, type UpstreamRequestOptions } from "./upstream-proxy-agent.js";
+import { createUpstreamTransportDiagnostics } from "./upstream-transport-diagnostics.js";
 import {
   appendBufferedResponseChunk,
+  DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
+  MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES,
+  UpstreamResponseLimitError,
   normalizeMaxBufferedResponseBytes,
   normalizeMaxObservedStreamEventBytes
 } from "./upstream-response-buffer.js";
@@ -29,6 +33,8 @@ export interface BufferedUpstreamOptions {
   startedAt: number;
   timeoutMs: number;
   timeoutMessage: string;
+  /** Fires once a ClientRequest exists, never for local preflight rejection. */
+  onAttemptStarted?: () => void;
   requestHeaders: Record<string, string>;
   proxyUrl?: string;
   body: Buffer;
@@ -37,6 +43,9 @@ export interface BufferedUpstreamOptions {
   deferHttpErrors?: boolean;
   deferRetryableStreamErrors?: boolean;
   maxBufferedResponseBytes?: number;
+  requireCompleteResponse?: boolean;
+  /** JSON carries continuation IDs as well as diagnostics and must stay complete. */
+  requireCompleteJsonResponse?: boolean;
   rejectHtmlResponse?: boolean;
   maxDeferredHttpErrorBytes?: number;
   maxObservedStreamEventBytes?: number;
@@ -65,12 +74,15 @@ export interface BufferedUpstreamResult {
   status: number;
   errorSummary: string | null;
   responseBody: Buffer;
+  responseBodyBytes?: number;
   responseBodyTruncated: boolean;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
   streamSummary: OpenAiStreamSummary | null;
   clientStreamSummary?: OpenAiStreamSummary | null;
   clientResponseBody?: Buffer | null;
+  clientResponseBodyBytes?: number;
+  clientResponseBodyTruncated?: boolean;
   clientResponseHeaders?: IncomingHttpHeaders | null;
   clientDisconnectPhase: ClientDisconnectPhase;
 }
@@ -84,6 +96,7 @@ export type UpstreamFailureKind =
 export interface UpstreamFailureDetails {
   status: number | null;
   responseBody: Buffer;
+  responseBodyBytes?: number;
   responseBodyTruncated: boolean;
   responseHeaders: IncomingHttpHeaders;
   firstTokenMs: number | null;
@@ -134,6 +147,7 @@ export function sendBufferedUpstreamRequest(
     let activeResponse: ActiveUpstreamResponse | null = null;
     const connectionAbort = new AbortController();
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let diagnostics: ReturnType<typeof createUpstreamTransportDiagnostics> = null;
 
     const cleanup = () => {
       clearTimeout(deadlineTimer);
@@ -149,6 +163,7 @@ export function sendBufferedUpstreamRequest(
 
       settled = true;
       cleanup();
+      diagnostics?.settle(options.streamProtocol === "anthropic" ? classifyAnthropicUpstreamResult(result) : classifyOpenAiUpstreamResult(result));
       resolve(result);
     };
 
@@ -159,6 +174,9 @@ export function sendBufferedUpstreamRequest(
 
       settled = true;
       cleanup();
+      const kind = error instanceof UpstreamRequestError ? error.details.kind : "upstream_request_error";
+      diagnostics?.closing(kind);
+      diagnostics?.settle(kind);
       connectionAbort.abort();
       if (activeResponse?.responseTransform) {
         const transform = activeResponse.responseTransform.stream;
@@ -176,6 +194,7 @@ export function sendBufferedUpstreamRequest(
     ): UpstreamFailureDetails => ({
       status: activeResponse?.status ?? null,
       responseBody: activeResponse ? Buffer.concat(activeResponse.responseChunks) : Buffer.alloc(0),
+      responseBodyBytes: activeResponse?.responseBodyBytes ?? 0,
       responseBodyTruncated: activeResponse?.responseBodyTruncated ?? false,
       responseHeaders: activeResponse?.response.headers ?? {},
       firstTokenMs: activeResponse?.firstTokenMs ?? null,
@@ -270,11 +289,13 @@ export function sendBufferedUpstreamRequest(
     if (agent) {
       requestOptions.agent = agent;
     }
+    diagnostics = createUpstreamTransportDiagnostics(options.upstream, options.extraResponseHeaders["x-compactgate-request-id"], options.startedAt);
 
     upstreamReq = client.request(
       options.upstream,
       requestOptions,
       (response) => {
+        diagnostics?.attachResponse(response);
         if (settled) { response.destroy(); return; }
         const status = response.statusCode ?? 502;
         const responseChunks: Buffer[] = [];
@@ -283,10 +304,13 @@ export function sendBufferedUpstreamRequest(
           options.deferRetryableStreamErrors === true && status >= 500;
         const shouldDeferResponse = shouldDeferHttpError || shouldDeferRetryableResponse;
         const shouldWriteResponse = options.writeResponse !== false && !shouldDeferResponse;
+        const requireCompleteJson = options.requireCompleteJsonResponse === true && status < 400 &&
+          String(response.headers["content-type"] ?? "").toLowerCase().includes("application/json");
+        const requireCompleteResponse = options.requireCompleteResponse || requireCompleteJson;
         const maxBufferedResponseBytes = shouldDeferHttpError
           ? normalizeMaxBufferedResponseBytes(options.maxDeferredHttpErrorBytes)
           : options.writeResponse === false || shouldWriteResponse || shouldDeferRetryableResponse
-            ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes)
+            ? normalizeMaxBufferedResponseBytes(options.maxBufferedResponseBytes ?? (requireCompleteJson ? MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES : undefined))
             : Number.POSITIVE_INFINITY;
         let responseTransform: UpstreamResponseTransform | null = null;
         try {
@@ -310,17 +334,22 @@ export function sendBufferedUpstreamRequest(
         let clientResponseBytes = 0;
         const clientStreamObserver = responseTransform
           ? responseTransform.streamProtocol === "anthropic"
-            ? createAnthropicStreamObserver(responseTransform.responseHeaders)
-            : createOpenAiStreamObserver(responseTransform.responseHeaders)
+            ? createAnthropicStreamObserver(responseTransform.responseHeaders, { maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes ?? DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES) })
+            : createOpenAiStreamObserver(responseTransform.responseHeaders, { maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes ?? DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES) })
           : null;
         let responseTransformCompletion: Promise<void> | null = null;
         if (responseTransform) {
           responseTransform.stream.on("data", (chunk: Buffer) => {
-            clientResponseBytes += chunk.byteLength;
-            if (clientResponseBytes <= maxBufferedResponseBytes) {
-              clientResponseChunks.push(Buffer.from(chunk));
-            }
+            responseState.clientResponseBodyBytes += chunk.byteLength;
+            const previousBytes = clientResponseBytes;
+            clientResponseBytes = appendBufferedResponseChunk(clientResponseChunks, clientResponseBytes, chunk, maxBufferedResponseBytes);
+            responseState.clientResponseBodyTruncated ||= clientResponseBytes - previousBytes < chunk.byteLength;
             clientStreamObserver?.observe(chunk);
+            if (requireCompleteResponse && responseState.clientResponseBodyTruncated) {
+              const cause = new UpstreamResponseLimitError(maxBufferedResponseBytes);
+              rejectOnce(new UpstreamRequestError(cause.message, responseDetails("upstream_stream_incomplete", "before_terminal"), { cause }));
+              if (options.res.headersSent) options.res.destroy();
+            }
           });
           responseTransformCompletion = finished(responseTransform.stream, { cleanup: true }).catch((error: unknown) => {
             rejectOnce(new UpstreamRequestError(
@@ -333,20 +362,25 @@ export function sendBufferedUpstreamRequest(
         let bufferedBytes = 0;
         const streamObserver = options.streamProtocol === "anthropic"
           ? createAnthropicStreamObserver(response.headers, {
-              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
+              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes),
+              onTerminalEvent: diagnostics ? () => diagnostics.mark("terminal_observed_ms") : undefined
             })
           : createOpenAiStreamObserver(response.headers, {
-              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes)
+              maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes),
+              onTerminalEvent: diagnostics ? () => diagnostics.mark("terminal_observed_ms") : undefined
             });
         const responseState: ActiveUpstreamResponse = {
           response,
           status,
           responseChunks,
+          responseBodyBytes: 0,
           responseBodyTruncated: false,
           firstTokenMs: null,
           streamObserver,
           clientStreamObserver,
           clientResponseChunks,
+          clientResponseBodyBytes: 0,
+          clientResponseBodyTruncated: false,
           responseTransform,
           responseTransformCompletion,
           clientDisconnectPhase: "none",
@@ -361,6 +395,10 @@ export function sendBufferedUpstreamRequest(
           options.res.writeHead(status);
         }
         response.on("data", (chunk: Buffer) => {
+          // Transport draining must not mutate a settled response or its usage.
+          if (responseState.responseResolutionStarted) return;
+          responseState.responseBodyBytes += chunk.byteLength;
+          diagnostics?.mark("first_body_byte_ms");
           responseState.firstTokenMs ??= Math.max(0, Math.round(performance.now() - options.startedAt));
           const previousBufferedBytes = bufferedBytes;
           bufferedBytes = appendBufferedResponseChunk(
@@ -373,6 +411,12 @@ export function sendBufferedUpstreamRequest(
             responseState.responseBodyTruncated = true;
           }
           streamObserver?.observe(chunk);
+          if (requireCompleteResponse && responseState.responseBodyTruncated) {
+            const cause = new UpstreamResponseLimitError(maxBufferedResponseBytes);
+            rejectOnce(new UpstreamRequestError(cause.message, responseDetails("upstream_stream_incomplete", "before_terminal"), { cause }));
+            if (options.res.headersSent) options.res.destroy();
+            return;
+          }
           if ((shouldDeferResponse || options.writeResponse === false) && responseState.responseBodyTruncated) {
             beginResolveUpstreamResponse();
             upstreamReq?.destroy();
@@ -421,7 +465,9 @@ export function sendBufferedUpstreamRequest(
         ? await responseState.streamObserver.finish()
         : null;
       const translationError = responseState.responseTransform?.translationError ?? null;
-      resolveOnce({
+      const clientStreamSummary = responseState.clientStreamObserver ? await responseState.clientStreamObserver.finish() : null;
+      if (settled) return;
+      const result: BufferedUpstreamResult = {
         status: responseState.status,
         errorSummary: extractResponseErrorSummary(
           responseState.status,
@@ -429,19 +475,29 @@ export function sendBufferedUpstreamRequest(
           responseState.response.headers
         ) ?? translationError,
         responseBody,
+        responseBodyBytes: responseState.responseBodyBytes,
         responseBodyTruncated: responseState.responseBodyTruncated,
         responseHeaders: responseState.response.headers,
         firstTokenMs: responseState.firstTokenMs,
         streamSummary,
-        clientStreamSummary: responseState.clientStreamObserver
-          ? await responseState.clientStreamObserver.finish()
-          : null,
+        clientStreamSummary,
         clientResponseBody: responseState.responseTransform
           ? Buffer.concat(responseState.clientResponseChunks)
           : null,
+        clientResponseBodyTruncated: responseState.clientResponseBodyTruncated,
+        clientResponseBodyBytes: responseState.clientResponseBodyBytes,
         clientResponseHeaders: responseState.responseTransform?.responseHeaders ?? null,
         clientDisconnectPhase: responseState.clientDisconnectPhase
-      });
+      };
+      const afterTerminal = responseState.clientDisconnectPhase === "after_terminal" && agent !== undefined;
+      const successful = afterTerminal && result.status >= 200 && result.status < 300 &&
+        (options.streamProtocol === "anthropic" ? classifyAnthropicUpstreamResult(result) : classifyOpenAiUpstreamResult(result)) === "success" &&
+        !streamSummary?.decodeError && !clientStreamSummary?.decodeError &&
+        !clientStreamSummary?.sawFailedEvent && !clientStreamSummary?.sawIncompleteEvent;
+      if (successful) diagnostics?.startDrain();
+      resolveOnce(result);
+      if (afterTerminal && (!successful || !drainUpstreamResponse(agent, responseState.response,
+        options.startedAt + options.timeoutMs - performance.now(), diagnostics?.finishDrain))) upstreamReq?.destroy();
     }
 
     function settleAfterTerminal(disconnected: "client" | "upstream"): boolean {
@@ -466,6 +522,8 @@ export function sendBufferedUpstreamRequest(
       }
 
       responseState.clientDisconnectPhase = disconnected === "client" ? "after_terminal" : "none";
+      diagnostics?.mark("terminal_observed_ms");
+      diagnostics?.closing(disconnected === "client" ? "client_after_terminal" : "upstream_after_terminal");
       responseState.responseResolutionStarted = true;
       if (responseState.responseTransform) {
         responseState.response.unpipe(responseState.responseTransform.stream);
@@ -478,17 +536,20 @@ export function sendBufferedUpstreamRequest(
         responseState.response.unpipe(options.res);
         if (disconnected === "upstream" && options.res.headersSent && !options.res.destroyed) options.res.end();
       }
-      upstreamReq?.destroy();
+      if (disconnected === "client" && agent) responseState.response.pause();
+      else upstreamReq?.destroy();
       void resolveUpstreamResponse(responseState);
       return true;
     }
 
     options.res.once("close", handleClientClose);
+    diagnostics?.attachRequest(upstreamReq, agent !== undefined);
     options.res.once("error", handleClientError);
     upstreamReq.once("timeout", handleTimeout);
     upstreamReq.once("error", handleUpstreamRequestError);
 
     deadlineTimer = setTimeout(handleTimeout, remainingMs);
+    options.onAttemptStarted?.();
     upstreamReq.end(options.body);
   });
 }
@@ -497,11 +558,14 @@ interface ActiveUpstreamResponse {
   response: IncomingMessage;
   status: number;
   responseChunks: Buffer[];
+  responseBodyBytes: number;
   responseBodyTruncated: boolean;
   firstTokenMs: number | null;
   streamObserver: ReturnType<typeof createOpenAiStreamObserver>;
   clientStreamObserver: ReturnType<typeof createOpenAiStreamObserver>;
   clientResponseChunks: Buffer[];
+  clientResponseBodyBytes: number;
+  clientResponseBodyTruncated: boolean;
   responseTransform: UpstreamResponseTransform | null;
   responseTransformCompletion: Promise<void> | null;
   clientDisconnectPhase: ClientDisconnectPhase;
@@ -534,7 +598,7 @@ export async function sendOpenAiUpstreamRequest(
         continue;
       }
 
-      const finalResult = result.responseBodyTruncated
+      const finalResult = result.status >= 500 && result.responseBodyTruncated
         ? buildDeferredBufferLimitResult(result)
         : result;
       // ponytail: a deferred 5xx is written raw, so a non-retryable upstream
@@ -566,7 +630,7 @@ export async function sendOpenAiUpstreamRequest(
   });
 
   if (!isRetryableEmptyStreamUpstreamError(firstResult)) {
-    const finalResult = firstResult.responseBodyTruncated
+    const finalResult = firstResult.status >= 500 && firstResult.responseBodyTruncated
       ? buildDeferredBufferLimitResult(firstResult)
       : firstResult;
     writeBufferedUpstreamResult(options.res, finalResult, options.extraResponseHeaders);

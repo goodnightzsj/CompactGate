@@ -58,6 +58,7 @@ const MAX_PROVIDER_STATE_BINDINGS = 8_192;
 const MAX_PROVIDER_STATE_RECOVERY_EVIDENCE = 8_192;
 const PROVIDER_STATE_EXPIRY_SWEEP_INTERVAL_MS = 60_000;
 const DATABASE_SIZE_CHECK_INTERVAL_MS = 30_000;
+const STORAGE_PRUNE_YIELD_MS = 5;
 const RESPONSE_MODEL_BACKFILL_BATCH_ROWS = 200;
 
 /**
@@ -98,9 +99,13 @@ export class RequestLogger extends EventTarget {
 
   private readonly deferStoragePrune: boolean;
 
-  private scheduledStoragePrune: NodeJS.Immediate | null = null;
+  private scheduledStoragePrune: NodeJS.Timeout | null = null;
 
   private storagePruneInProgress = false;
+
+  private storagePruneSteps: Generator<void> | null = null;
+
+  private storagePruneRequested = false;
 
   private persistErrorCount = 0;
 
@@ -669,9 +674,13 @@ export class RequestLogger extends EventTarget {
 
     this.closed = true;
     if (this.scheduledStoragePrune) {
-      clearImmediate(this.scheduledStoragePrune);
+      clearTimeout(this.scheduledStoragePrune);
       this.scheduledStoragePrune = null;
     }
+    // Returning a paused iterator publishes any already-committed changes.
+    if (!this.storagePruneInProgress) this.storagePruneSteps?.return(undefined);
+    this.storagePruneSteps = null;
+    this.storagePruneRequested = false;
     this.db.close();
   }
 
@@ -685,24 +694,39 @@ export class RequestLogger extends EventTarget {
       return;
     }
 
-    if (this.closed || this.scheduledStoragePrune || this.storagePruneInProgress) {
+    if (this.closed) return;
+    if (this.storagePruneSteps || this.storagePruneInProgress) {
+      this.storagePruneRequested = true;
+      return;
+    }
+    if (this.scheduledStoragePrune) {
       return;
     }
 
-    this.scheduledStoragePrune = setImmediate(() => {
+    const advance = () => {
       this.scheduledStoragePrune = null;
-
-      if (this.closed || this.storagePruneInProgress) {
-        return;
-      }
-
+      if (this.closed) return;
+      const steps = this.storagePruneSteps ??= this.prunePersistedStorageSteps();
       this.storagePruneInProgress = true;
+      let done = false;
       try {
-        this.prunePersistedStorage();
+        done = (this.maxDatabaseBytes === null ? steps.return(undefined) : steps.next()).done === true;
       } finally {
         this.storagePruneInProgress = false;
       }
-    });
+      if (this.closed) return;
+      if (!done) {
+        // A timer boundary lets multi-stage network I/O progress between SQL calls.
+        this.scheduledStoragePrune = setTimeout(advance, STORAGE_PRUNE_YIELD_MS);
+        return;
+      }
+      this.storagePruneSteps = null;
+      if (this.storagePruneRequested) {
+        this.storagePruneRequested = false;
+        this.requestStoragePrune();
+      }
+    };
+    this.scheduledStoragePrune = setTimeout(advance, 0);
   }
 
   private migratePersistedSchema(): void {
@@ -1037,6 +1061,11 @@ export class RequestLogger extends EventTarget {
   }
 
   private prunePersistedStorage(): void {
+    const steps = this.prunePersistedStorageSteps();
+    while (!steps.next().done) { /* Synchronous callers keep their completion contract. */ }
+  }
+
+  private *prunePersistedStorageSteps(): Generator<void> {
     if (this.maxDatabaseBytes === null) {
       return;
     }
@@ -1046,11 +1075,16 @@ export class RequestLogger extends EventTarget {
       if (this.databaseFootprintBytes() <= this.maxDatabaseBytes) return;
       // WAL pages can be reclaimed without deleting any saved body.
       this.checkpointSqliteStorage();
+      yield;
+      // This body-first check includes every write made before resuming here.
+      this.storagePruneRequested = false;
       if (this.databaseFootprintBytes() > this.maxDatabaseBytes) {
         const rowsCleared = this.clearPersistedBodies();
         if (rowsCleared > 0) {
           changed = true;
+          yield;
           this.reclaimSqliteStorage();
+          yield;
         }
       }
 
@@ -1066,6 +1100,8 @@ export class RequestLogger extends EventTarget {
         if (footprint <= this.maxDatabaseBytes) {
           return;
         }
+        // Writes during a pause need a fresh body-first pass before metadata deletion.
+        if (this.storagePruneRequested) return;
 
         const rowCount = this.persistedRowCount();
         if (rowCount <= 1) {
@@ -1091,8 +1127,10 @@ export class RequestLogger extends EventTarget {
         );
         this.deleteOldestPersistedRows(rowsToDelete);
         changed = true;
+        yield;
         this.reclaimSqliteStorage();
         passes += 1;
+        yield;
       }
     } catch (error) {
       this.recordPersistenceFailure("prune request log database", error);

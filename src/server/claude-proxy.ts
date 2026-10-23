@@ -45,6 +45,7 @@ import { StudioEventBroadcaster } from "./studio-events.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
+  emptyUsageMetrics,
   extractSourceModel,
   responseTransport
 } from "./usage.js";
@@ -69,6 +70,8 @@ import {
   createResponsesToAnthropicResponseTransform
 } from "./protocol-stream.js";
 import { buildUpstreamUrl, upstreamPathForEndpoint } from "./routing.js";
+import { mergeUsage } from "./usage-merge.js";
+import { DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES } from "./upstream-response-buffer.js";
 
 export const ANTHROPIC_PROXY_PREFIX = "/anthropic";
 
@@ -281,22 +284,25 @@ export async function proxyClaudeRequest(
     const oauthProvider = await prepareOAuthRequest(config.claude.primary, configStore.oauth, oauthRequest, req.method);
     if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     transaction.upstreamBody = oauthRequest.upstreamBody;
-    studioEvents.broadcastKeyActivity("claude", routing.profileId,
-      claudeKeySelection?.keyId ?? enabledApiKeyPool(config.claude.primary)[0]?.id ?? null, configRevision);
-    upstreamAttempted = true;
     const completedResult = await sendBufferedUpstreamRequest({
       req,
       res,
       upstream,
       startedAt,
+      onAttemptStarted: () => {
+        upstreamAttempted = true;
+        studioEvents.broadcastKeyActivity("claude", routing?.profileId ?? null,
+          claudeKeySelection?.keyId ?? enabledApiKeyPool(config.claude.primary)[0]?.id ?? null, configRevision);
+      },
       timeoutMs: config.timeouts.claude_ms,
       timeoutMessage: "Claude upstream request timed out.",
       requestHeaders: transaction.requestHeaders,
       proxyUrl: config.claude.primary.proxy_url,
       body: transaction.upstreamBody,
       extraResponseHeaders: routeHeaders,
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      requireCompleteJsonResponse: true,
       rejectHtmlResponse: modelList || messagesRequest,
+      maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
       streamProtocol: upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
       writeResponse: true,
       responseTransform: !messagesRequest ? undefined : oauthProvider === "openai-codex" && !countTokens
@@ -335,11 +341,14 @@ export async function proxyClaudeRequest(
     const clientResult = responseWasTransformed
       ? { ...completedResult, streamSummary: completedResult.clientStreamSummary ?? null }
       : completedResult;
-    const clientResponseBody = completedResult.clientResponseBody ?? transaction.responseBody;
-    const clientResponseHeaders = completedResult.clientResponseHeaders ?? transaction.responseHeaders;
+    const clientResponseBody = responseWasTransformed ? completedResult.clientResponseBody! : transaction.responseBody;
+    const clientResponseHeaders = responseWasTransformed ? completedResult.clientResponseHeaders! : transaction.responseHeaders;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
-    transaction.usage = observedResult.clientStreamSummary?.usage ??
-      extractResponseUsage(clientResponseBody, clientResponseHeaders);
+    const bodyTruncated = responseWasTransformed ? completedResult.clientResponseBodyTruncated : completedResult.responseBodyTruncated;
+    const observedUsage = clientResult.streamSummary?.usage;
+    transaction.usage = bodyTruncated
+      ? observedUsage ?? emptyUsageMetrics()
+      : mergeUsage(observedUsage ?? null, extractResponseUsage(clientResponseBody, clientResponseHeaders));
     if (transaction.requestMetadata.requestType === "stream" || transaction.requestType === "stream") {
       transaction.errorSummary ??= responseWasTransformed
         ? summarizeAnthropicStreamFailure(clientResult)

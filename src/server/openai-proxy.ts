@@ -62,6 +62,7 @@ import { normalizeCompactResponse } from "./compact-response-normalizer.js";
 import {
   extractRequestMetadata,
   extractResponseUsage,
+  emptyUsageMetrics,
   responseTransport,
   type RequestMetadata
 } from "./usage.js";
@@ -77,6 +78,7 @@ import {
   type UpstreamResponseTransform
 } from "./upstream-client.js";
 import { ProtocolConversionError, UnsupportedClientProtocolError } from "./protocol-conversion.js";
+import { DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES, MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES } from "./upstream-response-buffer.js";
 import {
   createAnthropicToResponsesCompactionResponseTransform,
   createAnthropicToResponsesResponseTransform,
@@ -215,12 +217,17 @@ async function proxyPrimaryRequest(
   let delegatedToCompact = false;
   let attemptedUpstream = false;
   const sendUpstream: typeof sendOpenAiUpstreamRequest = (options) => {
-    attemptedUpstream = true;
-    return sendOpenAiUpstreamRequest({
-      ...options,
+    return sendOpenAiUpstreamRequest({ ...options, requireCompleteJsonResponse: true,
       rejectHtmlResponse: options.req.method === "GET" && transaction.requestMetadata?.endpoint === "/models" ||
-        options.req.method === "POST" && ["/responses", "/chat/completions"].includes(transaction.requestMetadata?.endpoint ?? "")
-    });
+        options.req.method === "POST" && ["/responses", "/chat/completions"].includes(transaction.requestMetadata?.endpoint ?? ""),
+      maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES, onAttemptStarted: () => {
+      if (!attemptedUpstream) {
+        studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? null,
+          primarySelection?.keyId ?? enabledApiKeyPool(primarySelection?.config.primary ?? config.primary)[0]?.id ?? null,
+          configRevision);
+      }
+      attemptedUpstream = true;
+    } });
   };
   let primarySelection: PrimaryRouteSelection | null = null;
   let upstream = new URL(config.primary.base_url);
@@ -365,9 +372,6 @@ async function proxyPrimaryRequest(
     const targetStateFreeSuccess = logger.hasProviderStateRecoveryEvidence(targetHealthKey);
     const recoveryEnabled = plan.translateResponses && config.primary_failover.state_portability === "recover_on_error" &&
       plan.upstreamProtocol === "openai_responses";
-    studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? null,
-      primarySelection?.keyId ?? enabledApiKeyPool(primarySelection?.config.primary ?? config.primary)[0]?.id ?? null,
-      configRevision);
     const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
       ? await sendRecoveringPrimaryRequest({
           send: sendUpstream,
@@ -430,7 +434,6 @@ async function proxyPrimaryRequest(
       proxyUrl: plan.proxyUrl,
       body: transaction.upstreamBody,
       extraResponseHeaders,
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
       retryEmptyStreamError: classification.route !== "compact" &&
         plan.translateResponses &&
         plan.upstreamProtocol === "openai_responses" &&
@@ -479,6 +482,7 @@ async function proxyPrimaryRequest(
       completedSuccessfully
     ) {
       const responseId = readResponseId({
+        responseId: transaction.responseId,
         status: transaction.status,
         errorSummary: null,
         responseBody: transaction.responseBody,
@@ -530,6 +534,7 @@ async function proxyPrimaryRequest(
     if (!delegatedToCompact) {
     if (primarySelection && !requestProfile) {
       primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
+        responseId: transaction.responseId,
         status: transaction.status,
         errorSummary: transaction.errorSummary,
         streamOutcome: transaction.streamOutcome,
@@ -609,8 +614,7 @@ async function sendRecoveringPrimaryRequest(input: {
       body,
       extraResponseHeaders: input.extraResponseHeaders,
       deferHttpErrors: true,
-      responseTransform: input.responseTransform,
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY
+      responseTransform: input.responseTransform
     })
   });
   if (recovery.result.status >= 400) {
@@ -786,6 +790,8 @@ async function proxyCompactRequest(
   let configRevision = configStore.revision;
   let upstream = new URL(config.compact.base_url);
   let attemptedUpstream = false;
+  // Public error status distinguishes preparation from transport, including preflight.
+  let invokedTransport = false;
   let primarySelection: PrimaryRouteSelection | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
@@ -874,11 +880,7 @@ async function proxyCompactRequest(
       );
       return;
     }
-    attemptedUpstream = true;
-    if (selectedConfig.compact.upstream_mode === "primary") {
-      studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? requestProfile?.profileId ?? null,
-        primarySelection?.keyId ?? enabledApiKeyPool(selectedConfig.primary)[0]?.id ?? null, configRevision);
-    }
+    invokedTransport = true;
 
     // 方案 B:流式转发原始上游 SSE 流给客户端。Codex compact 用 collect_compaction_output 逐事件消费,
     // 需要 response.created / response.output_item.done / response.completed 事件;缓冲后转 JSON 会让客户端
@@ -889,6 +891,13 @@ async function proxyCompactRequest(
       res,
       upstream,
       startedAt,
+      onAttemptStarted: () => {
+        if (!attemptedUpstream && selectedConfig.compact.upstream_mode === "primary") {
+          studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? requestProfile?.profileId ?? null,
+            primarySelection?.keyId ?? enabledApiKeyPool(selectedConfig.primary)[0]?.id ?? null, configRevision);
+        }
+        attemptedUpstream = true;
+      },
       timeoutMs: plan.timeoutMs,
       timeoutMessage: plan.timeoutMessage,
       requestHeaders: transaction.requestHeaders,
@@ -901,7 +910,10 @@ async function proxyCompactRequest(
         "x-compactgate-model": transaction.targetModel ?? "",
         "x-compactgate-request-id": requestId
       },
-      maxBufferedResponseBytes: Number.POSITIVE_INFINITY,
+      maxBufferedResponseBytes: classification.compactionMode === "remote_v1" ? MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES : undefined,
+      requireCompleteResponse: classification.compactionMode === "remote_v1",
+      requireCompleteJsonResponse: true,
+      maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
       retryHttpStatuses: [502, 503, 504],
       maxHttpStatusRetries: 3,
       streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
@@ -973,7 +985,7 @@ async function proxyCompactRequest(
       ? error.status
       : error instanceof RequestBodyTooLargeError
         ? 413
-        : attemptedUpstream
+        : invokedTransport
           ? 502
           : 400;
     transaction.errorSummary = summaryForError(error);
@@ -1067,12 +1079,14 @@ function applyClientResult(
   const clientResult = responseWasTransformed
     ? { ...result, streamSummary: result.clientStreamSummary ?? null }
     : result;
-  // Either decoder can reach its limit: merge same-protocol observations,
-  // letting the full body supply final usage from oversized terminal events.
-  transaction.usage = mergeUsage(clientResult.streamSummary?.usage ?? null, extractResponseUsage(
-    result.clientResponseBody ?? result.responseBody,
-    result.clientResponseHeaders ?? result.responseHeaders
-  ));
+  // A retained prefix is older than the incremental observation, not a final reading.
+  const bodyTruncated = responseWasTransformed ? result.clientResponseBodyTruncated : result.responseBodyTruncated;
+  const observedUsage = clientResult.streamSummary?.usage;
+  transaction.usage = bodyTruncated
+    ? observedUsage ?? emptyUsageMetrics()
+    : mergeUsage(observedUsage ?? null, extractResponseUsage(
+        result.clientResponseBody ?? result.responseBody, result.clientResponseHeaders ?? result.responseHeaders
+      ));
   const anthropic = !responseWasTransformed && plan.upstreamProtocol === "anthropic_messages";
   if (clientResult.streamSummary || expectStream) {
     transaction.errorSummary ??= anthropic

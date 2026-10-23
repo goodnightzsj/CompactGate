@@ -1,15 +1,20 @@
-import { Agent as HttpAgent, type ClientRequest, type RequestOptions } from "node:http";
+import { Agent as HttpAgent, type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { parseHttpConnectProxyUrl } from "./upstream-proxy-url.js";
 
+export type DrainOutcome = "complete" | "timeout" | "byte_limit" | "capacity" | "retired" | "closed" | "not_owned";
+
 const httpsProxyAgents = new Map<string, HttpConnectHttpsAgent>();
 const MAX_CACHED_PROXY_AGENTS = 8;
 const MAX_IDLE_SOCKETS_PER_TARGET = 2;
 const MAX_IDLE_SOCKETS_PER_AGENT = 8;
 const IDLE_SOCKET_TIMEOUT_MS = 4_000;
+const MAX_RESPONSE_DRAIN_MS = 500;
+const MAX_RESPONSE_DRAIN_BYTES = 64 * 1024;
+const MAX_DRAINING_RESPONSES_PER_AGENT = 8;
 let poolOwners = 0;
 
 export function retainUpstreamProxyAgents(): () => void {
@@ -72,9 +77,21 @@ export function resolveUpstreamAgent(
   return agent;
 }
 
+export function drainUpstreamResponse(
+  agent: HttpAgent | HttpsAgent | undefined,
+  response: IncomingMessage,
+  remainingMs: number,
+  onFinished?: (outcome: DrainOutcome, bytes: number) => void
+): boolean {
+  if (agent instanceof HttpConnectHttpsAgent) return agent.drainResponse(response, remainingMs, onFinished);
+  onFinished?.("not_owned", 0);
+  return false;
+}
+
 class HttpConnectHttpsAgent extends HttpsAgent {
   private retired = false;
   private readonly idleTimers = new Map<net.Socket, ReturnType<typeof setTimeout>>();
+  private readonly drainingResponses = new Map<IncomingMessage, () => void>();
 
   constructor(private readonly proxy: URL) {
     super({ keepAlive: true, maxFreeSockets: MAX_IDLE_SOCKETS_PER_TARGET });
@@ -106,8 +123,42 @@ class HttpConnectHttpsAgent extends HttpsAgent {
     this.idleTimers.delete(socket);
   }
 
+  drainResponse(response: IncomingMessage, remainingMs: number, onFinished?: (outcome: DrainOutcome, bytes: number) => void): boolean {
+    const unavailable = this.retired ? "retired" : response.destroyed ? "closed" : remainingMs <= 0 ? "timeout"
+      : this.drainingResponses.size >= MAX_DRAINING_RESPONSES_PER_AGENT ? "capacity" : null;
+    if (unavailable) { onFinished?.(unavailable, 0); return false; }
+    let bytes = 0;
+    const finish = (outcome: DrainOutcome) => {
+      if (!this.drainingResponses.delete(response)) return;
+      clearTimeout(timer);
+      response.off("data", onData);
+      response.off("end", onEnd);
+      response.off("close", onClosed);
+      response.off("error", onClosed);
+      if (outcome !== "complete") response.destroy();
+      onFinished?.(outcome, bytes);
+    };
+    const onData = (chunk: Buffer) => {
+      bytes += chunk.byteLength;
+      if (bytes > MAX_RESPONSE_DRAIN_BYTES) finish("byte_limit");
+    };
+    const onEnd = () => finish(response.complete ? "complete" : "closed");
+    const onClosed = () => finish("closed");
+    const timer = setTimeout(() => finish("timeout"), Math.min(MAX_RESPONSE_DRAIN_MS, remainingMs));
+    timer.unref();
+    this.drainingResponses.set(response, () => finish("retired"));
+    response.on("data", onData);
+    response.once("end", onEnd);
+    response.once("close", onClosed);
+    response.once("error", onClosed);
+    response.resume();
+    return true;
+  }
+
   retire(): void {
     this.retired = true;
+    // These requests have settled; only their bounded HTTP tails remain.
+    for (const cancel of this.drainingResponses.values()) cancel();
     // The free listener closes retired sockets after the current response ends.
     for (const socket of this.idleTimers.keys()) {
       this.clearIdleTimer(socket);

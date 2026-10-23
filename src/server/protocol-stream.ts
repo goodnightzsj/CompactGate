@@ -29,6 +29,7 @@ import {
 } from "./protocol-conversion.js";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
 import type { UpstreamResponseTransform } from "./upstream-client.js";
+import { MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES, UpstreamResponseLimitError } from "./upstream-response-buffer.js";
 
 interface StreamBlock {
   itemId: string;
@@ -1705,18 +1706,23 @@ function createAnthropicTerminatorRepairStream(): Transform {
       if (!match || match.index === undefined) {
         break;
       }
+      if (Buffer.byteLength(pending.slice(0, match.index)) > MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) throw new UpstreamResponseLimitError();
       observeFrame(pending.slice(0, match.index));
       pending = pending.slice(match.index + match[0].length);
     }
+    if (Buffer.byteLength(pending) > MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) throw new UpstreamResponseLimitError();
   };
 
   return new Transform({
     transform(chunk: Buffer, _encoding, callback: TransformCallback) {
-      observe(decoder.write(chunk));
-      callback(null, chunk);
+      try {
+        observe(decoder.write(chunk));
+        callback(null, chunk);
+      } catch (error) { callback(error as Error); }
     },
     flush(callback: TransformCallback) {
-      observe(decoder.end());
+      try { observe(decoder.end()); }
+      catch (error) { callback(error as Error); return; }
       if (pending.trim()) {
         // A connection cut mid-frame leaves a trailing frame with no blank line.
         observeFrame(pending);
@@ -1772,6 +1778,7 @@ function createSseTransform(options: {
   onFlush: (transform: Transform) => void;
 }): Transform {
   let pending = "";
+  let inputBytes = 0;
   const decoder = new StringDecoder("utf8");
 
   const convertFrame = (frame: string, transform: Transform): void => {
@@ -1804,6 +1811,8 @@ function createSseTransform(options: {
 
   return new Transform({
     transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+      inputBytes += chunk.byteLength;
+      if (inputBytes > MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) { callback(new UpstreamResponseLimitError()); return; }
       pending += decoder.write(chunk);
       try {
         flushFrames(false, this);
@@ -1841,9 +1850,12 @@ function bufferedJsonTransform(
   streamProtocol: "openai" | "anthropic"
 ): UpstreamResponseTransform {
   const chunks: Buffer[] = [];
+  let inputBytes = 0;
   const transform: UpstreamResponseTransform = {
     stream: new Transform({
       transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+        inputBytes += chunk.byteLength;
+        if (inputBytes > MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) { callback(new UpstreamResponseLimitError()); return; }
         chunks.push(Buffer.from(chunk));
         callback();
       },

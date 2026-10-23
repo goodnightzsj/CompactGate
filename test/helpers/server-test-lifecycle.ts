@@ -10,8 +10,8 @@ import { createCompactGateServer } from "../../src/server/http.js";
 import { StudioEventBroadcaster } from "../../src/server/studio-events.js";
 import type { OAuthStoreOptions } from "../../src/server/oauth-store.js";
 
-export const cleanup: Array<() => Promise<void>> = [];
-export const cleanupEnvKeys = new Set<string>();
+import { cleanup, cleanupEnvKeys } from "./server-test-cleanup.js";
+export { cleanup, cleanupEnvKeys } from "./server-test-cleanup.js";
 
 export async function startApp(
   primaryBaseUrl?: string,

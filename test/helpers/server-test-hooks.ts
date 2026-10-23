@@ -1,5 +1,5 @@
 import { afterEach } from "vitest";
-import { cleanup, cleanupEnvKeys } from "./server-test-utils.js";
+import { cleanup, cleanupEnvKeys } from "./server-test-cleanup.js";
 
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();

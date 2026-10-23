@@ -341,7 +341,15 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 `logging.keep_recent` 控制 Studio 首屏和 `/api/logs/recent` 默认返回多少条日志，范围是 1 到 2000，不是 SQLite 日志保留上限。SQLite 请求日志默认最多占用 1 GiB；先 checkpoint 回收 WAL，重新测量仍超限才清空历史正文并保留元数据，再超限才删除最早的元数据行。
 
-推荐使用分离存储：保持 `logging.persist_body = false`，再设置 `logging.capture_dir`。每个代理请求会写入一份独立 JSON，单段正文默认最多 1 MiB，受管抓包文件合计默认最多 20 GiB。目录超限时只删除最旧抓包，SQLite 元数据继续保留并把 `capture_status` 标为 `purged`。把 `capture_dir` 热更新为 `null` 可停止新抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
+自动容量维护在已提交的 SQLite 操作之间给网络 I/O 留出 5ms 调度窗口，保留现有 SQL 事务与删除顺序；期间的新写入会在必要时触发新的“正文优先”检查。关闭服务或禁用容量上限会取消尚未执行的阶段，已提交的正文/元数据变更仍通知 Studio。显式 `purge-bodies` 继续同步完成或明确报错。单次 UPDATE/VACUUM 仍同步，接近 1GiB 的元数据压力库实测可暂停约 5 秒，此调整不保证低尾延迟。
+
+推荐使用分离存储：保持 `logging.persist_body = false`，再设置 `logging.capture_dir`。每个代理请求会写入一份独立 JSON，单段正文默认最多 8 MiB，受管抓包文件合计默认最多 20 GiB。目录超限时只删除最旧抓包，SQLite 元数据继续保留并把 `capture_status` 标为 `purged`。把 `capture_dir` 热更新为 `null` 可停止新抓包；`COMPACTGATE_CAPTURE_DIR` 和 `COMPACTGATE_CAPTURE_BODY_MAX_BYTES` 仍优先于配置文件。
+
+实时 SSE 的诊断副本最多 8 MiB，不截断成功的直通交付；SQLite 正文和抓包明确标记副本截断，抓包 `byte_length` 保留实际观察字节数。SSE 中的续接 ID 独立于正文前缀保留，截断前缀不覆盖最终用量。生产代理的单事件观察预算从 64 KiB 提高为 8 MiB，以容纳携带完整输出的终态事件；超预算事件会计入 `stream_oversized_event_count`，缺失用量显示为未知，不把早期值当最终值。
+
+成功 JSON 响应还携带续接 ID 等业务元数据，不能只保留诊断前缀：其完整缓冲、RemoteV1 完整压缩结果及协议转换累计输入各限 32 MiB，超限明确中断且不缓存不完整结果。同协议透明流的终态修复只限制待解析单帧，不限制整个流。这些均为每请求预算，并非全进程内存上限；观察预算之外的元数据无法保证可恢复。
+
+请求 deadline 仍包含本地准备耗时。尚未创建出站请求就耗尽预算时，返回超时但不计上游健康失败，也不广播密钥活动；真实连接失败仍计入健康，重试前预算耗尽也不会抹掉此前已经发生的出站尝试。
 
 `logging.redact_body` 是为旧配置保留的兼容字段，当前不会改变 SQLite 正文或抓包正文；鉴权头、Cookie 头和常见凭据查询参数始终单独脱敏。Studio 不提供这个无效开关，保存其他日志设置时也不会重写它。
 
@@ -442,6 +450,40 @@ HTTP CONNECT 代理，显式配置优先于环境代理且非法值直接失败�
 HTTPS CONNECT 隧道会复用：每个目标最多保留 2 条空闲连接，每个代理最多 8 条，
 代理缓存最多 8 项，空闲 4 秒后关闭。缓存淘汰不打断在途请求，最后一个服务关闭后
 释放空闲隧道；活动请求仍遵循原有总超时，不因连接复用自动重发失败的模型 POST。
+
+成功 SSE 终态后，若客户端先于上游 HTTP EOF 断开，自有 CONNECT agent 会尝试
+消费剩余响应以保留连接。业务结果、usage 和请求耗时仍按原边界结算，尾部不会
+继续写入已结算结果；每次收尾最多 500 毫秒和 64 KiB（线上字节），每个代理
+最多同时收尾 8 条，且不延长原请求 deadline。这些是保守资源上限，不是实测
+最优参数。超限、连接异常或 agent 退役时关闭尾部；最后一个服务 owner 退出
+也会取消收尾，不影响其他 owner 的在途请求。终态前取消、失败响应与非自有
+agent 保持原有处理；上游要求关闭连接或不正常结束 HTTP 时不能保证复用。
+
+真实模型请求的传输诊断默认关闭。需要时在**获准启动的实例**环境中设置
+`COMPACTGATE_TRANSPORT_DIAGNOSTICS=1`，每次出站尝试结束后会向标准输出打印
+一条 `type=upstream_transport` 的 JSON，不写入数据库，也不更改 tok/s 口径。
+启用或关闭它不代表已获得重启现有服务的授权。
+
+- `request_id` 关联服务端生成的请求日志 ID，`attempt_id` 区分同一请求的多次
+  出站尝试；无关联请求 ID 的内部调用为 `null`。不输出正文、路径、query、
+  请求头、凭据或错误原文，仅保留上游 host、状态和有限原因分类。
+- `*_ms` 均为相对本次尝试起点的单调耗时；未发生的阶段为 `null`。
+  `request_elapsed_at_start_ms` 是尝试开始时原请求已耗时，可能包含前次尝试和退避。
+- `reused_socket` 来自 Node 的实际请求标记；`socket_ready_ms` 对 CONNECT 包含
+  隧道与 TLS 就绪时间；`request_sent_ms` 是本地写出完成，不代表上游已接收。
+- `headers_ms`、`first_body_byte_ms` 分别表示收到响应头和首个正文块，不等同于
+  首个可见文本 token。`terminal_observed_ms` 是识别语义终态的时刻，压缩响应
+  在解码后观测；无法识别的终态保持 `null`，不能直接据此推算纯模型生成时间。
+- `result_settled_ms`、`http_end_ms`、`request_closed_ms` 分别表示尝试结果结算、
+  HTTP 消费完毕和 Node ClientRequest 结束。`request_closed_ms` 与 `close_reason`
+  **不表示 TCP socket 已关闭**：正常完成时连接仍可能留在池中。
+- `drain_started_ms`、`drain_bytes`、`drain_outcome` 标识收尾。结果包括 `complete`、
+  `timeout`、`byte_limit`、`capacity`、`retired`、`closed`，未尝试为 `null`；
+  `complete` 只证明 HTTP 收尾完整，不保证连接被后续请求复用。
+
+诊断仅用于有限时段排查；输出量随实际尝试数增长，由进程日志的既有保留策略管理。
+先对比同上游、同模型与相近输入/缓存样本的复用标记及建连耗时，再决定是否调整
+4 秒空闲期限。连接优化无法替代上游限流、异常或大输入缓存未命中的独立排查。
 
 排查冷/热连接耗时时，可对公开、无鉴权的 HTTPS 地址执行：
 
@@ -710,10 +752,18 @@ npx vite --host 127.0.0.1 --port 5173
 
 运行检查：
 
+有运行中服务时，下面的构建与测试须在隔离副本执行，不覆盖服务使用的根 `dist/`。
+
 ```bash
 npm test
 npm run build
 ```
+
+`test/ui-lifecycle.test.tsx` 使用测试专用 jsdom 与真实 React StrictMode，覆盖配置保存/SSE、模型目录 A→B→A、日志筛选/分页/重连竞态，可用 `npx vitest run test/ui-lifecycle.test.tsx` 单独运行。
+
+`npx tsx scripts/benchmark-storage-prune.ts 1024 bodies cooperative` 创建并清理合成临时 SQLite 库及随机端口，测量回收、事件循环暂停和独立线程代理首字节延迟；不接受现有数据库或配置路径。用 `single-turn` 对照同一 SQL 的单轮执行，用 `metadata` 替换 `bodies` 测元数据压力分布。2026-10-23 本机 1.04GiB 正文库三组对照中，最大首字节延迟中位数从 382ms 降至 299ms，回收总耗时中位数从 386ms 增至 393ms；结果依赖硬件与数据分布，不能外推到生产。
+
+2026-10-24 提交前复核：包含最新通用 agent 协议兼容的完整版本，在隔离副本通过 `npm run check`（146 个测试文件、1605 项通过、1 项因缺少本地抓包 fixture 跳过）。构建产物的合成 Primary/Claude 请求、用量落盘和 HTML/JS 资源冒烟通过；8MiB 正文/元数据库回收自检均通过。未使用生产凭据、重启现有服务或覆盖根 `dist/`；本次未重测 1GiB 性能对照。
 
 Studio 总览随入口加载，其余页面首次打开时按需下载；React 运行时单独分包缓存。页面加载失败时仍可切换导航，也可手动刷新重试；刷新会丢失未保存的修改。
 

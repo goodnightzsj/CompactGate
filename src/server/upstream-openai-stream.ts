@@ -10,6 +10,7 @@ import { extractResponseModelFromText } from "./response-model.js";
 import { normalizeMaxObservedStreamEventBytes } from "./upstream-response-buffer.js";
 import { mergeUsage } from "./usage-merge.js";
 import { extractUsageFromJsonText } from "./usage-record.js";
+import { readJsonResponseId } from "./primary-failover-result.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
 import { isRecord, readTrimmedString } from "../shared/records.js";
 
@@ -26,11 +27,13 @@ export interface OpenAiStreamSummary {
   decodeError: boolean;
   errorSummary: string | null;
   responseModel: string | null;
+  responseId?: string | null;
   usage: TokenUsageMetrics | null;
 }
 
 export interface OpenAiStreamObserverOptions {
   maxEventBytes?: number;
+  onTerminalEvent?: () => void;
 }
 
 type StreamProtocol = "openai" | "anthropic";
@@ -67,7 +70,8 @@ function createProtocolStreamObserver(
 
   const observer = new OpenAiStreamObserver(
     protocol,
-    normalizeMaxObservedStreamEventBytes(options.maxEventBytes)
+    normalizeMaxObservedStreamEventBytes(options.maxEventBytes),
+    options.onTerminalEvent
   );
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
   if (contentEncoding.includes("br")) {
@@ -111,7 +115,8 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   constructor(
     private readonly protocol: StreamProtocol,
-    private readonly maxEventBytes: number
+    private readonly maxEventBytes: number,
+    private onTerminalEvent?: () => void
   ) {}
 
   /**
@@ -177,6 +182,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       if (this.eventName) {
         this.summary.eventCount += 1;
         this.recordEvent(this.eventName, null, "");
+        this.notifyTerminal();
       }
       this.resetEvent();
       return;
@@ -191,10 +197,17 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     const data = this.dataLines.join("\n").trim();
     const eventType = this.readEventType(data);
     this.recordEvent(this.eventName, eventType, data);
+    this.notifyTerminal();
 
     this.eventName = null;
     this.dataLines = [];
     this.retainedEventBytes = 0;
+  }
+
+  private notifyTerminal(): void {
+    if (!this.summary.sawTerminalEvent) return;
+    this.onTerminalEvent?.();
+    this.onTerminalEvent = undefined;
   }
 
   private recordEvent(eventName: string | null, eventType: string | null, data: string): void {
@@ -268,6 +281,8 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     if (!data || data === "[DONE]") {
       return;
     }
+
+    this.summary.responseId ??= readJsonResponseId(data);
 
     const usage = extractUsageFromJsonText(data);
     if (usage) {
@@ -354,6 +369,8 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     this.retainedEventBytes = 0;
     if (!this.oversizedEvent) {
       this.summary.oversizedEventCount += 1;
+      // Missing payload may contain newer usage; an earlier count is not final.
+      if (!this.summary.sawTerminalEvent) this.summary.usage = null;
     }
     this.oversizedEvent = true;
   }

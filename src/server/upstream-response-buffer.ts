@@ -1,6 +1,15 @@
 export const DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES = 8 * 1024 * 1024;
+export const MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_MAX_JSON_RESPONSE_BYTES = 1 * 1024 * 1024;
 export const DEFAULT_MAX_OBSERVED_STREAM_EVENT_BYTES = 64 * 1024;
+
+export class UpstreamResponseLimitError extends Error {
+  readonly code = "ERR_UPSTREAM_RESPONSE_TOO_LARGE";
+  constructor(limit = MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) {
+    super(`Upstream response exceeded the ${limit} byte complete-response limit.`);
+    this.name = "UpstreamResponseLimitError";
+  }
+}
 
 export function appendBufferedResponseChunk(
   chunks: Buffer[],

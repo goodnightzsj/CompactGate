@@ -160,7 +160,7 @@ function readSseResponseId(text: string): string | null {
   return null;
 }
 
-function readJsonResponseId(text: string): string | null {
+export function readJsonResponseId(text: string): string | null {
   try {
     const parsed = JSON.parse(text) as unknown;
     if (!isRecord(parsed)) {

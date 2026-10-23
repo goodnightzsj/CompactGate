@@ -14,6 +14,7 @@ import {
 } from "./helpers/server-test-utils.js";
 import { waitForLogEntry } from "./helpers/server-test-logs.js";
 import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
+import { DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES } from "../src/server/upstream-response-buffer.js";
 
 function postJson(
   appUrl: string,
@@ -172,15 +173,13 @@ describe("CompactGate OpenAI routing", () => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write([
         "event: response.completed",
-        `data: {"type":"response.completed","response":{"output":"${"x".repeat(70 * 1024)}"}}`,
+        `data: {"type":"response.completed","response":{"output":"${"x".repeat(DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES)}"}}`,
         "",
         ": completion-tail-marker",
         ""
       ].join("\n"));
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      if (!res.writableEnded) {
-        res.end();
-      }
+      // Keep HTTP open until the client closes, regardless of payload throughput.
+      await new Promise<void>((resolve) => res.once("close", resolve));
     });
     const compact = await startCapturedOpenAiUpstream([], (_req, res) => {
       writeJsonResponse(res, { ok: true });

@@ -30,8 +30,18 @@ import type {
   TokenUsageMetrics
 } from "./usage.js";
 import { buildCompactionDiagnostics } from "./compaction-diagnostics.js";
+import { readResponseId } from "./primary-failover-result.js";
+
+function serializeObservedBody(writer: DebugCaptureWriter, body: Buffer, byteLength?: number, truncated = false) {
+  const serialized = writer.serializeBody(body);
+  return { ...serialized, byte_length: byteLength ?? serialized.byte_length, truncated: truncated || serialized.truncated };
+}
 
 export interface OpenAiProxyTransactionState {
+  responseId: string | null;
+  responseBodyBytes?: number;
+  clientResponseBodyBytes?: number;
+  clientResponseBodyTruncated?: boolean;
   status: number;
   upstreamStatus: number | null;
   streamTerminalEvent: string | null;
@@ -62,6 +72,9 @@ export interface OpenAiProxyTransactionState {
 }
 
 export interface OpenAiProxyUpstreamResult {
+  responseBodyBytes?: number;
+  clientResponseBodyBytes?: number;
+  clientResponseBodyTruncated?: boolean;
   status: number;
   errorSummary: string | null;
   responseBody: Buffer;
@@ -76,6 +89,9 @@ export interface OpenAiProxyUpstreamResult {
 }
 
 export interface OpenAiProxyTransactionInput {
+  responseBodyBytes?: number;
+  clientResponseBodyBytes?: number;
+  clientResponseBodyTruncated?: boolean;
   logger: RequestLogger;
   captureWriter: DebugCaptureWriter;
   studioEvents: StudioEventBroadcaster;
@@ -123,6 +139,7 @@ export interface OpenAiProxyTransactionInput {
 
 export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState {
   return {
+    responseId: null,
     status: 502,
     upstreamStatus: null,
     streamTerminalEvent: null,
@@ -164,9 +181,13 @@ export function applyOpenAiProxyUpstreamResult(
   state.clientDisconnectPhase = result.clientDisconnectPhase;
   state.streamOversizedEventCount = streamSummary?.oversizedEventCount ?? 0;
   state.responseBodyTruncated = result.responseBodyTruncated;
+  state.responseId = result.streamSummary?.responseId ?? readResponseId(result);
   state.responseModel = streamSummary?.responseModel ?? state.responseModel;
   state.errorSummary = result.errorSummary;
   state.responseBody = result.responseBody;
+  state.responseBodyBytes = result.responseBodyBytes;
+  state.clientResponseBodyBytes = result.clientResponseBodyBytes;
+  state.clientResponseBodyTruncated = result.clientResponseBodyTruncated;
   state.responseHeaders = result.responseHeaders;
   state.clientResponseBody = result.clientResponseBody ?? null;
   state.clientResponseHeaders = result.clientResponseHeaders ?? null;
@@ -180,6 +201,7 @@ export function applyOpenAiProxyUpstreamResult(
  * test/architecture-boundaries.test.ts).
  */
 export interface UpstreamFailureTransactionDetails {
+  responseBodyBytes?: number;
   status: number | null;
   responseBody: Buffer;
   responseBodyTruncated: boolean;
@@ -197,12 +219,14 @@ export function applyUpstreamFailureToTransaction(
 ): void {
   state.upstreamStatus = details.status;
   state.responseBody = details.responseBody;
+  state.responseBodyBytes = details.responseBodyBytes;
   state.responseHeaders = details.responseHeaders;
   state.firstTokenMs = details.firstTokenMs;
   state.streamTerminalEvent = details.streamSummary?.terminalEvent ?? null;
   state.clientDisconnectPhase = details.clientDisconnectPhase;
   state.streamOversizedEventCount = details.streamSummary?.oversizedEventCount ?? 0;
   state.responseBodyTruncated = details.responseBodyTruncated;
+  state.responseId = details.streamSummary?.responseId ?? null;
   state.responseModel = details.streamSummary?.responseModel ?? state.responseModel;
   state.usage = details.streamSummary?.usage ?? state.usage;
   state.streamOutcome = details.kind === "client_cancel"
@@ -265,6 +289,9 @@ export function finalizeFromTransaction(
     streamOutcome: transaction.streamOutcome,
     streamOversizedEventCount: transaction.streamOversizedEventCount,
     upstreamResponseTruncated: transaction.responseBodyTruncated,
+    responseBodyBytes: transaction.responseBodyBytes,
+    clientResponseBodyBytes: transaction.clientResponseBodyBytes,
+    clientResponseBodyTruncated: transaction.clientResponseBodyTruncated,
     requestMetadata: transaction.requestMetadata,
     requestType: transaction.requestType,
     sourceModel: transaction.sourceModel,
@@ -329,6 +356,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     incomingRequestBody: input.rawBody,
     upstreamRequestBody: input.upstreamBody,
     upstreamResponseBody: input.responseBody,
+    clientResponseBodyTruncated: input.clientResponseBodyTruncated,
     upstreamResponseHeaders: input.responseHeaders,
     clientResponseBody: input.clientResponseBody,
     clientResponseHeaders: input.clientResponseHeaders,
@@ -401,13 +429,13 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       upstream_response: {
         status: input.upstreamStatus ?? input.status,
         headers: serializeHeaders(input.responseHeaders),
-        body: input.captureWriter.serializeBody(input.responseBody)
+        body: serializeObservedBody(input.captureWriter, input.responseBody, input.responseBodyBytes, input.upstreamResponseTruncated)
       },
       client_response: input.clientResponseBody
         ? {
             status: input.upstreamStatus ?? input.status,
             headers: serializeHeaders(input.clientResponseHeaders ?? {}),
-            body: input.captureWriter.serializeBody(input.clientResponseBody)
+            body: serializeObservedBody(input.captureWriter, input.clientResponseBody, input.clientResponseBodyBytes, input.clientResponseBodyTruncated)
           }
         : null
     }),
