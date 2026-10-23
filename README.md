@@ -328,6 +328,8 @@ Chat 使用 `http://127.0.0.1:7865/v1` 并选择 `openai_chat` 上游；Response
 400 不触发网关重试，但第三方客户端若自行重发所有错误，仍需调整其重试或连接配置。
 现场证据、修复边界与验证见[通用 agent 兼容方案](docs/2026-10-24-agent-protocol-compatibility.md)。
 
+Lexora Buddy 0.15.0 安装版已实测支持 Chat、Responses 和 Anthropic Messages。自定义 Anthropic 供应商不支持自动同步模型，需手动添加并启用；不要为了同步模型而选 Chat 再连接 `/anthropic`，目录可能获取成功，但生成仍会返回 400。默认重试上限 3 表示最多 4 次请求，实测 500、HTML/不完整流会重试，协议错配 400 不重试；上限设为 0 可用于排障，但不能修复协议错配。隔离测试通过不代表原连接已恢复，验收还须核对实际连接和真实请求。
+
 协议转换覆盖文本、图片、自定义 function tools、tool result、JSON/SSE、usage
 和错误响应。Responses 与 Messages 之间还会保留可移植的 reasoning/compaction
 状态；无法安全移植的 provider-private 状态会明确失败。转换到 Chat 的路径只承诺无状态的

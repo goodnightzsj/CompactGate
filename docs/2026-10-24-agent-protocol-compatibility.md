@@ -33,9 +33,54 @@
 - 修复后针对性 91 项通过；补齐路由试算、原生 SSE、Chat 失败回归及更新 HTML 旧断言后，相关 94 项通过。
 - 首次完整检查为 1597 通过、2 失败、1 跳过；两项失败均为已明确改变的 HTML 200 透传断言，调整为 502 且保留上游 200 后重新执行整个检查链。
 - 最终隔离 `npm run check`：1605 项通过、1 项跳过；diff/style/严格类型检查与构建全部通过。日志 `/tmp/compactgate-models-compat-check-final.log`。
-- 现有服务仍为 PID 48299、127.0.0.1:7865，根 `dist/server/main.js` SHA-256 仍为 `20a0b910c71927862475d5cadfe03e1083d97a2aa1e9f6c235131f0618b785c4`。23 个未涉及的既有修改文件与任务前快照逐字节一致。
+- 该轮检查时观测到服务 PID 48299、127.0.0.1:7865；23 个未涉及的既有修改文件与任务前快照逐字节一致。此处是历史快照，不代表后续服务状态；入口 `main.js` 的哈希不能用于判断其他代理模块是否更新。
 - 提交版单独排除工作区内未提交的存储/传输优化，在 `/tmp/compactgate-agent-commit.CquRnB` 再跑完整 `npm run check`：141 个文件、1550 项通过、1 项跳过，类型检查与构建通过；日志 `/tmp/compactgate-agent-commit-check.log`。
-- 未部署，未用真实 agent/生产上游重放对话。供应商专有目录结构保持原样，不承诺任意目录格式自动转换为 OpenAI schema；提交/推送状态以 Git 为准。
+- 上述实现与提交验证阶段未执行部署，也未用真实 agent/生产上游重放对话；后续安装版及原连接排查见下节。供应商专有目录结构保持原样，不承诺任意目录格式自动转换为 OpenAI schema；提交/推送状态以 Git 为准。
+
+## Lexora 安装版与原连接验收
+
+### 隔离实测
+
+2026-10-24 使用本机已安装的 Lexora Buddy 0.15.0（Electron 44.9.3，pi-ai / pi-coding-agent 1.3.0），通过内置 `test` profile 隔离配置、对话和凭据。经渲染进程的 preload API 创建供应商、认证、同步模型及发送任务，执行安装包真实 SDK 和 SSE 解析链路；不是仅查看最新源码，也不是完整鼠标点击回归。
+
+上游使用合成模型和固定响应，不消耗真实模型额度。三种协议分别直连合成上游、经过与 `abf4366` 对应的隔离网关构建，共 6 次任务均收到固定文本并以 `run.completed` 结束。下表是本次验证的同协议配置，不排除已有 Responses/Messages 转换能力。
+
+| Lexora 协议 | 网关 Base URL | 对应同协议上游 | 模型同步 |
+|---|---|---|---|
+| `openai-completions` | `http://127.0.0.1:7865/v1` | `openai_chat` | 成功，请求 `/v1/models?client_version=pi` |
+| `openai-responses` | `http://127.0.0.1:7865/v1` | `openai_responses` | 成功，请求 `/v1/models?client_version=pi` |
+| `anthropic-messages` | `http://127.0.0.1:7865/anthropic` | `anthropic_messages` | 自定义供应商返回 `MODEL_SYNC_UNSUPPORTED`，未发送目录请求；手动添加并启用模型后对话成功 |
+
+表中 7865 是常规接入示例；实际隔离测试使用独立随机端口，没有切换在线服务。新同步的未知模型初始 `enabled=false`，须显式启用。模型目录可获取不代表生成协议匹配：Chat 供应商使用 `/anthropic` 时，目录同步仍可成功，但生成会被拒绝。
+
+### 重试实测
+
+默认 `runtime.modelRetryLimit=3` 表示首次请求加最多 3 次重试，实测退避约 2、4、8 秒，之后失败停止，并非默认无限重试。
+
+| 场景 | 客户端请求次数 | 结果 |
+|---|---:|---|
+| Chat 错投 `/anthropic` | 1 | 400 `unsupported_protocol`，没有上游请求 |
+| Chat 选择 Responses 上游 | 1 | 400 `unsupported_protocol`，没有上游请求 |
+| 上游 400，经网关 | 1 | `MODEL_REQUEST_FAILED` |
+| 上游 401，直连 | 1 | `PROVIDER_AUTHENTICATION_FAILED` |
+| 上游 500，经网关 | 4 | `MODEL_SERVICE_UNAVAILABLE` |
+| HTML 200，直连 | 4 | `MODEL_STREAM_INCOMPLETE`，`Stream ended without finish_reason` |
+| HTML 200，经修复网关 | 4 | 网关返回 502 并保留 `upstream_status=200`，客户端最终报服务不可用 |
+| 重试上限改为 0，500 经网关 | 1 | 明确失败，不重试 |
+
+以上 8 次预期失败与 6 次成功任务合计 14 次；同时核对了 18 条隔离网关请求与 26 条合成上游请求（含目录探测和直连测试）。对客户端终态、固定文本、请求次数、错配不出站和 HTML 状态归因的断言通过。重复失败各有独立入站 request_id，且对应上游计数，证明该复现中的重发来自客户端。
+
+临时证据为 `/tmp/lexora-local-test.s1nVAh/run-results.json` 和 `wire-results.json`，不属于仓库文件，可能被系统清理。测试实例与监听端口均已关闭；Lexora 自身日志收尾曾报告丢弃记录，验收依据是关闭前独立导出的客户端事件和网关/fixture 记录。未覆盖长对话、工具执行、多模态和 `unlimited` 重试。
+
+### 原连接 400 与结论更正
+
+用户随后反馈原连接仍报 400。只读核对 05:53:23 的日志 235547：入站实际为 `/anthropic/chat/completions`，Claude 日志的 `path` 已剥去 `/anthropic` 前缀；`status=400`、`upstream_status=null`，错误明确指出该入口接受 Anthropic Messages 而非 OpenAI 请求。请求尚未出站，不是上游认证或模型拒绝。
+
+当时运行配置的 Claude 上游为 `anthropic_messages`，Primary 上游为 `openai_responses`。因此保留现有 Claude 路由的匹配方案是：Lexora 选择 **Anthropic Messages**、Base URL 使用 `http://127.0.0.1:7865/anthropic`，手动添加并启用模型；只把地址改成 `/v1`、仍发送 Chat，也会与当时的 Primary 协议不匹配。现有修复包含模型探测、原生 Chat 接入和明确错误语义，不包含 Chat→Anthropic 自动转换。
+
+这条在线错误已经证明新协议检查生效。此前依据单个 `dist/server/main.js` 哈希不变推断“线上未更新”不成立，现予以更正：未由本次测试执行部署，不等于线上一定没有相关修复。版本判断必须结合相关模块与实际运行行为；隔离测试通过也不能替代原连接验收。
+
+用户之后明确确认“现在正常了”。本记录将其标为用户确认恢复，不声称由智能体修改了正式配置、重启了服务或另行完成真实上游复测；也不推断用户具体更改了哪些设置。
 
 ## 协议依据
 
