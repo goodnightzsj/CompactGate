@@ -166,11 +166,7 @@ export function recoverAgentrouterCompactionIds(
 ): { body: Buffer; removedIds: number } | null {
   if (status !== 400 || !hostMatchesSuffix(host, "agentrouter.org")) return null;
   const response = parseJsonRecord(responseBody);
-  const error = isRecord(response?.error) ? response.error : null;
-  const message = "The requested item was created under a different Azure OpenAI resource. " +
-    "Use the same resource that created the item to access it.";
-  if (error?.type !== "invalid_request_error" || typeof error.message !== "string" ||
-    !error.message.startsWith(message)) return null;
+  if (!isAgentrouterAzureResourceError(response?.error)) return null;
 
   const unchanged = { body, removedIds: 0 };
   const parsed = parseJsonRecord(body);
@@ -192,6 +188,23 @@ export function recoverAgentrouterCompactionIds(
     }
   }
   return removedIds > 0 ? { body: Buffer.from(JSON.stringify(parsed)), removedIds } : unchanged;
+}
+
+function isAgentrouterAzureResourceError(error: unknown): boolean {
+  if (!isRecord(error) || error.type !== "invalid_request_error" || typeof error.message !== "string") return false;
+  const message = "The requested item was created under a different Azure OpenAI resource. " +
+    "Use the same resource that created the item to access it.";
+  if (error.message.startsWith(message)) return true;
+
+  // Decode only the observed Go wrapper; quoted errors and arbitrary nested text must not trigger replay.
+  const prefix = "failed to decode error response: json: cannot unmarshal number into Go struct field ";
+  if (!error.message.startsWith(prefix)) return false;
+  const raw = error.message.slice(prefix.length).match(/^[\w.*]+\.code of type string, raw: ([\s\S]+)$/)?.[1];
+  if (!raw) return false;
+  const response = parseJsonRecord(Buffer.from(raw.trimEnd().replace(/\[trace_id=[a-f0-9]{32}\]$/i, "")));
+  const cause = isRecord(response?.error) ? response.error : null;
+  return cause?.type === "invalid_request_error" && typeof cause.message === "string" &&
+    cause.message.startsWith(message);
 }
 
 /**

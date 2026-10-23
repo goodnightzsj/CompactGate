@@ -38,7 +38,13 @@ const requestBody = (stream = false) => ({
 });
 const betaHeaders = { "x-codex-beta-features": "remote_compaction_v2" };
 
-describe("agentrouter recovery through the HTTP proxy", () => {
+describe.each(["direct", "Go-wrapped"])("agentrouter recovery through the HTTP proxy (%s)", (format) => {
+  const upstreamError = format === "direct" ? azureError : { error: {
+    type: "invalid_request_error", param: "", code: null,
+    message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
+      "gateway.Error.code of type string, raw: " + JSON.stringify({ error: { ...azureError.error, code: 0 } }) +
+      `\n[trace_id=${"b".repeat(32)}]`
+  } };
   it.each([false, true])("preserves context and the selected upstream before a successful stream=%s retry", async (stream) => {
     const sent: CapturedRequest[] = [];
     const responseBody = { id: "resp_synthetic", object: "response", model: "synthetic-model", status: "completed", output: [] };
@@ -46,7 +52,7 @@ describe("agentrouter recovery through the HTTP proxy", () => {
       sent.push(await captureRequest(req));
       if (sent.length === 1) {
         res.writeHead(400, { "content-type": "application/json", "content-encoding": "gzip" });
-        res.end(gzipSync(JSON.stringify(azureError)));
+        res.end(gzipSync(JSON.stringify(upstreamError)));
       } else if (stream) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.end(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: responseBody })}\n\n`);
@@ -90,12 +96,13 @@ describe("agentrouter recovery through the HTTP proxy", () => {
     });
   });
 
-  it("returns the second real error with no third send or broader cleanup", async () => {
+  it.each(["changed", "same"])("returns the %s second error with no third send or broader cleanup", async (kind) => {
     const sent: CapturedRequest[] = [];
-    const secondError = { error: { code: "invalid_encrypted_content", message: "synthetic second failure" } };
+    const secondError = kind === "same" ? upstreamError
+      : { error: { code: "invalid_encrypted_content", message: "synthetic second failure" } };
     const upstream = await startUpstream(async (req, res) => {
       sent.push(await captureRequest(req));
-      writeJsonResponse(res, sent.length === 1 ? azureError : secondError, 400);
+      writeJsonResponse(res, sent.length === 1 ? upstreamError : secondError, 400);
     });
     const app = await startApp(upstream.url.replace("127.0.0.1", "agentrouter.org"));
     const response = await postJson(app.url, "/v1/responses", requestBody(true), betaHeaders);
@@ -109,7 +116,7 @@ describe("agentrouter recovery through the HTTP proxy", () => {
     const sent: CapturedRequest[] = [];
     const upstream = await startUpstream(async (req, res) => {
       sent.push(await captureRequest(req));
-      writeJsonResponse(res, scenario === "success" ? { output: [] } : azureError, scenario === "success" ? 200 : 400);
+      writeJsonResponse(res, scenario === "success" ? { output: [] } : upstreamError, scenario === "success" ? 200 : 400);
     });
     const app = await startApp(upstream.url.replace("127.0.0.1", scenario === "other-host" ? "other.example" : "agentrouter.org"), undefined, {
       primary_failover: { state_portability: scenario === "disabled" ? "off" : "recover_on_error" }

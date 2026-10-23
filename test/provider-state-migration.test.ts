@@ -265,11 +265,17 @@ describe("provider-state recovery state machine", () => {
   });
 });
 
-describe("agentrouter compaction ID recovery", () => {
-  const error = { error: {
+describe.each(["direct", "Go-wrapped"])("agentrouter compaction ID recovery (%s)", (format) => {
+  const directError = { error: {
     message: "The requested item was created under a different Azure OpenAI resource. " +
       "Use the same resource that created the item to access it.\n[trace_id=15d282710125406b3b990feef345de65]",
     type: "invalid_request_error", param: "", code: null
+  } };
+  const error = format === "direct" ? directError : { error: {
+    type: "invalid_request_error", code: null,
+    message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
+      "***.***.code of type string, raw: " + JSON.stringify({ error: { ...directError.error, code: 0 } }) +
+      `\n[trace_id=${"a".repeat(32)}]`
   } };
   const request = () => ({
     model: "synthetic-model", store: false, previous_response_id: null,
@@ -339,7 +345,12 @@ describe("agentrouter compaction ID recovery", () => {
       canonicalBody, upstreamHost: host, targetStateDomain: "same-domain",
       canReplay: () => scenario !== "cancelled" &&
         (scenario !== "deadline-during-repair" || replayChecks++ === 0),
-      startGenericRecovery: () => null,
+      startGenericRecovery: () => {
+        if (["store-true", "store-absent", "reference", "untyped-reference", "continuation", "no-id", "no-ciphertext"].includes(scenario)) {
+          throw new Error("recognized Azure failures must not reach broader cleanup");
+        }
+        return null;
+      },
       send: async (sent) => { sends += 1; expect(sent).toBe(canonicalBody); return result; }
     });
     expect(sends).toBe(1);

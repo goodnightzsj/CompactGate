@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyHostBodyQuirks,
   applyHostQuirks,
+  recoverAgentrouterCompactionIds,
   resolveHostShortCircuit
 } from "../src/server/host-quirks.js";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
@@ -181,6 +182,65 @@ describe("applyHostBodyQuirks", () => {
     };
     expect(applyHostBodyQuirks(context)).toEqual([]);
     expect(JSON.parse(context.body.toString()).input[0].id).toBeDefined();
+  });
+});
+
+describe("agentrouter Azure error envelopes", () => {
+  const message = "The requested item was created under a different Azure OpenAI resource. " +
+    "Use the same resource that created the item to access it.";
+  const direct = { error: { code: 0, type: "invalid_request_error", message } };
+  const wrap = (raw: string, suffix = "") => ({ error: {
+    type: "invalid_request_error", code: null,
+    message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
+      `gateway.Error.code of type string, raw: ${raw}${suffix}`
+  } });
+  const body = Buffer.from(JSON.stringify({ store: false, input: [
+    { type: "compaction", id: "cmp_synthetic", encrypted_content: "opaque-state" }
+  ] }));
+  const recover = (error: unknown) => recoverAgentrouterCompactionIds(
+    "agentrouter.org", body, 400, Buffer.from(JSON.stringify(error))
+  );
+
+  it.each([0, "0", null, undefined])("recognizes direct errors independently of code=%s", (code) => {
+    expect(recover({ error: { ...direct.error, code } })?.removedIds).toBe(1);
+  });
+
+  it.each([
+    ["bare JSON", wrap(JSON.stringify(direct))],
+    ["trace suffix", wrap(JSON.stringify(direct), `\n[trace_id=${"a".repeat(32)}]`)],
+    ["formatted JSON", wrap(JSON.stringify(direct, null, 2), ` \r\n[trace_id=${"B".repeat(32)}] \n`)],
+    ["escaped message", wrap(JSON.stringify({ error: { ...direct.error, message: `${message} trace_id: synthetic; \"{raw:}\\\"` } }))],
+    ["redacted field", wrap(JSON.stringify(direct)).error.message.replace("gateway.Error", "***.***")]
+  ])("recognizes a single known Go wrapper: %s", (_name, fixture) => {
+    const response = typeof fixture === "string" ? { error: { ...direct.error, message: fixture } } : fixture;
+    const repair = recover(response);
+    expect(repair?.removedIds).toBe(1);
+    expect(JSON.parse(repair!.body.toString()).input).toEqual([
+      { type: "compaction", encrypted_content: "opaque-state" }
+    ]);
+    expect(JSON.parse(body.toString()).input[0].id).toBe("cmp_synthetic");
+  });
+
+  it.each([
+    ["quoted Azure message", { error: { ...direct.error, message: `Other error quoting: ${message}` } }],
+    ["unknown wrapper", { error: { ...direct.error, message: `proxy failure, raw: ${JSON.stringify(direct)}` } }],
+    ["invalid JSON", wrap(JSON.stringify(direct).slice(0, -1))],
+    ["HTML", wrap(`<html>${message}</html>`)],
+    ["JSON string", wrap(JSON.stringify(JSON.stringify(direct)))],
+    ["array", wrap(JSON.stringify([direct]))],
+    ["null", wrap("null")],
+    ["wrong inner type", wrap(JSON.stringify({ error: { ...direct.error, type: "other_error" } }))],
+    ["missing inner type", wrap(JSON.stringify({ error: { message } }))],
+    ["inner quotation", wrap(JSON.stringify({ error: { ...direct.error, message: `Quoted: ${message}` } }))],
+    ["nested wrapper", wrap(JSON.stringify(wrap(JSON.stringify(direct))))],
+    ["unknown suffix", wrap(JSON.stringify(direct), " extra text")],
+    ["invalid trace", wrap(JSON.stringify(direct), "\n[trace_id=not-a-trace]")],
+    ["second JSON object", wrap(`${JSON.stringify(direct)} {}`)],
+    ["wrong outer type", { error: { ...wrap(JSON.stringify(direct)).error, type: "other_error" } }],
+    ["other field", { error: { ...direct.error, message: wrap(JSON.stringify(direct)).error.message.replace(".code of", ".status of") } }],
+    ["other decode failure", { error: { ...direct.error, message: wrap(JSON.stringify(direct)).error.message.replace("unmarshal number", "unmarshal bool") } }]
+  ])("does not infer an Azure repair from %s", (_name, fixture) => {
+    expect(recover(fixture)).toBeNull();
   });
 });
 
