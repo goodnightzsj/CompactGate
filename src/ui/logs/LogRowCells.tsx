@@ -70,7 +70,7 @@ export const LogRowCells = memo(function LogRowCells({
         {showAllColumns ? formatDurationMs(entry.first_token_ms) : <LogTimingSummary entry={entry} />}
       </LogTextTooltip></td>
       <td><LogTextTooltip className="log-cell-time"
-        value={showAllColumns ? formatDurationMs(entry.duration_ms) : outputThroughputLabel(entry)}
+        value={showAllColumns ? formatDurationMs(entry.duration_ms) : generationThroughputLabel(entry)}
         tooltip={showAllColumns ? "请求总耗时（包含等待时间）" : throughputHint}>
         {showAllColumns ? formatDurationMs(entry.duration_ms) : <LogThroughputSummary entry={entry} />}
       </LogTextTooltip></td>

@@ -4,6 +4,8 @@ import { formatCompactMetricNumber, formatDurationMs, formatMetricNumber } from 
 import { averageOutputTokensPerSecond, hasResponseModelMismatch, responseModelSourceLabel } from "./log-utils.js";
 import { displayTotalTokens, formatCacheHitRate, totalInputTokens } from "./log-token-metrics.js";
 
+const GENERATION_RATE_NUMBER = new Intl.NumberFormat("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 export function LogModelSummary({ entry }: { entry: RequestLogEntry }) {
   const rewritten = entry.target_model && entry.target_model !== entry.source_model;
   return <span className="log-summary-stack">
@@ -44,12 +46,9 @@ export const GENERATION_THROUGHPUT_HINT = `生成速度 = 源流输出 Token / �
 
 export function generationThroughputLabel(entry: RequestLogEntry): string {
   const rate = generationTokensPerSecond(entry.generation_sample);
-  return rate === null ? "-" : `${formatMetricNumber(Math.round(rate * 10) / 10)} tok/s`;
+  return rate === null ? "-" : `${GENERATION_RATE_NUMBER.format(rate)} tok/s`;
 }
 
 export function LogThroughputSummary({ entry }: { entry: RequestLogEntry }) {
-  return <span className="log-summary-stack">
-    <span>生成 {generationThroughputLabel(entry)}</span>
-    <small>平均 {outputThroughputLabel(entry)}</small>
-  </span>;
+  return <span>{generationThroughputLabel(entry)}</span>;
 }

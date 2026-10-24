@@ -538,7 +538,7 @@ export function LogsPage({
                   {showAllColumns && <><th scope="col">上游凭据</th><th scope="col">端点</th><th scope="col">类型 / 吞吐</th></>}
                   <th scope="col">Token</th>
                   <th scope="col">{showAllColumns ? "首响应" : "耗时 / 首响应"}</th>
-                  <th scope="col">{showAllColumns ? "耗时" : "生成 / 平均"}</th>
+                  <th scope="col">{showAllColumns ? "耗时" : "吞吐"}</th>
                 </tr>
               </thead>
               <tbody>

@@ -126,7 +126,8 @@ it("defaults to the original twelve columns with separate first-response and dur
 
 it("retains responsive model diagnostics and groups throughput with transport", () => {
   const entry = { ...requestLog("none"), response_model: "declared-other", target_model: "target",
-    response_model_source: "upstream" as const, output_tokens: 50, duration_ms: 2000, first_token_ms: 120 };
+    response_model_source: "upstream" as const, output_tokens: 50, duration_ms: 2000, first_token_ms: 120,
+    generation_sample: { first_output_ms: 500, duration_ms: 500, output_tokens: 50 } };
   const render = (value: RequestLogEntry) => renderToStaticMarkup(<table><tbody><tr>
     <LogRowCells entry={value} showAllColumns />
   </tr></tbody></table>);
@@ -137,7 +138,8 @@ it("retains responsive model diagnostics and groups throughput with transport", 
   expect(cells[2]).toContain('<small class="log-model-response log-model-difference">↳ declared-other · 响应声明不同</small>');
   expect(cells[4]).toContain("declared-other");
   expect(cells[8]).toContain("stream");
-  expect(cells[8]).toContain("25 tok/s");
+  expect(cells[8]).toContain("100.0 tok/s");
+  expect(cells[8]).not.toContain("25 tok/s");
   expect(cells[10]).toContain(formatDurationMs(120));
   expect(cells[11]).toContain(formatDurationMs(2000));
   const inferred = render({ ...entry, response_model: null, response_model_source: "target_fallback" });
@@ -145,7 +147,7 @@ it("retains responsive model diagnostics and groups throughput with transport", 
   expect(inferred).not.toContain("响应声明不同");
 });
 
-it("keeps response evidence, token breakdown and throughput in both log summaries", async () => {
+it("shows only unlabeled generation speed in every log summary while retaining both detail metrics", async () => {
   const { LogMobileCard } = await import("../src/ui/logs/LogMobileCard.js");
   const entry = { ...requestLog("none"), response_model: "declared-other", target_model: "target",
     input_tokens: 100, output_tokens: 50, duration_ms: 2000,
@@ -156,30 +158,43 @@ it("keeps response evidence, token breakdown and throughput in both log summarie
   for (const markup of [desktop, full, mobile]) {
     expect(markup).toContain("响应声明不同");
     expect(markup).toContain("declared-other");
-    expect(markup).toContain("生成 100 tok/s");
-    expect(markup).toContain("平均 25 tok/s");
+    expect(markup.match(/tok\/s/g)).toHaveLength(1);
+    expect(markup).toContain(">100.0 tok/s</span>");
+    expect(markup).not.toContain("生成");
+    expect(markup).not.toContain("平均");
+    expect(markup).not.toContain("25 tok/s");
     expect(markup).toContain("入 ");
     expect(markup).toContain(" · 出 ");
   }
   const detail = renderToStaticMarkup(<LogDetailPanel entry={entry} />);
-  expect(detail).toContain("<dt>生成速度</dt><dd>100 tok/s</dd>");
+  expect(detail).toContain("<dt>生成速度</dt><dd>100.0 tok/s</dd>");
   expect(detail).toContain("<dt>平均输出吞吐</dt><dd>25 tok/s</dd>");
   expect(detail).toContain("<dt>采样输出（非另计用量）</dt><dd>50</dd>");
   expect(detail).toContain("首个有效输出至成功终态");
   expect(detail).toContain("不足 100ms 时显示 -");
 });
 
-it("keeps average throughput when generation is unknown and never derives generation from first response", () => {
+it("shows a placeholder without falling back to average throughput or first response", () => {
   const entry = { ...requestLog("none"), output_tokens: 50, duration_ms: 2000, first_token_ms: 1500 };
   for (const generation_sample of [undefined, null, { first_output_ms: 500, duration_ms: 99, output_tokens: 50 }]) {
     const markup = renderToStaticMarkup(<LogThroughputSummary entry={{ ...entry, generation_sample }} />);
-    expect(markup).toContain("生成 -");
-    expect(markup).toContain("平均 25 tok/s");
+    expect(markup).toBe("<span>-</span>");
+    const detail = renderToStaticMarkup(<LogDetailPanel entry={{ ...entry, generation_sample }} />);
+    expect(detail).toContain("<dt>生成速度</dt><dd>-</dd>");
+    expect(detail).toContain("<dt>平均输出吞吐</dt><dd>25 tok/s</dd>");
   }
-  const zero = renderToStaticMarkup(<LogThroughputSummary entry={{ ...entry,
-    generation_sample: { first_output_ms: 500, duration_ms: 1000, output_tokens: 0 }
+});
+
+it.each([
+  [235, 1000, "235.0"],
+  [23514, 100000, "235.1"],
+  [1235, 1000, "1,235.0"],
+  [0, 1000, "0.0"]
+] as const)("formats %i output tokens over %i ms as one decimal", (output_tokens, duration_ms, expected) => {
+  const markup = renderToStaticMarkup(<LogThroughputSummary entry={{ ...requestLog("none"),
+    generation_sample: { first_output_ms: 500, duration_ms, output_tokens }
   }} />);
-  expect(zero).toContain("生成 0 tok/s");
+  expect(markup).toBe(`<span>${expected} tok/s</span>`);
 });
 
 it("offers one keyboard entry per recent request with full metadata and instructions", () => {
