@@ -336,6 +336,14 @@ Lexora Buddy 0.15.0 安装版已实测支持 Chat、Responses 和 Anthropic Mess
 文本、图片和 function tool 交互；reasoning、compaction、structured output、
 provider tools 和多 choice 不会被静默丢弃，而是在请求发送前或流解析时返回明确错误。
 
+Messages 上游若提供非标准扩展 `usage.reasoning_tokens`（例如 oc-go-cc），普通与
+compaction 的 JSON/SSE 转换会保留为 Responses 的
+`usage.output_tokens_details.reasoning_tokens`，下游响应和日志使用同一转换结果。
+只接收非负整数；未提供或无效时省略，明确报告的 0 保留，但后续省略或零值流帧不会抹掉
+已观测的正数。它是 `output_tokens` 的拆分，不额外增加输出或总量，也不回填旧日志。
+这只补齐上游已报告的用量明细，不启用额外推理能力，也不改变请求路由、模型参数或
+压缩摘要与状态桥接逻辑；未提供该扩展字段的上游保持原有行为。
+
 Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，CompactGate 不根据
 提示词猜测压缩流量；`claude.compact` 继续作为独立配置、凭据和 profile 元数据保存。
 

@@ -74,6 +74,7 @@ export function createAnthropicToResponsesStream(): Transform {
   let inputTokens = 0;
   let outputTokens = 0;
   let inputTokenDetails: Record<string, unknown> | null = null;
+  let outputTokenDetails: Record<string, unknown> | null = null;
   let nextOutputIndex = 0;
   let completed = false;
   let stopReason: string | null = null;
@@ -108,6 +109,7 @@ export function createAnthropicToResponsesStream(): Transform {
       inputTokens = usage && typeof usage.input_tokens === "number" ? usage.input_tokens : inputTokens;
       outputTokens = usage && typeof usage.output_tokens === "number" ? usage.output_tokens : outputTokens;
       inputTokenDetails = isRecord(usage?.input_tokens_details) ? usage.input_tokens_details : inputTokenDetails;
+      outputTokenDetails = isRecord(usage?.output_tokens_details) ? usage.output_tokens_details : outputTokenDetails;
       emit(transform, "response.created", {
         type: "response.created",
         response: responseEnvelope("in_progress")
@@ -408,6 +410,11 @@ export function createAnthropicToResponsesStream(): Transform {
       if (isRecord(usage?.input_tokens_details)) {
         inputTokenDetails = usage.input_tokens_details;
       }
+      // Like logged usage, a zero-filled trailer must not erase an observed split.
+      if (isRecord(usage?.output_tokens_details) &&
+          (usage.output_tokens_details.reasoning_tokens !== 0 || outputTokenDetails === null)) {
+        outputTokenDetails = usage.output_tokens_details;
+      }
       return;
     }
 
@@ -452,7 +459,8 @@ export function createAnthropicToResponsesStream(): Transform {
         // it, so the same upstream reported a cache hit rate on the JSON path and
         // zero on the SSE path while the total matched — the analytics panel read
         // that as "no cache" rather than "unknown".
-        ...(inputTokenDetails ? { input_tokens_details: inputTokenDetails } : {})
+        ...(inputTokenDetails ? { input_tokens_details: inputTokenDetails } : {}),
+        ...(outputTokenDetails ? { output_tokens_details: outputTokenDetails } : {})
       },
       ...extra
     };
@@ -487,6 +495,7 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
   let model: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
+  let outputTokenDetails: Record<string, unknown> | null = null;
   let summary: string | null = null;
   let outputItem: Record<string, unknown> | null = null;
   let completed = false;
@@ -608,6 +617,11 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
     if (typeof value.output_tokens === "number" && Number.isInteger(value.output_tokens)) {
       outputTokens = value.output_tokens;
     }
+    const usage = anthropicUsageToResponses(value);
+    if (isRecord(usage?.output_tokens_details) &&
+        (usage.output_tokens_details.reasoning_tokens !== 0 || outputTokenDetails === null)) {
+      outputTokenDetails = usage.output_tokens_details;
+    }
   }
 
   function responseEnvelope(
@@ -624,7 +638,8 @@ export function createAnthropicToResponsesCompactionStream(): Transform {
       usage: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,
-        total_tokens: inputTokens + outputTokens
+        total_tokens: inputTokens + outputTokens,
+        ...(outputTokenDetails ? { output_tokens_details: outputTokenDetails } : {})
       },
       ...extra
     };

@@ -735,6 +735,10 @@ export function anthropicUsageToResponses(value: unknown): Record<string, unknow
       ...(cacheWriteTokens > 0 ? { cache_write_tokens: cacheWriteTokens } : {})
     };
   }
+  const reasoningTokens = nonNegativeInteger(value.reasoning_tokens);
+  if (reasoningTokens !== null) {
+    usage.output_tokens_details = { reasoning_tokens: reasoningTokens };
+  }
   return usage;
 }
 
