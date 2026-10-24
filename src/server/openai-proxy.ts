@@ -1135,4 +1135,5 @@ function applyCachedCompactResponse(
   transaction.compactResponseSyntheticSource = cached.compactResponseSyntheticSource;
   // A replay has no new upstream response sample.
   transaction.firstTokenMs = null;
+  transaction.generationSample = null;
 }

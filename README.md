@@ -517,6 +517,36 @@ UTF-8 文本字节数判断，图片 base64 不计入。优先级固定为：显
 Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单次精确选择；
 仅 loopback 客户端可用，转发前会删除，并且不会修改 active profile、健康度或粘性。
 
+### Claude 思考参数适配
+
+模型映射默认只修改 `model`，保留客户端的 `thinking` 与 `output_config`。
+未知中转、自定义模型以及中转上的 Claude 同名模型，不再因为模型名未命中规则
+就把 `effort` 换成 `budget_tokens`。例如 DeepSeek 自定义模型收到的
+`output_config.effort: "max"` 会原样转发；字段是否生效仍取决于该中转的实际实现。
+
+自动兼容仅在模型确实改变、最终端点为 `https://api.anthropic.com/v1/messages`、
+目标 ID 已核实且不接受原 thinking 模式时启用。规则按具体 ID 匹配，
+不推测未来版本、带前缀的别名或其他供应商能力：
+
+- 已知 4.5 模型只接受手动预算；Opus 4.5 同时支持 `low`/`medium`/`high` effort，转换时保留受支持档位。
+- Opus/Sonnet 4.6 与 Mythos Preview 接受两种模式，保留客户端原模式。
+- 已登记的 adaptive-only 模型只在收到手动预算时转换；已有受支持 effort 优先于比例估算。
+- 只调整必要字段，保留 `output_config.format` 等其他字段；不主动开启已关闭的思考。
+- `count_tokens` 不做此适配；OpenAI 上游继续由已有转换器处理，`max` 映射为 `xhigh`。
+
+兼容转换中的预算/档位比例是近似策略，不是官方等价关系；手动预算转成 effort
+后不再具有相同的思考 token 硬上限，但不会扩大原 `max_tokens`。
+仅在需要转换时，缺失/非法的 `max_tokens` 或预算、未知/不支持的明确 effort、
+没有明确 effort 的 adaptive→预算请求、冲突的 adaptive+budget 参数会返回 422。
+生成手动预算还要求 `max_tokens > 1024`；不足时不再静默关闭思考。
+原样透传的请求仍由上游校验，不因本地规则未知而被拦截。
+
+升级无需迁移配置或重填六槽位。曾依赖旧启发式的中转可能暴露参数不兼容；
+应核实具体上游合同，不能恢复“所有未知模型都转预算”。能力依据见
+[Anthropic thinking 支持表](https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting)、
+[effort 说明](https://platform.claude.com/docs/en/build-with-claude/effort)；
+[DeepSeek 官方兼容说明](https://api-docs.deepseek.com/guides/anthropic_api)不代表第三方中转已实现相同行为。
+
 ## Studio 页面能做什么
 
 打开 `http://127.0.0.1:7865/` 后，你可以直接：
@@ -550,7 +580,7 @@ HTTP 日志页与 SSE 插入共享 SQLite 序号，避免分页期间新增漏�
 
 仪表盘和用量可按所展示统计的实际时间范围下钻到日志；响应模型与 Host 使用精确匹配，不用模糊搜索替代。日志筛选区直接显示响应模型与开始时间范围，窄屏同样可见；模型可切换为“全部响应模型”而保留时间，时间菜单可移除时间与模型限定并保留其他条件，也可清除全部筛选。总览与路由始终使用全局记录。“样本概览”移至独立页面（`/#samples`），从日志页或导航进入，与请求日志共用筛选条件、实时记录和已加载分页窗口；日志页不再内联展示分组。样本页完整展示分组、调用数、失败数、成功率和最近最多十次结果，可加载更早记录，不代表全库或上游健康探测。
 
-桌面日志默认沿用完整12列，保留独立的首响应与耗时；模型差异放在响应模型列，类型下方展示平均输出吞吐。可切换精简7列，合并模型链路、上游凭据、输入/输出 Token 与首响应/总耗时；“响应声明不同”只比较上游明确声明与目标模型，不把目标推断当证据，也不代表模型指纹鉴定。平均输出吞吐为输出 Token / 总耗时，非纯生成速度；移动详情仍可查看全部诊断字段。
+桌面日志默认沿用完整12列，保留独立的首响应与耗时；模型差异放在响应模型列，类型下方分别展示生成速度和平均输出吞吐。可切换精简7列，合并模型链路、上游凭据、输入/输出 Token 与首响应/总耗时；“响应声明不同”只比较上游明确声明与目标模型，不把目标推断当证据，也不代表模型指纹鉴定。平均输出吞吐仍为输出 Token / 总耗时，包含等待；生成速度采用同一次上游源流的输出 Token / 首个有效输出至成功终态的耗时。两者在桌面、移动端与详情中明确区分，不改变原有用量和健康统计。
 
 正文清理已提交但 SQLite 空间回收失败时，仍通知页面刷新，并明确报告“正文已清、空间回收失败”。非 SQLite 模式下抓包目录可清空后继续编辑；留空保存将关闭抓包。日志表在中等宽度下可局部横向滚动，720px 及以下保留卡片布局；Token 明细支持键盘操作，复制失败会显示原因。
 
@@ -839,6 +869,10 @@ Stream disconnected before completion: stream closed before response.completed
 日志中的 `response_model` 只表示响应中明确返回的模型。流式观察与全文解析均优先采用首次有效 `response.completed` 模型声明，否则保留最后一次有效声明。Remote V2 的 `response.compaction` 可能不携带 `model`，此时 `response_model` 保持为空，`effective_response_model` 则在成功时使用 `target_model`，并由 `response_model_source=target_fallback` 标记为“目标模型推断”。没有模型声明的失败、取消或未完成流标记为 `unavailable`。超出流观察器 payload 上限的完整 `response.completed` 仍会按事件名识别，但不能据此推测未读取的模型，并记录 `stream_oversized_event_count` 供诊断。
 
 Studio 的“首响应”表示收到上游第一个响应数据块的耗时，可能是元信息或心跳，不等于首个生成 Token。历史 API/SQLite 字段仍名为 `first_token_ms`，统计中的同名前缀字段也沿用这一口径，不重新解释历史数据。
+
+`generation_sample` 是日志 API/SSE 与 SQLite 中新增的可空采样对象：`first_output_ms` 是相对本次请求开始的首有效输出耗时，`duration_ms` 是该源流从首有效输出到成功终态的耗时，`output_tokens` 是同一次源流结尾报告的输出计数。它只用于生成速度，不额外计费，也不与转换后的日志用量混算。采样复用有界 SSE 解压/观察器，识别已支持协议的非空文本、思考与工具调用输出，忽略信封、心跳、空增量和签名；在源协议终态冻结，不等待 HTTP 收尾、连接池 drain 或日志落盘。重试只保留最终响应的样本。
+
+旧日志、源 JSON、计数端点、缓存重放、失败、终态前取消、不完整流、缺失最终输出 usage 或观察受损时不推算生成速度；成功终态后正常提前断开沿用既有成功语义，可保留完整采样。正常完整采样不足 100ms 时保留原始值，但显示 `-`，不沿用上次速度。诊断正文前缀截断不等于观察器失效：只要完整源流仍被有效观察，样本可保留。生成速度是代理观察值，仍受上游缓冲、网络、解压调度和未展示思考的影响，不是纯 GPU 解码速度，也不保证与 dsh/ccline 的不同观察点读数完全一致。
 
 当前版本在 `compact.upstream_mode = "split"` 时，会把成功 compact 响应里的可读 summary 状态记录下来。下一次包含同一段 `encrypted_content` 的普通 `/v1/responses` 请求会继续走 primary，但 CompactGate 会先把可读 compact 状态转换成 assistant summary message，再转发给 primary。
 

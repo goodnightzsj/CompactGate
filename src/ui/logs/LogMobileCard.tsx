@@ -4,7 +4,7 @@ import { useMediaQuery } from "./useNarrowViewport.js";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime } from "../shared/format.js";
-import { LogModelSummary, LogTokenSummary, LogTimingSummary, outputThroughputLabel } from "./LogSummary.js";
+import { LogModelSummary, LogTokenSummary, LogTimingSummary, LogThroughputSummary } from "./LogSummary.js";
 import { LogDetailPanel } from "./LogDetailRow.js";
 import {
   compactionModeClass,
@@ -53,7 +53,7 @@ export const LogMobileCard = memo(function LogMobileCard({
           <span>{entry.request_type}</span>
           <LogTokenSummary entry={entry} />
           <LogTimingSummary entry={entry} />
-          <span>平均 {outputThroughputLabel(entry)}</span>
+          <LogThroughputSummary entry={entry} />
         </span>
         {hasError && <span className="log-error-hint">{entry.error_summary ?? entry.stream_outcome ?? "请求未成功"}</span>}
         <span className="log-mobile-disclosure" aria-hidden="true">{expanded ? "收起" : "详情"}</span>

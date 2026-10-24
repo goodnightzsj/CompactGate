@@ -387,6 +387,7 @@ export class RequestLogger extends EventTarget {
           entry.upstream_response_truncated ? 1 : 0,
           entry.duration_ms,
           entry.first_token_ms,
+          entry.generation_sample ? JSON.stringify(entry.generation_sample) : null,
           entry.input_tokens,
           entry.output_tokens,
           entry.cached_input_tokens,
@@ -429,7 +430,7 @@ export class RequestLogger extends EventTarget {
 
   /**
    * Prepared once and reused: `add` runs on every proxied request, and re-parsing
-   * a 51-column INSERT per call is pure overhead on the hot path. Cached lazily so
+   * the wide INSERT per call is pure overhead on the hot path. Cached lazily so
    * constructing a logger still costs nothing until the first write, and because
    * `migratePersistedSchema` must have added its columns before the statement is
    * compiled against them.
@@ -470,6 +471,7 @@ export class RequestLogger extends EventTarget {
         upstream_response_truncated,
         duration_ms,
         first_token_ms,
+        generation_sample,
         input_tokens,
         output_tokens,
         cached_input_tokens,
@@ -498,7 +500,7 @@ export class RequestLogger extends EventTarget {
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `);
     return this.cachedAddStatement;

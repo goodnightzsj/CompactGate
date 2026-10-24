@@ -24,19 +24,48 @@ import {
 import { buildUpstreamUrlWithMode } from "./upstream-url.js";
 import type { OAuthStore } from "./oauth-store.js";
 import { fetchOAuthModels } from "./oauth-transport.js";
+import { ProtocolConversionError } from "./protocol-conversion.js";
 
 export const MIMO_IMAGE_INPUT_MODEL = "mimo-v2.5";
 const MIMO_IMAGE_INPUT_HOSTNAME = "token-plan-sgp.xiaomimimo.com";
 
-/**
- * Anthropic models that take effort-based thinking (`output_config.effort` with
- * `thinking.type: "adaptive"`) instead of the older `thinking.budget_tokens`
- * dial. Matches the family generation, so `sonnet-4-5` stays budget-based.
- */
-const CLAUDE_EFFORT_THINKING_MODEL = /(?:opus|sonnet|haiku|fable)-5\b|opus-4-8\b/i;
-/** Anthropic's floor for `thinking.budget_tokens`, which must also stay under `max_tokens`. */
+/** Floor for reconstructed manual budgets; generated budgets stay below max_tokens. */
 const CLAUDE_MIN_THINKING_BUDGET = 1024;
 
+interface ClaudeThinkingCapabilities {
+  modes: readonly string[];
+  efforts: readonly string[];
+}
+
+const BUDGET_THINKING = { modes: ["enabled"], efforts: [] };
+const BUDGET_WITH_EFFORT = { modes: ["enabled"], efforts: ["low", "medium", "high"] };
+const ADAPTIVE_THINKING = { modes: ["adaptive"], efforts: ["low", "medium", "high", "xhigh", "max"] };
+const DUAL_THINKING = { modes: ["enabled", "adaptive"], efforts: ["low", "medium", "high", "max"] };
+
+// Verified 2026-10-25: https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+// Effort is independent of thinking mode (notably Opus 4.5); never infer future IDs or relay aliases.
+const CLAUDE_THINKING_CAPABILITIES: ReadonlyMap<string, ClaudeThinkingCapabilities> = new Map([
+  ["claude-sonnet-4-5", BUDGET_THINKING],
+  ["claude-sonnet-4-5-20250929", BUDGET_THINKING],
+  ["claude-haiku-4-5", BUDGET_THINKING],
+  ["claude-haiku-4-5-20251001", BUDGET_THINKING],
+  ["claude-opus-4-5", BUDGET_WITH_EFFORT],
+  ["claude-opus-4-5-20251101", BUDGET_WITH_EFFORT],
+  ["claude-opus-4-6", DUAL_THINKING],
+  ["claude-sonnet-4-6", DUAL_THINKING],
+  ["claude-mythos-preview", DUAL_THINKING],
+  ["claude-opus-4-7", ADAPTIVE_THINKING],
+  ["claude-opus-4-8", ADAPTIVE_THINKING],
+  ["claude-opus-5", ADAPTIVE_THINKING],
+  ["claude-opus-5-5", ADAPTIVE_THINKING],
+  ["claude-sonnet-5", ADAPTIVE_THINKING],
+  ["claude-sonnet-5-5", ADAPTIVE_THINKING],
+  ["claude-haiku-5-5", ADAPTIVE_THINKING],
+  ["claude-fable-5", ADAPTIVE_THINKING],
+  ["claude-fable-5-1", ADAPTIVE_THINKING],
+  ["claude-mythos-5", ADAPTIVE_THINKING],
+  ["claude-mythos-5-1", ADAPTIVE_THINKING]
+]);
 
 export interface ClaudeSceneDetection {
   scene: ClaudeScene;
@@ -159,10 +188,9 @@ export function hostNeedsToolReferenceStripping(host: string): boolean {
 }
 
 /**
- * Rewrites the request model, and on a native Anthropic upstream also carries
- * the client's thinking level across that rewrite. `alignThinking` must stay
- * false when the body is headed for an OpenAI-protocol conversion, which does
- * its own thinking translation and rejects `output_config`.
+ * Rewrites only the model by default. The caller may supply the final native
+ * Messages endpoint for verified, necessary thinking adaptation. OpenAI and
+ * count_tokens callers omit it: their protocol handling owns those fields.
  *
  * `tool_reference` stripping is separate and host-scoped (see
  * `stripClaudeToolReferenceBlocks`), applied by the caller once the upstream
@@ -172,7 +200,7 @@ export function hostNeedsToolReferenceStripping(host: string): boolean {
 export function rewriteClaudeModelBody(
   rawBody: Buffer,
   modelOverride: string,
-  alignThinking = false
+  thinkingUpstream?: URL
 ): Buffer {
   const model = readTrimmedString(modelOverride);
   if (!model) {
@@ -180,13 +208,14 @@ export function rewriteClaudeModelBody(
   }
 
   const parsed = parseJsonRecord(rawBody);
-  if (!parsed) {
+  if (!parsed || parsed.model === model) {
     return rawBody;
   }
 
   return Buffer.from(JSON.stringify({
     ...parsed,
-    ...(alignThinking ? alignClaudeThinkingToModel(parsed, model) : {}),
+    ...(thinkingUpstream && typeof parsed.model === "string"
+      ? alignClaudeThinkingToModel(parsed, model, thinkingUpstream) : {}),
     model
   }));
 }
@@ -262,100 +291,86 @@ function replaceClaudeToolReferenceBlocks(messages: unknown): unknown[] | null {
   return changed ? next : null;
 }
 
-/**
- * Carries the thinking level the client asked for across a model rewrite, in
- * whichever direction the rewrite crossed. A `thinking.budget_tokens` dial means
- * nothing to an effort-based target model and an `output_config.effort` tier
- * means nothing to a budget-based one, so translate between the two and leave a
- * request that already speaks the target's dialect alone.
- */
+/** Only an incompatible mode on a verified endpoint/model warrants rewriting client intent. */
 function alignClaudeThinkingToModel(
   parsed: Record<string, unknown>,
-  model: string
+  model: string,
+  upstream: URL
 ): Record<string, unknown> {
-  if (!isRecord(parsed.thinking)) {
+  if (upstream.origin !== "https://api.anthropic.com" || upstream.pathname !== "/v1/messages") {
     return {};
   }
-
-  const type = readTrimmedString(parsed.thinking.type)?.toLowerCase();
-  if (type === "disabled") {
+  const capabilities = CLAUDE_THINKING_CAPABILITIES.get(model);
+  if (!capabilities || !isRecord(parsed.thinking)) {
     return {};
   }
-
-  return CLAUDE_EFFORT_THINKING_MODEL.test(model)
-    ? budgetThinkingToEffort(parsed, parsed.thinking, type)
-    : effortThinkingToBudget(parsed, type);
+  const thinking = parsed.thinking;
+  const type = thinking.type;
+  if ((type !== "enabled" && type !== "adaptive") || capabilities.modes.includes(type)) {
+    return {};
+  }
+  if (parsed.output_config !== undefined && !isRecord(parsed.output_config)) {
+    throw new ProtocolConversionError("Thinking adaptation requires output_config to be an object.");
+  }
+  const output = isRecord(parsed.output_config) ? { ...parsed.output_config } : {};
+  const effort = output.effort;
+  if (effort !== undefined && capabilities.efforts.length > 0 &&
+    (typeof effort !== "string" || !capabilities.efforts.includes(effort))) {
+    throw new ProtocolConversionError(`Thinking adaptation encountered an unsupported output_config.effort for ${model}.`);
+  }
+  const maxTokens = parsed.max_tokens;
+  if (typeof maxTokens !== "number" || !Number.isSafeInteger(maxTokens) || maxTokens <= 0) {
+    throw new ProtocolConversionError("Thinking adaptation requires an explicit positive integer max_tokens.");
+  }
+  return type === "enabled"
+    ? budgetThinkingToEffort(thinking, output, maxTokens)
+    : effortThinkingToBudget(thinking, output, capabilities, maxTokens);
 }
 
 function budgetThinkingToEffort(
-  parsed: Record<string, unknown>,
   thinking: Record<string, unknown>,
-  type: string | undefined
+  output: Record<string, unknown>,
+  maxTokens: number
 ): Record<string, unknown> {
-  if (isRecord(parsed.output_config) || type !== "enabled") {
-    return {};
-  }
-
   const budget = thinking.budget_tokens;
-  if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) {
-    return {};
+  if (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < CLAUDE_MIN_THINKING_BUDGET) {
+    throw new ProtocolConversionError("Thinking adaptation requires an integer thinking.budget_tokens of at least 1024.");
   }
-
+  const nextThinking: Record<string, unknown> = { ...thinking, type: "adaptive" };
+  delete nextThinking.budget_tokens;
   return {
-    thinking: { type: "adaptive" },
-    output_config: { effort: claudeEffortForThinkingBudget(budget, parsed.max_tokens) }
+    thinking: nextThinking,
+    output_config: { ...output, effort: output.effort ?? claudeEffortForThinkingBudget(budget, maxTokens) }
   };
 }
 
-/**
- * The effort dialect carries no token count, so the budget a budget-based model
- * needs is reconstructed from the tier's share of the output ceiling. Anthropic
- * requires at least 1024 thinking tokens and a budget below `max_tokens`.
- */
 function effortThinkingToBudget(
-  parsed: Record<string, unknown>,
-  type: string | undefined
+  thinking: Record<string, unknown>,
+  output: Record<string, unknown>,
+  capabilities: ClaudeThinkingCapabilities,
+  maxTokens: number
 ): Record<string, unknown> {
-  const effort = isRecord(parsed.output_config)
-    ? readTrimmedString(parsed.output_config.effort)?.toLowerCase()
-    : null;
-  if (type !== "adaptive" && !effort) {
-    return {};
+  if (thinking.budget_tokens !== undefined) {
+    throw new ProtocolConversionError("Cannot adapt ambiguous thinking with both adaptive mode and budget_tokens.");
   }
-
-  const maxTokens = typeof parsed.max_tokens === "number" && Number.isFinite(parsed.max_tokens)
-    ? parsed.max_tokens
-    : 32000;
   if (maxTokens <= CLAUDE_MIN_THINKING_BUDGET) {
-    // Both constraints cannot hold at this ceiling. Any budget we could emit
-    // would be rejected with a 400, and so would the client's own
-    // `{type:"adaptive"}` on a budget-based target — so drop the thinking block
-    // outright rather than only the effort dial, and let the request through
-    // without thinking instead of failing it entirely.
-    return { thinking: undefined, output_config: undefined };
+    throw new ProtocolConversionError("Thinking adaptation needs max_tokens > 1024; it will not silently disable thinking.");
   }
-
+  // shortcut: legacy budget/effort ratios are approximate; replace only with a verified target-specific mapping.
   const budget = Math.max(CLAUDE_MIN_THINKING_BUDGET, Math.min(
     maxTokens - 1,
-    Math.round(maxTokens * claudeThinkingShareForEffort(effort))
+    Math.round(maxTokens * claudeThinkingShareForEffort(output.effort))
   ));
-
+  if (capabilities.efforts.length === 0) delete output.effort;
   return {
-    thinking: { type: "enabled", budget_tokens: budget },
-    output_config: undefined
+    thinking: { ...thinking, type: "enabled", budget_tokens: budget },
+    output_config: Object.keys(output).length > 0 ? output : undefined
   };
 }
 
-/**
- * ponytail: the reserved budget share is the only level signal a budget-based
- * client sends, so the tier is a ratio heuristic. Swap in a lookup table if the
- * exact budget ladder each client uses becomes known.
- */
-function claudeEffortForThinkingBudget(budget: number, maxTokens: unknown): string {
-  const ceiling = typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-    ? maxTokens
-    : budget;
-  const share = budget / ceiling;
+// shortcut: the budget ratio approximates effort, not an equivalent hard cap; retain explicit effort when available.
+function claudeEffortForThinkingBudget(budget: number, maxTokens: number): string {
+  const share = budget / maxTokens;
   if (share >= 0.75) {
     return "max";
   }
@@ -368,7 +383,7 @@ function claudeEffortForThinkingBudget(budget: number, maxTokens: unknown): stri
   return "low";
 }
 
-function claudeThinkingShareForEffort(effort: string | null | undefined): number {
+function claudeThinkingShareForEffort(effort: unknown): number {
   switch (effort) {
     case "minimal":
       return 0.05;
@@ -378,8 +393,11 @@ function claudeThinkingShareForEffort(effort: string | null | undefined): number
       return 0.375;
     case "high":
       return 0.625;
-    default:
+    case "xhigh":
+    case "max":
       return 1;
+    default:
+      throw new ProtocolConversionError("Budget thinking adaptation requires an explicit supported output_config.effort.");
   }
 }
 

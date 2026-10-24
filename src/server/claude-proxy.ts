@@ -180,14 +180,17 @@ export async function proxyClaudeRequest(
     const normalizedUpstreamPath = upstreamPathForEndpoint(req.method ?? "POST", upstreamPath, "anthropic", upstreamProtocol);
     const countTokens = upstreamPath === "/v1/messages/count_tokens" || upstreamPath === "/messages/count_tokens";
     const openAiUpstream = upstreamProtocol === "openai_responses" || upstreamProtocol === "openai_chat";
+    upstream = openAiUpstream
+      ? buildUpstreamUrl(config.claude.primary.base_url, normalizedUpstreamPath, url.search)
+      : buildClaudeUpstreamUrl(config.claude.primary.base_url, normalizedUpstreamPath, url.search);
     transaction.upstreamBody = rewriteClaudeModelBody(
       transaction.rawBody,
       transaction.targetModel ?? "",
-      !openAiUpstream && !countTokens
+      messagesRequest && !openAiUpstream && !countTokens ? upstream : undefined
     );
     if (transaction.upstreamBody === transaction.rawBody) {
-      // The body was unreadable, so no mapping was applied; report what the
-      // upstream actually receives rather than the model we meant to send.
+      // No mapping was applied (unreadable body or unchanged model); log the
+      // model the upstream actually receives, not an intended override.
       transaction.targetModel = transaction.sourceModel;
     }
     // Routing has resolved the actual profile, but the body is still Messages.
@@ -201,11 +204,6 @@ export async function proxyClaudeRequest(
           ? anthropicRequestToChat(transaction.upstreamBody, { countTokens })
           : anthropicRequestToResponses(transaction.upstreamBody, { countTokens });
       }
-      upstream = buildUpstreamUrl(
-        config.claude.primary.base_url,
-        normalizedUpstreamPath,
-        url.search
-      );
       const auth = resolveClaudeCredential(config);
       transaction.requestHeaders = buildOpenAiRequestHeaders(
         req.headers,
@@ -213,7 +211,6 @@ export async function proxyClaudeRequest(
         config.claude.primary.extra_headers
       );
     } else {
-      upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, normalizedUpstreamPath, url.search);
       const auth = resolveClaudeCredential(config);
       transaction.requestHeaders = buildAnthropicUpstreamHeaders(
         req.headers,

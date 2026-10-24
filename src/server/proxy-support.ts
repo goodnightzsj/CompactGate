@@ -6,6 +6,7 @@ import type {
   CompactResponseSyntheticSource,
   CompactionDiagnostics,
   ClientDisconnectPhase,
+  GenerationSample,
   OpenAiCompactionMode,
   OpenAiRequestDetectionSource,
   ProviderStatePortabilityLog,
@@ -98,6 +99,7 @@ export function addLog(
     targetModel: string | null;
     responseModel?: string | null;
     firstTokenMs: number | null;
+    generationSample?: GenerationSample | null;
     usage: TokenUsageMetrics;
     errorSummary: string | null;
     providerStatePortability?: ProviderStatePortabilityLog | null;
@@ -160,6 +162,7 @@ export function addLog(
     upstream_response_truncated: input.upstreamResponseTruncated ?? false,
     duration_ms: Math.max(0, Math.round(performance.now() - input.startedAt)),
     first_token_ms: input.firstTokenMs,
+    generation_sample: input.generationSample ?? null,
     input_tokens: input.usage.inputTokens,
     output_tokens: input.usage.outputTokens,
     cached_input_tokens: input.usage.cachedInputTokens,

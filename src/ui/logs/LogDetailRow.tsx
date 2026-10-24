@@ -23,7 +23,7 @@ import {
   codexClientDisplay
 } from "./log-utils.js";
 import { LogCaptureViewer } from "./LogCaptureViewer.js";
-import { outputThroughputLabel } from "./LogSummary.js";
+import { GENERATION_THROUGHPUT_HINT, generationThroughputLabel, outputThroughputLabel } from "./LogSummary.js";
 import { hasResponseModelMismatch } from "./log-utils.js";
 
 function CopyValue({ value }: { value: string }) {
@@ -108,9 +108,10 @@ export function LogDetailPanel({ entry, onCollapse }: {
         <dl className="log-detail-metrics">
           <DetailField label="首响应（首个数据块）">{formatDurationMs(entry.first_token_ms)}</DetailField>
           <DetailField label="总耗时">{formatDurationMs(entry.duration_ms)}</DetailField>
+          <DetailField label="生成速度">{generationThroughputLabel(entry)}</DetailField>
           <DetailField label="平均输出吞吐">{outputThroughputLabel(entry)}</DetailField>
         </dl>
-        <p className="log-detail-note">吞吐 = 输出 Token / 总耗时，包含等待，非纯生成速度</p>
+        <p className="log-detail-note">{GENERATION_THROUGHPUT_HINT} 平均吞吐 = 输出 Token / 总耗时，包含等待，非纯生成速度。</p>
       </section>
 
       <section className="log-detail-section" aria-label="路由与模型">
@@ -169,6 +170,9 @@ export function LogDetailPanel({ entry, onCollapse }: {
         <dl className="log-detail-fields">
           <DetailField label="开始时间">{formatDateTime(entry.time)}</DetailField>
           <DetailField label="完成时间">{formatDateTime(entry.completed_at)}</DetailField>
+          <DetailField label="首有效输出（请求起算）">{formatDurationMs(entry.generation_sample?.first_output_ms ?? null)}</DetailField>
+          <DetailField label="生成采样耗时">{formatDurationMs(entry.generation_sample?.duration_ms ?? null)}</DetailField>
+          <DetailField label="采样输出（非另计用量）">{formatMetricNumber(entry.generation_sample?.output_tokens ?? null)}</DetailField>
           <DetailField label="上游状态">{entry.upstream_status ?? "-"}</DetailField>
           <DetailField label="流完成">{entry.stream_terminal_event ?? "-"}</DetailField>
           <DetailField label="断开阶段">{entry.client_disconnect_phase ?? "none"}</DetailField>

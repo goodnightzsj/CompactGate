@@ -18,6 +18,7 @@ import { effectiveResponseModel } from "./response-model.js";
 import { parseCodexClientUserAgent } from "./codex-version.js";
 import { readNumber as readNullableNumber } from "./usage-utils.js";
 import { isRecord } from "../shared/records.js";
+import { readGenerationSample } from "../shared/generation-metrics.js";
 
 export { readNullableNumber };
 
@@ -201,6 +202,7 @@ export function rowToLogEntry(row: Record<string, unknown>): RequestLogEntry {
     upstream_response_truncated: readBoolean(row.upstream_response_truncated),
     duration_ms: readNullableNumber(row.duration_ms) ?? 0,
     first_token_ms: readNullableNumber(row.first_token_ms),
+    generation_sample: readStoredGenerationSample(row.generation_sample),
     input_tokens: readNullableNumber(row.input_tokens),
     output_tokens: readNullableNumber(row.output_tokens),
     cached_input_tokens: readNullableNumber(row.cached_input_tokens),
@@ -230,6 +232,15 @@ export function stripLogEntryBodies(entry: RequestLogEntry): RequestLogEntry {
     upstream_response_body: null,
     client_response_body: null
   };
+}
+
+function readStoredGenerationSample(value: unknown): RequestLogEntry["generation_sample"] {
+  if (typeof value !== "string") return null;
+  try {
+    return readGenerationSample(JSON.parse(value));
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeLogStatus(value: unknown): LogStatusKind {

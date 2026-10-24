@@ -2,7 +2,7 @@ import { memo } from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime, formatDurationMs } from "../shared/format.js";
-import { LogModelSummary, LogTimingSummary, outputThroughputLabel } from "./LogSummary.js";
+import { GENERATION_THROUGHPUT_HINT, generationThroughputLabel, LogModelSummary, LogThroughputSummary, LogTimingSummary, outputThroughputLabel } from "./LogSummary.js";
 import { LogTextTooltip, TokenTooltip } from "./LogTooltips.js";
 import {
   logStatusKind,
@@ -29,7 +29,7 @@ export const LogRowCells = memo(function LogRowCells({
 }) {
   const modelMapping = `${entry.source_model ?? "-"} -> ${entry.target_model ?? entry.source_model ?? "-"}`;
   const responseEvidence = hasResponseModelMismatch(entry) ? "响应声明不同" : responseModelSourceLabel(entry);
-  const throughputHint = `${outputThroughputLabel(entry)} · 平均输出吞吐 = 输出 Token / 总耗时，包含等待时间，非纯生成速度。`;
+  const throughputHint = `生成 ${generationThroughputLabel(entry)} · 平均 ${outputThroughputLabel(entry)}\n${GENERATION_THROUGHPUT_HINT}\n平均输出吞吐 = 输出 Token / 总耗时，包含等待时间。`;
 
   return (
     <>
@@ -62,7 +62,7 @@ export const LogRowCells = memo(function LogRowCells({
         <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
         <td><LogTextTooltip className="log-summary-stack" value={entry.request_type} tooltip={throughputHint}>
           <span className={`log-transport ${entry.request_type}`}>{entry.request_type}</span>
-          <small>{outputThroughputLabel(entry)}</small>
+          <LogThroughputSummary entry={entry} />
         </LogTextTooltip></td>
       </>}
       <td><TokenTooltip entry={entry} /></td>
@@ -71,7 +71,9 @@ export const LogRowCells = memo(function LogRowCells({
       </LogTextTooltip></td>
       <td><LogTextTooltip className="log-cell-time"
         value={showAllColumns ? formatDurationMs(entry.duration_ms) : outputThroughputLabel(entry)}
-        tooltip={showAllColumns ? "请求总耗时（包含等待时间）" : throughputHint} /></td>
+        tooltip={showAllColumns ? "请求总耗时（包含等待时间）" : throughputHint}>
+        {showAllColumns ? formatDurationMs(entry.duration_ms) : <LogThroughputSummary entry={entry} />}
+      </LogTextTooltip></td>
     </>
   );
 }, (previous, next) => previous.showAllColumns === next.showAllColumns && (previous.entry === next.entry ||

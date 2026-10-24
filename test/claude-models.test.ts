@@ -7,7 +7,7 @@ import {
   rewriteClaudeModelBody,
   stripClaudeToolReferenceBlocks
 } from "../src/server/claude-models.js";
-import { anthropicRequestToResponses } from "../src/server/protocol-conversion.js";
+import { anthropicRequestToResponses, ProtocolConversionError } from "../src/server/protocol-conversion.js";
 
 function body(value: unknown): Buffer {
   return Buffer.from(JSON.stringify(value));
@@ -68,8 +68,12 @@ describe("Claude scene detection", () => {
 });
 
 describe("Claude model rewrite thinking alignment", () => {
-  function rewritten(value: unknown, model: string): Record<string, unknown> {
-    return JSON.parse(rewriteClaudeModelBody(body(value), model, true).toString());
+  function rewritten(
+    value: unknown,
+    model: string,
+    endpoint = "https://api.anthropic.com/v1/messages"
+  ): Record<string, unknown> {
+    return JSON.parse(rewriteClaudeModelBody(body(value), model, new URL(endpoint)).toString());
   }
 
   it("translates the reserved budget share into the matching effort tier", () => {
@@ -139,9 +143,11 @@ describe("Claude model rewrite thinking alignment", () => {
   it("translates an effort tier back into a budget for a budget-based target", () => {
     const cases: Array<[string, number]> = [
       ["max", 31999],
+      ["xhigh", 31999],
       ["high", 20000],
       ["medium", 12000],
-      ["low", 4800]
+      ["low", 4800],
+      ["minimal", 1600]
     ];
 
     for (const [effort, budget] of cases) {
@@ -157,35 +163,22 @@ describe("Claude model rewrite thinking alignment", () => {
     }
   });
 
-  it("keeps a bare adaptive request usable on a budget-based target", () => {
-    const result = rewritten({
+  it("does not invent an effort for a bare adaptive request needing a budget", () => {
+    expect(() => rewritten({
       model: "claude-opus-4-8",
       max_tokens: 32000,
       thinking: { type: "adaptive" }
-    }, "claude-sonnet-4-5-20250929");
-
-    expect(result.thinking).toEqual({ type: "enabled", budget_tokens: 31999 });
+    }, "claude-sonnet-4-5-20250929")).toThrow(/effort/);
   });
 
-  it("drops thinking instead of emitting a budget above max_tokens", () => {
-    // Anthropic wants budget_tokens >= 1024 and < max_tokens, so a small output
-    // ceiling satisfies neither. Clamping to the 1024 floor anyway sent
-    // budget_tokens: 1024 with max_tokens: 512 and the upstream 400'd the whole
-    // request — a subagent probe asking for a short answer would just fail.
-    for (const maxTokens of [512, 1000, 1024]) {
-      const result = rewritten({
+  it("rejects an impossible budget instead of silently disabling thinking", () => {
+    for (const maxTokens of [undefined, null, "32000", 0, -1, 512, 1000, 1024, 1024.5]) {
+      expect(() => rewritten({
         model: "claude-opus-4-8",
         max_tokens: maxTokens,
         thinking: { type: "adaptive" },
         output_config: { effort: "high" }
-      }, "claude-sonnet-4-5-20250929");
-
-      // Both the budget *and* the client's own adaptive block have to go: a
-      // budget-based target 400s on `{type:"adaptive"}` just as it does on a
-      // budget above max_tokens.
-      expect(result.thinking).toBeUndefined();
-      expect(result.output_config).toBeUndefined();
-      expect(result.max_tokens).toBe(maxTokens);
+      }, "claude-sonnet-4-5-20250929")).toThrow(/max_tokens/);
     }
 
     // One token of headroom is enough to keep a real thinking block.
@@ -196,6 +189,147 @@ describe("Claude model rewrite thinking alignment", () => {
       output_config: { effort: "high" }
     }, "claude-sonnet-4-5-20250929");
     expect(usable.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    expect(usable.max_tokens).toBe(1025);
+  });
+
+  it.each([
+    ["https://opencode.9962510.xyz/v1/messages", "global:deepseek-v4.1-flash-sg"],
+    ["https://api.deepseek.com/anthropic/v1/messages", "claude-sonnet-4-5"],
+    ["https://relay.example/v1/messages", "claude-sonnet-4-5"],
+    ["https://api.anthropic.com.evil.test/v1/messages", "claude-sonnet-4-5"],
+    ["http://api.anthropic.com/v1/messages", "claude-sonnet-4-5"],
+    ["https://api.anthropic.com:8443/v1/messages", "claude-sonnet-4-5"],
+    ["https://api.anthropic.com/custom/v1/messages", "claude-sonnet-4-5"],
+    ["https://api.anthropic.com/v1/messages/count_tokens", "claude-sonnet-4-5"],
+    ["https://api.anthropic.com/v1/messages", "global:claude-sonnet-4-5"],
+    ["https://api.anthropic.com/v1/messages", "claude-sonnet-4-5-20990101"],
+    ["https://api.anthropic.com/v1/messages", "claude-opus-6"],
+    ["https://api.anthropic.com/v1/messages", "constructor"]
+  ])("preserves unknown endpoint/model capabilities: %s %s", (endpoint, model) => {
+    const request = {
+      model: "claude-opus-5-5", max_tokens: 128000,
+      thinking: { type: "adaptive", display: "omitted" },
+      output_config: { effort: "max", future_constraint: true }
+    };
+    expect(rewritten(request, model, endpoint)).toEqual({ ...request, model });
+  });
+
+  it("does not reinterpret an unchanged model, even with an unfamiliar configuration", () => {
+    const raw = Buffer.from('{ "model": "claude-sonnet-4-5", "thinking": {"type":"adaptive"}, "max_tokens":512 }');
+    expect(rewriteClaudeModelBody(raw, "claude-sonnet-4-5", new URL("https://api.anthropic.com/v1/messages"))).toBe(raw);
+  });
+
+  it("preserves an unknown relay's manual budget even for an official-looking target", () => {
+    const request = {
+      model: "client-model", max_tokens: 512,
+      thinking: { type: "enabled", budget_tokens: 256 }, output_config: { effort: "future-tier" }
+    };
+    expect(rewritten(request, "claude-opus-5", "https://relay.example/v1/messages"))
+      .toEqual({ ...request, model: "claude-opus-5" });
+  });
+
+  it.each(["claude-sonnet-4-5", "claude-sonnet-4-5-20250929", "claude-haiku-4-5", "claude-haiku-4-5-20251001"])(
+    "recognizes the verified manual-only model %s", model => {
+      expect(rewritten({
+        model: "claude-opus-5", max_tokens: 32000, thinking: { type: "adaptive" }, output_config: { effort: "high" }
+      }, model)).toEqual({ model, max_tokens: 32000, thinking: { type: "enabled", budget_tokens: 20000 } });
+    }
+  );
+
+  it.each(["claude-opus-4-6", "claude-sonnet-4-6", "claude-mythos-preview"])(
+    "preserves either accepted thinking mode on %s", model => {
+      for (const thinking of [{ type: "adaptive" }, { type: "enabled", budget_tokens: 16000 }]) {
+        const request = { model: "client-model", max_tokens: 32000, thinking, output_config: { effort: "high" } };
+        expect(rewritten(request, model)).toEqual({ ...request, model });
+      }
+    }
+  );
+
+  it.each([
+    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5",
+    "claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+    "claude-fable-5", "claude-fable-5-1", "claude-mythos-5", "claude-mythos-5-1"
+  ])("converts a manual budget only when the official target %s requires adaptive", model => {
+    expect(rewritten({
+      model: "claude-sonnet-4-5", max_tokens: 32000,
+      thinking: { type: "enabled", budget_tokens: 16000, display: "omitted" }
+    }, model)).toEqual({
+      model, max_tokens: 32000,
+      thinking: { type: "adaptive", display: "omitted" }, output_config: { effort: "high" }
+    });
+  });
+
+  it("preserves output constraints in both conversion directions and explicit effort over heuristics", () => {
+    const format = { type: "json_schema", schema: { type: "object" } };
+    const output = { format, future_constraint: { on: true } };
+    const budget = {
+      model: "claude-opus-4-5", max_tokens: 32000,
+      thinking: { type: "enabled", budget_tokens: 31999, display: "omitted" },
+      output_config: { ...output, effort: "low" }
+    };
+    expect(rewritten(budget, "claude-opus-5")).toEqual({
+      ...budget, model: "claude-opus-5", thinking: { type: "adaptive", display: "omitted" },
+      output_config: { ...output, effort: "low" }
+    });
+    expect(rewritten({ ...budget, output_config: output }, "claude-opus-5").output_config).toEqual({ ...output, effort: "max" });
+    const adaptive = {
+      ...budget, model: "claude-opus-5", thinking: { type: "adaptive", display: "omitted" },
+      output_config: { ...output, effort: "high" }
+    };
+    expect(rewritten(adaptive, "claude-sonnet-4-5")).toEqual({
+      ...adaptive, model: "claude-sonnet-4-5", thinking: { type: "enabled", budget_tokens: 20000, display: "omitted" },
+      output_config: output
+    });
+    for (const model of ["claude-opus-4-5", "claude-opus-4-5-20251101"]) {
+      expect(rewritten(adaptive, model)).toEqual({
+        ...adaptive, model, thinking: { type: "enabled", budget_tokens: 20000, display: "omitted" }
+      });
+    }
+  });
+
+  it.each([undefined, { type: "disabled" }, { type: "between_tools" }])(
+    "never enables thinking or consumes effort on a non-adaptive request: %j", thinking => {
+      const request = { model: "client-model", max_tokens: 512, thinking, output_config: { effort: "max" } };
+      expect(rewritten(request, "claude-sonnet-4-5")).toEqual(JSON.parse(JSON.stringify({ ...request, model: "claude-sonnet-4-5" })));
+    }
+  );
+
+  it("rejects invalid or unsupported explicit effort only when it must translate", () => {
+    for (const effort of ["turbo", "", "HIGH", null, 5]) {
+      for (const thinking of [{ type: "adaptive" }, { type: "enabled", budget_tokens: 8192 }]) {
+        const target = thinking.type === "adaptive" ? "claude-sonnet-4-5" : "claude-opus-5";
+        expect(() => rewritten({
+          model: "client-model", max_tokens: 32000, thinking, output_config: { effort }
+        }, target)).toThrow(ProtocolConversionError);
+      }
+    }
+    expect(() => rewritten({
+      model: "claude-opus-5", max_tokens: 32000,
+      thinking: { type: "adaptive" }, output_config: { effort: "max" }
+    }, "claude-opus-4-5")).toThrow(/effort/);
+  });
+
+  it("does not invent a budget or replace malformed output_config when converting to adaptive", () => {
+    for (const budget of [undefined, null, 0, 1023, 1024.5, "16000"]) {
+      expect(() => rewritten({
+        model: "claude-sonnet-4-5", max_tokens: 32000, thinking: { type: "enabled", budget_tokens: budget }
+      }, "claude-opus-5")).toThrow(/budget_tokens/);
+    }
+    for (const output_config of [null, "high", []]) {
+      expect(() => rewritten({
+        model: "claude-sonnet-4-5", max_tokens: 32000,
+        thinking: { type: "enabled", budget_tokens: 8192 }, output_config
+      }, "claude-opus-5")).toThrow(/output_config/);
+    }
+    for (const max_tokens of [undefined, null, "32000", 0, -1, 8192.5]) {
+      expect(() => rewritten({
+        model: "claude-sonnet-4-5", max_tokens, thinking: { type: "enabled", budget_tokens: 8192 }
+      }, "claude-opus-5")).toThrow(/max_tokens/);
+    }
+    expect(() => rewritten({
+      model: "claude-opus-5", max_tokens: 32000,
+      thinking: { type: "adaptive", budget_tokens: 8192 }, output_config: { effort: "high" }
+    }, "claude-sonnet-4-5")).toThrow(/ambiguous/);
   });
 });
 
@@ -234,7 +368,7 @@ describe("Claude tool_reference stripping on a model rewrite", () => {
     align = true,
     stripToolReferences = true
   ) {
-    const rewrittenBody = rewriteClaudeModelBody(body(value), model, align);
+    const rewrittenBody = rewriteClaudeModelBody(body(value), model, align ? new URL("https://relay.example/v1/messages") : undefined);
     return JSON.parse(
       (stripToolReferences ? stripClaudeToolReferenceBlocks(rewrittenBody) : rewrittenBody).toString()
     );
@@ -302,8 +436,8 @@ describe("Claude tool_reference stripping on a model rewrite", () => {
   });
 
   it("strips for the OpenAI-protocol path too, whose converters 422 on the block", () => {
-    // alignThinking=false is the OpenAI-protocol branch; stripping is a separate
-    // flag and must still fire, or anthropicRequestToResponses refuses the
+    // The OpenAI branch omits the native endpoint; stripping is a separate
+    // step and must still fire, or anthropicRequestToResponses refuses the
     // request locally before any upstream sees it.
     const converted = rewritten(withToolReference, "deepseek/deepseek-v4.1-flash", false, true);
     expect(converted.messages[1].content[0].content).toEqual([{

@@ -362,10 +362,12 @@ export function sendBufferedUpstreamRequest(
         let bufferedBytes = 0;
         const streamObserver = options.streamProtocol === "anthropic"
           ? createAnthropicStreamObserver(response.headers, {
+              requestStartedAt: options.startedAt,
               maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes),
               onTerminalEvent: diagnostics ? () => diagnostics.mark("terminal_observed_ms") : undefined
             })
           : createOpenAiStreamObserver(response.headers, {
+              requestStartedAt: options.startedAt,
               maxEventBytes: normalizeMaxObservedStreamEventBytes(options.maxObservedStreamEventBytes),
               onTerminalEvent: diagnostics ? () => diagnostics.mark("terminal_observed_ms") : undefined
             });

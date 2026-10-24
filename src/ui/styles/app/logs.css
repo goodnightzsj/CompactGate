@@ -547,7 +547,7 @@
 }
 
 .log-detail-error p { margin: 3px 0 0; font-family: var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
-.log-detail-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.log-detail-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; }
 .log-detail-metrics .log-detail-field { display: block; padding: 0; border: 0; }
 .log-detail-metrics .log-detail-field dd { margin-top: 4px; font-size: 1.06rem; font-weight: 600; }
 .log-detail-note { margin: 6px 0 0; color: var(--muted); font-size: 0.7rem; font-weight: 400; line-height: 1.5; }
@@ -1033,7 +1033,7 @@
 .log-table-full .log-table-grid {
   width: 100%;
   /* Keep twelve metric columns readable between the card and desktop layouts. */
-  min-width: 960px;
+  min-width: 1080px;
   max-width: 100%;
   table-layout: fixed;
 }
@@ -1080,26 +1080,26 @@
    room — at the original 5% the duration text was clipped at every viewport. */
 .log-table-full .log-col-started { width: 11%; }
 .log-table-full .log-col-status { width: 5%; }
-.log-table-full .log-col-model-route { width: 16%; }
+.log-table-full .log-col-model-route { width: 14%; }
 .log-table-full .log-col-reasoning { width: 5%; }
 .log-table-full .log-col-response-model { width: 10%; }
 .log-table-full .log-col-host { width: 10%; }
 .log-table-full .log-col-key { width: 6%; }
 .log-table-full .log-col-endpoint { width: 6%; }
-.log-table-full .log-col-type { width: 8%; }
-.log-table-full .log-col-token { width: 11%; }
+.log-table-full .log-col-type { width: 11%; }
+.log-table-full .log-col-token { width: 10%; }
 .log-table-full .log-col-first-token { width: 6%; }
 .log-table-full .log-col-duration { width: 6%; }
 
 /* Essential mode keeps the table readable; less frequent fields remain in details. */
-.log-table-full.is-essential .log-table-grid { min-width: 760px; }
+.log-table-full.is-essential .log-table-grid { min-width: 840px; }
 .log-table-full.is-essential .log-col-started { width: 16%; }
 .log-table-full.is-essential .log-col-status { width: 7%; }
-.log-table-full.is-essential .log-col-model-route { width: 25%; }
-.log-table-full.is-essential .log-col-host { width: 19%; }
+.log-table-full.is-essential .log-col-model-route { width: 22%; }
+.log-table-full.is-essential .log-col-host { width: 17%; }
 .log-table-full.is-essential .log-col-token { width: 13%; }
 .log-table-full.is-essential .log-col-first-token { width: 10%; }
-.log-table-full.is-essential .log-col-duration { width: 10%; }
+.log-table-full.is-essential .log-col-duration { width: 15%; }
 
 .log-table-summary .log-table-body {
   overflow-x: hidden;
@@ -1552,7 +1552,6 @@
 .logs-mobile-list .log-detail-close,
 .logs-mobile-list .log-copy-button { min-height: 44px; }
 .logs-mobile-list .log-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.logs-mobile-list .log-detail-metrics .log-detail-field:last-child { grid-column: 1 / -1; }
 .logs-mobile-list .log-detail-field { grid-template-columns: 6rem minmax(0, 1fr); gap: 8px; }
 .logs-mobile-list .log-detail-metrics .log-detail-field { display: block; }
 .logs-mobile-list .log-detail-diagnostics .log-detail-fields { grid-template-columns: minmax(0, 1fr); }

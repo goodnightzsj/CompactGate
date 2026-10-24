@@ -27,6 +27,33 @@ afterEach(async () => {
 });
 
 describe("RequestLogger", () => {
+  it("migrates nullable generation samples without backfilling old timing or changing billing", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-generation-log-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const database = path.join(dir, "logs.sqlite");
+    let logger = new RequestLogger(20, database);
+    const entry = logEntry(0);
+    logger.add(entry);
+    logger.close();
+    // Reopen the same synthetic database with the column absent, as on upgrade.
+    const legacy = new DatabaseSync(database);
+    legacy.exec("ALTER TABLE request_logs DROP COLUMN generation_sample");
+    legacy.close();
+    logger = new RequestLogger(20, database);
+    const generation_sample = { first_output_ms: 1200.5, duration_ms: 1000.25, output_tokens: 800 };
+    try {
+      expect(logger.recent()[0]).toMatchObject({ first_token_ms: entry.first_token_ms, generation_sample: null });
+      logger.add({ ...logEntry(1), generation_sample });
+      expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
+      expect(logger.recent()[0]).toMatchObject({ generation_sample, output_tokens: logEntry(1).output_tokens });
+      expect(logger.page({ limit: 20, offset: 0 }).logs[0].generation_sample).toEqual(generation_sample);
+      expect(logger.getByRequestId(logEntry(1).request_id)).toMatchObject({ status: "found", entry: { generation_sample } });
+    } finally { logger.close(); }
+    logger = new RequestLogger(20, database);
+    try { expect(logger.recent()[0].generation_sample).toEqual(generation_sample); }
+    finally { logger.close(); }
+  });
+
   it("does not checkpoint for deferred maintenance while below the storage cap", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-checkpoint-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

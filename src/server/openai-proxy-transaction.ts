@@ -1,6 +1,7 @@
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import type {
   ClientDisconnectPhase,
+  GenerationSample,
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource,
   OpenAiCompactionMode,
@@ -61,6 +62,7 @@ export interface OpenAiProxyTransactionState {
   requestType: RequestTransport;
   firstTokenMs: number | null;
   usage: TokenUsageMetrics;
+  generationSample: GenerationSample | null;
   sourceModel: string | null;
   targetModel: string | null;
   responseModel: string | null;
@@ -119,6 +121,7 @@ export interface OpenAiProxyTransactionInput {
   responseModel?: string | null;
   firstTokenMs: number | null;
   usage: TokenUsageMetrics;
+  generationSample?: GenerationSample | null;
   errorSummary: string | null;
   providerStatePortability?: ProviderStatePortabilityLog | null;
   compactBridgeReplacements: number;
@@ -158,6 +161,7 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
     requestMetadata: null,
     requestType: "http",
     firstTokenMs: null,
+    generationSample: null,
     usage: emptyUsageMetrics(),
     sourceModel: null,
     targetModel: null,
@@ -192,6 +196,8 @@ export function applyOpenAiProxyUpstreamResult(
   state.clientResponseBody = result.clientResponseBody ?? null;
   state.clientResponseHeaders = result.clientResponseHeaders ?? null;
   state.firstTokenMs = result.firstTokenMs;
+  // The source sample owns its token count; translated client usage must not replace it.
+  state.generationSample = result.streamSummary?.generationSample ?? null;
 }
 
 /**
@@ -222,6 +228,7 @@ export function applyUpstreamFailureToTransaction(
   state.responseBodyBytes = details.responseBodyBytes;
   state.responseHeaders = details.responseHeaders;
   state.firstTokenMs = details.firstTokenMs;
+  state.generationSample = null;
   state.streamTerminalEvent = details.streamSummary?.terminalEvent ?? null;
   state.clientDisconnectPhase = details.clientDisconnectPhase;
   state.streamOversizedEventCount = details.streamSummary?.oversizedEventCount ?? 0;
@@ -250,6 +257,7 @@ type TransactionDerivedField =
   | "sourceModel"
   | "targetModel"
   | "firstTokenMs"
+  | "generationSample"
   | "usage"
   | "errorSummary"
   | "compactBridgeReplacements"
@@ -297,6 +305,7 @@ export function finalizeFromTransaction(
     sourceModel: transaction.sourceModel,
     targetModel: transaction.targetModel,
     firstTokenMs: transaction.firstTokenMs,
+    generationSample: transaction.generationSample,
     usage: transaction.usage,
     errorSummary: transaction.errorSummary,
     compactBridgeReplacements: transaction.compactBridgeReplacements,
@@ -321,9 +330,8 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
   const endpoint = input.requestMetadata?.endpoint ?? endpointFromPath(input.url.pathname);
   // Token-count endpoints return prompt estimates, not generation usage.
   // Apply this at settlement so failure paths cannot record estimates either.
-  const usage = endpoint === "/messages/count_tokens" || endpoint === "/responses/input_tokens"
-    ? emptyUsageMetrics()
-    : input.usage;
+  const tokenCountOnly = endpoint === "/messages/count_tokens" || endpoint === "/responses/input_tokens";
+  const usage = tokenCountOnly ? emptyUsageMetrics() : input.usage;
   const compactionDiagnostics = input.compactionMode
     ? buildCompactionDiagnostics({
         mode: input.compactionMode,
@@ -368,6 +376,8 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
     targetModel: input.targetModel,
     responseModel: input.responseModel,
     firstTokenMs: input.firstTokenMs,
+    generationSample: !tokenCountOnly && input.status >= 200 && input.status < 300 &&
+      input.streamOutcome === "success" && !input.errorSummary ? input.generationSample ?? null : null,
     usage,
     errorSummary: input.errorSummary,
     providerStatePortability: input.providerStatePortability ?? null,

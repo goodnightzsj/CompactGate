@@ -1,4 +1,5 @@
 import type { RequestLogEntry } from "../../shared/types.js";
+import { generationTokensPerSecond, MIN_GENERATION_DURATION_MS } from "../../shared/generation-metrics.js";
 import { formatCompactMetricNumber, formatDurationMs, formatMetricNumber } from "../shared/format.js";
 import { averageOutputTokensPerSecond, hasResponseModelMismatch, responseModelSourceLabel } from "./log-utils.js";
 import { displayTotalTokens, formatCacheHitRate, totalInputTokens } from "./log-token-metrics.js";
@@ -37,4 +38,18 @@ export function LogTimingSummary({ entry }: { entry: RequestLogEntry }) {
 export function outputThroughputLabel(entry: RequestLogEntry): string {
   const rate = averageOutputTokensPerSecond(entry);
   return rate === null ? "-" : `${formatMetricNumber(Math.round(rate * 10) / 10)} tok/s`;
+}
+
+export const GENERATION_THROUGHPUT_HINT = `生成速度 = 源流输出 Token / 首个有效输出至成功终态的耗时。排除首输出前等待和 HTTP 收尾；无可靠样本或不足 ${MIN_GENERATION_DURATION_MS}ms 时显示 -。这是代理观察值，上游缓冲或未展示的思考可能影响读数。`;
+
+export function generationThroughputLabel(entry: RequestLogEntry): string {
+  const rate = generationTokensPerSecond(entry.generation_sample);
+  return rate === null ? "-" : `${formatMetricNumber(Math.round(rate * 10) / 10)} tok/s`;
+}
+
+export function LogThroughputSummary({ entry }: { entry: RequestLogEntry }) {
+  return <span className="log-summary-stack">
+    <span>生成 {generationThroughputLabel(entry)}</span>
+    <small>平均 {outputThroughputLabel(entry)}</small>
+  </span>;
 }

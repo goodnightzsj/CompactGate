@@ -13,6 +13,8 @@ import { extractUsageFromJsonText } from "./usage-record.js";
 import { readJsonResponseId } from "./primary-failover-result.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
 import { isRecord, readTrimmedString } from "../shared/records.js";
+import type { GenerationSample } from "../shared/types.js";
+import { readGenerationSample } from "../shared/generation-metrics.js";
 
 export interface OpenAiStreamSummary {
   sawTerminalEvent: boolean;
@@ -29,11 +31,14 @@ export interface OpenAiStreamSummary {
   responseModel: string | null;
   responseId?: string | null;
   usage: TokenUsageMetrics | null;
+  generationSample?: GenerationSample | null;
 }
 
 export interface OpenAiStreamObserverOptions {
   maxEventBytes?: number;
   onTerminalEvent?: () => void;
+  /** Only source observers receive this; transformed/buffered output has no source timing. */
+  requestStartedAt?: number;
 }
 
 type StreamProtocol = "openai" | "anthropic";
@@ -71,7 +76,8 @@ function createProtocolStreamObserver(
   const observer = new OpenAiStreamObserver(
     protocol,
     normalizeMaxObservedStreamEventBytes(options.maxEventBytes),
-    options.onTerminalEvent
+    options.onTerminalEvent,
+    options.requestStartedAt
   );
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
   if (contentEncoding.includes("br")) {
@@ -97,6 +103,10 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private oversizedEvent = false;
   private discardingLine = false;
   private hasCompletedResponseModel = false;
+  private firstOutputAt: number | null = null;
+  private observedAt: number | null = null;
+  private generationInvalid = false;
+  private finalGenerationUsage: TokenUsageMetrics | null = null;
   private summary: OpenAiStreamSummary = {
     sawTerminalEvent: false,
     sawCompletedEvent: false,
@@ -110,13 +120,15 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     decodeError: false,
     errorSummary: null,
     responseModel: null,
-    usage: null
+    usage: null,
+    generationSample: null
   };
 
   constructor(
     private readonly protocol: StreamProtocol,
     private readonly maxEventBytes: number,
-    private onTerminalEvent?: () => void
+    private onTerminalEvent?: () => void,
+    private readonly requestStartedAt?: number
   ) {}
 
   /**
@@ -128,6 +140,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private readonly decoder = new StringDecoder("utf8");
 
   observe(chunk: Buffer): void {
+    if (this.requestStartedAt !== undefined && !this.summary.sawTerminalEvent) this.observedAt = performance.now();
     const text = this.decoder.write(chunk);
     let offset = 0;
 
@@ -155,6 +168,8 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   markDecodeError(): void {
     this.summary.decodeError = true;
+    this.summary.generationSample = null;
+    this.generationInvalid = true;
   }
 
   private observeLine(line: string): void {
@@ -195,8 +210,12 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
     this.summary.eventCount += 1;
     const data = this.dataLines.join("\n").trim();
-    const eventType = this.readEventType(data);
+    const record = this.readEventRecord(data);
+    const eventType = typeof record?.type === "string" ? record.type : null;
+    const wasTerminal = this.summary.sawTerminalEvent;
+    if (!wasTerminal && this.eventName && eventType && this.eventName !== eventType) this.generationInvalid = true;
     this.recordEvent(this.eventName, eventType, data);
+    if (!wasTerminal) this.recordGeneration(record, eventType ?? this.eventName, data);
     this.notifyTerminal();
 
     this.eventName = null;
@@ -300,21 +319,45 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     }
   }
 
-  private readEventType(data: string): string | null {
+  private recordGeneration(record: Record<string, unknown> | null, type: string | null, data: string): void {
+    if (this.requestStartedAt === undefined || this.observedAt === null || this.generationInvalid) return;
+    if (!data) return;
+    if (!record && data !== "[DONE]") {
+      this.generationInvalid = true;
+      return;
+    }
+    if (this.firstOutputAt === null && record && hasGenerationOutput(this.protocol, type, record)) {
+      this.firstOutputAt = this.observedAt;
+    }
+    // Start envelopes can report provisional output counts, not a completed measurement.
+    const finalUsageEvent = this.protocol === "anthropic"
+      ? type === "message_delta" || type === "message_stop"
+      : type === "response.completed" || Array.isArray(record?.choices);
+    if (finalUsageEvent) {
+      const usage = extractUsageFromJsonText(data);
+      if (usage) this.finalGenerationUsage = mergeUsage(this.finalGenerationUsage, usage);
+    }
+    if (!this.summary.sawTerminalEvent || this.summary.sawFailedEvent || this.summary.sawIncompleteEvent) return;
+    const output = this.finalGenerationUsage?.outputTokens;
+    if (this.firstOutputAt === null) return;
+    this.summary.generationSample = readGenerationSample({
+      first_output_ms: this.firstOutputAt - this.requestStartedAt,
+      duration_ms: this.observedAt - this.firstOutputAt,
+      output_tokens: output
+    });
+  }
+
+  private readEventRecord(data: string): Record<string, unknown> | null {
     if (!data || data === "[DONE]") {
       return null;
     }
 
     try {
       const parsed = JSON.parse(data) as unknown;
-      if (isRecord(parsed) && typeof parsed.type === "string") {
-        return parsed.type;
-      }
+      return isRecord(parsed) ? parsed : null;
     } catch {
       return null;
     }
-
-    return null;
   }
 
   private observeLineSegment(segment: string, lineComplete: boolean): void {
@@ -370,7 +413,10 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     if (!this.oversizedEvent) {
       this.summary.oversizedEventCount += 1;
       // Missing payload may contain newer usage; an earlier count is not final.
-      if (!this.summary.sawTerminalEvent) this.summary.usage = null;
+      if (!this.summary.sawTerminalEvent) {
+        this.summary.usage = null;
+        this.generationInvalid = true;
+      }
     }
     this.oversizedEvent = true;
   }
@@ -381,6 +427,41 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     this.retainedEventBytes = 0;
     this.oversizedEvent = false;
   }
+}
+
+/** Unlike the broad output-presence heuristic, timing requires a known, non-empty output. */
+function hasGenerationOutput(protocol: StreamProtocol, type: string | null, record: Record<string, unknown>): boolean {
+  const nonEmpty = (value: unknown): boolean => typeof value === "string" && value.length > 0;
+  if (protocol === "anthropic") {
+    const delta = record.delta;
+    if (type === "content_block_delta" && isRecord(delta)) {
+      return (delta.type === "text_delta" && nonEmpty(delta.text)) ||
+        (delta.type === "thinking_delta" && nonEmpty(delta.thinking)) ||
+        (delta.type === "input_json_delta" && nonEmpty(delta.partial_json));
+    }
+    const block = record.content_block;
+    return type === "content_block_start" && isRecord(block) && (
+      (block.type === "text" && nonEmpty(block.text)) ||
+      (block.type === "thinking" && nonEmpty(block.thinking)) ||
+      (block.type === "tool_use" && nonEmpty(block.name))
+    );
+  }
+  if (["response.output_text.delta", "response.reasoning_summary_text.delta", "response.reasoning_text.delta",
+    "response.reasoning.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta"].includes(type ?? "")) {
+    return nonEmpty(record.delta);
+  }
+  const item = record.item;
+  if (type === "response.output_item.added" && isRecord(item) &&
+    (item.type === "function_call" || item.type === "custom_tool_call")) {
+    return nonEmpty(item.name) || nonEmpty(item.arguments) || nonEmpty(item.input);
+  }
+  return Array.isArray(record.choices) && record.choices.some((choice: unknown) => {
+    if (!isRecord(choice) || !isRecord(choice.delta)) return false;
+    const delta = choice.delta;
+    return nonEmpty(delta.content) || nonEmpty(delta.reasoning_content) ||
+      (Array.isArray(delta.tool_calls) && delta.tool_calls.some((call: unknown) =>
+        isRecord(call) && isRecord(call.function) && (nonEmpty(call.function.name) || nonEmpty(call.function.arguments))));
+  });
 }
 
 class CompressedOpenAiStreamObserver implements OpenAiStreamObserverHandle {

@@ -432,6 +432,15 @@ export interface RoutePreviewResponse {
   scene_text_bytes?: number;
 }
 
+/** One source-stream attempt's measurements; never an additional billing counter. */
+export interface GenerationSample {
+  /** Elapsed from the logical request start to its first meaningful output event. */
+  first_output_ms: number;
+  /** First meaningful output to the source protocol's successful terminal event. */
+  duration_ms: number;
+  output_tokens: number;
+}
+
 export interface RequestLogEntry {
   /** SQLite insert ID; absent on unpersisted events and legacy payloads. */
   sequence?: number;
@@ -471,6 +480,7 @@ export interface RequestLogEntry {
   duration_ms: number;
   /** Time to the first upstream response data chunk, not the first generated token. */
   first_token_ms: number | null;
+  generation_sample?: GenerationSample | null;
   input_tokens: number | null;
   output_tokens: number | null;
   cached_input_tokens: number | null;

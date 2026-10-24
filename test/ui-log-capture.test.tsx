@@ -5,7 +5,7 @@ import { DashboardRecentRequests } from "../src/ui/dashboard/DashboardRecentRequ
 import { LogRowCells } from "../src/ui/logs/LogRowCells.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
 import { LogDetailPanel } from "../src/ui/logs/LogDetailRow.js";
-import { LogTokenSummary } from "../src/ui/logs/LogSummary.js";
+import { LogThroughputSummary, LogTokenSummary } from "../src/ui/logs/LogSummary.js";
 import { formatDurationMs } from "../src/ui/shared/format.js";
 import {
   CaptureRequestError,
@@ -148,16 +148,38 @@ it("retains responsive model diagnostics and groups throughput with transport", 
 it("keeps response evidence, token breakdown and throughput in both log summaries", async () => {
   const { LogMobileCard } = await import("../src/ui/logs/LogMobileCard.js");
   const entry = { ...requestLog("none"), response_model: "declared-other", target_model: "target",
-    input_tokens: 100, output_tokens: 50, duration_ms: 2000 };
+    input_tokens: 100, output_tokens: 50, duration_ms: 2000,
+    generation_sample: { first_output_ms: 500, duration_ms: 500, output_tokens: 50 } };
   const desktop = renderToStaticMarkup(<table><tbody><tr><LogRowCells entry={entry} showAllColumns={false} /></tr></tbody></table>);
+  const full = renderToStaticMarkup(<table><tbody><tr><LogRowCells entry={entry} showAllColumns /></tr></tbody></table>);
   const mobile = renderToStaticMarkup(<LogMobileCard entry={entry} logKey="test" detailId="detail-test" expanded={false} onToggle={() => {}} />);
-  for (const markup of [desktop, mobile]) {
+  for (const markup of [desktop, full, mobile]) {
     expect(markup).toContain("响应声明不同");
     expect(markup).toContain("declared-other");
-    expect(markup).toContain("25 tok/s");
+    expect(markup).toContain("生成 100 tok/s");
+    expect(markup).toContain("平均 25 tok/s");
     expect(markup).toContain("入 ");
     expect(markup).toContain(" · 出 ");
   }
+  const detail = renderToStaticMarkup(<LogDetailPanel entry={entry} />);
+  expect(detail).toContain("<dt>生成速度</dt><dd>100 tok/s</dd>");
+  expect(detail).toContain("<dt>平均输出吞吐</dt><dd>25 tok/s</dd>");
+  expect(detail).toContain("<dt>采样输出（非另计用量）</dt><dd>50</dd>");
+  expect(detail).toContain("首个有效输出至成功终态");
+  expect(detail).toContain("不足 100ms 时显示 -");
+});
+
+it("keeps average throughput when generation is unknown and never derives generation from first response", () => {
+  const entry = { ...requestLog("none"), output_tokens: 50, duration_ms: 2000, first_token_ms: 1500 };
+  for (const generation_sample of [undefined, null, { first_output_ms: 500, duration_ms: 99, output_tokens: 50 }]) {
+    const markup = renderToStaticMarkup(<LogThroughputSummary entry={{ ...entry, generation_sample }} />);
+    expect(markup).toContain("生成 -");
+    expect(markup).toContain("平均 25 tok/s");
+  }
+  const zero = renderToStaticMarkup(<LogThroughputSummary entry={{ ...entry,
+    generation_sample: { first_output_ms: 500, duration_ms: 1000, output_tokens: 0 }
+  }} />);
+  expect(zero).toContain("生成 0 tok/s");
 });
 
 it("offers one keyboard entry per recent request with full metadata and instructions", () => {

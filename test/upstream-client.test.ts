@@ -1,4 +1,5 @@
 import http from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { requestJson, UpstreamStatusError } from "../src/server/upstream-json-client.js";
@@ -183,6 +184,36 @@ describe("sendBufferedUpstreamRequest", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(upstreamBody);
     expect(bufferedBody.toString("utf8")).toBe("01234567");
+  });
+
+  it("keeps generation sampling independent of the diagnostic response buffer", async () => {
+    const output = 'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n';
+    const terminal = 'event: response.completed\ndata: {"type":"response.completed","response":{"usage":{"output_tokens":100}}}\n\n';
+    const upstream = await startUpstream(async (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(output);
+      await delay(150);
+      res.end(terminal);
+    });
+    let result: BufferedUpstreamResult | undefined;
+    const proxy = http.createServer(async (req, res) => {
+      result = await sendBufferedUpstreamRequest({
+        req, res, upstream: new URL(upstream.url), startedAt: performance.now(),
+        timeoutMs: 2000, timeoutMessage: "synthetic timeout", requestHeaders: {},
+        body: Buffer.alloc(0), extraResponseHeaders: {}, maxBufferedResponseBytes: 8
+      });
+    });
+    await listen(proxy);
+    trackServer(proxy);
+    const address = proxy.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP server address.");
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/test`);
+    expect(await response.text()).toBe(output + terminal);
+    await expect.poll(() => result).toBeDefined();
+    expect(result!.responseBodyTruncated).toBe(true);
+    expect(result!.responseBody.length).toBe(8);
+    expect(result!.streamSummary?.generationSample?.output_tokens).toBe(100);
+    expect(result!.streamSummary?.generationSample?.duration_ms).toBeGreaterThanOrEqual(100);
   });
 
   it("bounds OpenAI SSE observer event retention without truncating the client stream", async () => {
