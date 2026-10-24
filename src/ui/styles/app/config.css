@@ -1802,6 +1802,7 @@
 
 .claude-model-map-grid {
   display: grid;
+  align-items: start;
   gap: 8px;
 }
 
@@ -1944,6 +1945,114 @@
 
 .model-row-hint {
   grid-column: 1 / -1;
+}
+
+.model-bulk-offer {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 16px;
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--hairline));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface-raised));
+}
+
+.model-bulk-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-bulk-optional {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: var(--text-small);
+}
+
+.model-bulk-heading h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--text-body);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.model-bulk-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 12%, var(--hairline));
+}
+
+.model-bulk-offer .model-bulk-model {
+  margin: 0;
+  color: var(--accent);
+  font-size: var(--text-body);
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.model-bulk-roles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-bulk-roles li {
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-small);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.model-bulk-offer .model-bulk-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+
+.model-bulk-note > span {
+  display: block;
+  color: var(--muted);
+}
+
+.model-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-bulk-actions .btn {
+  min-height: 44px;
+}
+
+.model-bulk-result {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--jade);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+@container model-map (max-width: 480px) {
+  .model-bulk-actions .btn-primary { flex: 1; }
+}
+
+@container model-map (max-width: 360px) {
+  .model-bulk-roles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .logging-storage-panel {

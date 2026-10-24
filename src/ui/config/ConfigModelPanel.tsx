@@ -1,6 +1,6 @@
 import type * as React from "react";
 import type {
-  ClaudeModelMapRole,
+  ClaudeModelMap,
   ConfigProfileScope,
   PrimaryReasoningEffort,
   PublicConfig
@@ -44,12 +44,12 @@ export function ConfigModelPanel({
     fetchModels
   } = useUpstreamModels("/api/openai/models", primarySourceKey);
 
-  function updateClaudeModelMap(role: ClaudeModelMapRole, value: string) {
+  function updateClaudeModelMap(patch: Partial<ClaudeModelMap>) {
     onFormChange((previous) => ({
       ...previous,
       claudeModelMap: {
         ...previous.claudeModelMap,
-        [role]: value
+        ...patch
       }
     }));
   }

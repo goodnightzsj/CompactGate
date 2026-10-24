@@ -526,10 +526,13 @@ Codex 与 Claude 请求都可携带 `x-compactgate-profile: PROFILE_ID` 做单�
 - 切换 `split` / `primary` 模式
 - 切换 linked / custom 模型改写方式
 - 从已保存的 Primary/Claude 上游按需拉取模型并选择思考强度，或保留自定义兼容模型
+- Claude 模型选择后可确认同步到全部 6 个角色槽位，也可保留单槽位修改
 - 直接保存 API Key，为同一档案的多把密钥设置优先级
 - 预览某条请求会走哪条路由
 - 查看健康状态
 - 实时查看最近日志
+
+Claude 每次成功拉取模型目录后，首次选择只修改当前槽位，并就地展示模型名称、六槽位范围与覆盖提醒。点击“应用到全部 6 个槽位”才会统一填写；选择“仅此槽位”或在确认区域按 Escape 不会覆盖其他槽位，重新拉取前不重复提示。批量操作仍只更新草稿，保存配置后生效，之后可继续逐项调整；不会修改 Codex 模型设置。
 
 配置页五个 Tab 分别使用 `/config/profiles`、`/config/routes`、`/config/model`、`/config/logging` 和 `/config/portable`，可通过浏览器前进、后退回顾切换历史。旧 `/config/preview` 入口进入路由工作区。
 
