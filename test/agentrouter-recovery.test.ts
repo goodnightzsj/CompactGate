@@ -38,8 +38,10 @@ const requestBody = (stream = false) => ({
 });
 const betaHeaders = { "x-codex-beta-features": "remote_compaction_v2" };
 
-describe.each(["direct", "Go-wrapped"])("agentrouter recovery through the HTTP proxy (%s)", (format) => {
-  const upstreamError = format === "direct" ? azureError : { error: {
+describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recovery through the HTTP proxy (%s)", (format) => {
+  const upstreamError = format === "direct" ? azureError : format === "Responses-prefixed" ? { error: {
+    ...azureError.error, message: `OpenAI Responses bad request: ${azureError.error.message}`
+  } } : { error: {
     type: "invalid_request_error", param: "", code: null,
     message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
       "gateway.Error.code of type string, raw: " + JSON.stringify({ error: { ...azureError.error, code: 0 } }) +

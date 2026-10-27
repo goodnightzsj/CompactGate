@@ -380,7 +380,7 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 明确 `400 invalid_encrypted_content` 或 `previous_response_not_found` 直接执行一次错误专用修复。修复后仍返回同一明确 400 时,若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；错误专用修复按错误位置插入。所有请求固定在当前 profile/host，最多发送 4 个不同 body，且每次都从同一份不可变请求体派生。只有完整成功响应才更新持久绑定。
 
-`agentrouter.org`（含子域）的原生 Responses 另有一项定向恢复：首发收到 `The requested item was created under a different Azure OpenAI resource...` 的 HTTP 400 后，若 `store=false`、无存储引用且 compaction 携带密文，只删除 `compaction.id`，在同一上游重试一次。也识别已知 Go 数字 `error.code` 解码失败包装中的一层 `raw:` JSON 与可选末尾 trace；未知包装、畸形内层 JSON 不用于该定向恢复。密文与其余上下文保持不变；第二次失败直接返回，不继续 CPA/strict，原始错误不被解包结果替换。此尝试不保证跨资源密文可用，且 `state_portability=off` 时不启用。
+`agentrouter.org`（含子域）的原生 Responses 另有一项定向恢复：首发收到 `The requested item was created under a different Azure OpenAI resource...` 的 HTTP 400 后，若 `store=false`、无存储引用且 compaction 携带密文，只删除 `compaction.id`，在同一上游重试一次。也识别完整 Azure 原文前紧邻的固定 `OpenAI Responses bad request: ` 前缀，以及已知 Go 数字 `error.code` 解码失败包装中的一层 `raw:` JSON 与可选末尾 trace；未知包装、任意引用、递归包装和畸形内层 JSON 不用于该定向恢复。密文与其余上下文保持不变；第二次失败直接返回，不继续 CPA/strict，原始错误不被解包结果替换。此尝试不保证跨资源密文可用，且 `state_portability=off` 时不启用。
 
 通过 `POST /api/config/profiles/apply` 手动应用 Codex profile 是一次权威切换：CompactGate 会清除旧的进程内会话 stickiness，并强制下一次 Primary 选择新 profile，即使 `auto_schedule=true`。自动调度内部同步 active profile 不触发该强制逻辑。
 

@@ -205,6 +205,17 @@ describe("agentrouter Azure error envelopes", () => {
     expect(recover({ error: { ...direct.error, code } })?.removedIds).toBe(1);
   });
 
+  it.each([0, "0", null, undefined])("recognizes the Responses bad-request prefix independently of code=%s", (code) => {
+    const repair = recover({ error: { type: "invalid_request_error", param: "", code,
+      message: `OpenAI Responses bad request: ${message} [trace_id=6f7bf4f452d030a24110788b049c1a4b]`
+    } });
+    expect(repair?.removedIds).toBe(1);
+    expect(JSON.parse(repair!.body.toString()).input).toEqual([
+      { type: "compaction", encrypted_content: "opaque-state" }
+    ]);
+    expect(JSON.parse(body.toString()).input[0].id).toBe("cmp_synthetic");
+  });
+
   it.each([
     ["bare JSON", wrap(JSON.stringify(direct))],
     ["trace suffix", wrap(JSON.stringify(direct), `\n[trace_id=${"a".repeat(32)}]`)],
@@ -223,6 +234,12 @@ describe("agentrouter Azure error envelopes", () => {
 
   it.each([
     ["quoted Azure message", { error: { ...direct.error, message: `Other error quoting: ${message}` } }],
+    ["quoted Responses wrapper", { error: { ...direct.error, message: `Quoted: OpenAI Responses bad request: ${message}` } }],
+    ["Responses wrapper quoting Azure", { error: { ...direct.error, message: `OpenAI Responses bad request: Quoted: ${message}` } }],
+    ["other Responses error", { error: { ...direct.error, message: "OpenAI Responses bad request: Invalid model" } }],
+    ["incomplete Azure message", { error: { ...direct.error, message: `OpenAI Responses bad request: ${message.slice(0, -1)}` } }],
+    ["wrong Responses error type", { error: { type: "other_error", message: `OpenAI Responses bad request: ${message}` } }],
+    ["nested Responses wrapper", { error: { ...direct.error, message: `OpenAI Responses bad request: OpenAI Responses bad request: ${message}` } }],
     ["unknown wrapper", { error: { ...direct.error, message: `proxy failure, raw: ${JSON.stringify(direct)}` } }],
     ["invalid JSON", wrap(JSON.stringify(direct).slice(0, -1))],
     ["HTML", wrap(`<html>${message}</html>`)],

@@ -194,7 +194,8 @@ function isAgentrouterAzureResourceError(error: unknown): boolean {
   if (!isRecord(error) || error.type !== "invalid_request_error" || typeof error.message !== "string") return false;
   const message = "The requested item was created under a different Azure OpenAI resource. " +
     "Use the same resource that created the item to access it.";
-  if (error.message.startsWith(message)) return true;
+  if (error.message.startsWith(message) ||
+    error.message.startsWith(`OpenAI Responses bad request: ${message}`)) return true;
 
   // Decode only the observed Go wrapper; quoted errors and arbitrary nested text must not trigger replay.
   const prefix = "failed to decode error response: json: cannot unmarshal number into Go struct field ";

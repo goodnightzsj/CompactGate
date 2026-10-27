@@ -196,3 +196,11 @@ CompactGate 的服务端是 TypeScript。现有 JSON 解析能够接收数字；
 本次提交仅含 `host-quirks.ts`、三个相关测试文件、README 的 agentrouter 段落及本文，共 6 个文件；其他已有工作区修改不混入。llmdoc 仅按授权本地同步，继续遵循既有忽略规则。
 
 另在 `/tmp/compactgate-azure-commit.L3gSeG` 从 `dc7c4f5` 导出构建所需源码与测试，只应用这 6 个文件的暂存差异，并按该提交的锁文件安装隔离依赖。完整 `npm run check` 按原顺序执行差异检查、样式检查、严格类型检查、全测试和前后端构建，exit 0：140 个测试文件、1492 项通过、1 项既有生产抓包条件跳过。测试数少于工作区验证，是因为未混入其他尚未提交的测试和功能修改。未复制生产配置、凭据或抓包，未部署。
+
+## 后续兼容：Responses bad-request 前缀（2026-10-27）
+
+用户补充的 `invalid_request_error` 在完整 Azure 原文前多出固定的 `OpenAI Responses bad request: `，其 `code=null` 和尾部 trace 已在既有支持范围内。原谓词因首部不匹配而漏判；新增回归在原实现上出现19项预期失败，其余129项通过。
+
+本次只在 [host-quirks.ts](../src/server/host-quirks.ts) 的原私有识别谓词接受这一紧邻完整 Azure 原文的前缀，不改恢复协调器。只在此前批准的 agentrouter、HTTP 400、原生 Responses、recover_on_error 及可安全去 ID 的条件下重试一次；不能安全修复或第二次仍失败时继续保留原错误，不升级 CPA/strict，不删除密文。未知前缀、引用、不完整消息、错误类型不符和递归包装不新增恢复行为。
+
+三个既有测试文件增加相同报文形态的识别、守卫和真实本地 HTTP JSON/SSE 回归，覆盖同上游与凭据、只删 compaction.id、第二次失败直接返回及 gzip。实际 Azure 后端能否接受仍需真实请求验证；本次不读取生产凭据/历史正文，不部署，不扩大 host 支持范围。执行与隔离验证记录见 `.codex-tasks/20261027-azure-responses-prefix/`。
