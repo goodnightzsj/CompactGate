@@ -10,6 +10,7 @@ import {
   providerStateTargetHealthKey
 } from "../src/server/provider-state-evidence.js";
 import type { BufferedUpstreamResult } from "../src/server/upstream-client.js";
+import { agentrouterResourceErrorCases } from "./helpers/agentrouter-resource-errors.js";
 
 function validEncryptedContent(): string {
   const payload = Buffer.alloc(73);
@@ -265,20 +266,9 @@ describe("provider-state recovery state machine", () => {
   });
 });
 
-describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter compaction ID recovery (%s)", (format) => {
-  const directError = { error: {
-    message: "The requested item was created under a different Azure OpenAI resource. " +
-      "Use the same resource that created the item to access it.\n[trace_id=15d282710125406b3b990feef345de65]",
-    type: "invalid_request_error", param: "", code: null
-  } };
-  const error = format === "direct" ? directError : format === "Responses-prefixed" ? { error: {
-    ...directError.error, message: `OpenAI Responses bad request: ${directError.error.message}`
-  } } : { error: {
-    type: "invalid_request_error", code: null,
-    message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
-      "***.***.code of type string, raw: " + JSON.stringify({ error: { ...directError.error, code: 0 } }) +
-      `\n[trace_id=${"a".repeat(32)}]`
-  } };
+describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
+  (host) => agentrouterResourceErrorCases.map((fixture) => ({ host, ...fixture }))
+))("$host compaction ID recovery ($name)", ({ host: allowedHost, response: error }) => {
   const request = () => ({
     model: "synthetic-model", store: false, previous_response_id: null,
     input: [
@@ -295,7 +285,7 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter compa
     const canonicalBody = Buffer.from(JSON.stringify(original));
     const sent: Buffer[] = [];
     const recovery = await runProviderStateMigration({
-      canonicalBody, upstreamHost: "agentrouter.org", targetStateDomain: "same-domain",
+      canonicalBody, upstreamHost: allowedHost, targetStateDomain: "same-domain",
       canReplay: () => true,
       startGenericRecovery: () => { throw new Error("must not run broader cleanup"); },
       send: async (body) => {
@@ -325,10 +315,10 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter compa
   ])("does not perform the host repair for %s", async (scenario) => {
     const body: Record<string, unknown> = request();
     const input = body.input as Array<Record<string, unknown>>;
-    let host = "agentrouter.org";
+    let host = allowedHost;
     let result = upstreamResult(400, error);
-    if (scenario === "other-host") host = "anyrouter.top";
-    if (scenario === "lookalike-host") host = "agentrouter.org.example";
+    if (scenario === "other-host") host = "other.example";
+    if (scenario === "lookalike-host") host = `${allowedHost}.example`;
     if (scenario === "other-error") result = upstreamResult(400, { error: { type: "invalid_request_error", message: "bad input" } });
     if (scenario === "success") result = upstreamResult(200, { output: [] });
     if (scenario === "status-500") result.status = 500;
@@ -362,7 +352,7 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter compa
   it("recognizes gzip errors on a subdomain without changing encrypted context", async () => {
     let sends = 0;
     const recovery = await runProviderStateMigration({
-      canonicalBody: Buffer.from(JSON.stringify(request())), upstreamHost: "api.agentrouter.org",
+      canonicalBody: Buffer.from(JSON.stringify(request())), upstreamHost: `api.${allowedHost}`,
       targetStateDomain: "same-domain", canReplay: () => true, startGenericRecovery: () => null,
       send: async () => {
         sends += 1;

@@ -1,5 +1,5 @@
 import type { BufferedUpstreamResult } from "./upstream-client.js";
-import { recoverAgentrouterCompactionIds } from "./host-quirks.js";
+import { recoverResourceMismatchCompactionIds } from "./host-quirks.js";
 import {
   analyzeProviderState,
   compileProviderStateAttempt,
@@ -100,7 +100,7 @@ export async function runProviderStateMigration(
       return { result, body: compiled.body, attempts, trigger };
     }
 
-    const hostRepair = recoverAgentrouterCompactionIds(
+    const hostRepair = recoverResourceMismatchCompactionIds(
       options.upstreamHost ?? "", compiled.body, result.status, result.responseBody
     );
     if (hostRepair) {

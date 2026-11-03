@@ -204,3 +204,63 @@ CompactGate 的服务端是 TypeScript。现有 JSON 解析能够接收数字；
 本次只在 [host-quirks.ts](../src/server/host-quirks.ts) 的原私有识别谓词接受这一紧邻完整 Azure 原文的前缀，不改恢复协调器。只在此前批准的 agentrouter、HTTP 400、原生 Responses、recover_on_error 及可安全去 ID 的条件下重试一次；不能安全修复或第二次仍失败时继续保留原错误，不升级 CPA/strict，不删除密文。未知前缀、引用、不完整消息、错误类型不符和递归包装不新增恢复行为。
 
 三个既有测试文件增加相同报文形态的识别、守卫和真实本地 HTTP JSON/SSE 回归，覆盖同上游与凭据、只删 compaction.id、第二次失败直接返回及 gzip。实际 Azure 后端能否接受仍需真实请求验证；本次不读取生产凭据/历史正文，不部署，不扩大 host 支持范围。执行与隔离验证记录见 `.codex-tasks/20261027-azure-responses-prefix/`。
+
+## 后续实现：自动识别表现层变体（2026-11-03）
+
+真实日志 #273551（2026-11-03 09:53:41 +08:00，trace `2a4a42762771b1b5782e6770af578193`）来自 agentrouter.org，返回 HTTP 400。日志原文的供应商位置是 `***`，不是用户手工脱敏；仅有一次 `original`，decision/trigger 为 `observed/none`。当前源码和构建产物的离线断言均证实此形态漏判，换回 Azure 即识别。状态计数为 56 个加密 reasoning、1 个 compaction、无 previous response；正文未保留，不能确认此条 compaction 是否具备安全去 ID 条件。
+
+用户要求以后类似变体自动识别，因此不再逐项枚举 Azure/星号，也不新增一套恢复状态机：
+
+- 在 `host-quirks.ts` 中，以锚定的两句完整英文语义匹配“item 创建于不同 OpenAI resource”及“使用创建它的同一 resource 访问”。只归一化检测副本的大小写/空白，不改原错误或原请求。
+- 供应商位置允许零到六个有界名称/脱敏 token，每个至多 64 字符，支持 ASCII 字母数字、下划线、连字符、星号和方括号；不根据品牌枚举。句号、冒号和引号不能被名称位置吞入。
+- 允许一层诊断前缀：至多三个名称 token，随后为 Responses/upstream/gateway/proxy/API/HTTP 400 和 bad request/error。仍不扫描任意位置、不解包任意错误链。两个完整语句及句末点号仍是明确证据，否定或缺失语句不匹配。
+- 已知 Go 数字 code 解码包装接受格式化空白和大小写变化，但只解析一层合法 raw JSON；内层类型仍须为 invalid_request_error，消息复用同一识别器，可含上述诊断前缀。保留既有末尾 trace 合同。
+- host/status/type、原生协议、recover_on_error、存储引用和 replay guard 不变；仍只移除可安全去掉的 compaction ID，同上游/凭据重试一次，零安全改动或第二次失败时停止且不进入 CPA/strict。
+
+新增共用合成 fixture 同时驱动识别、协调器和 HTTP JSON/SSE 测试，覆盖错误原文、变长脱敏、多词供应商、无品牌、大小写/空白、诊断前缀和 Go 内层组合；反例覆盖引用、否定、缺失补救语句、错误资源类型、插入语句及超长供应商文本。首次在旧实现运行时 144 项预期失败、258 项通过，证实新增形态确实暴露旧缺口；修复后的最终验证记录在任务工件中。
+
+自动识别的边界是该错误族的表现层变化，不是所有 400 或任意自然语言改写。实际后端资源归属仍由中转层控制；同一 URL/key 和本地 state domain 相同不能证明 Azure resource 相同。此修复不读取凭据、不重放真实历史、不切换现有服务，实施与隔离验证证据见 `.codex-tasks/20261103-resource-error-variants/`。
+
+最终隔离验证：三个相关测试文件 404 项通过；按锁文件补齐隔离依赖后，全量 151 个文件、2032 项通过，1 项既有私有抓包 fixture 缺失而跳过。样式、严格类型和前后端构建均通过；构建产物的 12 类错误识别断言通过且未改原始请求。生产仍为 `127.0.0.1:7865`、PID `92420`，根 dist 的 214 个文件整体摘要前后一致。没有部署；这些结果不等同于真实上游去 ID A/B。
+
+## 扩展至 anyrouter（2026-11-03）
+
+用户随后要求 anyrouter 同样启用，并授权更新文档、提交及 push。定向恢复入口统一为 `recoverResourceMismatchCompactionIds`，白名单为 `agentrouter.org`、`anyrouter.top` 及两者子域；`anyrouter.top.example`、`notanyrouter.top` 等相似域名不匹配。错误识别、仅删 compaction ID、单次重试与失败保留边界共用原实现，不添加配置或独立恢复器。anyrouter 首发请求不启用 agentrouter 的普通 item ID 清理；其他 host quirk、协议和调度行为不变。
+
+### 会识别的报文
+
+以下 HTTP 400 响应可被识别；`code` 的数字、字符串、null 或缺失不影响本规则：
+
+```json
+{
+  "error": {
+    "message": "OpenAI Responses bad request: The requested item was created under a different *** OpenAI resource. Use the same resource that created the item to access it. [trace_id=2a4a42762771b1b5782e6770af578193]",
+    "type": "invalid_request_error",
+    "param": "",
+    "code": null
+  }
+}
+```
+
+同样的 `error.type` 下，以下完整 `message` 也匹配：
+
+```text
+The requested item was created under a different Azure OpenAI resource. Use the same resource that created the item to access it.
+Relay-X Responses error: The requested item was created under a different [REDACTED] OpenAI resource. Use the same resource that created the item to access it.
+HTTP 400 Bad Request: The requested item was created under a different Vendor-42 Europe OpenAI resource. Use the same resource that created the item to access it.
+```
+
+上述消息的大小写、换行/重复空白变化，以及符合既有 Go `.code of type string, raw:` 包装合同的一层 JSON，也复用同一识别器。前缀、供应商 token 数量与字符集合仍受上节所述边界约束。
+
+识别不等于无条件重试：还必须是受支持域名的原生 Responses、`recover_on_error`、首发完整 HTTP 400、客户端仍可重放；请求需 `store=false`、无 previous response 或 item reference，并至少有一个同时带字符串 ID 与非空 `encrypted_content` 的 compaction。只删除这种 compaction 的 `id`，不删密文或其他上下文。已识别但不能安全去 ID 时直接保留失败，不转入 CPA/strict。
+
+### 不触发本规则的例子
+
+- `OpenAI Responses bad request: Invalid model` 或 `Invalid API key`：不是资源归属错误。
+- 只有 `The requested item was created under a different Azure OpenAI resource.`：缺少完整第二句。
+- `Other error quoting: ...`、否定语句、未知/递归包装或畸形内层 JSON：不猜测引用内容为实际故障。
+- HTTP 502、`error.type=other_error`、白名单外域名、关闭 portability：不进入这项定向恢复；其他既有规则不因此改变。
+
+anyrouter 扩展的旧实现基线为 231 failed / 578 passed；扩大共享白名单后，三个相关测试文件的 809 项全部通过。测试矩阵包含两家域名、anyrouter 子域、12 类报文、JSON/SSE/gzip、原样首发、同 URL/凭据、最多两次发送及原有安全守卫。执行记录见 `.codex-tasks/20261103-anyrouter-recovery-release/`。本地 llmdoc 已按授权同步，仍遵循既有 Git 忽略规则。
+
+正式门禁在隔离 Git clone `/tmp/compactgate-anyrouter-release.CKPb58` 按原顺序执行完整 `npm run check`，exit 0：差异、样式、严格类型、全量测试和前后端构建均通过；151 个测试文件、2437 项通过，1 项缺少既有私有抓包 fixture 而跳过。编译产物另通过 48 组域名/报文组合、4 项排除条件及原始 Buffer 不变断言。隔离副本仅使用源码、锁文件依赖和合成 fixture，无生产配置或凭据。生产仍为 PID `92420`、`127.0.0.1:7865`，根 dist 的 214 个文件整体摘要未变。未执行部署、真实上游重放或密文跨资源解密验证。

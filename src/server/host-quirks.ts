@@ -157,16 +157,18 @@ function stripResponsesInputItemIds(body: Buffer): Buffer {
   return changed ? Buffer.from(JSON.stringify({ ...parsed, input: next })) : body;
 }
 
+const RESOURCE_MISMATCH_HOSTS = ["agentrouter.org", "anyrouter.top"];
+
 /** A matched error with no safe ID removal still stops broader state cleanup. */
-export function recoverAgentrouterCompactionIds(
+export function recoverResourceMismatchCompactionIds(
   host: string,
   body: Buffer,
   status: number,
   responseBody: Buffer
 ): { body: Buffer; removedIds: number } | null {
-  if (status !== 400 || !hostMatchesSuffix(host, "agentrouter.org")) return null;
+  if (status !== 400 || !RESOURCE_MISMATCH_HOSTS.some((candidate) => hostMatchesSuffix(host, candidate))) return null;
   const response = parseJsonRecord(responseBody);
-  if (!isAgentrouterAzureResourceError(response?.error)) return null;
+  if (!isResourceMismatchError(response?.error)) return null;
 
   const unchanged = { body, removedIds: 0 };
   const parsed = parseJsonRecord(body);
@@ -190,22 +192,33 @@ export function recoverAgentrouterCompactionIds(
   return removedIds > 0 ? { body: Buffer.from(JSON.stringify(parsed)), removedIds } : unchanged;
 }
 
-function isAgentrouterAzureResourceError(error: unknown): boolean {
+// Both affirmative sentences are required; bounded labels cannot absorb quoted clauses.
+const RESOURCE_MISMATCH_MESSAGE = new RegExp([
+  String.raw`^(?:(?:[\w.-]+ ){0,3}(?:responses|upstream|gateway|proxy|api|http 400) (?:bad request|error) *: *)?`,
+  String.raw`the requested item was created under a different (?:[\w*\[\]-]{1,64} ){0,6}openai resource ?\. `,
+  String.raw`use the same resource that created the item to access it ?\.`
+].join(""), "i");
+
+const GO_NUMERIC_CODE_ERROR = new RegExp([
+  String.raw`^\s*failed\s+to\s+decode\s+error\s+response:\s*json:\s*cannot\s+unmarshal\s+number\s+into\s+Go\s+struct\s+field\s+`,
+  String.raw`[\w.*]+\.code\s+of\s+type\s+string,\s*raw:\s*([\s\S]+)$`
+].join(""), "i");
+
+function isResourceMismatchError(error: unknown): boolean {
   if (!isRecord(error) || error.type !== "invalid_request_error" || typeof error.message !== "string") return false;
-  const message = "The requested item was created under a different Azure OpenAI resource. " +
-    "Use the same resource that created the item to access it.";
-  if (error.message.startsWith(message) ||
-    error.message.startsWith(`OpenAI Responses bad request: ${message}`)) return true;
+  if (isResourceMismatchMessage(error.message)) return true;
 
   // Decode only the observed Go wrapper; quoted errors and arbitrary nested text must not trigger replay.
-  const prefix = "failed to decode error response: json: cannot unmarshal number into Go struct field ";
-  if (!error.message.startsWith(prefix)) return false;
-  const raw = error.message.slice(prefix.length).match(/^[\w.*]+\.code of type string, raw: ([\s\S]+)$/)?.[1];
+  const raw = error.message.match(GO_NUMERIC_CODE_ERROR)?.[1];
   if (!raw) return false;
   const response = parseJsonRecord(Buffer.from(raw.trimEnd().replace(/\[trace_id=[a-f0-9]{32}\]$/i, "")));
   const cause = isRecord(response?.error) ? response.error : null;
   return cause?.type === "invalid_request_error" && typeof cause.message === "string" &&
-    cause.message.startsWith(message);
+    isResourceMismatchMessage(cause.message);
+}
+
+function isResourceMismatchMessage(message: string): boolean {
+  return RESOURCE_MISMATCH_MESSAGE.test(message.trim().replace(/\s+/g, " "));
 }
 
 /**

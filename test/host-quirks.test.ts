@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   applyHostBodyQuirks,
   applyHostQuirks,
-  recoverAgentrouterCompactionIds,
+  recoverResourceMismatchCompactionIds,
   resolveHostShortCircuit
 } from "../src/server/host-quirks.js";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
 import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
 import { PrimaryFailoverState } from "../src/server/primary-failover.js";
+import { agentrouterResourceErrorCases } from "./helpers/agentrouter-resource-errors.js";
 
 describe("applyHostQuirks", () => {
   it("adds the 1m context beta for opus targets on anyrouter", () => {
@@ -185,7 +186,7 @@ describe("applyHostBodyQuirks", () => {
   });
 });
 
-describe("agentrouter Azure error envelopes", () => {
+describe("resource mismatch error envelopes", () => {
   const message = "The requested item was created under a different Azure OpenAI resource. " +
     "Use the same resource that created the item to access it.";
   const direct = { error: { code: 0, type: "invalid_request_error", message } };
@@ -197,9 +198,30 @@ describe("agentrouter Azure error envelopes", () => {
   const body = Buffer.from(JSON.stringify({ store: false, input: [
     { type: "compaction", id: "cmp_synthetic", encrypted_content: "opaque-state" }
   ] }));
-  const recover = (error: unknown) => recoverAgentrouterCompactionIds(
+  const recover = (error: unknown) => recoverResourceMismatchCompactionIds(
     "agentrouter.org", body, 400, Buffer.from(JSON.stringify(error))
   );
+
+  it.each(["agentrouter.org", "api.agentrouter.org", "anyrouter.top", "api.anyrouter.top", " API.ANYROUTER.TOP "])(
+    "enables resource recovery on %s", (host) => {
+      expect(recoverResourceMismatchCompactionIds(host, body, 400, Buffer.from(JSON.stringify(direct)))?.removedIds).toBe(1);
+    }
+  );
+
+  it.each(["other.example", "notanyrouter.top", "anyrouter.top.example", "agentrouter.org.example"])(
+    "does not enable resource recovery on %s", (host) => {
+      expect(recoverResourceMismatchCompactionIds(host, body, 400, Buffer.from(JSON.stringify(direct)))).toBeNull();
+    }
+  );
+
+  it.each(agentrouterResourceErrorCases)("recognizes semantic variants: $name", ({ response }) => {
+    const repair = recover(response);
+    expect(repair?.removedIds).toBe(1);
+    expect(JSON.parse(repair!.body.toString()).input).toEqual([
+      { type: "compaction", encrypted_content: "opaque-state" }
+    ]);
+    expect(JSON.parse(body.toString()).input[0].id).toBe("cmp_synthetic");
+  });
 
   it.each([0, "0", null, undefined])("recognizes direct errors independently of code=%s", (code) => {
     expect(recover({ error: { ...direct.error, code } })?.removedIds).toBe(1);
@@ -221,7 +243,10 @@ describe("agentrouter Azure error envelopes", () => {
     ["trace suffix", wrap(JSON.stringify(direct), `\n[trace_id=${"a".repeat(32)}]`)],
     ["formatted JSON", wrap(JSON.stringify(direct, null, 2), ` \r\n[trace_id=${"B".repeat(32)}] \n`)],
     ["escaped message", wrap(JSON.stringify({ error: { ...direct.error, message: `${message} trace_id: synthetic; \"{raw:}\\\"` } }))],
-    ["redacted field", wrap(JSON.stringify(direct)).error.message.replace("gateway.Error", "***.***")]
+    ["redacted field", wrap(JSON.stringify(direct)).error.message.replace("gateway.Error", "***.***")],
+    ["formatted Go wrapper", wrap(JSON.stringify(direct)).error.message
+      .replace("failed to decode error response", " \nFAILED\tTO DECODE ERROR RESPONSE")
+      .replace("string, raw: ", "string,\nRAW:\t")]
   ])("recognizes a single known Go wrapper: %s", (_name, fixture) => {
     const response = typeof fixture === "string" ? { error: { ...direct.error, message: fixture } } : fixture;
     const repair = recover(response);
@@ -234,6 +259,15 @@ describe("agentrouter Azure error envelopes", () => {
 
   it.each([
     ["quoted Azure message", { error: { ...direct.error, message: `Other error quoting: ${message}` } }],
+    ["unknown diagnostic prefix", { error: { ...direct.error, message: `Unrelated failure: ${message}` } }],
+    ["negated conflict", { error: { ...direct.error, message: message.replace("was created", "was not created") } }],
+    ["negated remediation", { error: { ...direct.error, message: message.replace("Use the same", "Do not use the same") } }],
+    ["missing remediation", { error: { ...direct.error, message: message.split("Use the same")[0] } }],
+    ["different resource kind", { error: { ...direct.error, message: message.replace("OpenAI resource", "OpenAI account") } }],
+    ["injected vendor clause", { error: { ...direct.error, message: message.replace("Azure", "Azure. Quoted:") } }],
+    ["injected vendor sentence", { error: { ...direct.error, message: message.replace("Azure", "Azure. Use a different") } }],
+    ["quoted entire message", { error: { ...direct.error, message: `OpenAI Responses error: "${message}"` } }],
+    ["unbounded vendor text", { error: { ...direct.error, message: message.replace("Azure", "vendor ".repeat(10_000)) } }],
     ["quoted Responses wrapper", { error: { ...direct.error, message: `Quoted: OpenAI Responses bad request: ${message}` } }],
     ["Responses wrapper quoting Azure", { error: { ...direct.error, message: `OpenAI Responses bad request: Quoted: ${message}` } }],
     ["other Responses error", { error: { ...direct.error, message: "OpenAI Responses bad request: Invalid model" } }],

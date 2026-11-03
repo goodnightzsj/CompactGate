@@ -1,6 +1,7 @@
 import http, { type IncomingMessage, type RequestOptions } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agentrouterResourceErrorCases } from "./helpers/agentrouter-resource-errors.js";
 import {
   captureRequest, postJson, startApp, startUpstream, waitForLogEntry, writeJsonResponse,
   type CapturedRequest
@@ -22,11 +23,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const azureError = { error: {
-  message: "The requested item was created under a different Azure OpenAI resource. " +
-    "Use the same resource that created the item to access it.\n[trace_id=15d282710125406b3b990feef345de65]",
-  type: "invalid_request_error", param: "", code: null
-} };
 const compaction = { type: "compaction", id: "cmp_synthetic", encrypted_content: "opaque-synthetic-state" };
 const requestBody = (stream = false) => ({
   model: "synthetic-model", store: false, stream,
@@ -38,15 +34,9 @@ const requestBody = (stream = false) => ({
 });
 const betaHeaders = { "x-codex-beta-features": "remote_compaction_v2" };
 
-describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recovery through the HTTP proxy (%s)", (format) => {
-  const upstreamError = format === "direct" ? azureError : format === "Responses-prefixed" ? { error: {
-    ...azureError.error, message: `OpenAI Responses bad request: ${azureError.error.message}`
-  } } : { error: {
-    type: "invalid_request_error", param: "", code: null,
-    message: "failed to decode error response: json: cannot unmarshal number into Go struct field " +
-      "gateway.Error.code of type string, raw: " + JSON.stringify({ error: { ...azureError.error, code: 0 } }) +
-      `\n[trace_id=${"b".repeat(32)}]`
-  } };
+describe.each(["agentrouter.org", "anyrouter.top", "api.anyrouter.top"].flatMap(
+  (host) => agentrouterResourceErrorCases.map((fixture) => ({ host, ...fixture }))
+))("$host recovery through the HTTP proxy ($name)", ({ host, response: upstreamError }) => {
   it.each([false, true])("preserves context and the selected upstream before a successful stream=%s retry", async (stream) => {
     const sent: CapturedRequest[] = [];
     const responseBody = { id: "resp_synthetic", object: "response", model: "synthetic-model", status: "completed", output: [] };
@@ -62,7 +52,7 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recov
         writeJsonResponse(res, responseBody);
       }
     });
-    const app = await startApp(upstream.url.replace("127.0.0.1", "agentrouter.org"), undefined, {
+    const app = await startApp(upstream.url.replace("127.0.0.1", host), undefined, {
       primary: { api_key: "synthetic-key" }
     });
     const response = await postJson(app.url, "/v1/responses", requestBody(stream), betaHeaders);
@@ -73,7 +63,9 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recov
     expect(sent).toHaveLength(2);
     const first = JSON.parse(sent[0].body);
     const second = JSON.parse(sent[1].body);
-    expect(first.input[0].id).toBeUndefined(); // existing first-send quirk
+    const expectedFirst = requestBody(stream);
+    if (host === "agentrouter.org") delete expectedFirst.input[0].id;
+    expect(first).toEqual(expectedFirst); // anyrouter has no proactive ID cleanup
     expect(first.input[1]).toEqual(compaction);
     delete first.input[1].id;
     expect(second).toEqual(first);
@@ -106,7 +98,7 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recov
       sent.push(await captureRequest(req));
       writeJsonResponse(res, sent.length === 1 ? upstreamError : secondError, 400);
     });
-    const app = await startApp(upstream.url.replace("127.0.0.1", "agentrouter.org"));
+    const app = await startApp(upstream.url.replace("127.0.0.1", host));
     const response = await postJson(app.url, "/v1/responses", requestBody(true), betaHeaders);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual(secondError);
@@ -120,7 +112,7 @@ describe.each(["direct", "Go-wrapped", "Responses-prefixed"])("agentrouter recov
       sent.push(await captureRequest(req));
       writeJsonResponse(res, scenario === "success" ? { output: [] } : upstreamError, scenario === "success" ? 200 : 400);
     });
-    const app = await startApp(upstream.url.replace("127.0.0.1", scenario === "other-host" ? "other.example" : "agentrouter.org"), undefined, {
+    const app = await startApp(upstream.url.replace("127.0.0.1", scenario === "other-host" ? "other.example" : host), undefined, {
       primary_failover: { state_portability: scenario === "disabled" ? "off" : "recover_on_error" }
     });
     const response = await postJson(app.url, "/v1/responses", requestBody(), betaHeaders);
