@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { encryptedAgentMessage } from "./helpers/encrypted-agent-message.js";
 import {
   analyzeProviderState,
   compileProviderStateAttempt,
@@ -25,6 +26,88 @@ const WELFARE_CAPTURE_PATH = path.resolve(
 const welfareFixtureIt = existsSync(WELFARE_CAPTURE_PATH) ? it : it.skip;
 
 describe("provider state portability", () => {
+  it("recognizes encrypted agent messages without reasoning or compaction", () => {
+    const analysis = analyzeProviderState(Buffer.from(JSON.stringify({ input: [encryptedAgentMessage] })));
+    expect(analysis).toMatchObject({ hasProviderOwnedState: true, encryptedAgentMessageCount: 1 });
+    expect(JSON.stringify(analysis)).not.toContain("opaque-agent-state");
+    expect(analyzeProviderState(Buffer.from(JSON.stringify({ input: [{
+      ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]]
+    }] }))).hasProviderOwnedState).toBe(false);
+  });
+
+  it.each(["original", "cpa", "error_400"] as const)(
+    "preserves encrypted agent content during unrelated %s processing", (strategy) => {
+      const canonical = Buffer.from(JSON.stringify({ input: [encryptedAgentMessage] }));
+      const result = compileProviderStateAttempt(canonical, { strategy, errorCode: "previous_response_not_found" });
+      expect(result.body).toBe(canonical);
+    }
+  );
+
+  it.each(["original", "cpa"] as const)(
+    "removes agent ciphertext after explicit failure from %s while retaining other context", (priorStrategy) => {
+      const businessData = { type: "encrypted_content", encrypted_content: "caller-data" };
+      const body = { store: false, metadata: businessData, input: [
+        encryptedAgentMessage,
+        { type: "compaction", id: "cmp_keep", encrypted_content: "opaque-compaction-state" },
+        { type: "custom_tool_call", id: "tool_keep", call_id: "call_keep", input: JSON.stringify(businessData) },
+        { type: "custom_tool_call_output", call_id: "call_keep", output: JSON.stringify(businessData) },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "continue", metadata: businessData }] }
+      ] };
+      const canonical = Buffer.from(JSON.stringify(body));
+      const result = compileProviderStateAttempt(canonical, {
+        strategy: "error_400", priorStrategy, errorCode: "invalid_encrypted_content"
+      });
+      expect(parseBody(result.body)).toEqual({ ...body, input: [
+        { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }, ...body.input.slice(1)
+      ] });
+      expect(result.metrics).toMatchObject({ encryptedAgentMessageBlocksRemoved: 1, compactionItemsRemoved: 0 });
+      expect(result.fidelity).toBe("degraded");
+      expect(parseBody(canonical)).toEqual(body);
+    }
+  );
+
+  it.each(["cross_domain", "error_400"] as const)("keeps agent ciphertext removed through %s", (strategy) => {
+    const canonical = Buffer.from(JSON.stringify({ input: [encryptedAgentMessage] }));
+    const result = compileProviderStateAttempt(canonical, {
+      strategy, priorStrategy: "cross_domain", errorCode: "invalid_encrypted_content"
+    });
+    expect(parseBody(result.body).input).toEqual([{
+      type: "agent_message", author: "agent_synthetic", recipient: "all", content: [encryptedAgentMessage.content[0]]
+    }]);
+    expect(result.metrics).toMatchObject({ encryptedAgentMessageBlocksRemoved: 1 });
+    expect(result.fidelity).toBe("degraded");
+  });
+
+  it.each([[], [{ type: "input_text", text: "  " }], [{ type: "unknown", text: "not a text fallback" }]]
+    .map(content => ({ content })))(
+    "retains agent ciphertext when no readable text is available: $content", ({ content }) => {
+      const canonical = Buffer.from(JSON.stringify({ input: [{
+        ...encryptedAgentMessage, content: [...content, encryptedAgentMessage.content[1]]
+      }] }));
+      const result = compileProviderStateAttempt(canonical, { strategy: "error_400", errorCode: "invalid_encrypted_content" });
+      expect(result.body).toBe(canonical);
+      expect(analyzeProviderState(canonical).hasProviderOwnedState).toBe(true);
+    }
+  );
+
+  it("counts multiple encrypted blocks and ignores caller-owned lookalikes", () => {
+    const nested = { input: [encryptedAgentMessage] };
+    const canonical = Buffer.from(JSON.stringify({ metadata: nested, input: [
+      { ...encryptedAgentMessage, content: [...encryptedAgentMessage.content, encryptedAgentMessage.content[1]] },
+      { type: "custom_tool_call_output", call_id: "business", output: nested },
+      { type: "other", content: encryptedAgentMessage.content }
+    ] }));
+    const result = compileProviderStateAttempt(canonical, { strategy: "error_400", errorCode: "invalid_encrypted_content" });
+    const expected = parseBody(canonical);
+    (expected.input as Array<Record<string, unknown>>)[0].content = [encryptedAgentMessage.content[0]];
+    expect(parseBody(result.body)).toEqual(expected);
+    expect(result.metrics.encryptedAgentMessageBlocksRemoved).toBe(2);
+    expect(analyzeProviderState(canonical).encryptedAgentMessageCount).toBe(1);
+    expect(analyzeProviderState(Buffer.from(JSON.stringify({ input: [
+      { type: "custom_tool_call_output", call_id: "business", output: nested }
+    ] }))).hasProviderOwnedState).toBe(false);
+  });
+
   it.each(["cross_domain", "error_400"] as const)("preserves caller-owned schemas and data during %s cleanup", (strategy) => {
     const schema = {
       type: "object",
@@ -315,6 +398,7 @@ describe("provider state portability", () => {
       reasoningItemCount: 2,
       encryptedReasoningItemCount: 2,
       invalidEncryptedReasoningItemCount: 1,
+      encryptedAgentMessageCount: 0,
       compactionItemCount: 1,
       previousResponseIdPresent: true,
       hasProviderOwnedState: true

@@ -380,6 +380,8 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 明确 `400 invalid_encrypted_content` 或 `previous_response_not_found` 直接执行一次错误专用修复。修复后仍返回同一明确 400 时,若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；错误专用修复按错误位置插入。所有请求固定在当前 profile/host，最多发送 4 个不同 body，且每次都从同一份不可变请求体派生。只有完整成功响应才更新持久绑定。
 
+`invalid_encrypted_content` 的恢复也识别 `agent_message.content` 中的 `type: "encrypted_content"` 块，不依赖报错 item ID 前缀或 message 文案，适用于所有原生 Responses 上游。在同一 agent message 有非空 `input_text` 时，错误专用尝试删除加密块，保留明文、作者、接收方和其余字段；compaction 与工具调用不受此项清理影响。仅有密文而无可用明文的 agent message 保持不变，无法产生不同请求时返回原失败。移除加密块记录为 `degraded`，不承诺密文中的附加上下文可恢复；已有 strict 策略也复用此处理。`off`、响应已提交、取消、超时或错误响应截断时不重放。详见 [agent message 加密内容恢复](docs/2026-11-04-agent-message-hydration.md)。
+
 `agentrouter.org` 和 `anyrouter.top`（均含子域）的原生 Responses 另有一项定向恢复：首发收到“item 创建于不同 OpenAI resource，需使用创建它的同一 resource 访问”的 HTTP 400 `invalid_request_error` 后，若 `store=false`、无存储引用且 compaction 携带密文，只删除 `compaction.id`，在同一上游重试一次。anyrouter 不启用 agentrouter 的首发普通 item ID 清理。识别要求两个完整英文语句，但不绑定 Azure 品牌：支持供应商名称变化、`***`/`[REDACTED]` 等脱敏文本、无品牌、大小写及空白变化；允许一层以 Responses/upstream/gateway/proxy/API/HTTP 400 和 bad request/error 组成的诊断前缀。已知 Go 数字 `error.code` 解码失败包装的一层 `raw:` JSON（可带末尾 32 位十六进制 trace）复用同一识别规则。未知包装、任意引用、否定语句、缺失语句、递归包装和畸形内层 JSON 不用于该定向恢复。密文与其余上下文保持不变；第二次失败直接返回，不继续 CPA/strict，原始错误不被解包结果替换。自动识别覆盖上述同义表现层变化，不承诺任意自然语言改写或跨资源密文可用，且 `state_portability=off` 时不启用。报文示例和边界见[资源冲突恢复说明](docs/2026-10-24-azure-resource-mismatch-plan.md#扩展至-anyrouter2026-11-03)。
 
 通过 `POST /api/config/profiles/apply` 手动应用 Codex profile 是一次权威切换：CompactGate 会清除旧的进程内会话 stickiness，并强制下一次 Primary 选择新 profile，即使 `auto_schedule=true`。自动调度内部同步 active profile 不触发该强制逻辑。

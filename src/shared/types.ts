@@ -519,6 +519,7 @@ export interface ProviderStatePortabilityLog {
     reasoning: number;
     encrypted_reasoning: number;
     invalid_encrypted_reasoning: number;
+    encrypted_agent_messages?: number;
     compaction: number;
     previous_response_id: number;
   };

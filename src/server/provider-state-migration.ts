@@ -96,7 +96,7 @@ export async function runProviderStateMigration(
       compiled
     });
 
-    if (result.status < 400 || !options.canReplay()) {
+    if (result.status < 400 || result.responseBodyTruncated || !options.canReplay()) {
       return { result, body: compiled.body, attempts, trigger };
     }
 
@@ -104,7 +104,7 @@ export async function runProviderStateMigration(
       options.upstreamHost ?? "", compiled.body, result.status, result.responseBody
     );
     if (hostRepair) {
-      if (strategy !== "original" || result.responseBodyTruncated || hostRepair.removedIds === 0 ||
+      if (strategy !== "original" || hostRepair.removedIds === 0 ||
         !options.canReplay()) {
         return { result, body: compiled.body, attempts, trigger };
       }

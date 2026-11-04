@@ -14,6 +14,7 @@ export interface ProviderStateAnalysis {
   reasoningItemCount: number;
   encryptedReasoningItemCount: number;
   invalidEncryptedReasoningItemCount: number;
+  encryptedAgentMessageCount: number;
   compactionItemCount: number;
   previousResponseIdPresent: boolean;
   hasProviderOwnedState: boolean;
@@ -21,6 +22,7 @@ export interface ProviderStateAnalysis {
 
 export interface ProviderStateMetrics {
   encryptedReasoningFieldsRemoved: number;
+  encryptedAgentMessageBlocksRemoved: number;
   nullReasoningContentFieldsRemoved: number;
   reasoningItemsRemoved: number;
   compactionItemsReplaced: number;
@@ -56,6 +58,7 @@ export function analyzeProviderState(body: Buffer): ProviderStateAnalysis {
   let encryptedReasoningItemCount = 0;
   let invalidEncryptedReasoningItemCount = 0;
   let compactionItemCount = 0;
+  let encryptedAgentMessageCount = 0;
 
   for (const item of input) {
     if (!isRecord(item)) {
@@ -72,6 +75,9 @@ export function analyzeProviderState(body: Buffer): ProviderStateAnalysis {
       }
     } else if (item.type === "compaction") {
       compactionItemCount += 1;
+    } else if (item.type === "agent_message" && Array.isArray(item.content) &&
+      item.content.some(isEncryptedContentBlock)) {
+      encryptedAgentMessageCount += 1;
     }
   }
 
@@ -83,10 +89,11 @@ export function analyzeProviderState(body: Buffer): ProviderStateAnalysis {
     reasoningItemCount,
     encryptedReasoningItemCount,
     invalidEncryptedReasoningItemCount,
+    encryptedAgentMessageCount,
     compactionItemCount,
     previousResponseIdPresent,
     hasProviderOwnedState:
-      reasoningItemCount > 0 || compactionItemCount > 0 || previousResponseIdPresent
+      reasoningItemCount > 0 || compactionItemCount > 0 || encryptedAgentMessageCount > 0 || previousResponseIdPresent
   };
 }
 
@@ -149,6 +156,9 @@ export function compileProviderStateAttempt(
     if (metrics.compactionItemsRemoved > 0) {
       fidelity = "degraded";
     }
+  }
+  if (metrics.encryptedAgentMessageBlocksRemoved > 0) {
+    fidelity = "degraded";
   }
 
   const changed = hasChanges(metrics) || hasPromptCacheKeyRewrite(canonicalBody, parsed);
@@ -242,6 +252,7 @@ function applyCrossDomainCleanup(
   removePreviousResponseIds(body, metrics);
   stripPrivateMetadata(body, metrics);
   rewritePromptCacheKey(body, targetStateDomain);
+  removeAgentMessageEncryptedContent(body, metrics);
 
   const nextInput: unknown[] = [];
   let fidelity: ProviderStateFidelity = "exact";
@@ -348,6 +359,7 @@ function applyErrorRecovery(
   errorCode: ProviderStateErrorCode | undefined
 ): void {
   if (errorCode === "invalid_encrypted_content") {
+    removeAgentMessageEncryptedContent(body, metrics);
     if (!Array.isArray(body.input)) {
       return;
     }
@@ -382,6 +394,26 @@ function applyErrorRecovery(
       metrics.compactionItemsRemoved += remove ? 1 : 0;
       return !remove;
     });
+  }
+}
+
+function isEncryptedContentBlock(value: unknown): boolean {
+  return isRecord(value) && value.type === "encrypted_content";
+}
+
+function removeAgentMessageEncryptedContent(
+  body: Record<string, unknown>,
+  metrics: ProviderStateMetrics
+): void {
+  if (!Array.isArray(body.input)) return;
+  for (const item of body.input) {
+    if (!isRecord(item) || item.type !== "agent_message" || !Array.isArray(item.content)) continue;
+    // A ciphertext-only agent message has no safe readable fallback.
+    if (!item.content.some((block) => isRecord(block) && block.type === "input_text" &&
+      typeof block.text === "string" && block.text.trim().length > 0)) continue;
+    const content = item.content.filter((block) => !isEncryptedContentBlock(block));
+    metrics.encryptedAgentMessageBlocksRemoved += item.content.length - content.length;
+    item.content = content;
   }
 }
 
@@ -444,6 +476,7 @@ function hasChanges(metrics: ProviderStateMetrics): boolean {
 function emptyMetrics(): ProviderStateMetrics {
   return {
     encryptedReasoningFieldsRemoved: 0,
+    encryptedAgentMessageBlocksRemoved: 0,
     nullReasoningContentFieldsRemoved: 0,
     reasoningItemsRemoved: 0,
     compactionItemsReplaced: 0,

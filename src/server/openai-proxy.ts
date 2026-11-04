@@ -676,6 +676,7 @@ function buildProviderStatePortabilityLog(input: {
       reasoning: input.analysis.reasoningItemCount,
       encrypted_reasoning: input.analysis.encryptedReasoningItemCount,
       invalid_encrypted_reasoning: input.analysis.invalidEncryptedReasoningItemCount,
+      encrypted_agent_messages: input.analysis.encryptedAgentMessageCount,
       compaction: input.analysis.compactionItemCount,
       previous_response_id: input.analysis.previousResponseIdPresent ? 1 : 0
     },

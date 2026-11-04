@@ -11,6 +11,7 @@ import {
 } from "../src/server/provider-state-evidence.js";
 import type { BufferedUpstreamResult } from "../src/server/upstream-client.js";
 import { agentrouterResourceErrorCases } from "./helpers/agentrouter-resource-errors.js";
+import { encryptedAgentError, encryptedAgentMessage } from "./helpers/encrypted-agent-message.js";
 
 function validEncryptedContent(): string {
   const payload = Buffer.alloc(73);
@@ -65,6 +66,37 @@ function canonicalCompactionBody(): Buffer {
 }
 
 describe("provider-state recovery state machine", () => {
+  it.each(["success", "same-error", "cancelled", "truncated", "encrypted-only"])(
+    "handles agent hydration failure with bounded recovery: %s", async (scenario) => {
+      const item = scenario === "encrypted-only"
+        ? { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[1]] }
+        : encryptedAgentMessage;
+      const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [item,
+        ...(scenario === "truncated" ? [{ type: "reasoning", encrypted_content: "opaque-reasoning" }] : [])
+      ] }));
+      const sent: Buffer[] = [];
+      const failure = { ...upstreamResult(400, encryptedAgentError), responseBodyTruncated: scenario === "truncated" };
+      const recovery = await runProviderStateMigration({
+        canonicalBody, targetStateDomain: "same-domain", canReplay: () => scenario !== "cancelled",
+        startGenericRecovery: () => null,
+        send: async (body) => {
+          sent.push(body);
+          return sent.length === 1 || scenario !== "success" ? failure : upstreamResult(200, { output: [] });
+        }
+      });
+      const retry = scenario === "success" || scenario === "same-error";
+      expect(sent).toHaveLength(retry ? 2 : 1);
+      expect(sent[0]).toBe(canonicalBody);
+      if (retry) {
+        expect(JSON.parse(sent[1].toString()).input).toEqual([{
+          ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]]
+        }]);
+        expect(recovery.attempts[1].compiled.fidelity).toBe("degraded");
+      }
+      if (scenario !== "success") expect(recovery.result).toBe(failure);
+    }
+  );
+
   it("can use all four distinct attempts without mutating prior bodies", async () => {
     const canonicalBody = canonicalStatefulBody();
     const sentBodies: Buffer[] = [];

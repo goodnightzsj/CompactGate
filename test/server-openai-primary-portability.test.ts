@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import { encryptedAgentError, encryptedAgentMessage } from "./helpers/encrypted-agent-message.js";
 import {
   captureRequest,
   type CapturedRequest,
@@ -129,6 +130,106 @@ function statefulBody(sessionText = "continue") {
 }
 
 describe("primary provider-state error recovery", () => {
+  it.each([false, true])("recovers agent-only hydration failures without health evidence, stream=%s", async (stream) => {
+    const requests: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(requests, (res) => {
+      if (requests.length === 1) {
+        res.writeHead(400, { "content-type": "application/json", "content-encoding": "gzip" });
+        res.end(gzipSync(JSON.stringify(encryptedAgentError)));
+      } else if (stream) {
+        writeSse(res, [{ type: "response.completed", response: { id: "resp_agent", status: "completed", output: [] } }]);
+      } else {
+        writeJson(res, { id: "resp_agent", status: "completed", output: [] });
+      }
+    });
+    const app = await startApp(upstream.url, upstream.url, {
+      primary: { api_key: "synthetic-key" },
+      primary_failover: { auto_schedule: false, state_portability: "recover_on_error" }
+    });
+    const original = { model: "gpt-5.5", store: false, stream, input: [encryptedAgentMessage] };
+    const body = JSON.stringify(original);
+    const response = await fetch(`${app.url}/v1/responses`, { method: "POST", headers: JSON_HEADERS, body });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("resp_agent");
+    expect(requests).toHaveLength(2);
+    expect(requests[0].body).toBe(body);
+    expect(JSON.parse(requests[1].body)).toEqual({ ...original, input: [{
+      ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]]
+    }] });
+    for (const request of requests) {
+      expect(request.headers.authorization).toBe("Bearer synthetic-key");
+      expect(request.headers.host).toBe(requests[0].headers.host);
+      expect(Number(request.headers["content-length"])).toBe(Buffer.byteLength(request.body));
+    }
+    const log = await waitForLogEntry(app.url, entry => entry.request_id === response.headers.get("x-compactgate-request-id"));
+    expect(log.provider_state_portability).toMatchObject({
+      trigger: "explicit_400", target_state_free_success: false,
+      stateful_item_counts: { encrypted_agent_messages: 1, reasoning: 0, compaction: 0 },
+      attempts: [
+        { strategy: "original", status: 400, error_code: "invalid_encrypted_content" },
+        { strategy: "error_400", status: 200, fidelity: "degraded", migration_counts: { encryptedAgentMessageBlocksRemoved: 1 } }
+      ]
+    });
+  });
+
+  it.each(["disabled", "success", "auth-error"])("preserves agent content for %s", async (scenario) => {
+    const requests: CapturedRequest[] = [];
+    const status = scenario === "success" ? 200 : scenario === "auth-error" ? 401 : 400;
+    const upstream = await startCapturedOpenAiUpstream(requests, res =>
+      writeJson(res, status === 200 ? { output: [] } : encryptedAgentError, status));
+    const app = await startApp(upstream.url, upstream.url, {
+      primary_failover: { auto_schedule: false, state_portability: scenario === "disabled" ? "off" : "recover_on_error" }
+    });
+    const body = JSON.stringify({ store: false, input: [encryptedAgentMessage] });
+    const response = await fetch(`${app.url}/v1/responses`, { method: "POST", headers: JSON_HEADERS, body });
+    expect(response.status).toBe(status);
+    await response.text();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body).toBe(body);
+  });
+
+  it("preserves compaction and tool pairs when agent hydration fails after a profile switch", async () => {
+    const requests: CapturedRequest[] = [];
+    const setup = await setupProfileSwitch(
+      res => writeJson(res, { id: "resp_old", output: [] }),
+      async (req, res) => {
+        requests.push(await captureRequest(req));
+        writeJson(res, requests.length === 1 ? encryptedAgentError : { id: "resp_new", output: [] },
+          requests.length === 1 ? 400 : 200);
+      }
+    );
+    await establishOldBinding(setup.app.url, setup.oldProfileId, "agent-switch");
+    await applyCodexProfile(setup.app.url, setup.nextProfileId);
+    const original = { ...statefulBody(), input: [
+      ...statefulBody().input,
+      encryptedAgentMessage,
+      { type: "compaction", id: "cmp_preserved", encrypted_content: "opaque-compaction-state" },
+      { type: "custom_tool_call", call_id: "call_keep", name: "tool", input: "keep" },
+      { type: "custom_tool_call_output", call_id: "call_keep", output: "keep" }
+    ] };
+    const body = JSON.stringify(original);
+    const response = await fetch(`${setup.app.url}/v1/responses`, {
+      method: "POST", headers: { ...JSON_HEADERS, "x-compactgate-session": "agent-switch", "x-codex-beta-features": "remote_compaction_v2" }, body
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(requests).toHaveLength(2);
+    expect(requests[0].body).toBe(body);
+    expect(JSON.parse(requests[1].body).input).toEqual([
+      { type: "reasoning", summary: [] }, { type: "reasoning", summary: [] }, original.input[2],
+      { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }, ...original.input.slice(4)
+    ]);
+    expect(requests[1].headers["x-codex-beta-features"]).toBe("remote_compaction_v2");
+    const log = await waitForLogEntry(setup.app.url, entry => entry.request_id === response.headers.get("x-compactgate-request-id"));
+    expect(log.provider_state_portability).toMatchObject({
+      source_profile_id: setup.oldProfileId, target_profile_id: setup.nextProfileId,
+      target_state_free_success: false,
+      attempts: [{ strategy: "original" }, { strategy: "error_400", fidelity: "degraded",
+        migration_counts: { encryptedAgentMessageBlocksRemoved: 1, encryptedReasoningFieldsRemoved: 2, compactionItemsRemoved: 0 }
+      }]
+    });
+  });
+
   it("sends a successful malformed stateful request byte-for-byte exactly once", async () => {
     const requests: CapturedRequest[] = [];
     const upstream = await startCapturedOpenAiUpstream(
