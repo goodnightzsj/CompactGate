@@ -1,19 +1,27 @@
 import type { BufferedUpstreamResult } from "./upstream-client.js";
-import { recoverResourceMismatchCompactionIds } from "./host-quirks.js";
+import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { classifyProviderStateFailure, type ProviderStateFailure } from "./provider-state-errors.js";
 import {
   analyzeProviderState,
   compileProviderStateAttempt,
-  providerStateErrorCode,
+  hashProviderStateBody,
+  failureTargetsCompaction,
+  recoverCompactionItemIds,
+  stripCompactionItemIds,
+  ProviderStateRecoveryUnavailableError,
+  type CompileProviderStateOptions,
   type CompiledProviderStateAttempt,
   type ProviderStateBaseStrategy,
   type ProviderStateErrorCode,
   type ProviderStateStrategy
 } from "./provider-state-portability.js";
+import type { ProviderStateRecoveryPolicy } from "./provider-state-recovery-store.js";
 
 export type ProviderStateRecoveryTrigger =
   | "explicit_400"
   | "profile_switch_failure"
-  | "legacy_failure_threshold";
+  | "legacy_failure_threshold"
+  | "cached_recovery";
 
 export interface ProviderStateMigrationAttempt {
   strategy: ProviderStateStrategy;
@@ -28,12 +36,15 @@ export interface ProviderStateMigrationResult {
   body: Buffer;
   attempts: ProviderStateMigrationAttempt[];
   trigger: ProviderStateRecoveryTrigger | null;
+  unavailable?: boolean;
+  policy?: ProviderStateRecoveryPolicy;
 }
 
 interface RunProviderStateMigrationOptions {
   canonicalBody: Buffer;
-  upstreamHost?: string;
   targetStateDomain: string;
+  recoverCompaction?: CompileProviderStateOptions["recoverCompaction"];
+  cachedPolicy?: ProviderStateRecoveryPolicy | null;
   canReplay: () => boolean;
   startGenericRecovery: (
     result: BufferedUpstreamResult,
@@ -42,7 +53,8 @@ interface RunProviderStateMigrationOptions {
   send: (
     body: Buffer,
     strategy: ProviderStateStrategy,
-    priorStrategy: ProviderStateBaseStrategy
+    priorStrategy: ProviderStateBaseStrategy,
+    compiled: CompiledProviderStateAttempt
   ) => Promise<BufferedUpstreamResult>;
 }
 
@@ -57,22 +69,60 @@ export async function runProviderStateMigration(
   const attempts: ProviderStateMigrationAttempt[] = [];
   let finalResult: BufferedUpstreamResult | null = null;
   let finalBody = options.canonicalBody;
-  let strategy: ProviderStateStrategy = "original";
-  let priorStrategy: ProviderStateBaseStrategy = "original";
-  let errorCode: ProviderStateErrorCode | undefined;
-  let trigger: ProviderStateRecoveryTrigger | null = null;
+  const cached = options.cachedPolicy;
+  let strategy: ProviderStateStrategy = cached?.failure ? "error_400" : cached?.base ?? "original";
+  let priorStrategy: ProviderStateBaseStrategy = cached?.base ?? "original";
+  let errorCode: ProviderStateErrorCode | undefined = cached?.failure?.code ?? undefined;
+  let trigger: ProviderStateRecoveryTrigger | null = cached ? "cached_recovery" : null;
   let genericRecoveryStarted = false;
   let genericRecoveryEvaluated = false;
+  let resourceRepair = cached?.stripCompactionIds ? stripCompactionItemIds(options.canonicalBody) : null;
+  let failure: ProviderStateFailure | undefined = cached?.failure ?? undefined;
+  let rejectedCompaction = cached?.rejectedCompaction ?? false;
+  const priorEncryptedFailures = [...cached?.priorEncryptedFailures ?? []];
+  const finish = (unavailable = false): ProviderStateMigrationResult => {
+    if (!finalResult) throw new Error("Provider-state recovery produced no upstream attempt.");
+    return { result: finalResult, body: finalBody, attempts, trigger, ...(unavailable ? { unavailable } : {}), policy: {
+      base: strategy === "error_400" ? priorStrategy : strategy,
+      failure: failure ?? null,
+      stripCompactionIds: resourceRepair !== null,
+      priorEncryptedFailures, rejectedCompaction, unavailable
+    } };
+  };
 
   while (attempts.length < MAX_PROVIDER_STATE_ATTEMPTS) {
-    const compiled = compileProviderStateAttempt(options.canonicalBody, {
-      strategy,
-      priorStrategy,
-      errorCode,
-      targetStateDomain: options.targetStateDomain
-    });
+    let compiled: CompiledProviderStateAttempt;
+    try {
+      compiled = compileProviderStateAttempt(resourceRepair?.body ?? options.canonicalBody, {
+        strategy, priorStrategy, errorCode, failure, rejectedCompaction, priorEncryptedFailures,
+        allowCompactionDrop: attempts.length > 0,
+        targetStateDomain: options.targetStateDomain,
+        recoverCompaction: options.recoverCompaction
+      });
+    } catch (error) {
+      if (!(error instanceof ProviderStateRecoveryUnavailableError)) throw error;
+      if (finalResult) return finish(true);
+      // Cached repairs are hints, not a reason to block a fresh upstream attempt.
+      strategy = priorStrategy = "original";
+      errorCode = undefined;
+      failure = undefined;
+      rejectedCompaction = false;
+      priorEncryptedFailures.length = 0;
+      resourceRepair = null;
+      trigger = null;
+      continue;
+    }
+    if (resourceRepair) compiled.metrics.providerItemIdsRemoved += resourceRepair.removedIds;
     attemptedStrategies.add(strategy);
     if (attemptedBodyHashes.has(compiled.bodyHash)) {
+      if (finalResult && strategy === "error_400" && !resourceRepair && !genericRecoveryEvaluated) {
+        genericRecoveryEvaluated = true;
+        const genericTrigger = options.startGenericRecovery(finalResult, true);
+        if (genericTrigger) {
+          trigger ??= genericTrigger;
+          genericRecoveryStarted = true;
+        }
+      }
       const next = nextStrategyAfterDuplicate(strategy, genericRecoveryStarted, attemptedStrategies);
       if (!next) {
         break;
@@ -84,10 +134,11 @@ export async function runProviderStateMigration(
     }
 
     attemptedBodyHashes.add(compiled.bodyHash);
-    const result = await options.send(compiled.body, strategy, priorStrategy);
+    const result = await options.send(compiled.body, strategy, priorStrategy, compiled);
     finalResult = result;
     finalBody = compiled.body;
-    const responseErrorCode = providerStateErrorCode(result.status, result.responseBody);
+    const responseFailure = result.deferredProviderStateFailure ?? classifyProviderStateFailure(result.status, result.responseBody, result.responseHeaders);
+    const responseErrorCode = responseFailure?.code ?? null;
     attempts.push({
       strategy,
       bodyHash: compiled.bodyHash,
@@ -96,31 +147,22 @@ export async function runProviderStateMigration(
       compiled
     });
 
-    if (result.status < 400 || result.responseBodyTruncated || !options.canReplay()) {
-      return { result, body: compiled.body, attempts, trigger };
+    if (result.status < 400 && !responseFailure || result.responseBodyTruncated || !options.canReplay()) {
+      return finish();
     }
 
-    const hostRepair = recoverResourceMismatchCompactionIds(
-      options.upstreamHost ?? "", compiled.body, result.status, result.responseBody
-    );
-    if (hostRepair) {
-      if (strategy !== "original" || hostRepair.removedIds === 0 ||
+    const idRepair = recoverCompactionItemIds(compiled.body, responseFailure);
+    if (idRepair) {
+      if (resourceRepair || idRepair.removedIds === 0 ||
+        (responseFailure?.kind === "resource_mismatch" && strategy !== "original") ||
         !options.canReplay()) {
-        return { result, body: compiled.body, attempts, trigger };
+        return finish();
       }
-      const repaired = compileProviderStateAttempt(hostRepair.body, { strategy: "original" });
-      repaired.metrics.providerItemIdsRemoved = hostRepair.removedIds;
-      const retryResult = await options.send(repaired.body, "error_400", "original");
-      attempts.push({
-        strategy: "error_400",
-        bodyHash: repaired.bodyHash,
-        status: retryResult.status,
-        errorCode: providerStateErrorCode(retryResult.status, retryResult.responseBody),
-        compiled: repaired
-      });
-      // This host-specific experiment never falls through to CPA/strict, even
-      // if the second error changes: preserve the encrypted context on failure.
-      return { result: retryResult, body: repaired.body, attempts, trigger: "explicit_400" };
+      resourceRepair = stripCompactionItemIds(options.canonicalBody);
+      trigger ??= "explicit_400";
+      if (strategy !== "error_400") priorStrategy = strategy;
+      strategy = "error_400";
+      continue;
     }
 
     if (
@@ -128,16 +170,25 @@ export async function runProviderStateMigration(
       (!canonicalHasCompaction ||
         (strategy === "error_400" && errorCode === "invalid_responses_request"))
     ) {
-      return { result, body: compiled.body, attempts, trigger };
+      return finish();
     }
 
-    if (responseErrorCode && strategy !== "error_400") {
+    const compactionOnlyFailure = responseErrorCode === "invalid_encrypted_content" &&
+      responseFailure?.itemId == null && responseFailure?.inputIndex == null && responseFailure?.encryptedContentHash == null &&
+      failureTargetsCompaction(parseJsonRecord(compiled.body) ?? {}, responseFailure ?? undefined);
+    if (responseErrorCode) {
       trigger ??= "explicit_400";
-      priorStrategy = strategy;
+      if (strategy !== "error_400") priorStrategy = strategy;
+      if (errorCode === "invalid_encrypted_content" && failure) priorEncryptedFailures.push(failure);
       strategy = "error_400";
       errorCode = responseErrorCode;
+      failure = locateFailure(compiled.body, responseFailure) ?? undefined;
+      rejectedCompaction ||= compactionOnlyFailure;
       continue;
     }
+
+    // A resource-ID experiment can continue only for an explicit state failure, never a generic destructive fallback.
+    if (resourceRepair) return finish();
 
     if (!genericRecoveryStarted && !genericRecoveryEvaluated) {
       genericRecoveryEvaluated = true;
@@ -150,22 +201,23 @@ export async function runProviderStateMigration(
 
     const next = nextStrategyAfterFailure(strategy, genericRecoveryStarted, attemptedStrategies);
     if (!next) {
-      return { result, body: compiled.body, attempts, trigger };
+      return finish();
     }
     strategy = next;
     priorStrategy = next;
     errorCode = undefined;
   }
 
-  if (!finalResult) {
-    throw new Error("Provider-state recovery produced no upstream attempt.");
-  }
-  return {
-    result: finalResult,
-    body: finalBody,
-    attempts,
-    trigger
-  };
+  return finish();
+}
+
+function locateFailure(body: Buffer, failure: ProviderStateFailure | null): ProviderStateFailure | null {
+  if (!failure || failure.encryptedContentHash) return failure;
+  const input = parseJsonRecord(body)?.input;
+  const item = Array.isArray(input) ? failure.inputIndex !== null ? input[failure.inputIndex]
+    : input.find(item => isRecord(item) && failure.itemId !== null && item.id === failure.itemId) : null;
+  return isRecord(item) && typeof item.encrypted_content === "string"
+    ? { ...failure, itemId: null, inputIndex: null, encryptedContentHash: hashProviderStateBody(Buffer.from(item.encrypted_content)) } : failure;
 }
 
 function nextStrategyAfterFailure(

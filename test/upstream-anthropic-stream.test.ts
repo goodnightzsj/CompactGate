@@ -206,6 +206,40 @@ describe("Anthropic passthrough terminator repair", () => {
   it("does not wrap a non-stream body that has no terminator to repair", () => {
     expect(createAnthropicPassthroughResponseTransform(200, { "content-type": "application/json" })).toBeNull();
   });
+
+  it("does not append a success terminator after an explicit provider error", async () => {
+    const stream = truncated + anthropicEvent("error", { type: "error", error: { type: "overloaded_error", message: "Overloaded" } });
+    expect(await runTransform({ "content-type": "text/event-stream" }, stream)).toBe(stream);
+  });
+
+  it.each(["", anthropicEvent("ping", { type: "ping" }),
+    anthropicEvent("message_start", { type: "message_start", message: { id: "msg_empty", content: [] } })])("does not turn an empty or heartbeat-only stream into a successful message", async stream => {
+    const output = await runTransform({ "content-type": "text/event-stream" }, stream);
+    expect(output).not.toContain("message_stop");
+    expect(output).toContain('"type":"error"');
+  });
+
+  it("does not finish a partial tool input as end_turn", async () => {
+    const stream = truncated + anthropicEvent("content_block_start", { type: "content_block_start", index: 2,
+      content_block: { type: "tool_use", id: "call_fixture", name: "write", input: {} } }) +
+      anthropicEvent("content_block_delta", { type: "content_block_delta", index: 2,
+        delta: { type: "input_json_delta", partial_json: '{"path":' } });
+    const output = await runTransform({ "content-type": "text/event-stream" }, stream);
+    expect(output.startsWith(stream)).toBe(true);
+    expect(output.slice(stream.length)).not.toContain("message_stop");
+    expect(output.slice(stream.length)).toContain('"type":"error"');
+  });
+
+  it.each([false, true])("repairs a closed tool turn only with a provider stop reason (%s)", async hasStopReason => {
+    const stream = truncated + anthropicEvent("content_block_start", { type: "content_block_start", index: 2,
+      content_block: { type: "tool_use", id: "call_fixture", name: "read", input: {} } }) +
+      anthropicEvent("content_block_stop", { type: "content_block_stop", index: 2 }) +
+      (hasStopReason ? anthropicEvent("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use" } }) : "");
+    const appended = (await runTransform({ "content-type": "text/event-stream" }, stream)).slice(stream.length);
+    expect(appended.includes('"type":"message_stop"')).toBe(hasStopReason);
+    expect(appended.includes('"type":"error"')).toBe(!hasStopReason);
+    expect(appended).not.toContain("end_turn");
+  });
 });
 
 async function runTransform(headers: Record<string, string>, input: Buffer | string): Promise<string> {

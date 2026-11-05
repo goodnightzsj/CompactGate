@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   applyHostBodyQuirks,
   applyHostQuirks,
-  recoverResourceMismatchCompactionIds,
   resolveHostShortCircuit
 } from "../src/server/host-quirks.js";
+import { classifyProviderStateFailure } from "../src/server/provider-state-errors.js";
+import { recoverCompactionItemIds } from "../src/server/provider-state-portability.js";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
 import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
@@ -198,20 +199,8 @@ describe("resource mismatch error envelopes", () => {
   const body = Buffer.from(JSON.stringify({ store: false, input: [
     { type: "compaction", id: "cmp_synthetic", encrypted_content: "opaque-state" }
   ] }));
-  const recover = (error: unknown) => recoverResourceMismatchCompactionIds(
-    "agentrouter.org", body, 400, Buffer.from(JSON.stringify(error))
-  );
-
-  it.each(["agentrouter.org", "api.agentrouter.org", "anyrouter.top", "api.anyrouter.top", " API.ANYROUTER.TOP "])(
-    "enables resource recovery on %s", (host) => {
-      expect(recoverResourceMismatchCompactionIds(host, body, 400, Buffer.from(JSON.stringify(direct)))?.removedIds).toBe(1);
-    }
-  );
-
-  it.each(["other.example", "notanyrouter.top", "anyrouter.top.example", "agentrouter.org.example"])(
-    "does not enable resource recovery on %s", (host) => {
-      expect(recoverResourceMismatchCompactionIds(host, body, 400, Buffer.from(JSON.stringify(direct)))).toBeNull();
-    }
+  const recover = (error: unknown) => recoverCompactionItemIds(
+    body, classifyProviderStateFailure(400, Buffer.from(JSON.stringify(error)))
   );
 
   it.each(agentrouterResourceErrorCases)("recognizes semantic variants: $name", ({ response }) => {

@@ -284,7 +284,8 @@ profile 时，再通过 `ANTHROPIC_CUSTOM_HEADERS` 注入请求级
   },
   "primary_failover": {
     "auto_schedule": true,
-    "state_portability": "recover_on_error"
+    "state_portability": "recover_on_error",
+    "state_recovery_retention_hours": 0
   }
 }
 ```
@@ -357,6 +358,8 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 
 成功 JSON 响应还携带续接 ID 等业务元数据，不能只保留诊断前缀：其完整缓冲、RemoteV1 完整压缩结果及协议转换累计输入各限 32 MiB，超限明确中断且不缓存不完整结果。同协议透明流的终态修复只限制待解析单帧，不限制整个流。这些均为每请求预算，并非全进程内存上限；观察预算之外的元数据无法保证可恢复。
 
+原生 Anthropic 的文本截流保留仍会补齐终态，但显式错误后不再追加成功；空流、仅心跳或未完成的工具回合返回 SSE 错误，避免把半截工具参数交付成成功。全局重试与账号冷却共用 `retry-after-ms`（优先）、`Retry-After` 小数秒/日期解析，继续受原有等待和总超时预算约束。
+
 请求 deadline 仍包含本地准备耗时。尚未创建出站请求就耗尽预算时，返回超时但不计上游健康失败，也不广播密钥活动；真实连接失败仍计入健康，重试前预算耗尽也不会抹掉此前已经发生的出站尝试。
 
 `logging.redact_body` 是为旧配置保留的兼容字段，当前不会改变 SQLite 正文或抓包正文；鉴权头、Cookie 头和常见凭据查询参数始终单独脱敏。Studio 不提供这个无效开关，保存其他日志设置时也不会重写它。
@@ -376,15 +379,27 @@ Claude Code 的手工摘要提示仍按现有规则走 `claude.primary`，Compac
 ### `primary_failover.state_portability`
 
 - `off`：不做旧会话迁移。
-- `recover_on_error`：默认值。第一次始终把当前请求原样发给选中的 profile；只有明确的可修复 400，或具有目标健康和状态域证据的兼容性失败，才从原始请求体派生恢复请求。旧配置值 `compatibility_first` 和 `domain_aware` 在加载时归一化为此模式。
+- `recover_on_error`：默认值。未知状态首次原样发送；只有明确的可修复 400，或具有目标健康和状态域证据的兼容性失败，才从原始请求体派生恢复请求。只有已验证成功的修复规则可跨轮次或重启复用；旧负向规则不再拦截请求。旧配置值 `compatibility_first` 和 `domain_aware` 在加载时归一化为此模式。
 
-明确 `400 invalid_encrypted_content` 或 `previous_response_not_found` 直接执行一次错误专用修复。修复后仍返回同一明确 400 时,若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；错误专用修复按错误位置插入。所有请求固定在当前 profile/host，最多发送 4 个不同 body，且每次都从同一份不可变请求体派生。只有完整成功响应才更新持久绑定。
+统一分类器优先使用稳定错误码，也识别 `code: null` 时明确的 `The encrypted content ... could not be verified` / 解密失败语句，包括 item ID、完整或缩略密文、一层已知网关包装和压缩响应；不靠动态 ID、trace 或密文前缀匹配。按实际定位项累积修复并重新分类下一次错误。修复后仍失败时，若跨域证据成立仍可继续 strict。welfare 一类泛化失败必须同时满足：请求含 provider-owned state、目标 profile 最近 15 分钟有同模型/端点的无状态成功，以及已知状态域不匹配；来源未知时还要求 10 分钟内出现两次相同失败。恢复链为原始请求、CPA 低损清理、严格跨域清理；所有尝试固定当前 profile/host/凭据，最多发送 4 个不同 body，从不可变请求体派生。只有完整成功响应才更新持久绑定。
+
+`invalid_responses_request` 和通用 strict 路径不直接删除不透明 compaction；失效 continuation 和远端 item reference 也不能靠删除 ID 假装恢复。优先用实际可读摘要或完整检查点重建；仅本轮明确 compaction 解密失败可进入下述有损续聊。不符合有损条件或尝试仍失败时，保留实际上游错误，不保存负向拦截规则；旧规则即使已经落盘也会被忽略。正向规则的恢复材料失效时退回原始请求，不产生缓存前置 `422`，也不能只凭缓存删除 compaction。既有非原生协议/split bridge 无法转换上下文的显式失败不变。邻近输出消息不是压缩历史的证据。移除 reasoning 密文、agent 加密块或无法恢复的 compaction 标为 `degraded`，摘要替换标为 `summary`。
 
 `invalid_encrypted_content` 的恢复也识别 `agent_message.content` 中的 `type: "encrypted_content"` 块，不依赖报错 item ID 前缀或 message 文案，适用于所有原生 Responses 上游。在同一 agent message 有非空 `input_text` 时，错误专用尝试删除加密块，保留明文、作者、接收方和其余字段；compaction 与工具调用不受此项清理影响。仅有密文而无可用明文的 agent message 保持不变，无法产生不同请求时返回原失败。移除加密块记录为 `degraded`，不承诺密文中的附加上下文可恢复；已有 strict 策略也复用此处理。`off`、响应已提交、取消、超时或错误响应截断时不重放。详见 [agent message 加密内容恢复](docs/2026-11-04-agent-message-hydration.md)。
 
-`agentrouter.org` 和 `anyrouter.top`（均含子域）的原生 Responses 另有一项定向恢复：首发收到“item 创建于不同 OpenAI resource，需使用创建它的同一 resource 访问”的 HTTP 400 `invalid_request_error` 后，若 `store=false`、无存储引用且 compaction 携带密文，只删除 `compaction.id`，在同一上游重试一次。anyrouter 不启用 agentrouter 的首发普通 item ID 清理。识别要求两个完整英文语句，但不绑定 Azure 品牌：支持供应商名称变化、`***`/`[REDACTED]` 等脱敏文本、无品牌、大小写及空白变化；允许一层以 Responses/upstream/gateway/proxy/API/HTTP 400 和 bad request/error 组成的诊断前缀。已知 Go 数字 `error.code` 解码失败包装的一层 `raw:` JSON（可带末尾 32 位十六进制 trace）复用同一识别规则。未知包装、任意引用、否定语句、缺失语句、递归包装和畸形内层 JSON 不用于该定向恢复。密文与其余上下文保持不变；第二次失败直接返回，不继续 CPA/strict，原始错误不被解包结果替换。自动识别覆盖上述同义表现层变化，不承诺任意自然语言改写或跨资源密文可用，且 `state_portability=off` 时不启用。报文示例和边界见[资源冲突恢复说明](docs/2026-10-24-azure-resource-mismatch-plan.md#扩展至-anyrouter2026-11-03)。
+加密状态的错误驱动恢复对**所有原生 Responses 上游**生效，不再按 host 限定。已知资源冲突、指向 compaction 的明确解密失败及统一分类器支持的全部报文变体共用一个入口：`store=false`、无存储引用且 compaction 携带密文时，先仅删除 `compaction.id` 重试，密文不动，也不要求开启正文留存。reasoning 加密字段和有可用明文的 agent message 加密块继续按既有规则清理；缩略报文无定位时，只剩 compaction 承载密文才尝试去其 ID。后续明确状态错误继续交给同一有界恢复链，保留之前的定向修复；普通失败仍停止，不因 ID 修复进入 CPA/strict。这不是对任意 400 的无条件清理，也不扩展 agentrouter 特有的首发普通 item ID quirk。原始错误不被解包结果替换。资源语法与包装历史见[资源冲突恢复说明](docs/2026-10-24-azure-resource-mismatch-plan.md#扩展至-anyrouter2026-11-03)，当前全局行为见[统一恢复说明](docs/2026-11-05-provider-state-recovery.md)。
+
+有损续聊是 `recover_on_error` 的最后一种明确解密错误恢复：ID 尝试仍被拒且没有可用摘要/检查点时，允许仅从派生的出站正文移除被拒 compaction。有定位时只处理匹配项；无定位时要求只剩唯一 compaction 承载密文。必须 `store=false`、无 continuation/远端引用并有其他非 compaction 输入，保留其余消息及工具配对；仍共享四次发送上限。成功返回 `x-compactgate-context-fidelity: degraded`，日志记录 `compactionItemsRemoved`。这会丢失仅存在于该压缩块内的历史，不是无损恢复；不改客户端原历史、不新增留存、不在首发仅凭缓存删除。仅有资源冲突、普通错误或通用 strict 不能触发此删除；关闭自动恢复仍用 `off`。
 
 通过 `POST /api/config/profiles/apply` 手动应用 Codex profile 是一次权威切换：CompactGate 会清除旧的进程内会话 stickiness，并强制下一次 Primary 选择新 profile，即使 `auto_schedule=true`。自动调度内部同步 active profile 不触发该强制逻辑。
+
+全局恢复还覆盖有明文载荷的普通消息、function/custom tool 与 web_search 的顶层密文副本；空 reasoning 会移除，有可读摘要则保留。所有载体共用 compaction 归因和成功规则指纹，工具参数内的同名字段保持原样。HTTP 200 SSE 的明确状态错误可在交付输出前进入同一恢复链：只暂存最多 64 KiB、最长 1 秒的前缀；出现输出、工具、未知事件或达到预算立即透传，此后不重放。没有可用修复时保留原 SSE 状态和正文。实现、外部源码依据及全部上游兼容类别的融合决策见[全局兼容方案](docs/2026-11-05-global-compatibility.md)。
+
+### `primary_failover.state_recovery_retention_hours`
+
+默认 `0`，不保存恢复用对话正文。显式设置为 `1`–`720` 的整数，才在现有 SQLite 日志库中保存有界检查点：单项最多 4 MiB，总量最多 64 MiB；仅记录完整成功 JSON/SSE 对应的可见历史。适用于原生 Responses Remote V1/V2 和 continuation，不保证隐藏推理等价。设置回 `0` 会逻辑删除检查点并阻止在途旧请求写回；不清除其他日志/抓包或备份，也不是磁盘安全擦除。
+
+成功修复的规则元数据独立保存 24 小时、最多 8192 项，不含明文、原始密文、item ID 或凭据；规则按会话、目标资源与状态集合指纹隔离，不缓存失败。没有稳定会话标识时不跨请求保存恢复关联。重建长历史会增加输入 token，超限或缺少材料时明确失败，不偷偷裁剪。配置开关、诊断响应头与恢复限制见[统一恢复说明](docs/2026-11-05-provider-state-recovery.md)。
 
 ### `compact`
 

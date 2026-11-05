@@ -186,6 +186,7 @@ export interface LoggingConfig {
 export interface PrimaryFailoverConfig {
   auto_schedule: boolean;
   state_portability: PrimaryStatePortabilityMode;
+  state_recovery_retention_hours?: number;
 }
 
 export interface CompactGateRuntimeConfig {
@@ -508,7 +509,8 @@ export interface RequestLogEntry {
 
 export interface ProviderStatePortabilityLog {
   decision: "not_applicable" | "disabled" | "observed" | "recovery";
-  trigger: "none" | "explicit_400" | "profile_switch_failure" | "legacy_failure_threshold";
+  trigger: "none" | "explicit_400" | "profile_switch_failure" | "legacy_failure_threshold" | "cached_recovery";
+  recovery_unavailable?: boolean;
   target_state_free_success: boolean;
   conversation_hash: string | null;
   source_profile_id: string | null;
@@ -520,6 +522,7 @@ export interface ProviderStatePortabilityLog {
     encrypted_reasoning: number;
     invalid_encrypted_reasoning: number;
     encrypted_agent_messages?: number;
+    encrypted_non_compaction_items?: number;
     compaction: number;
     previous_response_id: number;
   };

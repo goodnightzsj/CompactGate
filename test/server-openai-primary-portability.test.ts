@@ -216,7 +216,7 @@ describe("primary provider-state error recovery", () => {
     expect(requests).toHaveLength(2);
     expect(requests[0].body).toBe(body);
     expect(JSON.parse(requests[1].body).input).toEqual([
-      { type: "reasoning", summary: [] }, { type: "reasoning", summary: [] }, original.input[2],
+      original.input[2],
       { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }, ...original.input.slice(4)
     ]);
     expect(requests[1].headers["x-codex-beta-features"]).toBe("remote_compaction_v2");
@@ -298,7 +298,7 @@ describe("primary provider-state error recovery", () => {
     ]);
   });
 
-  it("removes rejected remote-v2 compaction and retries once", async () => {
+  it("restores a readable remote-v2 summary and retries once", async () => {
     const requests: CapturedRequest[] = [];
     const upstream = await startCapturedOpenAiUpstream(requests, (res) => {
       if (requests.length === 1) {
@@ -316,7 +316,7 @@ describe("primary provider-state error recovery", () => {
       model: "gpt-5.5",
       input: [
         { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] },
-        { type: "compaction", encrypted_content: "opaque-provider-state" },
+        { type: "compaction", encrypted_content: "The previous work is preserved in this readable summary." },
         { type: "message", role: "user", content: "continue" }
       ]
     });
@@ -332,6 +332,7 @@ describe("primary provider-state error recovery", () => {
     expect(requests[0].body).toBe(body);
     expect(JSON.parse(requests[1].body).input).toEqual([
       { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] },
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "The previous work is preserved in this readable summary." }] },
       { type: "message", role: "user", content: "continue" }
     ]);
     const log = await waitForLogEntry(
@@ -345,8 +346,8 @@ describe("primary provider-state error recovery", () => {
         {
           strategy: "error_400",
           status: 200,
-          fidelity: "degraded",
-          migration_counts: { compactionItemsRemoved: 1 }
+          fidelity: "summary",
+          migration_counts: { compactionItemsRemoved: 0, compactionItemsReplaced: 1 }
         }
       ]
     });
@@ -456,7 +457,7 @@ describe("primary provider-state error recovery", () => {
         id: "rs_foreign",
         encrypted_content: validEncryptedContent(),
         content: null,
-        summary: []
+        summary: [{ type: "summary_text", text: "Readable context survives the first repair." }]
       }]
     });
 
@@ -578,7 +579,7 @@ describe("primary provider-state error recovery", () => {
       (res) => writeJson(res, { id: "resp_old", output: [] }),
       async (req, res) => {
         nextRequests.push(await captureRequest(req));
-        writeSse(res, [{
+        writeSse(res, [{ type: "response.output_text.delta", delta: "Already delivered." }, {
           type: "response.failed",
           response: { error: { code: "invalid_encrypted_content" } }
         }]);

@@ -9,6 +9,17 @@ import {
 } from "../src/server/compaction-bridge.js";
 
 describe("compaction continuity matrix", () => {
+  it("never treats retained output messages as a summary of opaque compaction", () => {
+    const store = new CompactionBridgeStore();
+    const scope = { compactUpstream: "https://compact.example", sourceModel: "a", targetModel: "b" };
+    const compaction = { type: "compaction", encrypted_content: "opaque-provider-state" };
+    store.storeCompactResponse(Buffer.from(JSON.stringify({ output: [
+      { type: "message", role: "user", content: "A retained prompt is not the previous conversation." },
+      { type: "message", role: "assistant", content: "An adjacent answer is not proof of summarized history." }, compaction
+    ] })), { scope });
+    const body = Buffer.from(JSON.stringify({ input: [compaction] }));
+    expect(store.rewritePrimaryBody(body, scope)).toEqual({ body, replacedCompactionCount: 0, remainingCompactionCount: 1, knownMissingCompactionCount: 1 });
+  });
   it("retains compact tombstones as bounded digests until their original TTL", () => {
     let now = 1_000;
     const store = new CompactionBridgeStore({ maxEntries: 1, ttlMs: 1_000, now: () => now });
@@ -28,7 +39,7 @@ describe("compaction continuity matrix", () => {
       type: "compaction", encrypted_content
     })) }));
     expect(store.rewritePrimaryBody(body, scope)).toMatchObject({
-      replacedCompactionCount: 1, knownMissingCompactionCount: 2
+      replacedCompactionCount: 0, knownMissingCompactionCount: 3
     });
     expect(store.rewritePrimaryBody(body, { ...scope, sourceModel: "other" })).toMatchObject({
       replacedCompactionCount: 0, knownMissingCompactionCount: 3

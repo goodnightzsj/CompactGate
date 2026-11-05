@@ -131,14 +131,20 @@ export function readResponseId(result: PrimaryRouteResult): string | null {
  * same Retry-After reading but has only headers, not a `PrimaryRouteResult`.
  */
 export function parseRetryAfterMs(headers: IncomingHttpHeaders | undefined, now: number): number | null {
+  const numeric = /^[+-]?(?:\d+\.?\d*|\.\d+)$/;
+  const milliseconds = readHeader(headers?.["retry-after-ms"]);
+  if (milliseconds && numeric.test(milliseconds)) {
+    const delay = Number(milliseconds);
+    if (Number.isFinite(delay) && delay >= 0) return Math.round(delay);
+  }
   const value = readHeader(headers?.["retry-after"]);
   if (!value) {
     return null;
   }
 
-  const seconds = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.round(seconds * 1000);
+  if (numeric.test(value)) {
+    const delay = Number(value) * 1000;
+    return Number.isFinite(delay) && delay >= 0 ? Math.round(delay) : null;
   }
 
   const timestamp = Date.parse(value);

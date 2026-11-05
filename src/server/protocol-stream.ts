@@ -1616,9 +1616,9 @@ export function createChatToAnthropicResponseTransform(
  * `content_block_stop`/`message_delta`/`message_stop`, and Claude Code discards
  * the whole assistant message when the terminator never arrives — the text it
  * already rendered disappears, so a truncated answer reads as no answer at all.
- * Bytes are forwarded unchanged; only an upstream that ends without
- * `message_stop` gets the open blocks closed and the terminator appended, so the
- * client keeps whatever did arrive.
+ * Bytes are forwarded unchanged; a text response that loses `message_stop`
+ * gets its open blocks closed so the client keeps whatever did arrive. Errors,
+ * empty streams and unfinished tool turns must never become successful turns.
  *
  * The repair is deliberately silent: nothing is injected into the text, because
  * an injected notice would become part of the assistant message and be replayed
@@ -1672,7 +1672,13 @@ function responseDecompressor(headers: IncomingHttpHeaders): Transform | null {
 function createAnthropicTerminatorRepairStream(): Transform {
   const decoder = new StringDecoder("utf8");
   const openBlocks = new Set<number>();
+  const openToolBlocks = new Set<number>();
   let pending = "";
+  let sawMessageStart = false;
+  let sawError = false;
+  let sawTool = false;
+  let sawText = false;
+  let stopReason: string | null = null;
   let sawMessageStop = false;
   let sawMessageDelta = false;
   let usage: Record<string, unknown> | null = null;
@@ -1692,18 +1698,40 @@ function createAnthropicTerminatorRepairStream(): Transform {
     }
     if (event.type === "content_block_start" && typeof event.index === "number") {
       openBlocks.add(event.index);
+      if (isRecord(event.content_block) && event.content_block.type === "text" &&
+        typeof event.content_block.text === "string" && event.content_block.text.length > 0) sawText = true;
+      if (isRecord(event.content_block) &&
+        (event.content_block.type === "tool_use" || event.content_block.type === "server_tool_use")) {
+        openToolBlocks.add(event.index);
+        sawTool = true;
+      }
+      return;
+    }
+    if (event.type === "content_block_delta" && isRecord(event.delta)) {
+      if (event.delta.type === "text_delta" && typeof event.delta.text === "string" && event.delta.text.length > 0) sawText = true;
+      if (event.delta.type === "input_json_delta" && typeof event.index === "number") {
+        sawTool = true;
+        openToolBlocks.add(event.index);
+      }
       return;
     }
     if (event.type === "content_block_stop" && typeof event.index === "number") {
       openBlocks.delete(event.index);
+      openToolBlocks.delete(event.index);
       return;
     }
-    if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
-      usage = event.message.usage;
+    if (event.type === "message_start" && isRecord(event.message)) {
+      sawMessageStart = true;
+      if (isRecord(event.message.usage)) usage = event.message.usage;
+      return;
+    }
+    if (event.type === "error") {
+      sawError = true;
       return;
     }
     if (event.type === "message_delta") {
       sawMessageDelta = true;
+      if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") stopReason = event.delta.stop_reason;
       if (isRecord(event.usage)) {
         usage = event.usage;
       }
@@ -1742,8 +1770,14 @@ function createAnthropicTerminatorRepairStream(): Transform {
         // A connection cut mid-frame leaves a trailing frame with no blank line.
         observeFrame(pending);
       }
-      if (sawMessageStop) {
+      if (sawMessageStop || sawError) {
         callback();
+        return;
+      }
+      if (!sawMessageStart || openToolBlocks.size > 0 || (!stopReason && (sawTool || !sawText))) {
+        callback(null, sseFrame("error", { type: "error", error: {
+          type: "api_error", message: "Upstream stream ended before a complete message or tool turn."
+        } }));
         return;
       }
       let repaired = "";

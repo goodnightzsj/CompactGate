@@ -38,6 +38,7 @@ import {
 import { readLogStats, type LogStatsOptions } from "./logger-analytics.js";
 import type { ProviderStateBinding } from "./provider-state-binding.js";
 import { extractResponseModelFromText } from "./response-model.js";
+import { ProviderStateRecoveryStore } from "./provider-state-recovery-store.js";
 
 export interface RequestLoggerOptions {
   maxDatabaseBytes?: number;
@@ -89,6 +90,7 @@ export function resolveLogDatabasePath(configPath: string): string {
 }
 
 export class RequestLogger extends EventTarget {
+  readonly providerStateRecovery: ProviderStateRecoveryStore;
   private readonly db: DatabaseSync;
 
   private readonly databasePath: string;
@@ -140,6 +142,10 @@ export class RequestLogger extends EventTarget {
     this.db.exec(LOG_TABLE_SQL);
     this.db.exec(PROVIDER_STATE_BINDING_SCHEMA_SQL);
     this.db.exec(PROVIDER_STATE_RECOVERY_EVIDENCE_SCHEMA_SQL);
+    this.providerStateRecovery = new ProviderStateRecoveryStore(this.db, error => {
+      this.recordPersistenceFailure("persist provider-state recovery", error);
+      console.error("Failed to persist provider-state recovery; the upstream response is unchanged.", error);
+    });
     this.migratePersistedSchema();
     this.ensureFacetSummary();
     this.reconcileInterruptedCaptures();

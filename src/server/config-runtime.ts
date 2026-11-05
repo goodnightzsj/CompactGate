@@ -233,6 +233,10 @@ export function mergeRuntimeConfig(
       state_portability: readPrimaryStatePortabilityMode(
         readChild(patchRecord.primary_failover).state_portability,
         base.primary_failover.state_portability
+      ),
+      state_recovery_retention_hours: readStateRecoveryRetention(
+        readChild(patchRecord.primary_failover).state_recovery_retention_hours,
+        base.primary_failover.state_recovery_retention_hours ?? 0
       )
     }
   };
@@ -245,6 +249,10 @@ function validateTimeoutMs(value: number, field: string): void {
 }
 
 function validatePrimaryFailover(value: CompactGateRuntimeConfig["primary_failover"]): void {
+  const retention = value.state_recovery_retention_hours ?? 0;
+  if (!Number.isInteger(retention) || retention < 0 || retention > 720) {
+    throw new ConfigError("primary_failover.state_recovery_retention_hours must be an integer between 0 and 720 (0 disables content retention).");
+  }
   if (typeof value.auto_schedule !== "boolean") {
     throw new ConfigError("primary_failover.auto_schedule must be a boolean.");
   }
@@ -253,6 +261,12 @@ function validatePrimaryFailover(value: CompactGateRuntimeConfig["primary_failov
       "primary_failover.state_portability must be off or recover_on_error."
     );
   }
+}
+
+function readStateRecoveryRetention(value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number") throw new ConfigError("primary_failover.state_recovery_retention_hours must be a number.");
+  return value;
 }
 
 function readPrimaryStatePortabilityMode(

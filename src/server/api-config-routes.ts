@@ -220,7 +220,9 @@ function broadcastConfigSnapshot(
   syncLogging = false
 ): void {
   if (syncLogging) {
-    const logging = configStore.get().logging;
+    const config = configStore.get();
+    const logging = config.logging;
+    logger.providerStateRecovery.configureRetention(config.primary_failover.state_recovery_retention_hours ?? 0);
     logger.configure({
       keepRecent: logging.keep_recent,
       maxDatabaseBytes: logging.max_database_bytes

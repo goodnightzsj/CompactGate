@@ -2,6 +2,7 @@ import http, { type IncomingMessage, type RequestOptions } from "node:http";
 import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { agentrouterResourceErrorCases } from "./helpers/agentrouter-resource-errors.js";
+import { encryptedAgentMessage } from "./helpers/encrypted-agent-message.js";
 import {
   captureRequest, postJson, startApp, startUpstream, waitForLogEntry, writeJsonResponse,
   type CapturedRequest
@@ -34,7 +35,76 @@ const requestBody = (stream = false) => ({
 });
 const betaHeaders = { "x-codex-beta-features": "remote_compaction_v2" };
 
-describe.each(["agentrouter.org", "anyrouter.top", "api.anyrouter.top"].flatMap(
+describe.each(["agentrouter.org", "api.anyrouter.top", "relay.example", "127.0.0.1"])("%s encrypted compaction recovery without retention", host => {
+  it.each([false, true])("continues through both reported error forms and caches only success (stream=%s)", async stream => {
+    const sent: CapturedRequest[] = [];
+    const repeat = { type: "message", role: "user", content: "Keep both occurrences." };
+    const body = { model: "synthetic-model", store: false, stream, input: [
+      { type: "additional_tools", tools: [] }, repeat, { ...repeat },
+      compaction,
+      { type: "reasoning", encrypted_content: "opaque-reasoning", summary: [], content: null },
+      encryptedAgentMessage,
+      { type: "function_call", call_id: "call_lookup", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_lookup", output: "eu-west-2" },
+      { type: "custom_tool_call", call_id: "call_check", name: "check", input: "eu-west-2" },
+      { type: "custom_tool_call_output", call_id: "call_check", output: "confirmed" },
+      { type: "message", role: "user", content: "Continue with the confirmed region." }
+    ] };
+    const expected = { ...body, input: [...body.input.slice(0, 3),
+      { type: "compaction", encrypted_content: compaction.encrypted_content },
+      { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }, ...body.input.slice(6)
+    ] };
+    const upstream = await startUpstream(async (req, res) => {
+      sent.push(await captureRequest(req));
+      if (sent.length <= 2) {
+        res.writeHead(400, { "content-type": "application/json", "content-encoding": "gzip" });
+        res.end(gzipSync(JSON.stringify({ error: { type: "invalid_request_error", code: null, param: "",
+          message: `OpenAI Responses bad request: The encrypted content ${sent.length === 1
+            ? "for item cmp_synthetic" : "gAAA...8A=="} could not be verified. Reason: Encrypted content could not be decrypted or parsed. [trace_id=synthetic]`
+        } })));
+        return;
+      }
+      const response = { id: "resp_recovered", status: "completed", output: [{ type: "message", role: "assistant",
+        content: [{ type: "output_text", text: "eu-west-2" }] }] };
+      if (!stream) writeJsonResponse(res, response);
+      else { res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ type: "response.completed", response })}\n\n`); }
+    });
+    const app = await startApp(upstream.url.replace("127.0.0.1", host), undefined, {
+      primary: { api_key: "synthetic-key" }, primary_failover: { state_recovery_retention_hours: 0 }
+    });
+    const headers = { ...betaHeaders, "x-compactgate-session": "encrypted-recovery-session" };
+    const response = await postJson(app.url, "/v1/responses", body, headers);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("eu-west-2");
+    expect(sent).toHaveLength(3);
+    expect(JSON.parse(sent[2].body)).toEqual(expected);
+    const idOnly = JSON.parse(sent[0].body);
+    delete idOnly.input[3].id;
+    expect(JSON.parse(sent[1].body)).toEqual(idOnly);
+    const log = await waitForLogEntry(app.url, entry => entry.request_id === response.headers.get("x-compactgate-request-id"));
+    expect(log.provider_state_portability).toMatchObject({ trigger: "explicit_400", attempts: [
+      { status: 400, error_code: "invalid_encrypted_content" },
+      { status: 400, fidelity: "exact" },
+      { status: 200, fidelity: "degraded", migration_counts: { compactionItemsRemoved: 0, compactionItemsReplaced: 0,
+        encryptedReasoningFieldsRemoved: 1, encryptedAgentMessageBlocksRemoved: 1 } }
+    ] });
+    const next = await postJson(app.url, "/v1/responses", body, headers);
+    expect(next.status).toBe(200);
+    expect(next.headers.get("x-compactgate-state-recovery")).toBe("cached");
+    await next.text();
+    expect(sent).toHaveLength(4);
+    expect(JSON.parse(sent[3].body)).toEqual(expected);
+    for (const request of sent) {
+      expect(request.headers.host).toBe(sent[0].headers.host);
+      expect(request.headers.authorization).toBe("Bearer synthetic-key");
+      expect(request.headers["x-codex-beta-features"]).toBe("remote_compaction_v2");
+      expect(Number(request.headers["content-length"])).toBe(Buffer.byteLength(request.body));
+    }
+  });
+});
+
+describe.each(["agentrouter.org", "anyrouter.top", "api.anyrouter.top", "relay.example", "127.0.0.1"].flatMap(
   (host) => agentrouterResourceErrorCases.map((fixture) => ({ host, ...fixture }))
 ))("$host recovery through the HTTP proxy ($name)", ({ host, response: upstreamError }) => {
   it.each([false, true])("preserves context and the selected upstream before a successful stream=%s retry", async (stream) => {
@@ -90,7 +160,7 @@ describe.each(["agentrouter.org", "anyrouter.top", "api.anyrouter.top"].flatMap(
     });
   });
 
-  it.each(["changed", "same"])("returns the %s second error with no third send or broader cleanup", async (kind) => {
+  it.each(["changed", "same"])("preserves the %s error after only its permitted recovery attempts", async (kind) => {
     const sent: CapturedRequest[] = [];
     const secondError = kind === "same" ? upstreamError
       : { error: { code: "invalid_encrypted_content", message: "synthetic second failure" } };
@@ -102,17 +172,22 @@ describe.each(["agentrouter.org", "anyrouter.top", "api.anyrouter.top"].flatMap(
     const response = await postJson(app.url, "/v1/responses", requestBody(true), betaHeaders);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual(secondError);
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(kind === "same" ? 2 : 3);
     expect(JSON.parse(sent[1].body).input[1]).toEqual({ type: "compaction", encrypted_content: compaction.encrypted_content });
+    if (kind === "changed") {
+      const expected = JSON.parse(sent[1].body);
+      expected.input.splice(1, 1);
+      expect(JSON.parse(sent[2].body)).toEqual(expected);
+    }
   });
 
-  it.each(["other-host", "disabled", "success"])("keeps existing behavior for %s", async (scenario) => {
+  it.each(["disabled", "success"])("keeps existing behavior for %s", async (scenario) => {
     const sent: CapturedRequest[] = [];
     const upstream = await startUpstream(async (req, res) => {
       sent.push(await captureRequest(req));
       writeJsonResponse(res, scenario === "success" ? { output: [] } : upstreamError, scenario === "success" ? 200 : 400);
     });
-    const app = await startApp(upstream.url.replace("127.0.0.1", scenario === "other-host" ? "other.example" : host), undefined, {
+    const app = await startApp(upstream.url.replace("127.0.0.1", host), undefined, {
       primary_failover: { state_portability: scenario === "disabled" ? "off" : "recover_on_error" }
     });
     const response = await postJson(app.url, "/v1/responses", requestBody(), betaHeaders);

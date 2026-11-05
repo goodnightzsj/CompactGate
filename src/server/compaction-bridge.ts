@@ -172,7 +172,9 @@ export class CompactionBridgeStore {
       }
 
       const key = compactionKey(options.scope, item.encrypted_content);
-      const fallbackItems = extractFallbackItems(output, item);
+      // Retained output messages are not proof of what the opaque compaction summarized.
+      const summary = synthesizeAssistantMessage(item.encrypted_content);
+      const fallbackItems = summary ? [summary] : [];
       rememberMapEntry(this.knownCompactionStateByContent, sha256(item.encrypted_content), expiresAt);
       if (fallbackItems.length === 0) {
         continue;
@@ -325,26 +327,6 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function extractFallbackItems(
-  output: unknown[],
-  compactionItem: { type: "compaction"; encrypted_content: string }
-): unknown[] {
-  const assistantMessages = output.filter(
-    (item) => isMessageItem(item) && item.role === "assistant"
-  );
-  if (assistantMessages.length > 0) {
-    return assistantMessages;
-  }
-
-  const userMessages = output.filter((item) => isMessageItem(item) && item.role === "user");
-  if (userMessages.length > 0) {
-    return userMessages;
-  }
-
-  const synthesizedMessage = synthesizeAssistantMessage(compactionItem.encrypted_content);
-  return synthesizedMessage ? [synthesizedMessage] : [];
-}
-
 function isCompactionItem(
   value: unknown
 ): value is { type: "compaction"; encrypted_content: string } {
@@ -353,10 +335,6 @@ function isCompactionItem(
     value.type === "compaction" &&
     typeof value.encrypted_content === "string"
   );
-}
-
-function isMessageItem(value: unknown): value is { type: "message"; role: string } {
-  return isRecord(value) && value.type === "message" && typeof value.role === "string";
 }
 
 function deepCloneJsonArray(items: unknown[]): unknown[] {

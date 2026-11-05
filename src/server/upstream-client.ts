@@ -24,6 +24,8 @@ import {
   normalizeMaxObservedStreamEventBytes
 } from "./upstream-response-buffer.js";
 import { extractResponseErrorSummary } from "./usage.js";
+import { ProviderStateStreamGate } from "./provider-state-stream.js";
+import type { ProviderStateFailure } from "./provider-state-errors.js";
 import type { ClientDisconnectPhase, StreamOutcome } from "../shared/types.js";
 
 export interface BufferedUpstreamOptions {
@@ -41,6 +43,7 @@ export interface BufferedUpstreamOptions {
   extraResponseHeaders: Record<string, string>;
   writeResponse?: boolean;
   deferHttpErrors?: boolean;
+  deferProviderStateStreamErrors?: boolean;
   deferRetryableStreamErrors?: boolean;
   maxBufferedResponseBytes?: number;
   requireCompleteResponse?: boolean;
@@ -72,6 +75,7 @@ export interface UpstreamResponseTransform {
 
 export interface BufferedUpstreamResult {
   status: number;
+  deferredProviderStateFailure?: ProviderStateFailure;
   errorSummary: string | null;
   responseBody: Buffer;
   responseBodyBytes?: number;
@@ -178,6 +182,7 @@ export function sendBufferedUpstreamRequest(
       diagnostics?.closing(kind);
       diagnostics?.settle(kind);
       connectionAbort.abort();
+      activeResponse?.providerStateGate?.destroy();
       if (activeResponse?.responseTransform) {
         const transform = activeResponse.responseTransform.stream;
         activeResponse.response.unpipe(transform);
@@ -304,6 +309,13 @@ export function sendBufferedUpstreamRequest(
           options.deferRetryableStreamErrors === true && status >= 500;
         const shouldDeferResponse = shouldDeferHttpError || shouldDeferRetryableResponse;
         const shouldWriteResponse = options.writeResponse !== false && !shouldDeferResponse;
+        const providerStateGate = shouldWriteResponse && options.deferProviderStateStreamErrors === true &&
+          status >= 200 && status < 300 && String(response.headers["content-type"] ?? "").toLowerCase().includes("text/event-stream")
+          ? new ProviderStateStreamGate(response.headers) : null;
+        const providerStateGateCompletion = providerStateGate ? finished(providerStateGate, { cleanup: true }).catch((error: unknown) => {
+          rejectOnce(new UpstreamRequestError(error instanceof Error ? error.message : "Upstream state observation failed.",
+            responseDetails("upstream_stream_incomplete", "before_terminal"), { cause: error }));
+        }) : null;
         const requireCompleteJson = options.requireCompleteJsonResponse === true && status < 400 &&
           String(response.headers["content-type"] ?? "").toLowerCase().includes("application/json");
         const requireCompleteResponse = options.requireCompleteResponse || requireCompleteJson;
@@ -322,6 +334,7 @@ export function sendBufferedUpstreamRequest(
             ? options.responseTransform?.(status, response.headers) ?? null
             : null;
         } catch (error) {
+          providerStateGate?.destroy();
           response.resume();
           rejectOnce(new UpstreamRequestError(
             error instanceof Error ? error.message : "Upstream response transform failed.",
@@ -352,6 +365,7 @@ export function sendBufferedUpstreamRequest(
             }
           });
           responseTransformCompletion = finished(responseTransform.stream, { cleanup: true }).catch((error: unknown) => {
+            if (providerStateGate?.failure) return;
             rejectOnce(new UpstreamRequestError(
               error instanceof Error ? error.message : "Upstream response transform failed.",
               responseDetails("upstream_stream_incomplete", "before_terminal"),
@@ -385,17 +399,21 @@ export function sendBufferedUpstreamRequest(
           clientResponseBodyTruncated: false,
           responseTransform,
           responseTransformCompletion,
+          providerStateGate,
+          providerStateGateCompletion,
           clientDisconnectPhase: "none",
           responseResolutionStarted: false
         };
         activeResponse = responseState;
-        if (shouldWriteResponse) {
+        const writeHeaders = () => {
+          if (options.res.headersSent || options.res.destroyed) return;
           copyResponseHeaders(responseTransform?.responseHeaders ?? response.headers, options.res);
           for (const [name, value] of Object.entries(options.extraResponseHeaders)) {
             options.res.setHeader(name, value);
           }
           options.res.writeHead(status);
-        }
+        };
+        if (shouldWriteResponse && !providerStateGate) writeHeaders();
         response.on("data", (chunk: Buffer) => {
           // Transport draining must not mutate a settled response or its usage.
           if (responseState.responseResolutionStarted) return;
@@ -436,7 +454,17 @@ export function sendBufferedUpstreamRequest(
           }
         });
         if (shouldWriteResponse) {
-          if (responseTransform) {
+          if (providerStateGate) {
+            const destination = responseTransform?.stream ?? options.res;
+            providerStateGate.on("data", writeHeaders);
+            providerStateGate.pipe(destination, { end: false });
+            if (responseTransform) responseTransform.stream.pipe(options.res);
+            providerStateGate.on("end", () => {
+              if (providerStateGate.failure) responseTransform?.stream.destroy();
+              else { writeHeaders(); destination.end(); }
+            });
+            response.pipe(providerStateGate);
+          } else if (responseTransform) {
             response.pipe(responseTransform.stream).pipe(options.res);
           } else {
             response.pipe(options.res);
@@ -459,6 +487,7 @@ export function sendBufferedUpstreamRequest(
 
     async function resolveUpstreamResponse(responseState: ActiveUpstreamResponse) {
       const responseBody = Buffer.concat(responseState.responseChunks);
+      await responseState.providerStateGateCompletion;
       if (responseState.responseTransformCompletion) {
         await responseState.responseTransformCompletion;
       }
@@ -471,6 +500,7 @@ export function sendBufferedUpstreamRequest(
       if (settled) return;
       const result: BufferedUpstreamResult = {
         status: responseState.status,
+        ...(responseState.providerStateGate?.failure ? { deferredProviderStateFailure: responseState.providerStateGate.failure } : {}),
         errorSummary: extractResponseErrorSummary(
           responseState.status,
           responseBody,
@@ -507,6 +537,7 @@ export function sendBufferedUpstreamRequest(
       if (settled || !responseState) {
         return false;
       }
+      if (responseState.providerStateGate && !options.res.headersSent) return false;
       if (responseState.responseResolutionStarted) {
         if (disconnected === "client" && responseState.responseTransform) {
           // The broken sink no longer drains the adapter. Let its pending flush
@@ -527,6 +558,12 @@ export function sendBufferedUpstreamRequest(
       diagnostics?.mark("terminal_observed_ms");
       diagnostics?.closing(disconnected === "client" ? "client_after_terminal" : "upstream_after_terminal");
       responseState.responseResolutionStarted = true;
+      if (responseState.providerStateGate) {
+        responseState.response.unpipe(responseState.providerStateGate);
+        responseState.providerStateGate.unpipe();
+        responseState.providerStateGate.resume();
+        responseState.providerStateGate.end();
+      }
       if (responseState.responseTransform) {
         responseState.response.unpipe(responseState.responseTransform.stream);
         if (disconnected === "client") {
@@ -570,6 +607,8 @@ interface ActiveUpstreamResponse {
   clientResponseBodyTruncated: boolean;
   responseTransform: UpstreamResponseTransform | null;
   responseTransformCompletion: Promise<void> | null;
+  providerStateGate: ProviderStateStreamGate | null;
+  providerStateGateCompletion: Promise<void> | null;
   clientDisconnectPhase: ClientDisconnectPhase;
   responseResolutionStarted: boolean;
 }

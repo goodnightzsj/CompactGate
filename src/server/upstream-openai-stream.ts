@@ -37,6 +37,7 @@ export interface OpenAiStreamSummary {
 export interface OpenAiStreamObserverOptions {
   maxEventBytes?: number;
   onTerminalEvent?: () => void;
+  onEvent?: (name: string | null, record: Record<string, unknown> | null, data: string) => void;
   /** Only source observers receive this; transformed/buffered output has no source timing. */
   requestStartedAt?: number;
 }
@@ -77,7 +78,8 @@ function createProtocolStreamObserver(
     protocol,
     normalizeMaxObservedStreamEventBytes(options.maxEventBytes),
     options.onTerminalEvent,
-    options.requestStartedAt
+    options.requestStartedAt,
+    options.onEvent
   );
   const contentEncoding = readHeader(headers["content-encoding"])?.toLowerCase() ?? "";
   if (contentEncoding.includes("br")) {
@@ -128,7 +130,8 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     private readonly protocol: StreamProtocol,
     private readonly maxEventBytes: number,
     private onTerminalEvent?: () => void,
-    private readonly requestStartedAt?: number
+    private readonly requestStartedAt?: number,
+    private readonly onEvent?: OpenAiStreamObserverOptions["onEvent"]
   ) {}
 
   /**
@@ -170,6 +173,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     this.summary.decodeError = true;
     this.summary.generationSample = null;
     this.generationInvalid = true;
+    this.onEvent?.(null, null, "");
   }
 
   private observeLine(line: string): void {
@@ -194,6 +198,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   private flushEvent(): void {
     if (this.oversizedEvent) {
+      this.onEvent?.(this.eventName, null, "");
       if (this.eventName) {
         this.summary.eventCount += 1;
         this.recordEvent(this.eventName, null, "");
@@ -211,6 +216,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     this.summary.eventCount += 1;
     const data = this.dataLines.join("\n").trim();
     const record = this.readEventRecord(data);
+    this.onEvent?.(this.eventName, record, data);
     const eventType = typeof record?.type === "string" ? record.type : null;
     const wasTerminal = this.summary.sawTerminalEvent;
     if (!wasTerminal && this.eventName && eventType && this.eventName !== eventType) this.generationInvalid = true;

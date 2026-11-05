@@ -159,6 +159,7 @@ export async function createCompactGateServer(
   actualLogger.addEventListener("storage-pruned", notifyLogPrune);
   let pendingCaptureWriter: DebugCaptureWriter | undefined;
   try {
+    actualLogger.providerStateRecovery.configureRetention(configStore.get().primary_failover.state_recovery_retention_hours ?? 0);
     pendingCaptureWriter = captureWriter ?? createDebugCaptureWriter(
       configStore, actualLogger, studioEvents, codexVersionMonitor, clientIdentity
     );

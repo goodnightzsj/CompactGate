@@ -140,7 +140,8 @@ export const DEFAULT_CONFIG: CompactGateConfig = {
   },
   primary_failover: {
     auto_schedule: true,
-    state_portability: "recover_on_error"
+    state_portability: "recover_on_error",
+    state_recovery_retention_hours: 0
   },
   profile_scopes: {
     codex: {

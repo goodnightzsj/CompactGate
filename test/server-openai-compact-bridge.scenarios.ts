@@ -248,19 +248,20 @@ describe("CompactGate OpenAI routing", () => {
         },
         {
           type: "compaction",
-          encrypted_content: "EXPIRING_COMPACT_STATE"
+          encrypted_content: "SUMMARY FROM COMPACT: retained work."
         }
       ]
     }));
     const followUpBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
-      input: [{ type: "compaction", encrypted_content: "EXPIRING_COMPACT_STATE" }]
+      input: [{ type: "compaction", encrypted_content: "SUMMARY FROM COMPACT: retained work." }]
     }));
 
     store.storeCompactResponse(compactResponseBody, { scope });
+    expect(store.rewritePrimaryBody(followUpBody, scope, { allowReadableFallback: false }).replacedCompactionCount).toBe(1);
     now += 1_001;
 
-    expect(store.rewritePrimaryBody(followUpBody, scope)).toMatchObject({
+    expect(store.rewritePrimaryBody(followUpBody, scope, { allowReadableFallback: false })).toMatchObject({
       body: followUpBody,
       replacedCompactionCount: 0
     });
@@ -394,14 +395,14 @@ describe("CompactGate OpenAI routing", () => {
         },
         {
           type: "compaction",
-          encrypted_content: "CACHED_COMPACT_STATE"
+          encrypted_content: "SUMMARY FROM COMPACT CACHE"
         }
       ]
     }));
     const followUpBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
       input: [
-        { type: "compaction", encrypted_content: "CACHED_COMPACT_STATE" },
+        { type: "compaction", encrypted_content: "SUMMARY FROM COMPACT CACHE" },
         {
           type: "message",
           role: "user",
@@ -449,29 +450,29 @@ describe("CompactGate OpenAI routing", () => {
         },
         {
           type: "compaction",
-          encrypted_content: "SCOPED_COMPACT_STATE"
+          encrypted_content: "SCOPED SUMMARY: retained work."
         }
       ]
     }));
     const followUpBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
-      input: [{ type: "compaction", encrypted_content: "SCOPED_COMPACT_STATE" }]
+      input: [{ type: "compaction", encrypted_content: "SCOPED SUMMARY: retained work." }]
     }));
 
     store.storeCompactResponse(compactResponseBody, { scope: cachedScope });
 
-    expect(store.rewritePrimaryBody(followUpBody, mismatchedScope)).toMatchObject({
+    expect(store.rewritePrimaryBody(followUpBody, mismatchedScope, { allowReadableFallback: false })).toMatchObject({
       body: followUpBody,
       replacedCompactionCount: 0
     });
 
-    const rewritten = store.rewritePrimaryBody(followUpBody, cachedScope);
+    const rewritten = store.rewritePrimaryBody(followUpBody, cachedScope, { allowReadableFallback: false });
     expect(rewritten.replacedCompactionCount).toBe(1);
     expect(JSON.parse(rewritten.body.toString("utf8")).input).toEqual([
       {
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text: "SCOPED SUMMARY" }]
+        content: [{ type: "output_text", text: "SCOPED SUMMARY: retained work." }]
       }
     ]);
   });
@@ -527,7 +528,7 @@ describe("CompactGate OpenAI routing", () => {
           },
           {
             type: "compaction",
-            encrypted_content: "ENCRYPTED_COMPACT_STATE"
+            encrypted_content: "SUMMARY FROM COMPACT: retained work."
           }
         ]
       });
@@ -550,7 +551,7 @@ describe("CompactGate OpenAI routing", () => {
       input: [
         {
           type: "compaction",
-          encrypted_content: "ENCRYPTED_COMPACT_STATE"
+          encrypted_content: "SUMMARY FROM COMPACT: retained work."
         },
         {
           type: "message",
@@ -577,7 +578,7 @@ describe("CompactGate OpenAI routing", () => {
       {
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text: "SUMMARY FROM COMPACT" }]
+        content: [{ type: "output_text", text: "SUMMARY FROM COMPACT: retained work." }]
       },
       {
         type: "message",
@@ -875,7 +876,7 @@ describe("CompactGate OpenAI routing", () => {
           },
           {
             type: "compaction",
-            encrypted_content: "DEDUPED_BODY_AWARE_STATE"
+            encrypted_content: "DEDUPED BODY AWARE SUMMARY"
           }
         ]
       });
@@ -918,7 +919,7 @@ describe("CompactGate OpenAI routing", () => {
       input: [
         {
           type: "compaction",
-          encrypted_content: "DEDUPED_BODY_AWARE_STATE"
+          encrypted_content: "DEDUPED BODY AWARE SUMMARY"
         },
         {
           type: "message",
@@ -1027,7 +1028,7 @@ describe("CompactGate OpenAI routing", () => {
           },
           {
             type: "compaction",
-            encrypted_content: "JSON_STREAM_FALLBACK_STATE"
+            encrypted_content: "JSON STREAM FALLBACK SUMMARY"
           }
         ]
       });
@@ -1051,7 +1052,7 @@ describe("CompactGate OpenAI routing", () => {
 
     const followUpResponse = await postJson(app.url, "/v1/responses", {
       model: "gpt-5.5",
-      input: [{ type: "compaction", encrypted_content: "JSON_STREAM_FALLBACK_STATE" }]
+      input: [{ type: "compaction", encrypted_content: "JSON STREAM FALLBACK SUMMARY" }]
     });
     expect(followUpResponse.status).toBe(200);
     await followUpResponse.text();
@@ -1609,7 +1610,7 @@ describe("CompactGate OpenAI routing", () => {
           type: "response.output_item.done",
           item: {
             type: "compaction",
-            encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
+            encrypted_content: "SSE ITEM DONE SUMMARY: retained work."
           }
         })}\n\n`
       );
@@ -1640,7 +1641,7 @@ describe("CompactGate OpenAI routing", () => {
     // 方案 B:客户端收原始 SSE 流(非归一化 JSON),验证关键事件。
     const compactText = await compactResponse.text();
     expect(compactText).toContain("SSE ITEM DONE SUMMARY");
-    expect(compactText).toContain("OPAQUE_SSE_COMPACT_STATE_1234567890");
+    expect(compactText).toContain('"type":"compaction"');
     expect(compactText).toContain("response.completed");
 
     const followUpResponse = await postJson(app.url, "/v1/responses", {
@@ -1648,7 +1649,7 @@ describe("CompactGate OpenAI routing", () => {
       input: [
         {
           type: "compaction",
-          encrypted_content: "OPAQUE_SSE_COMPACT_STATE_1234567890"
+          encrypted_content: "SSE ITEM DONE SUMMARY: retained work."
         },
         {
           type: "message",
@@ -1666,7 +1667,7 @@ describe("CompactGate OpenAI routing", () => {
       {
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY" }]
+        content: [{ type: "output_text", text: "SSE ITEM DONE SUMMARY: retained work." }]
       },
       {
         type: "message",
@@ -1710,7 +1711,7 @@ describe("CompactGate OpenAI routing", () => {
         type: "response.output_item.done",
         item: {
           type: "compaction",
-          encrypted_content: "DELAYED_V1_STATE"
+          encrypted_content: "DELAYED V1 SUMMARY: retained work."
         }
       })}\n\n`);
       res.write(`data: ${JSON.stringify({
@@ -1742,7 +1743,7 @@ describe("CompactGate OpenAI routing", () => {
     const followUpResponse = await postJson(app.url, "/v1/responses", {
       model: "gpt-5.5",
       input: [
-        { type: "compaction", encrypted_content: "DELAYED_V1_STATE" },
+        { type: "compaction", encrypted_content: "DELAYED V1 SUMMARY: retained work." },
         { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] }
       ]
     });
@@ -1752,7 +1753,7 @@ describe("CompactGate OpenAI routing", () => {
     expect(JSON.parse(primaryRequests[0].body).input[0]).toEqual({
       type: "message",
       role: "assistant",
-      content: [{ type: "output_text", text: "DELAYED V1 SUMMARY" }]
+      content: [{ type: "output_text", text: "DELAYED V1 SUMMARY: retained work." }]
     });
 
     const compactLog = await waitForLogEntry(

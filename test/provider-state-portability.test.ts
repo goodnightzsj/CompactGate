@@ -195,7 +195,6 @@ describe("provider state portability", () => {
     const readableSummary = "The previous upstream summarized the completed work in readable text.";
     const canonicalBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
-      previous_response_id: "resp_old_provider",
       prompt_cache_key: "session-old",
       internal_trace: "private",
       input: [
@@ -206,7 +205,6 @@ describe("provider state portability", () => {
           summary: [{ type: "summary_text", text: "private summary" }]
         },
         { type: "compaction", id: "cmp_readable", encrypted_content: readableSummary },
-        { type: "compaction", id: "cmp_opaque", encrypted_content: "OPAQUE_STATE_0123456789" },
         { type: "function_call", id: "fc_provider", call_id: "call_1", name: "shell", arguments: "{}" },
         { type: "function_call_output", id: "out_provider", call_id: "call_1", output: "ok" },
         { type: "function_call_output", call_id: "orphan", output: "drop me" },
@@ -247,13 +245,30 @@ describe("provider state portability", () => {
     expect(result.metrics).toMatchObject({
       reasoningItemsRemoved: 1,
       compactionItemsReplaced: 1,
-      compactionItemsRemoved: 1,
-      previousResponseIdsRemoved: 1,
+      compactionItemsRemoved: 0,
+      previousResponseIdsRemoved: 0,
       providerItemIdsRemoved: 3,
       privateMetadataFieldsRemoved: 3,
       orphanToolItemsRemoved: 1
     });
     expect(result.fidelity).toBe("degraded");
+  });
+
+  it.each([
+    { type: "compaction", encrypted_content: "opaque-state" },
+    { type: "item_reference", id: "item_remote" },
+    { id: "item_remote" }
+  ])("never discards unrecoverable cross-domain state: %j", item => {
+    const body = Buffer.from(JSON.stringify({ input: [item] }));
+    expect(() => compileProviderStateAttempt(body, { strategy: "cross_domain" })).toThrow("no complete recovery checkpoint");
+    expect(parseBody(body).input).toEqual([item]);
+  });
+
+  it("requires continuation history even when cross-domain cleanup is inherited by an error repair", () => {
+    const body = Buffer.from(JSON.stringify({ previous_response_id: "resp_foreign", input: "continue" }));
+    expect(() => compileProviderStateAttempt(body, { strategy: "error_400", priorStrategy: "cross_domain", errorCode: "invalid_encrypted_content" }))
+      .toThrow("no complete recovery checkpoint");
+    expect(parseBody(body).previous_response_id).toBe("resp_foreign");
   });
 
   it("derives invalid_encrypted_content recovery from canonical input", () => {
@@ -289,7 +304,7 @@ describe("provider state portability", () => {
     expect(recovery.bodyHash).not.toBe(cpa.bodyHash);
   });
 
-  it("removes only compaction for invalid_responses_request", () => {
+  it("restores only readable compaction for invalid_responses_request", () => {
     const reasoning = {
       type: "reasoning",
       id: "rs_same_provider",
@@ -301,7 +316,7 @@ describe("provider state portability", () => {
       previous_response_id: "resp_same_provider",
       input: [
         reasoning,
-        { type: "compaction", id: "cmp_rejected", encrypted_content: "opaque-state" },
+        { type: "compaction", id: "cmp_rejected", encrypted_content: "The previous work is preserved in this readable summary." },
         message
       ]
     }));
@@ -314,10 +329,11 @@ describe("provider state portability", () => {
 
     expect(parseBody(recovery.body)).toEqual({
       previous_response_id: "resp_same_provider",
-      input: [reasoning, message]
+      input: [reasoning, { type: "message", role: "assistant", content: [{ type: "output_text", text: "The previous work is preserved in this readable summary." }] }, message]
     });
-    expect(recovery.metrics.compactionItemsRemoved).toBe(1);
-    expect(recovery.fidelity).toBe("degraded");
+    expect(recovery.metrics.compactionItemsRemoved).toBe(0);
+    expect(recovery.metrics.compactionItemsReplaced).toBe(1);
+    expect(recovery.fidelity).toBe("summary");
     expect(providerStateErrorCode(400, Buffer.from(JSON.stringify({
       error: { code: "invalid_responses_request", type: "new_api_error" }
     })))).toBe("invalid_responses_request");
@@ -327,43 +343,39 @@ describe("provider state portability", () => {
   });
 
   it.each(["invalid_responses_request", "previous_response_not_found"] as const)(
-    "does not apply unrequested CPA cleanup during direct %s recovery", (errorCode) => {
+    "preserves canonical context when %s has no recovery material", (errorCode) => {
       const reasoning = { type: "reasoning", id: "rs_keep", encrypted_content: null, summary: [] };
       const compaction = { type: "compaction", encrypted_content: "opaque-state" };
       const canonical = { store: false, previous_response_id: "resp_old", input: [reasoning, compaction] };
       const body = Buffer.from(JSON.stringify(canonical));
-      const recovery = compileProviderStateAttempt(body, {
+      expect(() => compileProviderStateAttempt(body, {
         strategy: "error_400", priorStrategy: "original", errorCode
-      });
-
-      expect(parseBody(recovery.body)).toEqual(errorCode === "invalid_responses_request"
-        ? { ...canonical, input: [reasoning] }
-        : { store: false, input: [reasoning, compaction] });
-      expect(recovery.metrics.encryptedReasoningFieldsRemoved).toBe(0);
-      expect(recovery.metrics.providerItemIdsRemoved).toBe(0);
+      })).toThrow("no complete recovery checkpoint or readable summary");
       expect(parseBody(body)).toEqual(canonical);
     }
   );
 
   it.each(["cpa", "cross_domain"] as const)("retains prior %s cleanup during compaction recovery", (priorStrategy) => {
+    const summary = { type: "message", role: "assistant", content: [{ type: "output_text", text: "All previous work is recorded in this summary." }] };
     const body = Buffer.from(JSON.stringify({
       store: false,
       input: [
         { type: "reasoning", id: "rs_old", encrypted_content: null, summary: [] },
-        { type: "compaction", encrypted_content: "OPAQUE_STATE_0123456789" }
+        { type: "compaction", encrypted_content: "All previous work is recorded in this summary." }
       ]
     }));
     const recovery = compileProviderStateAttempt(body, {
       strategy: "error_400", priorStrategy, errorCode: "invalid_responses_request"
     });
     expect(parseBody(recovery.body).input).toEqual(priorStrategy === "cpa"
-      ? [{ type: "reasoning", summary: [] }]
-      : []);
-    expect(recovery.metrics.compactionItemsRemoved).toBe(1);
+      ? [{ type: "reasoning", summary: [] }, summary]
+      : [summary]);
+    expect(recovery.metrics.compactionItemsReplaced).toBe(1);
+    expect(recovery.metrics.compactionItemsRemoved).toBe(0);
     expect(recovery.fidelity).toBe("degraded");
   });
 
-  it("removes an invalid previous_response_id when input is not an item array", () => {
+  it("replaces an invalid continuation only with its complete saved history", () => {
     const canonicalBody = Buffer.from(JSON.stringify({
       model: "gpt-5.5",
       previous_response_id: "resp_old_provider",
@@ -373,12 +385,15 @@ describe("provider state portability", () => {
     const recovery = compileProviderStateAttempt(canonicalBody, {
       strategy: "error_400",
       priorStrategy: "original",
-      errorCode: "previous_response_not_found"
+      errorCode: "previous_response_not_found",
+      recoverCompaction: () => ({ body: Buffer.from(JSON.stringify({ model: "gpt-5.5", input: [
+        { role: "assistant", content: "Earlier complete answer." }, { role: "user", content: "continue" }
+      ] })), fidelity: "exact" })
     });
 
     expect(parseBody(recovery.body)).toEqual({
       model: "gpt-5.5",
-      input: "continue"
+      input: [{ role: "assistant", content: "Earlier complete answer." }, { role: "user", content: "continue" }]
     });
     expect(recovery.metrics.previousResponseIdsRemoved).toBe(1);
   });
@@ -399,6 +414,7 @@ describe("provider state portability", () => {
       encryptedReasoningItemCount: 2,
       invalidEncryptedReasoningItemCount: 1,
       encryptedAgentMessageCount: 0,
+      encryptedNonCompactionItemCount: 2,
       compactionItemCount: 1,
       previousResponseIdPresent: true,
       hasProviderOwnedState: true

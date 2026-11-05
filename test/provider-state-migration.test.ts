@@ -4,6 +4,7 @@ import {
   runProviderStateMigration
 } from "../src/server/provider-state-migration.js";
 import { hashProviderStateBody } from "../src/server/provider-state-portability.js";
+import type { ProviderStateRecoveryPolicy } from "../src/server/provider-state-recovery-store.js";
 import {
   isEligibleGenericProviderStateFailure,
   providerStateLegacyFailureKey,
@@ -42,7 +43,7 @@ function canonicalStatefulBody(): Buffer {
         id: "rs_valid",
         encrypted_content: validEncryptedContent(),
         content: null,
-        summary: []
+        summary: [{ type: "summary_text", text: "Readable reasoning retained until strict recovery." }]
       },
       {
         type: "reasoning",
@@ -59,13 +60,172 @@ function canonicalCompactionBody(): Buffer {
   return Buffer.from(JSON.stringify({
     model: "gpt-5.5",
     input: [
-      { type: "compaction", encrypted_content: "opaque-provider-state" },
+      { type: "compaction", encrypted_content: "The previous work is preserved in this readable summary." },
       { type: "message", role: "user", content: "continue" }
     ]
   }));
 }
 
 describe("provider-state recovery state machine", () => {
+  it.each([false, true])("retries the original request when a cached repair has no history (unavailable=%s)", async unavailable => {
+    const canonicalBody = Buffer.from(JSON.stringify({ input: [{ type: "compaction", encrypted_content: "opaque-state" }] }));
+    const cachedPolicy: ProviderStateRecoveryPolicy = { base: "original", stripCompactionIds: false, rejectedCompaction: true,
+      priorEncryptedFailures: [], unavailable, failure: { kind: "encrypted_content", code: "invalid_encrypted_content",
+        evidence: "code", itemId: null, inputIndex: null, encryptedContentHash: null } };
+    const sent: Buffer[] = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, cachedPolicy, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { sent.push(body); return upstreamResult(200, { output: [] }); }
+    });
+    expect(sent).toEqual([canonicalBody]);
+    expect(recovery.trigger).toBeNull();
+    expect(recovery.result.status).toBe(200);
+  });
+
+  it.each(["item", "index", "cipher", "abbreviated"])("tries only compaction IDs before restoring rejected %s state", async locator => {
+    const compaction = { type: "compaction", id: "cmp_a", encrypted_content: "gAAA_synthetic_8A==" };
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [compaction,
+      { type: "message", role: "user", content: "Preserve this new instruction." }] }));
+    const failure = { error: { type: "invalid_request_error", code: locator === "index" ? "invalid_encrypted_content" : null,
+      param: locator === "index" ? "input[0].encrypted_content" : "",
+      message: locator === "index" ? "Invalid input." : `OpenAI Responses bad request: The encrypted content ${
+        locator === "item" ? "for item cmp_a" : locator === "cipher" ? compaction.encrypted_content : "gAAA...8A=="
+      } could not be verified. Reason: Encrypted content could not be decrypted or parsed. [trace_id=synthetic]` } };
+    const sent: Buffer[] = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => { throw new Error("No generic recovery expected"); },
+      send: async body => { sent.push(body); return sent.length === 1 ? upstreamResult(400, failure) : upstreamResult(200, { output: [] }); }
+    });
+    expect(sent).toHaveLength(2);
+    const expected = JSON.parse(canonicalBody.toString());
+    delete expected.input[0].id;
+    expect(JSON.parse(sent[1].toString())).toEqual(expected);
+    expect(recovery.attempts[1].compiled.fidelity).toBe("exact");
+    expect(recovery.policy?.stripCompactionIds).toBe(true);
+  });
+
+  it("keeps earlier targeted repairs when a later failure identifies the compaction ID", async () => {
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [
+      { type: "reasoning", encrypted_content: "opaque-reasoning", summary: [] },
+      { type: "compaction", id: "cmp_a", encrypted_content: "opaque-compaction" }, encryptedAgentMessage
+    ] }));
+    const failures = [
+      { error: { code: "invalid_encrypted_content", param: "input[0].encrypted_content" } },
+      { error: { type: "invalid_request_error", message: "The encrypted content for item cmp_a could not be verified." } },
+      encryptedAgentError
+    ];
+    const sent: Array<{ input: Array<Record<string, unknown>> }> = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { sent.push(JSON.parse(body.toString())); return sent.length <= failures.length
+        ? upstreamResult(400, failures[sent.length - 1]) : upstreamResult(200, { output: [] }); }
+    });
+    expect(sent).toHaveLength(4);
+    expect(sent[3].input).toEqual([
+      { type: "compaction", encrypted_content: "opaque-compaction" }, { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }]);
+    expect(recovery.result.status).toBe(200);
+  });
+
+  it("tries the ID after an unlocated error first cleans the other encrypted carriers", async () => {
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [
+      { type: "reasoning", encrypted_content: "opaque-reasoning", summary: [] },
+      { type: "compaction", id: "cmp_a", encrypted_content: "opaque-compaction" }, encryptedAgentMessage
+    ] }));
+    const sent: Array<{ input: Array<Record<string, unknown>> }> = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { sent.push(JSON.parse(body.toString())); return sent.length < 3
+        ? upstreamResult(400, { error: { type: "invalid_request_error", code: null,
+          message: "The encrypted content gAAA...8A== could not be verified." } }) : upstreamResult(200, { output: [] }); }
+    });
+    expect(sent).toHaveLength(3);
+    expect(sent[1].input.find(item => item.type === "compaction")?.id).toBe("cmp_a");
+    expect(sent[2].input).toEqual([
+      { type: "compaction", encrypted_content: "opaque-compaction" }, { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }]);
+    expect(recovery.result.status).toBe(200);
+  });
+
+  it("preserves the last real rejection when ID removal cannot fix the opaque state", async () => {
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [
+      { type: "compaction", id: "cmp_a", encrypted_content: "opaque-compaction" }
+    ] }));
+    const failure = upstreamResult(400, { error: { type: "invalid_request_error", code: null,
+      message: "The encrypted content gAAA...8A== could not be verified. [trace_id=synthetic]" } });
+    const sent: Buffer[] = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { sent.push(body); return failure; }
+    });
+    expect(sent).toHaveLength(2);
+    expect(JSON.parse(sent[1].toString()).input).toEqual([{ type: "compaction", encrypted_content: "opaque-compaction" }]);
+    expect(recovery.result).toBe(failure);
+    expect(recovery.unavailable).toBe(true);
+  });
+
+  it("reclassifies decryption errors after resource-ID repair", async () => {
+    const summary = "The previous work is preserved in this readable summary.";
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [{ type: "compaction", id: "cmp_a", encrypted_content: summary }] }));
+    const sent: Array<Record<string, unknown>> = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same", canReplay: () => true,
+      startGenericRecovery: () => { throw new Error("resource repair must not enable generic fallback"); },
+      send: async body => {
+        sent.push(JSON.parse(body.toString()));
+        if (sent.length === 1) return upstreamResult(400, agentrouterResourceErrorCases[0].response);
+        if (sent.length === 2) return upstreamResult(400, { error: { type: "invalid_request_error", code: null,
+          message: "The encrypted content gAAA...8A== could not be verified. Reason: Encrypted content could not be decrypted or parsed." } });
+        return upstreamResult(200, { output: [] });
+      }
+    });
+    expect(sent).toHaveLength(3);
+    expect(sent[1].input).toEqual([{ type: "compaction", encrypted_content: summary }]);
+    expect(sent[2].input).toEqual([{ type: "message", role: "assistant", content: [{ type: "output_text", text: summary }] }]);
+    expect(recovery.result.status).toBe(200);
+    expect(recovery.policy?.stripCompactionIds).toBe(true);
+  });
+
+  it("accumulates targeted reasoning repairs without touching other state", async () => {
+    const input = [0, 1, 2].map(i => ({ type: "reasoning", id: `rs_${i}`, encrypted_content: `opaque_${i}`, summary: [] }));
+    const compaction = { type: "compaction", encrypted_content: "opaque-compaction" };
+    const sent: Array<{ input: unknown[] }> = [];
+    const recovery = await runProviderStateMigration({ canonicalBody: Buffer.from(JSON.stringify({ input: [...input, compaction] })),
+      targetStateDomain: "same", canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => {
+        sent.push(JSON.parse(body.toString()));
+        return sent.length <= 2 ? upstreamResult(400, { error: { type: "invalid_request_error", code: null,
+          message: `The encrypted content for item rs_${sent.length - 1} could not be verified.` } }) : upstreamResult(200, { output: [] });
+      }
+    });
+    expect(sent).toHaveLength(3);
+    expect(sent[2].input).toEqual([input[2], compaction]);
+    expect(recovery.policy?.priorEncryptedFailures).toHaveLength(1);
+  });
+
+  it("does not infer compaction rejection from a locator that does not match input", async () => {
+    const canonicalBody = Buffer.from(JSON.stringify({ input: [{ type: "compaction", encrypted_content: "opaque-state" }] }));
+    let sends = 0;
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same", canReplay: () => true,
+      startGenericRecovery: () => null, send: async body => {
+        sends++; expect(body).toBe(canonicalBody);
+        return upstreamResult(400, { error: { type: "invalid_request_error", code: null,
+          message: "The encrypted content for item cmp_other could not be verified." } });
+      }
+    });
+    expect(sends).toBe(1);
+    expect(recovery.unavailable).not.toBe(true);
+  });
+
+  it("never sends more than four different attempts even when every response names a new rejected item", async () => {
+    let sends = 0;
+    const recovery = await runProviderStateMigration({ canonicalBody: Buffer.from(JSON.stringify({ input:
+      Array.from({ length: 5 }, (_, i) => ({ type: "reasoning", id: `rs_${i}`, encrypted_content: `state_${i}` })) })),
+      targetStateDomain: "same", canReplay: () => true, startGenericRecovery: () => null,
+      send: async () => upstreamResult(400, { error: { type: "invalid_request_error",
+        message: `The encrypted content for item rs_${sends++} could not be verified.` } })
+    });
+    expect(sends).toBe(4);
+    expect(new Set(recovery.attempts.map(attempt => attempt.bodyHash)).size).toBe(4);
+  });
+
   it.each(["success", "same-error", "cancelled", "truncated", "encrypted-only"])(
     "handles agent hydration failure with bounded recovery: %s", async (scenario) => {
       const item = scenario === "encrypted-only"
@@ -246,9 +406,10 @@ describe("provider-state recovery state machine", () => {
     ]);
     expect(sentBodies[0]).toBe(canonicalBody);
     expect(JSON.parse(sentBodies[1].toString("utf8")).input).toEqual([
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "The previous work is preserved in this readable summary." }] },
       { type: "message", role: "user", content: "continue" }
     ]);
-    expect(recovery.attempts[1].compiled.fidelity).toBe("degraded");
+    expect(recovery.attempts[1].compiled.fidelity).toBe("summary");
     expect(recovery.trigger).toBe("explicit_400");
   });
 
@@ -274,7 +435,7 @@ describe("provider-state recovery state machine", () => {
     expect(recovery.result.status).toBe(400);
   });
 
-  it("stops when compaction removal receives the same invalid_responses_request", async () => {
+  it("stops when compaction restoration receives the same invalid_responses_request", async () => {
     const canonicalBody = canonicalCompactionBody();
     let sends = 0;
 
@@ -298,9 +459,7 @@ describe("provider-state recovery state machine", () => {
   });
 });
 
-describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
-  (host) => agentrouterResourceErrorCases.map((fixture) => ({ host, ...fixture }))
-))("$host compaction ID recovery ($name)", ({ host: allowedHost, response: error }) => {
+describe.each(agentrouterResourceErrorCases)("global compaction ID recovery ($name)", ({ response: error }) => {
   const request = () => ({
     model: "synthetic-model", store: false, previous_response_id: null,
     input: [
@@ -317,7 +476,7 @@ describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
     const canonicalBody = Buffer.from(JSON.stringify(original));
     const sent: Buffer[] = [];
     const recovery = await runProviderStateMigration({
-      canonicalBody, upstreamHost: allowedHost, targetStateDomain: "same-domain",
+      canonicalBody, targetStateDomain: "same-domain",
       canReplay: () => true,
       startGenericRecovery: () => { throw new Error("must not run broader cleanup"); },
       send: async (body) => {
@@ -341,16 +500,13 @@ describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
   });
 
   it.each([
-    "other-host", "lookalike-host", "other-error", "success", "status-500", "cancelled",
+    "other-error", "success", "status-500", "cancelled",
     "truncated", "deadline-during-repair", "store-true", "store-absent", "reference", "untyped-reference", "continuation",
     "no-id", "no-ciphertext"
-  ])("does not perform the host repair for %s", async (scenario) => {
+  ])("does not perform the ID repair for %s", async (scenario) => {
     const body: Record<string, unknown> = request();
     const input = body.input as Array<Record<string, unknown>>;
-    let host = allowedHost;
     let result = upstreamResult(400, error);
-    if (scenario === "other-host") host = "other.example";
-    if (scenario === "lookalike-host") host = `${allowedHost}.example`;
     if (scenario === "other-error") result = upstreamResult(400, { error: { type: "invalid_request_error", message: "bad input" } });
     if (scenario === "success") result = upstreamResult(200, { output: [] });
     if (scenario === "status-500") result.status = 500;
@@ -366,7 +522,7 @@ describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
     let sends = 0;
     let replayChecks = 0;
     const recovery = await runProviderStateMigration({
-      canonicalBody, upstreamHost: host, targetStateDomain: "same-domain",
+      canonicalBody, targetStateDomain: "same-domain",
       canReplay: () => scenario !== "cancelled" &&
         (scenario !== "deadline-during-repair" || replayChecks++ === 0),
       startGenericRecovery: () => {
@@ -381,10 +537,10 @@ describe.each(["agentrouter.org", "anyrouter.top"].flatMap(
     expect(recovery.result).toBe(result);
   });
 
-  it("recognizes gzip errors on a subdomain without changing encrypted context", async () => {
+  it("recognizes gzip errors without changing encrypted context", async () => {
     let sends = 0;
     const recovery = await runProviderStateMigration({
-      canonicalBody: Buffer.from(JSON.stringify(request())), upstreamHost: `api.${allowedHost}`,
+      canonicalBody: Buffer.from(JSON.stringify(request())),
       targetStateDomain: "same-domain", canReplay: () => true, startGenericRecovery: () => null,
       send: async () => {
         sends += 1;

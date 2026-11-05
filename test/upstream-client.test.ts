@@ -403,7 +403,7 @@ describe("sendBufferedUpstreamRequest", () => {
     expect(classifyOpenAiUpstreamResult(completedResult!)).toBe("upstream_stream_incomplete");
   });
 
-  it("settles a completed SSE response when the client closes before HTTP end", async () => {
+  it.each([false, true])("settles a completed SSE response when the client closes before HTTP end (state gate %s)", async deferProviderStateStreamErrors => {
     const completionEvent = 'event: response.completed\ndata: {"type":"response.completed"}\n\n';
     const upstream = await startUpstream((_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -419,6 +419,7 @@ describe("sendBufferedUpstreamRequest", () => {
     const proxy = http.createServer(async (req, res) => {
       try {
         resolveResult(await sendBufferedUpstreamRequest({
+          deferProviderStateStreamErrors,
           req,
           res,
           upstream: new URL(upstream.url),

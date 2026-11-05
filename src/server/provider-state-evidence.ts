@@ -40,7 +40,7 @@ export function providerStateLegacyFailureKey(
     scope.model ?? "",
     scope.endpoint ?? "",
     String(result.status),
-    providerStateErrorCode(result.status, result.responseBody) ?? ""
+    providerStateErrorCode(result.status, result.responseBody, result.responseHeaders) ?? ""
   ]);
 }
 
@@ -51,7 +51,7 @@ export function isEligibleGenericProviderStateFailure(
   if (result.responseBodyTruncated) {
     return false;
   }
-  if (providerStateErrorCode(result.status, result.responseBody)) {
+  if (providerStateErrorCode(result.status, result.responseBody, result.responseHeaders)) {
     return afterErrorSpecificRepair;
   }
   if (![400, 409, 422, 502].includes(result.status)) {

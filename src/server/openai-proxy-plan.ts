@@ -10,6 +10,7 @@ import { appendHeaderToken, buildUpstreamHeaders, parseJsonRecord } from "./http
 import { applyHostBodyQuirks, applyHostQuirks, type HostBodyQuirkContext } from "./host-quirks.js";
 import { applyClientIdentityUserAgent, isNativeCliRequest } from "./client-identity.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
+import { analyzeProviderState, type CompileProviderStateOptions, type ProviderStateFidelity } from "./provider-state-portability.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl
@@ -55,6 +56,7 @@ export interface OpenAiProxyPlan {
   proxyUrl: string;
   compactionFallback: "chat_synthesis" | null;
   translateResponses: boolean;
+  recoveredContextFidelity?: ProviderStateFidelity;
 }
 
 export function buildPrimaryOpenAiProxyPlan({
@@ -70,7 +72,8 @@ export function buildPrimaryOpenAiProxyPlan({
   primarySelectionOverride,
   reservePrimarySelection = true,
   synthesizeRemoteV2Compaction = false,
-  clientIdentity
+  clientIdentity,
+  restoreCompaction
 }: {
   config: CompactGateConfig;
   url: URL;
@@ -85,6 +88,7 @@ export function buildPrimaryOpenAiProxyPlan({
   reservePrimarySelection?: boolean;
   synthesizeRemoteV2Compaction?: boolean;
   clientIdentity?: ClientIdentityStore;
+  restoreCompaction?: CompileProviderStateOptions["recoverCompaction"];
 }): OpenAiProxyPlan {
   const primarySelection = primarySelectionOverride ?? primaryFailover.preview(
     config,
@@ -112,7 +116,7 @@ export function buildPrimaryOpenAiProxyPlan({
   }
   const splitCompactMode = config.compact.upstream_mode === "split";
   const preserveProviderState = preserveRemoteV2State && upstreamProtocol === "openai_responses";
-  const bridgeResult = !translateResponses || preserveProviderState
+  let bridgeResult = !translateResponses || preserveProviderState
     ? {
         body: modelRewrite.body,
         replacedCompactionCount: 0,
@@ -124,6 +128,7 @@ export function buildPrimaryOpenAiProxyPlan({
         includeSyntheticFallbacks: true,
         allowReadableFallback: splitCompactMode
       });
+  let recoveredContextFidelity: ProviderStateFidelity | undefined = bridgeResult.replacedCompactionCount > 0 ? "summary" : undefined;
   if (
     !preserveProviderState &&
     (
@@ -132,7 +137,13 @@ export function buildPrimaryOpenAiProxyPlan({
         : bridgeResult.remainingCompactionCount > 0
     )
   ) {
-    throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
+    const recovered = restoreCompaction?.(modelRewrite.body);
+    if (!recovered || analyzeProviderState(recovered.body).compactionItemCount > 0) {
+      throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
+    }
+    recoveredContextFidelity = recovered.fidelity;
+    bridgeResult = { body: recovered.body, replacedCompactionCount: bridgeResult.replacedCompactionCount + bridgeResult.remainingCompactionCount,
+      remainingCompactionCount: 0, knownMissingCompactionCount: 0 };
   }
 
   const chatCompactionFallback = synthesizeRemoteV2Compaction &&
@@ -163,7 +174,8 @@ export function buildPrimaryOpenAiProxyPlan({
       upstreamProtocol,
       proxyUrl: selectedPrimaryConfig.primary.proxy_url,
       compactionFallback: chatCompactionFallback ? "chat_synthesis" : null,
-      translateResponses
+      translateResponses,
+      recoveredContextFidelity
     },
     clientIdentity
   );

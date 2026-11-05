@@ -213,7 +213,7 @@ describe("cross-protocol compaction", () => {
     }]);
   });
 
-  it("rejects opaque state before an Anthropic primary request", () => {
+  it.each([false, true])("rejects opaque state before an Anthropic primary request even after partial recovery: %s", partialRecovery => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.primary.upstream_protocol = "anthropic_messages";
     config.compact.upstream_mode = "split";
@@ -227,7 +227,8 @@ describe("cross-protocol compaction", () => {
       })),
       endpoint: "/responses",
       compactionBridge: new CompactionBridgeStore(),
-      primaryFailover: new PrimaryFailoverState({ random: () => 0 })
+      primaryFailover: new PrimaryFailoverState({ random: () => 0 }),
+      restoreCompaction: partialRecovery ? body => ({ body, fidelity: "exact" }) : undefined
     })).toThrow(UnresolvedCompactionStateError);
   });
 

@@ -25,7 +25,8 @@ describe("ConfigStore", () => {
       logging: { keep_recent: 17, persist_body: true },
       primary_failover: {
         auto_schedule: false,
-        state_portability: "recover_on_error"
+        state_portability: "recover_on_error",
+        state_recovery_retention_hours: 0
       }
     });
 
@@ -114,9 +115,23 @@ describe("ConfigStore", () => {
 
       expect(store.get().primary_failover).toEqual({
         auto_schedule: false,
-        state_portability: "recover_on_error"
+        state_portability: "recover_on_error",
+        state_recovery_retention_hours: 0
       });
       expect(store.toPublicConfig().primary_failover.state_portability).toBe("recover_on_error");
+    }
+  });
+
+  it("keeps recovery content opt-in and preserves retention through patch and reload", async () => {
+    const configPath = path.join(await makeConfigDir(), "compactgate.json");
+    const store = await ConfigStore.load(configPath);
+    expect(store.get().primary_failover.state_recovery_retention_hours).toBe(0);
+    await store.patch({ primary_failover: { state_recovery_retention_hours: 24 } });
+    await store.patch({ primary_failover: { auto_schedule: false } });
+    expect(store.toPublicConfig().primary_failover.state_recovery_retention_hours).toBe(24);
+    expect((await ConfigStore.load(configPath)).get().primary_failover.state_recovery_retention_hours).toBe(24);
+    for (const value of [-1, 721, 1.5, "24", null]) {
+      await expect(store.patch({ primary_failover: { state_recovery_retention_hours: value } })).rejects.toThrow("state_recovery_retention_hours");
     }
   });
 
