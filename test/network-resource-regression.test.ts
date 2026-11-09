@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http, { type Server } from "node:http";
 import { once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,6 +96,36 @@ async function staticFixture() {
 }
 
 describe("static file stream ownership", () => {
+  it("returns an explicit uncached failure if a static source never becomes readable", async () => {
+    const { dir, url } = await staticFixture();
+    await writeFile(path.join(dir, "dist/public/assets/stalled.js"), "pending");
+    const source = new PassThrough();
+    cleanups.push(async () => { source.destroy(); });
+    vi.spyOn(fs, "createReadStream").mockReturnValue(source as unknown as fs.ReadStream);
+    syncBuiltinESMExports();
+    const response = await fetch(`${url}/assets/stalled.js`, { signal: AbortSignal.timeout(6_000) });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("Static asset") });
+    expect(source.destroyed).toBe(true);
+  }, 8_000);
+
+  it("keeps a read failure before the first byte out of immutable asset responses", async () => {
+    const { dir, url, errors } = await staticFixture();
+    await writeFile(path.join(dir, "dist/public/assets/read-failure.js"), "pending");
+    vi.spyOn(fs, "createReadStream").mockImplementation(() => {
+      const source = new PassThrough();
+      setImmediate(() => source.destroy(new Error("Synthetic first-read failure.")));
+      return source as unknown as fs.ReadStream;
+    });
+    syncBuiltinESMExports();
+    const response = await fetch(`${url}/assets/read-failure.js`, { signal: AbortSignal.timeout(1_000) });
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBeNull();
+    await expect(response.json()).resolves.toEqual({ error: "Static read failed." });
+    expect(errors).toHaveLength(1);
+  });
+
   it.skipIf(process.getuid?.() === 0)("returns HTTP failure when an existing file cannot be opened", async () => {
     const { dir, url, errors } = await staticFixture();
     const target = path.join(dir, "dist/public/assets/unreadable.js");
@@ -151,6 +182,27 @@ describe("static file stream ownership", () => {
     expect(source?.bytesRead).toBeLessThan(16 * 1024 * 1024);
   });
 
+  it("cancels a source still waiting for its first byte when the client leaves", async () => {
+    const { dir, url } = await staticFixture();
+    await writeFile(path.join(dir, "dist/public/assets/pending.js"), "pending");
+    const source = new PassThrough();
+    const closed = once(source, "close");
+    const opened = new Promise<void>((resolve) => {
+      vi.spyOn(fs, "createReadStream").mockImplementation(() => {
+        resolve();
+        return source as unknown as fs.ReadStream;
+      });
+    });
+    syncBuiltinESMExports();
+    const controller = new AbortController();
+    const request = fetch(`${url}/assets/pending.js`, { signal: controller.signal }).catch((error: unknown) => error);
+    await opened;
+    controller.abort();
+    await request;
+    await closed;
+    expect(source.destroyed).toBe(true);
+  });
+
   it("destroys a partial response when its open file stream fails", async () => {
     const { dir, url, errors } = await staticFixture();
     await writeFile(path.join(dir, "dist/public/assets/failing.js"), Buffer.alloc(16 * 1024 * 1024, 120));
@@ -159,12 +211,12 @@ describe("static file stream ownership", () => {
     cleanups.push(async () => { source?.destroy(); });
     vi.spyOn(fs, "createReadStream").mockImplementation((...args) => {
       source = createReadStream(...args);
-      source.once("data", () => setImmediate(() => source?.destroy(new Error("Synthetic read failure."))));
       return source;
     });
     syncBuiltinESMExports();
     const response = await fetch(`${url}/assets/failing.js`, { signal: AbortSignal.timeout(1_000) });
     expect(response.status).toBe(200);
+    source?.destroy(new Error("Synthetic read failure."));
     await expect(response.arrayBuffer()).rejects.toThrow();
     expect(source?.destroyed).toBe(true);
     expect(errors).toEqual([expect.objectContaining({ message: "Synthetic read failure." })]);
@@ -180,6 +232,16 @@ describe("static file stream ownership", () => {
       expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
       expect(await response.text()).toBe(method === "HEAD" ? "" : "hello");
     }
+    expect(errors).toEqual([]);
+  });
+
+  it("finishes an empty static file without waiting for a data event", async () => {
+    const { dir, url, errors } = await staticFixture();
+    await writeFile(path.join(dir, "dist/public/assets/empty.js"), "");
+    const response = await fetch(`${url}/assets/empty.js`, { signal: AbortSignal.timeout(1_000) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-length")).toBe("0");
+    expect(await response.text()).toBe("");
     expect(errors).toEqual([]);
   });
 });

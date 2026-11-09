@@ -508,7 +508,7 @@ export function AnalyticsEmptyState({ hasRetainedLogs, onNavigate }: {
   );
 }
 
-export function RetainedRange({ stats }: { stats: LogStatsSnapshot }) {
+export function RetainedRange({ stats }: { stats: Pick<LogStatsSnapshot, "retained_range"> }) {
   const oldest = stats.retained_range.oldest_at;
   const newest = stats.retained_range.newest_at;
   return (
@@ -520,7 +520,7 @@ export function RetainedRange({ stats }: { stats: LogStatsSnapshot }) {
   );
 }
 
-export function cacheRate(stats: LogStatsSnapshot): string {
+export function cacheRate(stats: { summary: Pick<LogStatsSnapshot["summary"], "input_tokens" | "cache_read_tokens"> }): string {
   return cacheHitRate(stats.summary.input_tokens, stats.summary.cache_read_tokens);
 }
 

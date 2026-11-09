@@ -6,6 +6,8 @@ import type {
   LogBodyPurgeResult,
   LogPersistenceHealth,
   LogStatsSnapshot,
+  LogUsageStatsSnapshot,
+  LogAnalyticsSnapshot,
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
@@ -36,6 +38,7 @@ import {
   RECENT_LOG_FIELDS
 } from "./logger-schema.js";
 import { readLogStats, type LogStatsOptions } from "./logger-analytics.js";
+import { LogStatsReader } from "./log-stats-reader.js";
 import type { ProviderStateBinding } from "./provider-state-binding.js";
 import { extractResponseModelFromText } from "./response-model.js";
 import { ProviderStateRecoveryStore } from "./provider-state-recovery-store.js";
@@ -94,6 +97,8 @@ export class RequestLogger extends EventTarget {
   private readonly db: DatabaseSync;
 
   private readonly databasePath: string;
+
+  private statsReader: LogStatsReader | null = null;
 
   private maxDatabaseBytes: number | null;
 
@@ -586,8 +591,20 @@ export class RequestLogger extends EventTarget {
     };
   }
 
-  stats(options: LogStatsOptions): LogStatsSnapshot {
+  stats(options: LogStatsOptions & { view: "usage" }): LogUsageStatsSnapshot;
+  stats(options: LogStatsOptions & { view?: undefined }): LogStatsSnapshot;
+  stats(options: LogStatsOptions): LogAnalyticsSnapshot;
+  stats(options: LogStatsOptions): LogAnalyticsSnapshot {
     return readLogStats(this.db, options);
+  }
+
+  statsAsync(options: LogStatsOptions & { view: "usage" }, signal?: AbortSignal): Promise<LogUsageStatsSnapshot>;
+  statsAsync(options: LogStatsOptions & { view?: undefined }, signal?: AbortSignal): Promise<LogStatsSnapshot>;
+  statsAsync(options: LogStatsOptions, signal?: AbortSignal): Promise<LogAnalyticsSnapshot>;
+  statsAsync(options: LogStatsOptions, signal?: AbortSignal): Promise<LogAnalyticsSnapshot> {
+    if (this.closed) return Promise.reject(new Error("Request logger is closed."));
+    this.statsReader ??= new LogStatsReader(this.databasePath);
+    return this.statsReader.read(options, signal);
   }
 
   getByRequestId(requestId: string):
@@ -675,9 +692,9 @@ export class RequestLogger extends EventTarget {
     };
   }
 
-  close(): void {
+  close(): Promise<void> {
     if (this.closed) {
-      return;
+      return this.statsReader?.close() ?? Promise.resolve();
     }
 
     this.closed = true;
@@ -689,7 +706,9 @@ export class RequestLogger extends EventTarget {
     if (!this.storagePruneInProgress) this.storagePruneSteps?.return(undefined);
     this.storagePruneSteps = null;
     this.storagePruneRequested = false;
+    const statsClosed = this.statsReader?.close() ?? Promise.resolve();
     this.db.close();
+    return statsClosed;
   }
 
   private requestStoragePrune(): void {

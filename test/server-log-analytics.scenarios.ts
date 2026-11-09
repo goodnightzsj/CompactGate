@@ -1,11 +1,62 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LogStatsSnapshot } from "../src/shared/types.js";
+import { RequestLogger } from "../src/server/logger.js";
+import { LogStatsBusyError } from "../src/server/log-stats-reader.js";
 import {
   startApp,
   startUpstream
 } from "./helpers/server-test-utils.js";
 
 describe("log stats API", () => {
+  it("reports queue saturation separately from query failures", async () => {
+    const app = await startApp();
+    const stats = vi.spyOn(RequestLogger.prototype, "statsAsync");
+    try {
+      stats.mockRejectedValueOnce(new LogStatsBusyError());
+      const busy = await fetch(`${app.url}/api/logs/stats`);
+      expect(busy.status).toBe(503);
+      expect(busy.headers.get("retry-after")).toBe("1");
+      await expect(busy.json()).resolves.toMatchObject({ error: expect.stringContaining("busy") });
+      stats.mockRejectedValueOnce(new Error("synthetic SQL failure"));
+      const failed = await fetch(`${app.url}/api/logs/stats`);
+      expect(failed.status).toBe(500);
+      await expect(failed.json()).resolves.toEqual({ error: "synthetic SQL failure" });
+    } finally {
+      stats.mockRestore();
+    }
+  });
+
+  it("cancels abandoned statistics requests while other API routes remain usable", async () => {
+    const app = await startApp();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let cancelled!: () => void;
+    const stopped = new Promise<void>((resolve) => { cancelled = resolve; });
+    const stats = vi.spyOn(RequestLogger.prototype, "statsAsync").mockImplementation((_options, signal) => {
+      entered();
+      return new Promise((_resolve, reject) => {
+        signal!.addEventListener("abort", () => {
+          cancelled();
+          reject(signal!.reason);
+        }, { once: true });
+      });
+    });
+    const controller = new AbortController();
+    const pending = fetch(`${app.url}/api/logs/stats`, { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      await started;
+      const health = await fetch(`${app.url}/api/health`);
+      expect(health.status).toBe(200);
+      await health.arrayBuffer();
+      controller.abort();
+      await Promise.all([rejected, stopped]);
+    } finally {
+      controller.abort();
+      stats.mockRestore();
+    }
+  });
+
   it("returns an empty default snapshot and rejects invalid ranges", async () => {
     const primary = await startUpstream((_req, res) => res.end("{}"));
     const compact = await startUpstream((_req, res) => res.end("{}"));
@@ -22,6 +73,18 @@ describe("log stats API", () => {
     expect(stats.overview?.recent.one_minute.requests).toBe(0);
     expect(stats.overview?.recent.five_minutes.average_rpm).toBe(0);
     expect(stats.range.from < stats.range.to).toBe(true);
+
+    const usage = await fetch(`${app.url}/api/logs/stats?view=usage`);
+    expect(usage.status).toBe(200);
+    const usageStats = await usage.json();
+    expect(usageStats).toMatchObject({ view: "usage", summary: { requests: 0 }, overview: null });
+    expect(usageStats).not.toHaveProperty("by_host");
+    expect(usageStats.summary).not.toHaveProperty("duration_p95_ms");
+    for (const suffix of ["view=unknown", "view=usage&overview=1"]) {
+      const invalidView = await fetch(`${app.url}/api/logs/stats?${suffix}`);
+      expect(invalidView.status).toBe(400);
+      await invalidView.arrayBuffer();
+    }
 
     const invalid = await fetch(`${app.url}/api/logs/stats?from=not-a-date`);
     expect(invalid.status).toBe(400);

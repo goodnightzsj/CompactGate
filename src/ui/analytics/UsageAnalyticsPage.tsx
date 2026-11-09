@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import type { StudioPage } from "../app-types.js";
 import type { LogDrilldownFilter } from "../../shared/types.js";
 import { formatCompactMetricNumber, formatMetricNumber } from "../shared/format.js";
@@ -22,6 +22,7 @@ import {
   groupTrend,
   inputDate,
   type AnalyticsGranularity,
+  type AnalyticsSnapshotCache,
   useLogStats
 } from "./analytics-data.js";
 import { DateRangePicker } from "./DateRangePicker.js";
@@ -35,18 +36,19 @@ export interface UsagePreferences {
   endpointMeasure: "requests" | "total_tokens";
 }
 
-export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs }: {
+export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs, snapshot }: {
   preferences: UsagePreferences | null;
   onPreferencesChange: (preferences: UsagePreferences) => void;
   onNavigate: (page: StudioPage) => void;
   onOpenLogs: (filter: LogDrilldownFilter & { host?: string }) => void;
+  snapshot?: RefObject<AnalyticsSnapshotCache<"usage"> | null>;
 }) {
   const defaults = useMemo(() => defaultUsageDates(), []);
   const current: UsagePreferences = preferences ?? { ...defaults, granularity: "day", endpointMeasure: "requests" };
   const { from: fromDate, to: toDate, granularity, endpointMeasure } = current;
   const range = useMemo(() => dateInputsToRange(fromDate, toDate), [fromDate, toDate]);
   const [formError, setFormError] = useState<string | null>(null);
-  const stats = useLogStats(range);
+  const stats = useLogStats(range, { view: "usage", snapshot });
   const matchesSelectedRange = stats.data?.range.from === range.from && stats.data.range.to === range.to;
   const trend = useMemo(
     () => stats.data ? groupTrend(stats.data, granularity) : [],

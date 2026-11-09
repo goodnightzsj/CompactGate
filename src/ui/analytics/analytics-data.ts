@@ -1,11 +1,19 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { flushSync } from "react-dom";
-import type { LogStatsMetric, LogStatsSnapshot } from "../../shared/types.js";
+import type { LogStatsMetric, LogStatsSnapshot, LogUsageStatsSnapshot } from "../../shared/types.js";
 import { api, errorSummary } from "../shared/api.js";
 
 export type AnalyticsGranularity = "hour" | "day";
 export type AnalyticsRange = LogStatsSnapshot["range"];
 export type AnalyticsPreset = "24h" | "7d" | "30d";
+type AnalyticsView = "full" | "usage";
+type AnalyticsSnapshot<View extends AnalyticsView> = View extends "usage" ? LogUsageStatsSnapshot : LogStatsSnapshot;
+
+export interface AnalyticsSnapshotCache<View extends AnalyticsView = "full"> {
+  key: string;
+  receivedAt: number;
+  data: AnalyticsSnapshot<View>;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,32 +51,64 @@ export interface AnalyticsTrendPoint {
   total_tokens: number;
 }
 
-export function fetchLogStats(
+export function fetchLogStats<View extends AnalyticsView = "full">(
   range: AnalyticsRange | AnalyticsPreset,
   includeOverview = false,
-  signal?: AbortSignal
-): Promise<LogStatsSnapshot> {
+  signal?: AbortSignal,
+  view?: View
+): Promise<AnalyticsSnapshot<View>> {
   // Resolve relative ranges at request time, including timer/visibility refreshes.
   const { from, to } = typeof range === "string" ? rangeForPreset(range) : range;
   const query = new URLSearchParams({ from, to });
   if (includeOverview) query.set("overview", "1");
-  return api<LogStatsSnapshot>(`/api/logs/stats?${query.toString()}`, { signal });
+  if (view === "usage") query.set("view", view);
+  return api<AnalyticsSnapshot<View>>(`/api/logs/stats?${query.toString()}`, { signal });
 }
 
-export function useLogStats(
+export function useLogStats<View extends AnalyticsView = "full">(
   range: AnalyticsRange | AnalyticsPreset,
-  options: { includeOverview?: boolean; transitionUpdates?: boolean } = {}
+  options: {
+    includeOverview?: boolean;
+    transitionUpdates?: boolean;
+    view?: View;
+    snapshot?: RefObject<AnalyticsSnapshotCache<View> | null>;
+  } = {}
 ) {
-  const { includeOverview = false, transitionUpdates = false } = options;
-  const [data, setData] = useState<LogStatsSnapshot | null>(null);
+  const { includeOverview = false, transitionUpdates = false, view, snapshot } = options;
+  const key = JSON.stringify([view ?? "full", includeOverview, typeof range === "string" ? range : [range.from, range.to]]);
+  const [initial] = useState(() => snapshot?.current?.key === key ? snapshot.current : null);
+  const [data, setData] = useState<AnalyticsSnapshot<View> | null>(initial?.data ?? null);
+  const [receivedAt, setReceivedAt] = useState<number | null>(initial?.receivedAt ?? null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initial || Date.now() - initial.receivedAt >= STATS_REFRESH_MS);
   const [revision, setRevision] = useState(0);
-  const hasData = useRef(false);
+  const hasData = useRef(initial !== null);
+  const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, readDocumentVisible, () => false);
+  const autoRefreshRef = useRef(false);
+  const forceRefreshRef = useRef(false);
+  const previousVisible = useRef(documentVisible);
 
   useEffect(() => {
+    const resumed = documentVisible && !previousVisible.current;
+    previousVisible.current = documentVisible;
+    if (!documentVisible) {
+      setLoading(false);
+      return;
+    }
+    const forceRefresh = forceRefreshRef.current;
+    forceRefreshRef.current = false;
+    const cached = snapshot?.current;
+    if (!forceRefresh && !resumed && cached?.key === key && Date.now() - cached.receivedAt < STATS_REFRESH_MS) {
+      setData(cached.data);
+      setReceivedAt(cached.receivedAt);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     let transition: ViewTransition | null = null;
+    const isAutoRefresh = resumed || autoRefreshRef.current;
+    autoRefreshRef.current = false;
     const reportError = (cause: unknown) => {
       if (!controller.signal.aborted && !(cause instanceof DOMException && cause.name === "AbortError")) {
         setError(errorSummary(cause));
@@ -76,10 +116,16 @@ export function useLogStats(
     };
     setError(null);
     setLoading(true);
-    void fetchLogStats(range, includeOverview, controller.signal).then(async (snapshot) => {
+    void fetchLogStats(range, includeOverview, controller.signal, view).then(async (nextData) => {
       if (controller.signal.aborted) return;
-      const isAutoRefresh = autoRefreshRef.current;
-      autoRefreshRef.current = false;
+      const commit = () => {
+        if (controller.signal.aborted) return;
+        const receivedAt = Date.now();
+        if (snapshot) snapshot.current = { key, receivedAt, data: nextData };
+        setData(nextData);
+        setReceivedAt(receivedAt);
+        hasData.current = true;
+      };
       if (
         transitionUpdates &&
         !isAutoRefresh &&
@@ -90,15 +136,14 @@ export function useLogStats(
         transition = document.startViewTransition(() => {
           // Skipping a transition still runs its callback. A newer range may
           // already own the page by the time the browser invokes this one.
-          if (!controller.signal.aborted) flushSync(() => setData(snapshot));
+          if (!controller.signal.aborted) flushSync(commit);
         });
         void transition.ready.catch(reportError);
         void transition.finished.catch(reportError);
         await transition.updateCallbackDone;
       } else {
-        setData(snapshot);
+        commit();
       }
-      if (!controller.signal.aborted) hasData.current = true;
     }).catch(reportError).finally(() => {
       if (!controller.signal.aborted) {
         setLoading(false);
@@ -109,19 +154,13 @@ export function useLogStats(
       controller.abort();
       transition?.skipTransition();
     };
-  }, [includeOverview, range, revision, transitionUpdates]);
-
-  const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, readDocumentVisible, () => false);
-  const autoRefreshRef = useRef(false);
-  const previousVisible = useRef(documentVisible);
+  }, [documentVisible, includeOverview, key, range, revision, snapshot, transitionUpdates, view]);
 
   // Poll only while the tab is visible: a hidden tab re-reading a large log
   // query every minute is pure cost, and its numbers would be stale the moment
   // it came back anyway. Coming back into view refreshes at once rather than
   // waiting out the interval, so the gap the user actually notices is covered.
   useEffect(() => {
-    const resumed = documentVisible && !previousVisible.current;
-    previousVisible.current = documentVisible;
     if (!documentVisible) {
       return;
     }
@@ -131,19 +170,30 @@ export function useLogStats(
       // belongs to a range change the user asked for, and one every minute would
       // flicker the whole panel for no reason.
       autoRefreshRef.current = true;
+      forceRefreshRef.current = true;
       setRevision((current) => current + 1);
     };
-    if (resumed) bump();
-
-    const interval = window.setInterval(bump, STATS_REFRESH_MS);
-    return () => window.clearInterval(interval);
-  }, [documentVisible]);
+    let interval: number | undefined;
+    const timeout = window.setTimeout(() => {
+      bump();
+      interval = window.setInterval(bump, STATS_REFRESH_MS);
+    }, receivedAt !== null && Date.now() - receivedAt < STATS_REFRESH_MS
+      ? receivedAt + STATS_REFRESH_MS - Date.now() : STATS_REFRESH_MS);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [documentVisible, receivedAt]);
 
   return {
     data,
     error,
     loading,
-    refresh: () => setRevision((current) => current + 1)
+    refresh: () => {
+      autoRefreshRef.current = false;
+      forceRefreshRef.current = true;
+      setRevision((current) => current + 1);
+    }
   };
 }
 
@@ -215,7 +265,7 @@ export function dateInputsToRange(fromValue: string, toValue: string): Analytics
 }
 
 export function groupTrend(
-  snapshot: LogStatsSnapshot,
+  snapshot: Pick<LogStatsSnapshot, "range" | "trend">,
   granularity: AnalyticsGranularity
 ): AnalyticsTrendPoint[] {
   const grouped = new Map<string, AnalyticsTrendPoint>();

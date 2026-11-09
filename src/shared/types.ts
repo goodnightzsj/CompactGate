@@ -717,6 +717,18 @@ export interface LogStatsSnapshot {
   } | null;
 }
 
+export type LogUsageStatsSnapshot = Omit<LogStatsSnapshot,
+  "summary" | "by_route" | "by_host" | "model_mappings" | "overview"
+> & {
+  view: "usage";
+  summary: Omit<LogStatsSummary,
+    "duration_p50_ms" | "duration_p95_ms" | "first_token_p50_ms" | "first_token_p95_ms"
+  >;
+  overview: null;
+};
+
+export type LogAnalyticsSnapshot = LogStatsSnapshot | LogUsageStatsSnapshot;
+
 /** Which agent family an outbound request is impersonating. */
 export type ClientIdentityKind = "codex" | "claude";
 

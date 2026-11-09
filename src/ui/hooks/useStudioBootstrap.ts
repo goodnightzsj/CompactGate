@@ -58,45 +58,27 @@ export function useStudioBootstrap(pageMode: PageMode) {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
+    const controller = new AbortController();
+    const errors: string[] = [];
+    let pending = healthMode ? 1 : 2;
+    async function load<Data>(url: string, apply: (data: Data) => void) {
       try {
-        if (healthMode) {
-          const nextHealth = await api<HealthResponse>("/api/health");
-
-          if (cancelled) {
-            return;
-          }
-
-          setHealth(nextHealth);
-          dispatchConfig({ type: "page_load_result", error: null });
-          return;
-        }
-
-        const [nextConfig, nextHealth] = await Promise.all([
-          api<PublicConfig>("/api/config"),
-          api<HealthResponse>("/api/health")
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        dispatchConfig({ type: "bootstrap", config: nextConfig });
-        setHealth(nextHealth);
-        dispatchConfig({ type: "page_load_result", error: null });
+        const data = await api<Data>(url, { signal: controller.signal });
+        if (!controller.signal.aborted) apply(data);
       } catch (error) {
-        if (!cancelled) {
-          dispatchConfig({ type: "page_load_result", error: errorSummary(error) });
+        if (!controller.signal.aborted) errors.push(errorSummary(error));
+      } finally {
+        pending -= 1;
+        // One successful response cannot erase the other request's failure.
+        if (!controller.signal.aborted && (errors.length > 0 || pending === 0)) {
+          dispatchConfig({ type: "page_load_result", error: errors.join("; ") || null });
         }
       }
     }
 
-    void load();
-    return () => {
-      cancelled = true;
-    };
+    if (!healthMode) void load<PublicConfig>("/api/config", (config) => dispatchConfig({ type: "bootstrap", config }));
+    void load<HealthResponse>("/api/health", setHealth);
+    return () => controller.abort();
     // `healthMode` is derived from `bootstrapScope`, so listing it again would
     // only suggest the two can move independently.
   }, [bootstrapScope, reloadToken]);

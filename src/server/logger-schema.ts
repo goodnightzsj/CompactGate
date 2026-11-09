@@ -60,6 +60,7 @@ export const LOG_TABLE_SQL = `
     capture_status TEXT NOT NULL DEFAULT 'none'
   );
   CREATE INDEX IF NOT EXISTS idx_request_logs_id ON request_logs(id DESC);
+  CREATE INDEX IF NOT EXISTS idx_request_logs_route_id ON request_logs(route, id DESC);
   CREATE INDEX IF NOT EXISTS idx_request_logs_time ON request_logs(time);
   CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id);
 `;

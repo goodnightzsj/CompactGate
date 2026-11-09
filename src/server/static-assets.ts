@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createReadStream, existsSync, statSync } from "node:fs";
-import { open } from "node:fs/promises";
+import { once } from "node:events";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { sendJson } from "./http-utils.js";
@@ -64,10 +64,19 @@ export async function serveStatic(
     return;
   }
 
-  // Open before asset headers or pipeline own the response: an open failure
-  // needs an HTTP error without the asset's immutable cache policy.
-  const file = req.method === "HEAD" ? null : await open(targetPath, "r");
+  if (res.destroyed) return;
+  const source = req.method === "HEAD" ? null : createReadStream(targetPath);
+  const controller = new AbortController();
+  const disconnected = () => controller.abort();
+  const timeoutError = new Error("Static asset did not become readable within 5 seconds.");
+  const deadline = source ? setTimeout(() => controller.abort(timeoutError), 5_000) : undefined;
+  res.once("close", disconnected);
   try {
+    // The stream owns its descriptor. Wait for a first read before handing it
+    // the response, so open/read failures never inherit immutable asset headers.
+    if (source) await once(source, "readable", { signal: controller.signal });
+    clearTimeout(deadline);
+    if (res.destroyed) return;
     res.statusCode = 200;
     res.setHeader(
       "content-type",
@@ -76,15 +85,22 @@ export async function serveStatic(
     res.setHeader("content-length", String(stat.size));
     res.setHeader("cache-control", cacheControlForTarget(targetPath, fallbackPath));
 
-    if (!file) {
+    if (!source) {
       res.end();
       return;
     }
-    if (!res.destroyed) {
-      await pipeline(createReadStream(targetPath, { fd: file }), res);
+    await pipeline(source, res, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.reason === timeoutError && !res.destroyed) {
+      res.setHeader("cache-control", "no-store");
+      sendJson(res, 503, { error: timeoutError.message });
+      return;
     }
+    if (!controller.signal.aborted || !(error instanceof Error) || error.name !== "AbortError") throw error;
   } finally {
-    await file?.close();
+    clearTimeout(deadline);
+    res.off("close", disconnected);
+    source?.destroy();
   }
 }
 

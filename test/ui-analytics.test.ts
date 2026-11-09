@@ -78,6 +78,23 @@ describe("analytics data helpers", () => {
     expect(Object.fromEntries(queries[3])).toEqual(fixed);
   });
 
+  it("requests the smaller usage view and renders its omitted dashboard fields", async () => {
+    const full = snapshot([]);
+    const usage = {
+      view: "usage" as const, generated_at: full.generated_at, range: full.range,
+      retained_range: full.retained_range, trend: full.trend, by_model: full.by_model,
+      by_endpoint: full.by_endpoint, overview: null,
+      summary: { ...metric(), average_rpm: 0, average_tpm: 0 }
+    };
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(usage));
+    expect(await fetchLogStats(full.range, false, undefined, "usage")).toEqual(usage);
+    const query = new URL(String(fetcher.mock.calls[0][0]), "https://synthetic.example").searchParams;
+    expect(query.get("view")).toBe("usage");
+    expect(query.has("overview")).toBe(false);
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: usage, loading: false, error: null, refresh: vi.fn() });
+    expect(renderToStaticMarkup(createElement(UsageAnalyticsPage, pageProps))).toContain("保留日志用量");
+  });
+
   it("formats analytics-scale values without changing precise formatters", () => {
     expect(formatCompactMetricNumber(999)).toBe("999");
     expect(formatCompactMetricNumber(1_900_000)).toBe("1.9M");
@@ -180,7 +197,7 @@ describe("analytics data helpers", () => {
   it("keeps existing statistics visible and announces a refresh", () => {
     const stats = vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), loading: true, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage, pageProps));
-    expect(stats).toHaveBeenCalledWith("24h", { includeOverview: true, transitionUpdates: true });
+    expect(stats).toHaveBeenCalledWith("24h", { includeOverview: true, transitionUpdates: true, snapshot: undefined });
     expect(markup).toContain("正在更新，当前显示上次统计");
     expect(markup).toMatch(/analytics-refresh[^>]*disabled/);
     expect(markup).toContain('aria-busy="true"');

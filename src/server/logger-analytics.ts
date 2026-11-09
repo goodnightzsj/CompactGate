@@ -2,7 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   LogStatsMetric,
   LogStatsSnapshot,
-  LogStatsSummary
+  LogStatsSummary,
+  LogUsageStatsSnapshot,
+  LogAnalyticsSnapshot
 } from "../shared/types.js";
 import {
   LOG_STANDALONE_ERROR_SQL,
@@ -15,6 +17,7 @@ export interface LogStatsOptions {
   from: string;
   to: string;
   includeOverview?: boolean;
+  view?: "usage";
 }
 
 const validToken = (column: string) =>
@@ -112,11 +115,27 @@ const METRIC_SQL = `
   AVG(first_token_ms) AS average_first_token_ms
 `;
 
-export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogStatsSnapshot {
+export function readLogStats(db: DatabaseSync, options: LogStatsOptions & { view: "usage" }): LogUsageStatsSnapshot;
+export function readLogStats(db: DatabaseSync, options: LogStatsOptions & { view?: undefined }): LogStatsSnapshot;
+export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogAnalyticsSnapshot;
+export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogAnalyticsSnapshot {
+  db.exec("SAVEPOINT log_stats");
+  try {
+    const snapshot = readStatsSnapshot(db, options);
+    db.exec("RELEASE log_stats");
+    return snapshot;
+  } catch (error) {
+    db.exec("ROLLBACK TO log_stats; RELEASE log_stats");
+    throw error;
+  }
+}
+
+function readStatsSnapshot(db: DatabaseSync, options: LogStatsOptions): LogAnalyticsSnapshot {
   const params = [options.from, options.to];
   const generatedAt = new Date().toISOString();
   const retained = db.prepare(
-    "SELECT MIN(time) AS oldest_at, MAX(time) AS newest_at FROM request_logs"
+    `SELECT (SELECT MIN(time) FROM request_logs) AS oldest_at,
+      (SELECT MAX(time) FROM request_logs) AS newest_at`
   ).get() as Record<string, unknown>;
 
   const trend = db.prepare(`
@@ -127,7 +146,7 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
     ORDER BY bucket_start
   `).all(...params) as Array<Record<string, unknown>>;
 
-  const routes = db.prepare(`
+  const routes = options.view === "usage" ? [] : db.prepare(`
     ${ANALYTICS_ROWS_SQL}
     SELECT route, ${METRIC_SQL}
     FROM analytics_rows
@@ -135,7 +154,7 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
     ORDER BY requests DESC, route
   `).all(...params) as Array<Record<string, unknown>>;
 
-  const hosts = db.prepare(`
+  const hosts = options.view === "usage" ? [] : db.prepare(`
     ${ANALYTICS_ROWS_SQL}
     SELECT upstream_host AS host, ${METRIC_SQL}
     FROM analytics_rows
@@ -168,7 +187,7 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
     LIMIT 8
   `).all(...params) as Array<Record<string, unknown>>;
 
-  const mappings = db.prepare(`
+  const mappings = options.view === "usage" ? [] : db.prepare(`
     ${ANALYTICS_ROWS_SQL}
     SELECT
       upstream_host AS host,
@@ -182,24 +201,15 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
     LIMIT 20
   `).all(...params) as Array<Record<string, unknown>>;
 
-  return {
+  const common = {
     generated_at: generatedAt,
-    range: options,
+    range: { from: options.from, to: options.to },
     retained_range: {
       oldest_at: readString(retained.oldest_at),
       newest_at: readString(retained.newest_at)
     },
-    summary: readSummary(db, options),
     trend: trend.map((row) => ({
       bucket_start: String(row.bucket_start),
-      ...readMetric(row)
-    })),
-    by_route: routes.map((row) => ({
-      route: normalizeRoute(row.route),
-      ...readMetric(row)
-    })),
-    by_host: hosts.map((row) => ({
-      host: readString(row.host) ?? "未知 Host",
       ...readMetric(row)
     })),
     by_model: models.map((row) => ({
@@ -216,6 +226,21 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogSta
       requests: readNumber(row.requests),
       error_requests: readNumber(row.error_requests),
       total_tokens: readNumber(row.total_tokens)
+    }))
+  };
+  if (options.view === "usage") {
+    return { ...common, view: "usage", summary: readUsageSummary(db, options), overview: null };
+  }
+  return {
+    ...common,
+    summary: readSummary(db, options),
+    by_route: routes.map((row) => ({
+      route: normalizeRoute(row.route),
+      ...readMetric(row)
+    })),
+    by_host: hosts.map((row) => ({
+      host: readString(row.host) ?? "未知 Host",
+      ...readMetric(row)
     })),
     model_mappings: mappings.map((row) => ({
       host: readString(row.host) ?? "未知 Host",
@@ -265,16 +290,22 @@ function readOverview(
 }
 
 function readSummary(db: DatabaseSync, options: LogStatsOptions): LogStatsSummary {
-  const summaryMetric = readSummaryMetric(db, options.from, options.to);
   const duration = readPercentiles(db, "duration_ms", options);
   const firstToken = readPercentiles(db, "first_token_ms", options);
-  const rangeMinutes = Math.max(1, (Date.parse(options.to) - Date.parse(options.from)) / 60_000);
   return {
-    ...summaryMetric,
+    ...readUsageSummary(db, options),
     duration_p50_ms: duration.p50,
     duration_p95_ms: duration.p95,
     first_token_p50_ms: firstToken.p50,
-    first_token_p95_ms: firstToken.p95,
+    first_token_p95_ms: firstToken.p95
+  };
+}
+
+function readUsageSummary(db: DatabaseSync, options: LogStatsOptions): LogUsageStatsSnapshot["summary"] {
+  const summaryMetric = readSummaryMetric(db, options.from, options.to);
+  const rangeMinutes = Math.max(1, (Date.parse(options.to) - Date.parse(options.from)) / 60_000);
+  return {
+    ...summaryMetric,
     average_rpm: summaryMetric.requests / rangeMinutes,
     average_tpm: summaryMetric.total_tokens / rangeMinutes
   };

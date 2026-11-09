@@ -14,6 +14,8 @@ import {
   sendJson
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
+import type { LogStatsOptions } from "./logger-analytics.js";
+import { LogStatsBusyError } from "./log-stats-reader.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import { fetchOpenAiModels } from "./openai-models.js";
 import {
@@ -175,7 +177,21 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/logs/stats") {
-    sendJson(res, 200, logger.stats(readLogStatsQuery(url)));
+    const options = readLogStatsQuery(url);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    res.once("close", abort);
+    try {
+      const stats = await logger.statsAsync(options, controller.signal);
+      if (!res.destroyed) sendJson(res, 200, stats);
+    } catch (error) {
+      if (controller.signal.aborted) return true;
+      if (!(error instanceof LogStatsBusyError)) throw error;
+      res.setHeader("retry-after", "1");
+      sendJson(res, 503, { error: error.message });
+    } finally {
+      res.off("close", abort);
+    }
     return true;
   }
 
@@ -416,7 +432,7 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
 
 const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
 
-function readLogStatsQuery(url: URL): { from: string; to: string; includeOverview: boolean } {
+function readLogStatsQuery(url: URL): LogStatsOptions {
   const toTime = parseStatsTimestamp(url.searchParams.get("to"), Date.now(), "to");
   const fromTime = parseStatsTimestamp(
     url.searchParams.get("from"),
@@ -430,11 +446,19 @@ function readLogStatsQuery(url: URL): { from: string; to: string; includeOvervie
   if (toTime - fromTime > MAX_LOG_STATS_RANGE_MS) {
     throw new ConfigError("logs stats range cannot exceed 31 days.");
   }
+  const view = url.searchParams.get("view");
+  if (view !== null && view !== "usage") {
+    throw new ConfigError("logs stats view must be usage when supplied.");
+  }
+  if (view === "usage" && url.searchParams.get("overview") === "1") {
+    throw new ConfigError("logs stats overview is unavailable for the usage view.");
+  }
 
   return {
     from: new Date(fromTime).toISOString(),
     to: new Date(toTime).toISOString(),
-    includeOverview: url.searchParams.get("overview") === "1"
+    includeOverview: url.searchParams.get("overview") === "1",
+    ...(view === "usage" ? { view } : {})
   };
 }
 

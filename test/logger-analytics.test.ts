@@ -266,6 +266,30 @@ describe("RequestLogger stats", () => {
       logger.close();
     }
   });
+
+  it("returns only usage metrics for the usage view without changing their values", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-usage-stats-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(10, path.join(dir, "logs.sqlite"));
+    try {
+      logger.add(logEntry({ input_tokens: 10, output_tokens: 5, total_tokens: 15 }));
+      const range = { from: "2026-08-07T00:00:00.000Z", to: "2026-08-08T00:00:00.000Z" };
+      const full = logger.stats(range);
+      const usage = logger.stats({ ...range, view: "usage" });
+      expect(usage.view).toBe("usage");
+      expect(full.summary).toMatchObject(usage.summary);
+      expect(usage.trend).toEqual(full.trend);
+      expect(usage.by_model).toEqual(full.by_model);
+      expect(usage.by_endpoint).toEqual(full.by_endpoint);
+      for (const field of ["by_host", "by_route", "model_mappings"]) expect(usage).not.toHaveProperty(field);
+      for (const field of ["duration_p50_ms", "duration_p95_ms", "first_token_p50_ms", "first_token_p95_ms"]) {
+        expect(usage.summary).not.toHaveProperty(field);
+      }
+      expect(usage.overview).toBeNull();
+    } finally {
+      await logger.close();
+    }
+  });
 });
 
 function logEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {

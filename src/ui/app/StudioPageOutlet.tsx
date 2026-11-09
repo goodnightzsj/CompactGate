@@ -1,10 +1,11 @@
-import { Component, lazy, Suspense, useState, type ComponentProps, type ReactNode } from "react";
+import { Component, lazy, Suspense, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { StudioPage } from "../app-types.js";
 import type { LogDrilldownFilter } from "../../shared/types.js";
 import { DashboardPage } from "../dashboard/DashboardPage.js";
 import type { ConfigDisplayScope } from "../config/ConfigPage.js";
 import type { UsagePreferences } from "../analytics/UsageAnalyticsPage.js";
 import type { AnalyticsPreferences } from "../analytics/AnalyticsDashboardPage.js";
+import type { AnalyticsSnapshotCache } from "../analytics/analytics-data.js";
 
 const AnalyticsDashboardPage = lazy(() => import("../analytics/AnalyticsDashboardPage.js").then((page) => ({ default: page.AnalyticsDashboardPage })));
 const UsageAnalyticsPage = lazy(() => import("../analytics/UsageAnalyticsPage.js").then((page) => ({ default: page.UsageAnalyticsPage })));
@@ -43,11 +44,13 @@ export function StudioPageOutlet({
   onLogDrilldown,
   routesPage
 }: StudioPageOutletProps & { onNavigate: (page: StudioPage) => void }) {
-  // Keep navigation preferences outside the keyed page boundary, without
+  // Keep preferences and one successful snapshot per analytics page outside the keyed boundary, without
   // retaining hidden pages or their polling effects.
   const [configScope, setConfigScope] = useState<ConfigDisplayScope>("codex");
   const [usagePreferences, setUsagePreferences] = useState<UsagePreferences | null>(null);
   const [analyticsPreferences, setAnalyticsPreferences] = useState<AnalyticsPreferences | null>(null);
+  const analyticsSnapshot = useRef<AnalyticsSnapshotCache | null>(null);
+  const usageSnapshot = useRef<AnalyticsSnapshotCache<"usage"> | null>(null);
   const openLogs = (filter: LogDrilldownFilter & { host?: string }) => {
     onLogDrilldown(filter);
     onNavigate("logs");
@@ -71,9 +74,9 @@ export function StudioPageOutlet({
 
       {currentPage === "dashboard" && <DashboardPage {...dashboardPage} onNavigate={onNavigate} />}
 
-      {currentPage === "analytics" && <AnalyticsDashboardPage preferences={analyticsPreferences} onPreferencesChange={setAnalyticsPreferences} onNavigate={onNavigate} onOpenLogs={openLogs} />}
+      {currentPage === "analytics" && <AnalyticsDashboardPage preferences={analyticsPreferences} onPreferencesChange={setAnalyticsPreferences} onNavigate={onNavigate} onOpenLogs={openLogs} snapshot={analyticsSnapshot} />}
 
-      {currentPage === "usage" && <UsageAnalyticsPage preferences={usagePreferences} onPreferencesChange={setUsagePreferences} onNavigate={onNavigate} onOpenLogs={openLogs} />}
+      {currentPage === "usage" && <UsageAnalyticsPage preferences={usagePreferences} onPreferencesChange={setUsagePreferences} onNavigate={onNavigate} onOpenLogs={openLogs} snapshot={usageSnapshot} />}
 
       {currentPage === "routes" && <RoutesPage {...routesPage} />}
 

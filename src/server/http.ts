@@ -173,7 +173,7 @@ export async function createCompactGateServer(
       try {
         if (!captureWriter) await pendingCaptureWriter?.flush();
       } finally {
-        if (!logger) actualLogger.close();
+        if (!logger) await actualLogger.close();
       }
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "CompactGate startup and cleanup failed.", { cause: error });
@@ -241,7 +241,7 @@ export async function createCompactGateServer(
     await actualCaptureWriter.flush();
     await Promise.all([clientIdentity.flush(), configStore.oauth.flush()]);
     actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
-    actualLogger.close();
+    await actualLogger.close();
   }
   server.once("close", () => {
     void closeResources().catch((error) => console.error("CompactGate resource shutdown failed.", error));

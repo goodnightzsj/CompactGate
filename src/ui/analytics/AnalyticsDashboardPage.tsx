@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type RefObject } from "react";
 import type { StudioPage } from "../app-types.js";
 import type { LogDrilldownFilter } from "../../shared/types.js";
 import {
@@ -24,6 +24,7 @@ import {
   platformBreakdown,
   presetForRange,
   type AnalyticsPreset,
+  type AnalyticsSnapshotCache,
   useLogStats
 } from "./analytics-data.js";
 
@@ -52,17 +53,18 @@ export interface AnalyticsPreferences {
   modelMeasure: DistributionMeasure;
 }
 
-export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs }: {
+export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNavigate, onOpenLogs, snapshot }: {
   preferences: AnalyticsPreferences | null;
   onPreferencesChange: (preferences: AnalyticsPreferences) => void;
   onNavigate: (page: StudioPage) => void;
   onOpenLogs: (filter: LogDrilldownFilter & { host?: string }) => void;
+  snapshot?: RefObject<AnalyticsSnapshotCache | null>;
 }) {
   const current: AnalyticsPreferences = preferences ?? {
     preset: "24h", sourceDimension: "platform", sourceMeasure: "requests", modelMeasure: "requests"
   };
   const { preset, sourceDimension, sourceMeasure, modelMeasure } = current;
-  const stats = useLogStats(preset, { includeOverview: true, transitionUpdates: true });
+  const stats = useLogStats(preset, { includeOverview: true, transitionUpdates: true, snapshot });
   const displayedPreset = stats.data ? presetForRange(stats.data.range) : preset;
   const granularity = displayedPreset === "24h" ? "hour" : "day";
   const trend = useMemo(
