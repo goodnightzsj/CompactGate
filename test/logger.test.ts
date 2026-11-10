@@ -998,7 +998,7 @@ describe("RequestLogger", () => {
       logger.add(logEntry(2, "body-2"));
       logger.add(logEntry(3));
 
-      const result = logger.purgeStoredBodies();
+      const result = await logger.purgeStoredBodies();
       expect(result).toMatchObject({
         rows_cleared: 2,
         row_count_before: 3,
@@ -1013,7 +1013,7 @@ describe("RequestLogger", () => {
         ])
       );
 
-      expect(logger.purgeStoredBodies()).toMatchObject({
+      expect(await logger.purgeStoredBodies()).toMatchObject({
         rows_cleared: 0,
         row_count_before: 3,
         row_count_after: 3
@@ -1034,19 +1034,21 @@ describe("RequestLogger", () => {
     logger.addEventListener("storage-pruned", notify);
     try {
       logger.add(logEntry(1, "x".repeat(1024 * 1024)));
+      await logger.statsAsync({ from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" });
       reader.exec("PRAGMA wal_checkpoint(TRUNCATE); BEGIN;");
       reader.prepare("SELECT COUNT(*) FROM request_logs").get();
-      expect(() => logger.purgeStoredBodies()).toThrow(/Cleared bodies from 1 log rows.*SQLite checkpoint is busy/);
+      await expect(logger.purgeStoredBodies()).rejects.toThrow(/Cleared bodies from 1 log rows.*SQLite checkpoint is busy/);
       expect(logger.page({ limit: 10, offset: 0 }).logs[0]?.body_status).toBe("purged");
       expect(notify).toHaveBeenCalledTimes(1);
       reader.exec("ROLLBACK;");
       expect(Number(reader.prepare("PRAGMA freelist_count;").get()?.freelist_count)).toBeGreaterThan(0);
-      const retry = logger.purgeStoredBodies();
+      const retry = await logger.purgeStoredBodies();
       expect(retry).toMatchObject({ rows_cleared: 0, row_count_before: 1, row_count_after: 1 });
       expect(Number(reader.prepare("PRAGMA freelist_count;").get()?.freelist_count)).toBe(0);
       expect(retry.database_bytes_after).toBeLessThan(retry.database_bytes_before);
       expect(notify).toHaveBeenCalledTimes(1);
-    } finally { reader.close(); logger.close(); }
+      expect((await logger.statsAsync({ from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" })).summary.requests).toBe(1);
+    } finally { reader.close(); await logger.close(); }
   }, 10_000);
 
   it("skips startup storage pruning when deferred mode is enabled", async () => {

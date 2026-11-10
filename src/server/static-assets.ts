@@ -67,6 +67,14 @@ export async function serveStatic(
   if (res.destroyed) return;
   const source = req.method === "HEAD" ? null : createReadStream(targetPath);
   const controller = new AbortController();
+  // Aborting once(readable) removes its error listener before a pending fs.open completes.
+  const sourceError = (error: Error) => {
+    if (controller.signal.aborted && error.name !== "AbortError") {
+      console.error("Static source failed after cancellation.", error);
+    }
+  };
+  source?.on("error", sourceError);
+  source?.once("close", () => source.off("error", sourceError));
   const disconnected = () => controller.abort();
   const timeoutError = new Error("Static asset did not become readable within 5 seconds.");
   const deadline = source ? setTimeout(() => controller.abort(timeoutError), 5_000) : undefined;

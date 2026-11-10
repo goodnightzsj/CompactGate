@@ -85,6 +85,45 @@ describe("log statistics reader", () => {
     await logger.close();
   });
 
+  it.each([false, true])("waits for the actual statistics transaction before purging bodies (cancelled: %s)", async (cancelled) => {
+    const { logger, writer } = await fixture(10_000);
+    writer.exec("UPDATE request_logs SET incoming_request_body = 'saved body', body_status = 'present' WHERE id = 1");
+    const controller = new AbortController();
+    const stats = logger.statsAsync(range, controller.signal);
+    const checked = cancelled ? expect(stats).rejects.toMatchObject({ name: "AbortError" }) : stats;
+    if (cancelled) controller.abort();
+    const purged = logger.purgeStoredBodies();
+    expect(writer.prepare("SELECT incoming_request_body AS body FROM request_logs WHERE id = 1").get()?.body).toBe("saved body");
+    await checked;
+    await expect(Promise.resolve(purged)).resolves.toMatchObject({ rows_cleared: 1, row_count_before: 10_000, row_count_after: 10_000 });
+    expect((await logger.statsAsync(range)).summary.requests).toBe(10_000);
+  });
+
+  it.each([false, true])("waits for statistics before automatic pruning (deferred: %s)", async (deferStoragePrune) => {
+    const { logger: initial, databasePath } = await fixture(10_000);
+    await initial.close();
+    const logger = new RequestLogger(10, databasePath, { maxDatabaseBytes: 0, deferStoragePrune });
+    cleanups.push(() => logger.close());
+    const stats = logger.statsAsync(range);
+    const pruned = new Promise<void>((resolve) => logger.addEventListener("storage-pruned", () => resolve(), { once: true }));
+    logger.configure({ keepRecent: 10, maxDatabaseBytes: 1 });
+    expect((await stats).summary.requests).toBe(10_000);
+    await pruned;
+    expect(logger.page({ limit: 10, offset: 0 }).all_total).toBe(1);
+    expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
+    expect((await logger.statsAsync(range)).summary.requests).toBe(1);
+  });
+
+  it("rejects pending maintenance on close without changing bodies", async () => {
+    const { logger, writer } = await fixture();
+    writer.exec("UPDATE request_logs SET incoming_request_body = 'saved body'");
+    const stats = expect(logger.statsAsync(range)).rejects.toThrow("closed");
+    const purged = expect(Promise.resolve(logger.purgeStoredBodies())).rejects.toThrow("closed");
+    await logger.close();
+    await Promise.all([stats, purged]);
+    expect(writer.prepare("SELECT incoming_request_body AS body FROM request_logs").get()?.body).toBe("saved body");
+  });
+
   it("reports SQL failures and recovers the read transaction for the next request", async () => {
     const { databasePath, writer } = await fixture();
     const reader = new LogStatsReader(databasePath);
@@ -105,14 +144,28 @@ describe("log statistics reader", () => {
   });
 
   it("fails the bounded queue when its execution deadline expires", async () => {
-    const { logger } = await fixture();
+    const { logger, writer } = await fixture();
+    writer.exec("UPDATE request_logs SET incoming_request_body = 'saved body'");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const requests = [logger.statsAsync(range), logger.statsAsync(range)];
-    const rejected = Promise.all(requests.map((query) => expect(query).rejects.toThrow("deadline")));
+    const rejected = Promise.all([...requests, logger.purgeStoredBodies()].map((query) => expect(query).rejects.toThrow("deadline")));
     vi.advanceTimersByTime(60_000);
     await rejected;
+    expect(writer.prepare("SELECT incoming_request_body AS body FROM request_logs").get()?.body).toBe("saved body");
     vi.useRealTimers();
     await logger.close();
+  });
+
+  it("closes automatic maintenance waiting behind a worker without touching stored rows", async () => {
+    const { logger, writer } = await fixture(10_000);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stats = expect(logger.statsAsync(range)).rejects.toThrow("closed");
+    logger.configure({ keepRecent: 10, maxDatabaseBytes: 1 });
+    vi.advanceTimersByTime(0);
+    await logger.close();
+    await stats;
+    expect(writer.prepare("SELECT COUNT(*) AS count FROM request_logs").get()?.count).toBe(10_000);
+    expect(logger.getPersistenceHealth().persist_error_count).toBe(0);
   });
 
   it("holds one snapshot while a separate connection changes the database", async () => {

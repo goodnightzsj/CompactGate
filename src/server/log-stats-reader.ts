@@ -31,6 +31,8 @@ export class LogStatsReader {
   private sequence = 0;
   private active: StatsJob | null = null;
   private readonly queue: StatsJob[] = [];
+  private readonly maintenance: Array<{ run(): void; reject(error: unknown): void }> = [];
+  private maintaining = false;
   private deadline: NodeJS.Timeout | null = null;
 
   constructor(private readonly databasePath: string) {}
@@ -66,6 +68,21 @@ export class LogStatsReader {
     });
   }
 
+  runMaintenance<T>(operation: () => T): Promise<T> {
+    if (this.closed) return Promise.reject(new Error("Log statistics reader is closed."));
+    if (this.stopping) return Promise.reject(new LogStatsBusyError());
+    return new Promise((resolve, reject) => {
+      this.maintenance.push({
+        run() {
+          try { resolve(operation()); }
+          catch (error) { reject(error); }
+        },
+        reject
+      });
+      this.dispatch();
+    });
+  }
+
   close(): Promise<void> {
     this.closed = true;
     this.failPending(new Error("Log statistics reader is closed."));
@@ -73,7 +90,15 @@ export class LogStatsReader {
   }
 
   private dispatch(): void {
-    if (this.active || this.queue.length === 0 || this.closed) return;
+    if (this.active || this.maintaining || this.closed || this.stopping) return;
+    // Checkpoint/VACUUM must run after the real read transaction, even if its caller aborted.
+    this.maintaining = true;
+    try {
+      while (this.maintenance.length > 0) this.maintenance.shift()!.run();
+    } finally {
+      this.maintaining = false;
+    }
+    if (this.queue.length === 0 || this.closed) return;
     this.active = this.queue.shift()!;
     try {
       const worker = this.worker ?? this.startWorker();
@@ -130,6 +155,7 @@ export class LogStatsReader {
     this.active?.complete(undefined, error);
     this.active = null;
     for (const job of this.queue.splice(0)) job.complete(undefined, error);
+    for (const job of this.maintenance.splice(0)) job.reject(error);
   }
 
   private clearDeadline(): void {

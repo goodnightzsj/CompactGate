@@ -4,6 +4,9 @@ import http, { type Server } from "node:http";
 import { once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import { PassThrough } from "node:stream";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +99,65 @@ async function staticFixture() {
 }
 
 describe("static file stream ownership", () => {
+  it.each(["cancel", "timeout"])("owns a delayed file-open failure after %s", async (reason) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-static-late-open-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    await mkdir(path.join(dir, "dist/public/assets"), { recursive: true });
+    await writeFile(path.join(dir, "dist/public/assets/pending.js"), "pending");
+    const moduleUrl = pathToFileURL(path.resolve(import.meta.dirname, "../src/server/static-assets.ts")).href;
+    // A subprocess makes an unowned ReadStream error observable as a process failure.
+    const script = `
+      import fs from "node:fs";
+      import http from "node:http";
+      import { once } from "node:events";
+      import assert from "node:assert/strict";
+      const { serveStatic } = await import(process.argv[1]);
+      process.chdir(process.argv[2]);
+      let releaseOpen;
+      let entered;
+      const pendingOpen = new Promise(resolve => { entered = resolve; });
+      const open = fs.open;
+      fs.open = (target, flags, mode, callback) => {
+        if (!String(target).endsWith("pending.js")) return open(target, flags, mode, callback);
+        releaseOpen = callback;
+        entered();
+      };
+      let completed;
+      const handled = new Promise(resolve => { completed = resolve; });
+      const server = http.createServer((req, res) => {
+        void serveStatic(req, res, new URL(req.url, "http://localhost"))
+          .then(completed, error => { console.error(error); process.exitCode = 2; completed(); });
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const controller = new AbortController();
+      const request = fetch("http://127.0.0.1:" + server.address().port + "/assets/pending.js", { signal: controller.signal });
+      await pendingOpen;
+      if (process.argv[3] === "cancel") {
+        const rejected = assert.rejects(request, { name: "AbortError" });
+        controller.abort();
+        await rejected;
+      } else {
+        const response = await request;
+        assert.equal(response.status, 503);
+        assert.equal(response.headers.get("cache-control"), "no-store");
+        await response.arrayBuffer();
+      }
+      await handled;
+      releaseOpen(Object.assign(new Error("Synthetic delayed file-open failure."), { code: "EIO" }));
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+      fs.open = open;
+      await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+      console.log("Static source failure handled without process termination.");
+    `;
+    const result = await promisify(execFile)(process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script, moduleUrl, dir, reason],
+      { cwd: path.resolve(import.meta.dirname, ".."), timeout: 7_000 });
+    expect(result.stdout).toContain("Static source failure handled without process termination.");
+    expect(result.stderr).toContain("Synthetic delayed file-open failure.");
+  }, 8_000);
+
   it("returns an explicit uncached failure if a static source never becomes readable", async () => {
     const { dir, url } = await staticFixture();
     await writeFile(path.join(dir, "dist/public/assets/stalled.js"), "pending");

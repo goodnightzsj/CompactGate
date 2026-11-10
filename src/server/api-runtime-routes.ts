@@ -204,7 +204,7 @@ export async function handleRuntimeApi(
       return true;
     }
 
-    const result = logger.purgeStoredBodies();
+    const result = await logger.purgeStoredBodies();
     sendJson(res, 200, result);
     return true;
   }
@@ -415,7 +415,7 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
     if (!url.searchParams.get("from") || !url.searchParams.get("to")) {
       throw new ConfigError("Log drilldown requires both from and to.");
     }
-    const { from, to } = readLogStatsQuery(url);
+    const { from, to } = readLogStatsRange(url);
     drilldown = { from, to };
     if (url.searchParams.has("model")) {
       const model = url.searchParams.get("model")!;
@@ -432,7 +432,7 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
 
 const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
 
-function readLogStatsQuery(url: URL): LogStatsOptions {
+function readLogStatsRange(url: URL): Pick<LogStatsOptions, "from" | "to"> {
   const toTime = parseStatsTimestamp(url.searchParams.get("to"), Date.now(), "to");
   const fromTime = parseStatsTimestamp(
     url.searchParams.get("from"),
@@ -446,6 +446,11 @@ function readLogStatsQuery(url: URL): LogStatsOptions {
   if (toTime - fromTime > MAX_LOG_STATS_RANGE_MS) {
     throw new ConfigError("logs stats range cannot exceed 31 days.");
   }
+  return { from: new Date(fromTime).toISOString(), to: new Date(toTime).toISOString() };
+}
+
+function readLogStatsQuery(url: URL): LogStatsOptions {
+  const range = readLogStatsRange(url);
   const view = url.searchParams.get("view");
   if (view !== null && view !== "usage") {
     throw new ConfigError("logs stats view must be usage when supplied.");
@@ -455,8 +460,7 @@ function readLogStatsQuery(url: URL): LogStatsOptions {
   }
 
   return {
-    from: new Date(fromTime).toISOString(),
-    to: new Date(toTime).toISOString(),
+    ...range,
     includeOverview: url.searchParams.get("overview") === "1",
     ...(view === "usage" ? { view } : {})
   };

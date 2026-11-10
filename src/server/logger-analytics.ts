@@ -233,6 +233,7 @@ function readStatsSnapshot(db: DatabaseSync, options: LogStatsOptions): LogAnaly
   }
   return {
     ...common,
+    range: options,
     summary: readSummary(db, options),
     by_route: routes.map((row) => ({
       route: normalizeRoute(row.route),

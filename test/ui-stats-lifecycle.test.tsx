@@ -4,6 +4,7 @@ import { act, StrictMode, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
+import type { PublicConfig } from "../src/shared/types.js";
 import {
   useLogStats, type AnalyticsPreset, type AnalyticsRange, type AnalyticsSnapshotCache
 } from "../src/ui/analytics/analytics-data.js";
@@ -64,7 +65,7 @@ function RetainedStats({ active = true, preset = "24h", overview = false, view, 
   return active ? <StatsHarness snapshot={snapshot} preset={preset} overview={overview} view={view} range={range} /> : <span>away</span>;
 }
 
-function BootstrapHarness() {
+function BootstrapHarness({ recoveryConfig }: { recoveryConfig?: PublicConfig }) {
   const state = useStudioBootstrap("config");
   return <>
     <output>{JSON.stringify({ config: state.config !== null, health: state.health !== null,
@@ -72,6 +73,8 @@ function BootstrapHarness() {
       formRevision: state.formRevision })}</output>
     <button onClick={state.retryBootstrap}>retry</button>
     <button onClick={() => state.setForm((form) => ({ ...form, loggingKeepRecent: 777 }))}>edit</button>
+    {recoveryConfig && <button onClick={() => state.applyRemoteConfig(recoveryConfig)}>snapshot</button>}
+    <button onClick={state.notifyServerRecovered}>poll recovered</button>
   </>;
 }
 
@@ -188,6 +191,24 @@ describe("analytics snapshot lifecycle", () => {
 });
 
 describe("independent bootstrap requests", () => {
+  it.each([
+    ["config", "snapshot"], ["health", "snapshot"],
+    ["config", "poll recovered"], ["health", "poll recovered"]
+  ] as const)("does not revive a recovered %s failure after %s when the sibling succeeds", async (failed, recovery) => {
+    const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+    const config = store.toPublicConfig();
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    vi.stubGlobal("fetch", vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise.then((response) => response.clone())));
+    const view = await mount(<BootstrapHarness recoveryConfig={config} />);
+    await act(async () => requests[failed].reject(new Error(`${failed} failed`)));
+    expect(state(view.container)).toMatchObject({ error: `${failed} failed`, failed: true });
+    await press(view.container, recovery);
+    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    const sibling = failed === "config" ? "health" : "config";
+    await act(async () => requests[sibling].json(sibling === "config" ? config : { ok: true }));
+    expect(state(view.container)).toMatchObject({ [sibling]: true, error: null, failed: false });
+  });
+
   it.each(["config", "health"] as const)("renders %s without waiting for the other request and preserves the other error", async (first) => {
     const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
     const config = store.toPublicConfig();

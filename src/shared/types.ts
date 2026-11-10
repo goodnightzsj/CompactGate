@@ -671,6 +671,7 @@ export interface LogStatsSnapshot {
   range: {
     from: string;
     to: string;
+    includeOverview?: boolean;
   };
   retained_range: {
     oldest_at: string | null;

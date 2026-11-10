@@ -8,6 +8,21 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("log stats API", () => {
+  it("preserves full statistics range fields and ignores statistics-only options on recent logs", async () => {
+    const app = await startApp();
+    const range = { from: "2026-08-07T00:00:00.000Z", to: "2026-08-08T00:00:00.000Z" };
+    for (const overview of ["0", "1"]) {
+      const response = await fetch(`${app.url}/api/logs/stats?${new URLSearchParams({ ...range, overview })}`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).range).toEqual({ ...range, includeOverview: overview === "1" });
+    }
+    const recentOptions: Record<string, string>[] = [{ view: "full" }, { view: "usage", overview: "1" }];
+    for (const query of recentOptions) {
+      const response = await fetch(`${app.url}/api/logs/recent?${new URLSearchParams({ ...range, ...query })}`);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ total: 0, logs: [] });
+    }
+  });
   it("reports queue saturation separately from query failures", async () => {
     const app = await startApp();
     const stats = vi.spyOn(RequestLogger.prototype, "statsAsync");

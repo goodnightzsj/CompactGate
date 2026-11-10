@@ -66,12 +66,15 @@ export function useStudioBootstrap(pageMode: PageMode) {
         const data = await api<Data>(url, { signal: controller.signal });
         if (!controller.signal.aborted) apply(data);
       } catch (error) {
-        if (!controller.signal.aborted) errors.push(errorSummary(error));
+        if (!controller.signal.aborted) {
+          errors.push(errorSummary(error));
+          dispatchConfig({ type: "page_load_result", error: errors.join("; ") });
+        }
       } finally {
         pending -= 1;
-        // One successful response cannot erase the other request's failure.
-        if (!controller.signal.aborted && (errors.length > 0 || pending === 0)) {
-          dispatchConfig({ type: "page_load_result", error: errors.join("; ") || null });
+        // A late success must neither erase a sibling failure nor replay one already recovered.
+        if (!controller.signal.aborted && pending === 0 && errors.length === 0) {
+          dispatchConfig({ type: "page_load_result", error: null });
         }
       }
     }

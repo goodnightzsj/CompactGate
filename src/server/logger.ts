@@ -666,7 +666,14 @@ export class RequestLogger extends EventTarget {
     };
   }
 
-  purgeStoredBodies(): LogBodyPurgeResult {
+  async purgeStoredBodies(): Promise<LogBodyPurgeResult> {
+    if (this.closed) throw new Error("Request logger is closed.");
+    return this.statsReader
+      ? this.statsReader.runMaintenance(() => this.purgeStoredBodiesSync())
+      : this.purgeStoredBodiesSync();
+  }
+
+  private purgeStoredBodiesSync(): LogBodyPurgeResult {
     const databaseBytesBefore = this.databaseFootprintBytes();
     const rowCountBefore = this.persistedRowCount();
     const rowsCleared = this.clearPersistedBodies();
@@ -716,7 +723,7 @@ export class RequestLogger extends EventTarget {
       return;
     }
 
-    if (!this.deferStoragePrune) {
+    if (!this.deferStoragePrune && !this.statsReader) {
       this.prunePersistedStorage();
       return;
     }
@@ -730,18 +737,29 @@ export class RequestLogger extends EventTarget {
       return;
     }
 
-    const advance = () => {
+    const advance = async () => {
       this.scheduledStoragePrune = null;
       if (this.closed) return;
       const steps = this.storagePruneSteps ??= this.prunePersistedStorageSteps();
       this.storagePruneInProgress = true;
       let done = false;
       try {
-        done = (this.maxDatabaseBytes === null ? steps.return(undefined) : steps.next()).done === true;
+        const step = () => (this.maxDatabaseBytes === null ? steps.return(undefined) : steps.next()).done === true;
+        done = this.statsReader ? await this.statsReader.runMaintenance(step) : step();
+      } catch (error) {
+        steps.return(undefined);
+        done = true;
+        if (!this.closed) {
+          this.recordPersistenceFailure("prune request log database", error);
+          console.error("Failed to schedule request log database pruning.", error);
+        }
       } finally {
         this.storagePruneInProgress = false;
       }
-      if (this.closed) return;
+      if (this.closed) {
+        steps.return(undefined);
+        return;
+      }
       if (!done) {
         // A timer boundary lets multi-stage network I/O progress between SQL calls.
         this.scheduledStoragePrune = setTimeout(advance, STORAGE_PRUNE_YIELD_MS);
