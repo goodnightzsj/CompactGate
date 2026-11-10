@@ -19,7 +19,7 @@ describe("import followed by another draft write", () => {
   it.each([[false, false], [true, false], [false, true], [true, true]])("keeps imported credential owners with pool=%s snapshotFirst=%s", async (pool, snapshotFirst) => {
     const { store, before } = await prepare(pool);
     const imported = store.toPublicConfig();
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: before });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: before, baselineConfig: null });
     const submitted = state.form;
     state = reduceStudioConfigState(state, { type: "set_form", value: { ...state.form, primaryModelOverride: "new-edit", claudeModelMap: { ...state.form.claudeModelMap, opus: "edited-opus" } } });
     if (snapshotFirst) state = reduceStudioConfigState(state, { type: "remote_config", config: imported });

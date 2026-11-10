@@ -59,6 +59,7 @@ export function useStudioBootstrap(pageMode: PageMode) {
 
   useEffect(() => {
     const controller = new AbortController();
+    const baselineErrorRevision = configState.pageErrorRevision;
     const errors: string[] = [];
     let pending = healthMode ? 1 : 2;
     async function load<Data>(url: string, apply: (data: Data) => void) {
@@ -68,22 +69,25 @@ export function useStudioBootstrap(pageMode: PageMode) {
       } catch (error) {
         if (!controller.signal.aborted) {
           errors.push(errorSummary(error));
-          dispatchConfig({ type: "page_load_result", error: errors.join("; ") });
+          dispatchConfig({ type: "page_load_result", error: errors.join("; "), baselineErrorRevision });
         }
       } finally {
         pending -= 1;
         // A late success must neither erase a sibling failure nor replay one already recovered.
         if (!controller.signal.aborted && pending === 0 && errors.length === 0) {
-          dispatchConfig({ type: "page_load_result", error: null });
+          dispatchConfig({ type: "page_load_result", error: null, baselineErrorRevision });
         }
       }
     }
 
-    if (!healthMode) void load<PublicConfig>("/api/config", (config) => dispatchConfig({ type: "bootstrap", config }));
-    void load<HealthResponse>("/api/health", setHealth);
+    if (!healthMode) void load<PublicConfig>("/api/config", (config) => dispatchConfig({
+      type: "bootstrap", config, baselineConfig: configState.config
+    }));
+    void load<HealthResponse>("/api/health", (nextHealth) => setHealth((current) => current === health ? nextHealth : current));
     return () => controller.abort();
     // `healthMode` is derived from `bootstrapScope`, so listing it again would
     // only suggest the two can move independently.
+    // Capture data and error ownership at request start without restarting on state changes.
   }, [bootstrapScope, reloadToken]);
 
   return {

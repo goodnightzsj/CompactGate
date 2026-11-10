@@ -23,22 +23,23 @@ export interface StudioConfigState {
   formRevision: string | null;
   /** The page-level banner text, whatever produced it. */
   pageError: string | null;
+  /** Recovery or an explicit page error supersedes earlier bootstrap results. */
+  pageErrorRevision: number;
   /**
-   * The last bootstrap load failed, so whatever is rendered below the banner is
-   * the previous successful load rather than current data.
+   * The banner belongs to a failed bootstrap, so the page may show stale data.
    */
   bootstrapFailed: boolean;
 }
 
 export type StudioConfigAction =
-  | { type: "bootstrap"; config: PublicConfig }
+  | { type: "bootstrap"; config: PublicConfig; baselineConfig: PublicConfig | null }
   | { type: "set_config"; value: SetStateAction<PublicConfig | null> }
   | { type: "set_form"; value: SetStateAction<ConfigFormState> }
   | { type: "remote_config"; config: PublicConfig }
   | { type: "apply_profile"; config: PublicConfig; scope: ConfigProfileScope; baselineConfig: PublicConfig | null; baselineRevision: string | null }
   | { type: "rebase_form_revision" }
   | { type: "commit_config"; config: PublicConfig; submittedRevision: number }
-  | { type: "page_load_result"; error: string | null }
+  | { type: "page_load_result"; error: string | null; baselineErrorRevision: number }
   | { type: "set_page_error"; value: SetStateAction<string | null> }
   | { type: "server_recovered" };
 
@@ -48,6 +49,7 @@ export const INITIAL_STUDIO_CONFIG_STATE: StudioConfigState = {
   draftRevision: 0,
   formRevision: null,
   pageError: null,
+  pageErrorRevision: 0,
   bootstrapFailed: false
 };
 
@@ -57,6 +59,8 @@ export function reduceStudioConfigState(
 ): StudioConfigState {
   switch (action.type) {
     case "bootstrap":
+      // A snapshot or completed write can supersede this request before it returns.
+      if (state.config !== action.baselineConfig) return state;
       // The bootstrap effect re-runs on every return from the health page, so
       // this is not necessarily the first load: adopt the fetched config but
       // keep an unsaved draft, exactly as remote_config does.
@@ -128,6 +132,7 @@ export function reduceStudioConfigState(
         formRevision: action.config.revision
       };
     case "page_load_result":
+      if (action.baselineErrorRevision !== state.pageErrorRevision) return state;
       return {
         ...state,
         pageError: action.error,
@@ -136,7 +141,9 @@ export function reduceStudioConfigState(
     case "set_page_error":
       return {
         ...state,
-        pageError: applyStateAction(state.pageError, action.value)
+        pageError: applyStateAction(state.pageError, action.value),
+        pageErrorRevision: state.pageErrorRevision + 1,
+        bootstrapFailed: false
       };
     case "server_recovered":
       return clearStaleLoadFailure(state);
@@ -144,14 +151,16 @@ export function reduceStudioConfigState(
 }
 
 /**
- * Drops the "showing the last successful load" banner once something proves the
- * server is answering again. Gated on the flag so a page error from a live
- * request (a failed export, say) is not swallowed by an unrelated snapshot.
+ * Recovery invalidates pending load errors, even before the first failure arrives.
+ * Only a bootstrap banner is cleared; a newer operation error stays visible.
  */
 function clearStaleLoadFailure(state: StudioConfigState): StudioConfigState {
-  return state.bootstrapFailed
-    ? { ...state, pageError: null, bootstrapFailed: false }
-    : state;
+  return {
+    ...state,
+    pageError: state.bootstrapFailed ? null : state.pageError,
+    pageErrorRevision: state.pageErrorRevision + 1,
+    bootstrapFailed: false
+  };
 }
 
 /**

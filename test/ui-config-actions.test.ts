@@ -18,7 +18,7 @@ describe("profile operations that do not submit a draft", () => {
       await store.saveProfile("codex", "Beta", { primary: { model_override: "beta" } });
       const ids = store.toPublicConfig().profile_scopes.codex.profiles.map((profile) => profile.id);
       await store.applyProfile("codex", ids[0]);
-      let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+      let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig(), baselineConfig: null });
       const dispatch = (action: StudioConfigAction) => { state = reduceStudioConfigState(state, action); };
       dispatch({ type: "set_form", value: (form) => ({ ...form, claudePrimaryBaseUrl: "https://local-draft.example" }) });
       await store.patch({ claude: { primary: { base_url: "https://other-tab.example" } } });
@@ -63,7 +63,7 @@ describe("profile operations that do not submit a draft", () => {
 describe("config writes and their health follow-up", () => {
   it.each([[false, false], [false, true], [true, false], [true, true]])("commits import with earlier snapshot=%s and newer edits=%s", async (snapshotFirst, editDuringImport) => {
     const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig(), baselineConfig: null });
     const dispatch = (action: StudioConfigAction) => { state = reduceStudioConfigState(state, action); };
     dispatch({ type: "set_form", value: (form) => ({ ...form, primaryModelOverride: "old-draft-to-replace" }) });
     const imported = structuredClone(store.toPublicConfig());

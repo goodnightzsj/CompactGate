@@ -102,7 +102,7 @@ describe("OAuth configuration UI contracts", () => {
 
   it("creating an OAuth profile preserves pending drafts and the active runtime", async () => {
     const { store, account } = await configured();
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig(), baselineConfig: null });
     state = reduceStudioConfigState(state, { type: "set_form", value: { ...state.form, primaryModelOverride: "unsaved-model", loggingKeepRecent: 123 } });
     const before = state;
     await store.saveOAuthProfile("codex", account.id, "OAuth draft", "provider/model", state.config!.revision);
@@ -116,7 +116,7 @@ describe("OAuth configuration UI contracts", () => {
 
   it("an OAuth profile creation cannot rebase an already conflicted draft", async () => {
     const { store, account } = await configured();
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig(), baselineConfig: null });
     const originalRevision = state.formRevision;
     state = reduceStudioConfigState(state, { type: "set_form", value: { ...state.form, primaryModelOverride: "unsaved-model" } });
     await store.patch({ primary: { model_override: "other-tab-model" } });

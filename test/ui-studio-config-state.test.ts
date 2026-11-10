@@ -27,6 +27,7 @@ describe("Studio config ownership", () => {
     next.primary.base_url = "http://127.0.0.1:9901/v1";
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
 
@@ -43,6 +44,7 @@ describe("Studio config ownership", () => {
     next.primary.base_url = "http://127.0.0.1:9902/v1";
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     state = reduceStudioConfigState(state, {
@@ -63,6 +65,7 @@ describe("Studio config ownership", () => {
     saved.primary.base_url = "http://submitted.local/v1";
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     state = reduceStudioConfigState(state, {
@@ -94,6 +97,7 @@ describe("Studio config ownership", () => {
     const current = store.toPublicConfig();
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     state = reduceStudioConfigState(state, {
@@ -102,7 +106,7 @@ describe("Studio config ownership", () => {
     });
     expect(state.config && isFormDirty(state.config, state.form)).toBe(true);
 
-    state = reduceStudioConfigState(state, { type: "bootstrap", config: current });
+    state = reduceStudioConfigState(state, { type: "bootstrap", config: current, baselineConfig: state.config });
 
     expect(state.form.codexPrimaryBaseUrl).toBe("http://draft.local/v1");
     expect(state.config && isFormDirty(state.config, state.form)).toBe(true);
@@ -115,10 +119,11 @@ describe("Studio config ownership", () => {
     next.primary.base_url = "http://127.0.0.1:9903/v1";
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
 
-    state = reduceStudioConfigState(state, { type: "bootstrap", config: next });
+    state = reduceStudioConfigState(state, { type: "bootstrap", config: next, baselineConfig: state.config });
 
     expect(state.config?.primary.base_url).toBe("http://127.0.0.1:9903/v1");
     expect(state.form.codexPrimaryBaseUrl).toBe("http://127.0.0.1:9903/v1");
@@ -136,6 +141,7 @@ describe("Studio config ownership", () => {
 
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     expect(state.formRevision).toBe(current.revision);
@@ -151,7 +157,7 @@ describe("Studio config ownership", () => {
 
     // A clean form has nothing to lose, so it re-bases along with the snapshot.
     const rebased = reduceStudioConfigState(
-      reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: current }),
+      reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: current, baselineConfig: null }),
       { type: "remote_config", config: remote }
     );
     expect(rebased.formRevision).toBe("r-other-tab");
@@ -169,6 +175,7 @@ describe("Studio config ownership", () => {
 
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     state = reduceStudioConfigState(state, {
@@ -205,6 +212,7 @@ describe("Studio config ownership", () => {
 
     let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, {
       type: "bootstrap",
+      baselineConfig: null,
       config: current
     });
     state = reduceStudioConfigState(state, {
@@ -238,7 +246,7 @@ describe("Studio config ownership", () => {
   it.each([false, true])("applies one scope without blocking unrelated drafts when its snapshot arrives first=%s", async (snapshotFirst) => {
     const store = await loadStore();
     const current = store.toPublicConfig();
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: current });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: current, baselineConfig: null });
     state = reduceStudioConfigState(state, { type: "set_form", value: (form) => ({
       ...form, primaryModelOverride: "discard-on-explicit-apply", claudePrimaryBaseUrl: "https://kept-draft.example", loggingKeepRecent: 999
     }) });

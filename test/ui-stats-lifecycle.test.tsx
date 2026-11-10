@@ -9,6 +9,7 @@ import {
   useLogStats, type AnalyticsPreset, type AnalyticsRange, type AnalyticsSnapshotCache
 } from "../src/ui/analytics/analytics-data.js";
 import { useStudioBootstrap } from "../src/ui/hooks/useStudioBootstrap.js";
+import { formFromConfig } from "../src/ui/config/config-form-state.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 const roots = new Set<Root>();
@@ -70,11 +71,20 @@ function BootstrapHarness({ recoveryConfig }: { recoveryConfig?: PublicConfig })
   return <>
     <output>{JSON.stringify({ config: state.config !== null, health: state.health !== null,
       error: state.pageError, failed: state.bootstrapFailed, draft: state.form.loggingKeepRecent,
-      formRevision: state.formRevision })}</output>
+      formRevision: state.formRevision, configRevision: state.config?.revision,
+      savedModel: state.config?.primary.model_override, model: state.form.primaryModelOverride,
+      healthTime: state.health?.time })}</output>
     <button onClick={state.retryBootstrap}>retry</button>
     <button onClick={() => state.setForm((form) => ({ ...form, loggingKeepRecent: 777 }))}>edit</button>
     {recoveryConfig && <button onClick={() => state.applyRemoteConfig(recoveryConfig)}>snapshot</button>}
+    {recoveryConfig && <>
+      <button onClick={() => { state.setConfig(recoveryConfig); state.setForm(formFromConfig(recoveryConfig)); }}>import</button>
+      <button onClick={() => state.commitConfig(recoveryConfig, state.draftRevision)}>save</button>
+      <button onClick={() => state.applyProfileConfig(recoveryConfig, "codex")}>apply profile</button>
+    </>}
     <button onClick={state.notifyServerRecovered}>poll recovered</button>
+    <button onClick={() => state.setPageError("export failed")}>operation error</button>
+    <button onClick={() => state.setHealth((current) => current && { ...current, time: "newer-health" })}>new health</button>
   </>;
 }
 
@@ -191,10 +201,72 @@ describe("analytics snapshot lifecycle", () => {
 });
 
 describe("independent bootstrap requests", () => {
+  it("keeps newer health when a failed retry has a late health response", async () => {
+    const config = (await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"))).toPublicConfig();
+    const fetcher = vi.fn((url: string) => Promise.resolve(Response.json(url === "/api/config" ? config : { time: "initial-health" })));
+    vi.stubGlobal("fetch", fetcher);
+    const view = await mount(<BootstrapHarness />);
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    fetcher.mockImplementation((url: string) => requests[url === "/api/config" ? "config" : "health"].promise);
+    await press(view.container, "retry");
+    await act(async () => requests.config.reject(new Error("config failed")));
+    await press(view.container, "new health");
+    await press(view.container, "poll recovered");
+    await act(async () => requests.health.json({ time: "stale-health" }));
+    expect(state(view.container)).toMatchObject({ healthTime: "newer-health", error: null });
+  });
+
+  it.each(["snapshot", "import", "save", "apply profile"])("keeps newer configuration from %s when an earlier bootstrap succeeds late", async (update) => {
+    const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+    const old = store.toPublicConfig();
+    const newer = structuredClone(old);
+    newer.revision = "newer-configuration";
+    newer.primary.model_override = "newer-model";
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    const fetcher = vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise.then((response) => response.clone()));
+    vi.stubGlobal("fetch", fetcher);
+    const view = await mount(<BootstrapHarness recoveryConfig={newer} />);
+    await act(async () => requests.health.reject(new Error("health failed")));
+    await press(view.container, update);
+    const updated = state(view.container);
+    expect(updated).toMatchObject({ configRevision: newer.revision, formRevision: newer.revision, model: "newer-model" });
+    await act(async () => requests.config.json(old));
+    expect(state(view.container)).toEqual(updated);
+
+    const retried = { ...newer, revision: "successful-retry" };
+    fetcher.mockImplementation((url: string) => Promise.resolve(Response.json(url === "/api/config" ? retried : { ok: true })));
+    await press(view.container, "retry");
+    expect(state(view.container)).toMatchObject({ configRevision: retried.revision, formRevision: retried.revision, error: null });
+  });
+
+  it("preserves a dirty draft and its revision when a snapshot and stale retry resolve in one batch", async () => {
+    const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+    const old = store.toPublicConfig();
+    const newer = structuredClone(old);
+    newer.revision = "newer-configuration";
+    newer.primary.model_override = "newer-model";
+    const fetcher = vi.fn((url: string) => Promise.resolve(Response.json(url === "/api/config" ? old : { ok: true })));
+    vi.stubGlobal("fetch", fetcher);
+    const view = await mount(<BootstrapHarness recoveryConfig={newer} />);
+    await press(view.container, "edit");
+    const pending = deferredResponse();
+    fetcher.mockImplementation((url: string) => url === "/api/config" ? pending.promise : Promise.resolve(Response.json({ ok: true })));
+    await press(view.container, "retry");
+    await act(async () => {
+      [...view.container.querySelectorAll("button")].find((button) => button.textContent === "snapshot")!.click();
+      pending.json(old);
+    });
+    expect(state(view.container)).toMatchObject({
+      configRevision: newer.revision, savedModel: "newer-model", draft: 777, formRevision: old.revision
+    });
+  });
+
   it.each([
-    ["config", "snapshot"], ["health", "snapshot"],
-    ["config", "poll recovered"], ["health", "poll recovered"]
-  ] as const)("does not revive a recovered %s failure after %s when the sibling succeeds", async (failed, recovery) => {
+    ["config", "snapshot", true], ["health", "snapshot", true],
+    ["config", "poll recovered", true], ["health", "poll recovered", true],
+    ["config", "snapshot", false], ["health", "snapshot", false],
+    ["config", "poll recovered", false], ["health", "poll recovered", false]
+  ] as const)("does not revive a recovered %s failure after %s with sibling success=%s", async (failed, recovery, succeeds) => {
     const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
     const config = store.toPublicConfig();
     const requests = { config: deferredResponse(), health: deferredResponse() };
@@ -205,8 +277,62 @@ describe("independent bootstrap requests", () => {
     await press(view.container, recovery);
     expect(state(view.container)).toMatchObject({ error: null, failed: false });
     const sibling = failed === "config" ? "health" : "config";
-    await act(async () => requests[sibling].json(sibling === "config" ? config : { ok: true }));
-    expect(state(view.container)).toMatchObject({ [sibling]: true, error: null, failed: false });
+    await act(async () => {
+      if (succeeds) requests[sibling].json(sibling === "config" ? config : { ok: true });
+      else requests[sibling].reject(new Error(`${sibling} failed late`));
+    });
+    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    if (succeeds) expect(state(view.container)[sibling]).toBe(true);
+  });
+
+  it.each(["snapshot", "poll recovered"])("ignores both old failures when %s arrives before either result in the same batch", async (recovery) => {
+    const config = (await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"))).toPublicConfig();
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    const fetcher = vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise);
+    vi.stubGlobal("fetch", fetcher);
+    const view = await mount(<BootstrapHarness recoveryConfig={config} />);
+    await act(async () => {
+      [...view.container.querySelectorAll("button")].find((button) => button.textContent === recovery)!.click();
+      requests.config.reject(new Error("old config failure"));
+      requests.health.reject(new Error("old health failure"));
+    });
+    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+
+    fetcher.mockImplementation((url: string) => Promise.reject(new Error(`new failure ${url}`)));
+    await press(view.container, "retry");
+    expect(state(view.container)).toMatchObject({ failed: true });
+    expect(state(view.container).error).toContain("new failure /api/config");
+    expect(state(view.container).error).toContain("new failure /api/health");
+    fetcher.mockImplementation((url: string) => Promise.resolve(Response.json(url === "/api/config" ? config : { time: "recovered" })));
+    await press(view.container, "retry");
+    expect(state(view.container)).toMatchObject({ config: true, health: true, error: null, failed: false });
+  });
+
+  it.each([true, false])("preserves a newer operation error after bootstrap failure with sibling success=%s", async (succeeds) => {
+    const config = (await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"))).toPublicConfig();
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    vi.stubGlobal("fetch", vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise));
+    const view = await mount(<BootstrapHarness recoveryConfig={config} />);
+    await act(async () => requests.health.reject(new Error("health failed")));
+    await press(view.container, "operation error");
+    await act(async () => {
+      if (succeeds) requests.config.json(config);
+      else requests.config.reject(new Error("late config failure"));
+    });
+    await press(view.container, "snapshot");
+    await press(view.container, "poll recovered");
+    expect(state(view.container)).toMatchObject({ error: "export failed", failed: false });
+  });
+
+  it("does not clear a new operation error when both older bootstrap requests succeed", async () => {
+    const config = (await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"))).toPublicConfig();
+    const requests = { config: deferredResponse(), health: deferredResponse() };
+    vi.stubGlobal("fetch", vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise.then((response) => response.clone())));
+    const view = await mount(<BootstrapHarness />);
+    await act(async () => requests.config.json(config));
+    await press(view.container, "operation error");
+    await act(async () => requests.health.json({ time: "health" }));
+    expect(state(view.container)).toMatchObject({ error: "export failed", failed: false });
   });
 
   it.each(["config", "health"] as const)("renders %s without waiting for the other request and preserves the other error", async (first) => {

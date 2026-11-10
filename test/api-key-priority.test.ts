@@ -295,7 +295,7 @@ describe("API key priority form round trips", () => {
   it("treats a cleared priority as the documented default and detects remote priority conflicts", async () => {
     const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
     await store.patch({ primary: priorityConfig().primary });
-    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig() });
+    let state = reduceStudioConfigState(INITIAL_STUDIO_CONFIG_STATE, { type: "bootstrap", config: store.toPublicConfig(), baselineConfig: null });
     const baselineRevision = state.formRevision;
     const draft = { ...state.form, codexPrimaryApiKeyPriority: "" as const, primaryModelOverride: "unsaved-model" };
     draft.codexPrimaryApiKeys = draft.codexPrimaryApiKeys.map((entry) => ({ ...entry, priority: "" as const }));
