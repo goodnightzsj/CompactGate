@@ -58,6 +58,9 @@ Thumbs.db
 /*.webp
 /*.avif
 /*.bmp
+
+# Local documentation
+/docs/
 llmdoc/
 
 # Local debugging probes: they read this machine's real compactgate.json and

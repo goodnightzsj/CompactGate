@@ -1,4 +1,4 @@
-import { chmod, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, readdir, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore, DEFAULT_CONFIG } from "../src/server/config.js";
@@ -121,7 +121,7 @@ describe("config file repository", () => {
     } finally { store.oauth.close(); }
   });
 
-  it("writes private files and keeps the ten newest prior versions", async () => {
+  it("writes private files and keeps the three newest prior versions", async () => {
     const dir = await makeConfigDir();
     const configPath = path.join(dir, "compactgate.json");
 
@@ -132,7 +132,7 @@ describe("config file repository", () => {
     }
 
     const backups = await listConfigBackups(configPath);
-    expect(backups).toHaveLength(10);
+    expect(backups).toHaveLength(3);
     expect((await stat(configPath)).mode & 0o777).toBe(0o600);
     for (const backup of backups) {
       expect((await stat(path.join(dir, backup.id))).mode & 0o777).toBe(0o600);
@@ -142,6 +142,38 @@ describe("config file repository", () => {
     });
     expect(await readConfigBackup(configPath, backups[0]!.id)).toMatchObject({
       logging: { keep_recent: 11 }
+    });
+    const versions = await Promise.all(backups.map(async (backup) => (
+      await readConfigBackup(configPath, backup.id) as CompactGateConfig
+    ).logging.keep_recent));
+    expect(versions.sort((left, right) => left - right)).toEqual([9, 10, 11]);
+  });
+
+  it("reduces ten existing backups to three while preserving unrelated files", async () => {
+    const dir = await makeConfigDir();
+    const configPath = path.join(dir, "compactgate.json");
+    await writeConfigFile(configPath, withKeepRecent(11));
+    for (let index = 1; index <= 10; index += 1) {
+      const timestamp = 1700000000000 + index;
+      const backupPath = path.join(dir, `compactgate.json.backup.${timestamp}.00000000-0000-4000-8000-000000000000.json`);
+      await writeFile(backupPath, JSON.stringify(withKeepRecent(index)), { mode: 0o600 });
+      await utimes(backupPath, new Date(timestamp), new Date(timestamp));
+    }
+    const unrelatedPath = path.join(dir, "other.json.backup.1700000000000.00000000-0000-4000-8000-000000000000.json");
+    await writeFile(unrelatedPath, "other config backup");
+    expect(await listConfigBackups(configPath)).toHaveLength(10);
+
+    await writeConfigFile(configPath, withKeepRecent(12));
+
+    const backups = await listConfigBackups(configPath);
+    expect(backups).toHaveLength(3);
+    const versions = await Promise.all(backups.map(async (backup) => (
+      await readConfigBackup(configPath, backup.id) as CompactGateConfig
+    ).logging.keep_recent));
+    expect(versions.sort((left, right) => left - right)).toEqual([9, 10, 11]);
+    expect(await readFile(unrelatedPath, "utf8")).toBe("other config backup");
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      logging: { keep_recent: 12 }
     });
   });
 

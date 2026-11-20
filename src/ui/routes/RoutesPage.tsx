@@ -47,7 +47,7 @@ export function RoutesPage({
   onRetryLogs: () => void;
   codexStatus: CodexVersionStatus | null;
   clientIdentity: ClientIdentityStatus | null;
-  onClientIdentityChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void;
+  onClientIdentityChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void | Promise<void>;
   previewPanel: ComponentProps<typeof ConfigPreviewPanel>;
 }) {
   const hitTone = activeRouteSource === "latest" && hasLogSnapshot && latestLog

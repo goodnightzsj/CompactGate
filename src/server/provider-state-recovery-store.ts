@@ -10,6 +10,7 @@ export interface ProviderStateRecoveryPolicy {
   stripCompactionIds: boolean;
   priorEncryptedFailures: ProviderStateFailure[];
   rejectedCompaction: boolean;
+  checkpointRecovery?: "compaction" | "continuation";
   unavailable: boolean;
 }
 
@@ -52,6 +53,7 @@ export class ProviderStateRecoveryStore {
     const policy = parseStoredJson(row.policy, "recovery policy");
     if (!isRecord(policy) || !["original", "cpa", "cross_domain"].includes(String(policy.base)) ||
       !["stripCompactionIds", "rejectedCompaction", "unavailable"].every(key => typeof policy[key] === "boolean") ||
+      policy.checkpointRecovery !== undefined && !["compaction", "continuation"].includes(String(policy.checkpointRecovery)) ||
       !Array.isArray(policy.priorEncryptedFailures) || policy.priorEncryptedFailures.length > 3 || !policy.priorEncryptedFailures.every(validStoredFailure) ||
       policy.failure !== null && !validStoredFailure(policy.failure)) {
       throw new Error("Invalid persisted provider-state recovery policy.");

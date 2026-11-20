@@ -137,7 +137,8 @@ export async function handleRuntimeApi(
             primaryRouteRequestContextFromBody(
               Buffer.from(typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody ?? {})),
               previewHeaders,
-              parsedUrl.pathname
+              parsedUrl.pathname,
+              classification.route === "compact" && classification.compactionMode !== "remote_v2" ? "compact" : "primary"
             )
           ).config;
         }

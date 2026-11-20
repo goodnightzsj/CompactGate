@@ -200,7 +200,7 @@ export function applyOpenAiProxyUpstreamResult(
   state.streamOversizedEventCount = streamSummary?.oversizedEventCount ?? 0;
   state.responseBodyTruncated = result.responseBodyTruncated;
   state.responseId = result.streamSummary?.responseId ?? readResponseId(result);
-  state.responseModel = streamSummary?.responseModel ?? state.responseModel;
+  state.responseModel = result.streamSummary?.responseModel ?? state.responseModel;
   state.errorSummary = result.errorSummary;
   state.responseBody = result.responseBody;
   state.responseBodyBytes = result.responseBodyBytes;
@@ -271,6 +271,7 @@ type TransactionDerivedField =
   | "requestType"
   | "sourceModel"
   | "targetModel"
+  | "responseModel"
   | "firstTokenMs"
   | "generationSample"
   | "usage"
@@ -296,9 +297,8 @@ export type FinalizeFromTransactionInput =
  * Finalizes a proxy transaction, projecting the shared transaction-state fields
  * onto the log/capture input. Anything passed in `overrides` wins, so callers
  * only spell out their per-route fields (route, compaction mode, url, ...) plus
- * any state field that needs a different value. Note `responseModel` and
- * `providerStatePortability` are deliberately NOT derived here: callers that
- * omit them must keep logging `undefined`.
+ * any state field that needs a different value. Provider-state diagnostics
+ * remain owned by the route.
  */
 export function finalizeFromTransaction(
   transaction: OpenAiProxyTransactionState,
@@ -320,6 +320,7 @@ export function finalizeFromTransaction(
     requestType: transaction.requestType,
     sourceModel: transaction.sourceModel,
     targetModel: transaction.targetModel,
+    responseModel: transaction.responseModel,
     firstTokenMs: transaction.firstTokenMs,
     generationSample: transaction.generationSample,
     usage: transaction.usage,

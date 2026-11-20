@@ -127,7 +127,7 @@ export function applyHostBodyQuirks(context: HostBodyQuirkContext): string[] {
  * Returns `body` unchanged when there is nothing to strip, so a request this
  * does not apply to is not re-serialised.
  */
-function stripResponsesInputItemIds(body: Buffer): Buffer {
+export function stripResponsesInputItemIds(body: Buffer): Buffer {
   const parsed = parseJsonRecord(body);
   if (!parsed || parsed.store !== false || !Array.isArray(parsed.input)) {
     return body;

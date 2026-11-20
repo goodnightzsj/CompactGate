@@ -58,9 +58,11 @@ export interface OAuthStoreOptions {
 /** Owns credentials; ConfigStore only owns references to these connections. */
 export class OAuthStore {
   private accounts = new Map<string, StoredOAuthAccount>();
+  private readonly pendingRotations = new Map<string, OAuthTokens>();
   private readonly sessions = new Map<string, OAuthSession>();
-  private readonly refreshes = new Map<string, { controller: AbortController; promise: Promise<OAuthTokens> }>();
+  private readonly refreshes = new Map<string, { controller: AbortController; promise: Promise<OAuthTokens>; committing: boolean }>();
   private writeQueue: Promise<void> = Promise.resolve();
+  private closingRefreshes: Promise<PromiseSettledResult<unknown>[]> | null = null;
   private closed = false;
   private readonly fetcher: typeof fetch;
   private readonly now: () => number;
@@ -229,7 +231,7 @@ export class OAuthStore {
   async credentials(id: string): Promise<OAuthTokens & { provider: OAuthProviderId }> {
     this.assertOpen();
     const account = this.requireUsableAccount(id);
-    if (account.expires_at !== null && account.expires_at <= this.now() + 60_000) {
+    if (this.pendingRotations.has(id) || account.expires_at !== null && account.expires_at <= this.now() + 60_000) {
       await this.refresh(id);
     }
     const current = this.requireUsableAccount(id);
@@ -246,7 +248,7 @@ export class OAuthStore {
     const promise = this.refreshAccount(account, controller.signal).finally(() => {
       if (this.refreshes.get(id)?.controller === controller) this.refreshes.delete(id);
     });
-    this.refreshes.set(id, { controller, promise });
+    this.refreshes.set(id, { controller, promise, committing: false });
     return promise;
   }
 
@@ -263,27 +265,45 @@ export class OAuthStore {
         updated_at: new Date(this.now()).toISOString()
       });
       return next;
+    }).finally(() => {
+      if (this.accounts.get(id)?.state === "disconnected") this.pendingRotations.delete(id);
     });
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
     for (const session of this.sessions.values()) {
       clearTimeout(session.timer);
       session.controller.abort();
       session.callbackServer?.close();
     }
-    for (const refresh of this.refreshes.values()) refresh.controller.abort();
+    this.closingRefreshes = Promise.allSettled([...this.refreshes.values()].map(async refresh => {
+      if (!refresh.committing) refresh.controller.abort();
+      try { await refresh.promise; }
+      catch (error) {
+        if (!refresh.controller.signal.aborted || !(error instanceof ConfigError) || error.status !== 409) throw error;
+      }
+    }));
     this.sessions.clear();
   }
 
   async flush(): Promise<void> {
-    await this.writeQueue;
+    const refreshes = this.closingRefreshes ?? Promise.allSettled([...this.refreshes.values()].map(refresh => refresh.promise));
+    const results = [...await refreshes, ...await Promise.allSettled([this.writeQueue])];
+    const failures = [...new Set(results.flatMap(result => result.status === "rejected" ? [result.reason] : []))];
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "OAuth credential persistence failed.");
+    if (this.pendingRotations.size > 0) throw new Error("Rotated OAuth credentials remain unpersisted. Retry the affected connection after fixing storage.");
   }
 
   private async refreshAccount(account: StoredOAuthAccount, signal: AbortSignal): Promise<OAuthTokens> {
+    const pending = this.pendingRotations.get(account.id);
+    let rotationAccepted = pending !== undefined;
     try {
-      const tokens = await refreshOAuthTokens(account.input, tokensOf(account), this.fetcher, signal, this.now());
+      const tokens = await (pending ?? refreshOAuthTokens(account.input, tokensOf(account), this.fetcher, signal, this.now()));
+      if (signal.aborted) throw new ConfigError("OAuth refresh was cancelled. No stale credentials were saved.", 409);
+      this.refreshes.get(account.id)!.committing = true;
       await this.mutate((current) => {
         if (signal.aborted || current.get(account.id) !== account) {
           throw new ConfigError("OAuth connection changed while refreshing. No stale credentials were saved.", 409);
@@ -293,13 +313,15 @@ export class OAuthStore {
         if (normalizeBase(tokens.base_url) !== normalizeBase(account.base_url)) {
           throw new OAuthProviderError("OAuth provider changed its API endpoint. Authorize a new connection.", true, 401);
         }
+        rotationAccepted = true;
+        this.pendingRotations.set(account.id, tokens);
         const next = new Map(current);
         next.set(account.id, { ...account, ...tokens, updated_at: new Date(this.now()).toISOString(), error: null });
         return next;
-      });
+      }, true);
       return tokens;
     } catch (error) {
-      if (!signal.aborted && this.accounts.get(account.id) === account) {
+      if (!rotationAccepted && !this.closed && !signal.aborted && this.accounts.get(account.id) === account) {
         await this.mutate((current) => {
           if (current.get(account.id) !== account) return current;
           const next = new Map(current);
@@ -309,9 +331,13 @@ export class OAuthStore {
             error: safeOAuthError(error), updated_at: new Date(this.now()).toISOString()
           });
           return next;
+        }).catch(commitError => {
+          throw new AggregateError([error, commitError], "OAuth refresh failed and its result could not be saved.");
         });
       }
       throw error;
+    } finally {
+      if (this.accounts.get(account.id) !== account) this.pendingRotations.delete(account.id);
     }
   }
 
@@ -337,21 +363,35 @@ export class OAuthStore {
     this.finish(session, "connected");
   }
 
-  private mutate(build: (current: Map<string, StoredOAuthAccount>) => Map<string, StoredOAuthAccount>): Promise<void> {
+  private mutate(build: (current: Map<string, StoredOAuthAccount>) => Map<string, StoredOAuthAccount>, retainRotation = false): Promise<void> {
+    this.assertOpen();
+    let persistenceStarted = false;
     const operation = this.writeQueue.catch(() => undefined).then(async () => {
-      this.assertOpen();
       const next = build(this.accounts);
       if (next === this.accounts) return;
+      persistenceStarted = true;
       await mkdir(path.dirname(this.filePath), { recursive: true });
       try {
         await writeFileAtomically(this.filePath, `${JSON.stringify({ version: 1, accounts: [...next.values()] }, null, 2)}\n`);
       } catch (error) {
         if (error instanceof FileCommitError && error.filePath === this.filePath) this.accounts = next;
+        else if (retainRotation) {
+          // Retry the accepted candidate locally, never exchange the consumed refresh grant again.
+          try {
+            await writeFileAtomically(this.filePath, `${JSON.stringify({ version: 1, accounts: [...next.values()] }, null, 2)}\n`);
+            this.accounts = next;
+          } catch (commitError) {
+            if (commitError instanceof FileCommitError && commitError.filePath === this.filePath) this.accounts = next;
+            throw new AggregateError([error, commitError], "Rotated OAuth credentials could not be saved.");
+          }
+        }
         throw error;
       }
       this.accounts = next;
     });
-    this.writeQueue = operation.then(() => undefined, () => undefined);
+    // Pre-commit cancellation belongs to the caller, not the persistence drain.
+    this.writeQueue = operation.catch(error => { if (persistenceStarted) throw error; });
+    void this.writeQueue.catch(() => undefined);
     return operation;
   }
 

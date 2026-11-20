@@ -39,8 +39,7 @@ describe("Route URL suggestions", () => {
 
     expect(suggestions.map((suggestion) => suggestion.baseUrl)).toEqual([
       persistedOnlyUrl,
-      profileUrl,
-      fallbackProfileUrl
+      profileUrl
     ]);
     expect(suggestions[0]).toMatchObject({
       credentialPresetId: "codex_compact-3",
@@ -50,12 +49,18 @@ describe("Route URL suggestions", () => {
       storedApiKey: true,
       apiKeyConfigured: true
     });
-    expect(suggestions[2]).toMatchObject({
-      credentialPresetId: "",
-      host: "127.0.0.1:7003",
-      label: "档案：Fallback profile"
-    });
+    expect(suggestions.every(suggestion => suggestion.credentialPresetId)).toBe(true);
   });
+
+  it.each(["codex_primary", "codex_compact", "claude_primary", "claude_compact"] as const)(
+    "does not offer unbound profile credentials for %s", kind => {
+      const profile = { ...publicCodexProfile("saved", "Saved", "http://b.invalid/v1"),
+        stored_api_key_count: 4, claude_primary_base_url: "http://b.invalid", claude_compact_base_url: "http://b.invalid" };
+      const config = { route_url_presets: [], profiles: [profile],
+        profile_scopes: { codex: { profiles: [profile] }, claude: { profiles: [profile] } } } as unknown as PublicConfig;
+      expect(routeUrlSuggestions(config, kind)).toEqual([]);
+    }
+  );
 });
 
 function publicCodexProfile(id: string, name: string, compactBaseUrl: string): PublicConfigProfile {

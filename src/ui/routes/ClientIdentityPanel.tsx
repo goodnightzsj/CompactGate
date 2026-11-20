@@ -28,7 +28,7 @@ const KIND_META: Record<ClientIdentityKind, { name: string; protocol: string; ch
  */
 export function ClientIdentityPanel({ status, onStatusChange }: {
   status: ClientIdentityStatus | null;
-  onStatusChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void;
+  onStatusChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void | Promise<void>;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +42,7 @@ export function ClientIdentityPanel({ status, onStatusChange }: {
         method: "POST",
         body: JSON.stringify(patch)
       });
-      onStatusChange(next, status);
+      await onStatusChange(next, status);
       return true;
     } catch (cause) {
       setError(errorSummary(cause));

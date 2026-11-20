@@ -9,6 +9,7 @@ import {
   decodeBodyText,
   parseJsonRecord
 } from "../src/server/http-utils.js";
+import { MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES } from "../src/server/upstream-response-buffer.js";
 
 describe("usage metadata extraction", () => {
   it.each(["metadata", "output", "content", "tool_result", "choices"])("ignores token-shaped data inside %s", key => {
@@ -400,7 +401,7 @@ describe("usage metadata extraction", () => {
         input_tokens: 1,
         output_tokens: 2
       },
-      padding: "x".repeat(9 * 1024 * 1024)
+      padding: "x".repeat(MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES + 1)
     })));
 
     const usage = extractResponseUsage(body, {
@@ -420,7 +421,7 @@ describe("usage metadata extraction", () => {
       error: {
         message: "OVERSIZED_GZIP_ERROR_SHOULD_NOT_BE_INFLATED"
       },
-      padding: "x".repeat(9 * 1024 * 1024)
+      padding: "x".repeat(MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES + 1)
     })));
 
     expect(extractResponseErrorSummary(500, body, {
@@ -439,6 +440,12 @@ describe("usage metadata extraction", () => {
       { status: "completed", error: null, output: [{ error: "user content" }] },
       { metadata: { status: "failed", error: "user content" }, message: "ordinary message" }
     ]) expect(extractResponseErrorSummary(200, Buffer.from(JSON.stringify(body)))).toBeNull();
+  });
+
+  it("does not report an undecodable successful JSON as a success", () => {
+    expect(extractResponseErrorSummary(200, Buffer.from("synthetic invalid gzip"), {
+      "content-type": "application/json", "content-encoding": "gzip"
+    })).toContain("could not be decoded");
   });
 
   it("bounds generic gzip text and JSON decoding helpers", () => {

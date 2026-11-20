@@ -4,6 +4,7 @@ import {
   codexPrimaryCandidates
 } from "./primary-failover-candidates.js";
 import { normalizeRequestContext } from "./primary-failover-context.js";
+import { deriveOpenAiModel } from "./routing.js";
 import {
   classifyPrimaryRouteResult,
   isReconnectLikePrimaryFailure,
@@ -140,6 +141,7 @@ export class PrimaryFailoverState {
 
     const now = this.elapsedNow();
     const category = classifyPrimaryRouteResult(result);
+    const model = deriveOpenAiModel(selection.context.model, selection.config, selection.context.modelRoute);
     if (category !== "client_cancel" && category !== "request_shape") health.lastResultAt = now;
     const staleSuccess = category === "success" && selection.healthVersion !== health.version;
     const countsAsProfileFailure =
@@ -169,8 +171,8 @@ export class PrimaryFailoverState {
           // also ends the sticky-only zone: the cap is clearly clear.
           health.quarantineUntil = 0;
           health.stickyOnlyUntil = 0;
-          if (selection.context.model) {
-            health.modelCooldowns.delete(selection.context.model);
+          if (model) {
+            health.modelCooldowns.delete(model);
           }
           health.version += 1;
         }
@@ -239,7 +241,6 @@ export class PrimaryFailoverState {
         break;
       }
       case "model_incompatible": {
-        const model = selection.context.model;
         const modelFailureKey = model ?? "";
         const modelFailures = (health.modelIncompatibleFailuresByModel.get(modelFailureKey) ?? 0) + 1;
         health.modelIncompatibleFailuresByModel.set(modelFailureKey, modelFailures);
@@ -499,7 +500,7 @@ export class PrimaryFailoverState {
     context: Required<PrimaryRouteRequestContext>,
     now: number
   ): number {
-    return this.health.blockedUntil(candidate.id, context.model, now) +
+    return this.health.blockedUntil(candidate.id, deriveOpenAiModel(context.model, candidate, context.modelRoute), now) +
       Math.round(this.random() * UNBLOCK_JITTER_MS);
   }
 
@@ -538,7 +539,7 @@ export class PrimaryFailoverState {
     context: Required<PrimaryRouteRequestContext>,
     now: number
   ): boolean {
-    return this.health.blockedUntil(candidate.id, context.model, now) <= now;
+    return this.health.blockedUntil(candidate.id, deriveOpenAiModel(context.model, candidate, context.modelRoute), now) <= now;
   }
 
   /**

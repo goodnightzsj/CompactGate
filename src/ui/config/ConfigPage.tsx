@@ -180,6 +180,9 @@ export function ConfigPage({
             role="tabpanel"
             aria-labelledby={`config-tab-${configTab}`}
           >
+            {!config && (configTab === "routes" || configTab === "model" || configTab === "logging") && (
+              <p className="page-description" role="status">正在等待配置数据，加载成功后即可编辑。</p>
+            )}
             {configTab === "profiles" && (
               <ConfigProfilesPanel
                 config={config}
@@ -222,7 +225,7 @@ export function ConfigPage({
               </details>
             )}
 
-            {configTab === "routes" && (
+            {configTab === "routes" && config && (
               <RouteConfigPanel
                 config={config}
                 keyActivity={keyActivity}
@@ -236,7 +239,7 @@ export function ConfigPage({
               />
             )}
 
-            {configTab === "model" && (
+            {configTab === "model" && config && (
               <ConfigModelPanel
                 config={config}
                 form={form}
@@ -248,7 +251,7 @@ export function ConfigPage({
               />
             )}
 
-            {configTab === "logging" && (
+            {configTab === "logging" && config && (
               <LoggingStoragePanel form={form} onFormChange={onFormChange} />
             )}
 

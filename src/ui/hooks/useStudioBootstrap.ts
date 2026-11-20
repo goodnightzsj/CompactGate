@@ -15,16 +15,32 @@ export function useStudioBootstrap(pageMode: PageMode) {
     INITIAL_STUDIO_CONFIG_STATE
   );
   const [health, updateHealth] = useState<HealthResponse | null>(null);
+  const latestHealth = useRef<HealthResponse | null>(null);
   const healthRevision = useRef(0);
   const setHealth = useCallback<React.Dispatch<React.SetStateAction<HealthResponse | null>>>(value => {
     healthRevision.current += 1;
-    updateHealth(value);
+    latestHealth.current = typeof value === "function" ? value(latestHealth.current) : value;
+    updateHealth(latestHealth.current);
   }, []);
   const setCodexStatus = useCallback((codex: HealthResponse["codex"]) => {
-    updateHealth(current => current && { ...current, codex });
+    if (latestHealth.current) {
+      latestHealth.current = { ...latestHealth.current, codex };
+      updateHealth(latestHealth.current);
+    }
   }, []);
-  const setClientIdentity = useCallback((status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => {
-    setHealth(current => current && current.client_identity === baseline ? { ...current, client_identity: status } : current);
+  const setClientIdentity = useCallback(async (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => {
+    // Invalidate reads started before this confirmed write, including during React batching.
+    const revision = ++healthRevision.current;
+    if (latestHealth.current?.client_identity === baseline) {
+      setHealth(current => current && { ...current, client_identity: status });
+      return;
+    }
+    let currentStatus: ClientIdentityStatus;
+    try { currentStatus = await api<ClientIdentityStatus>("/api/client-identity"); }
+    catch (error) {
+      throw new Error(`UA 设置已写入，但最新状态刷新失败：${errorSummary(error)}。请刷新状态，无需重复保存。`, { cause: error });
+    }
+    if (healthRevision.current === revision) setHealth(current => current && { ...current, client_identity: currentStatus });
   }, [setHealth]);
   const [reloadToken, setReloadToken] = useState(0);
   const latestConfig = useRef(configState.config);

@@ -171,6 +171,26 @@ describe("persistent provider-state recovery", () => {
 });
 
 describe("checkpoint context coverage", () => {
+  it.each(["clean", "stored", "changed-id", "changed-content", "changed-call", "changed-order", "reference", "local-shell"])(
+    "normalizes only disposable stateless window metadata: %s", scenario => {
+      const { store } = memoryStore();
+      const call = { type: "function_call", id: "fc_saved", call_id: "call_saved", name: "lookup", arguments: "{}" };
+      const shell = { type: "local_shell_call_output", id: "shell_saved", output: "42" };
+      const window = [scenario === "local-shell" ? shell : call, state];
+      store.rememberCheckpoint(recoveryHash("session", state.encrypted_content), { window, history: [user], fidelity: "exact", prefixHash: null }, 1);
+      const replay: Record<string, unknown> = { ...(scenario === "local-shell" ? shell : call) };
+      delete replay.id;
+      if (scenario === "changed-id") replay.id = "fc_other";
+      if (scenario === "changed-content") replay.arguments = '{"changed":true}';
+      if (scenario === "changed-call") replay.call_id = "call_other";
+      const input: unknown[] = [replay, state];
+      if (scenario === "changed-order") input.reverse();
+      if (scenario === "reference") input.push({ type: "item_reference", id: "fc_saved" });
+      const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({ store: scenario === "stored", input })), 1);
+      expect(restored !== null).toBe(scenario === "clean");
+    }
+  );
+
   it.each((["openai_chat", "anthropic_messages"] as const).flatMap(upstreamProtocol =>
     ["valid", "disabled", "revoked", "source-truncated", "client-truncated", "missing-client", "missing-adapter",
       "failed", "cancelled", "incomplete", "oversized-source", "corrupt-source"].map(scenario => ({ upstreamProtocol, scenario }))))(

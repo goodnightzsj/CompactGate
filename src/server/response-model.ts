@@ -2,7 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import type { ResponseModelSource } from "../shared/types.js";
 import { decodeResponseText } from "./usage-utils.js";
 import { isRecord } from "../shared/records.js";
-import { SSE_LINE_ENDING } from "./sse-frames.js";
+import { createSseFrameDecoder, SSE_LINE_ENDING, sseDataFrames } from "./sse-frames.js";
 
 export function extractResponseModelFromBodies(
   upstreamResponseBody: Buffer,
@@ -56,40 +56,25 @@ function extractJsonResponseModel(text: string): string | null {
 }
 
 function extractSseResponseModel(text: string): string | null {
-  let currentEvent = "";
   let lastModel: string | null = null;
-
-  for (const rawLine of text.split(SSE_LINE_ENDING)) {
-    const line = rawLine.trimEnd();
-    if (line.startsWith("event:")) {
-      currentEvent = line.slice("event:".length).trim();
-      continue;
-    }
-
-    if (!line.startsWith("data:")) {
-      continue;
-    }
-
-    const data = line.slice("data:".length).trim();
-    if (!data || data === "[DONE]") {
-      continue;
-    }
-
-    try {
-      const event = JSON.parse(data) as unknown;
-      const model = extractModelFromResponseObject(event);
-      if (!model) {
+  let completed = false;
+  const decoder = createSseFrameDecoder(frame => {
+    if (completed) return;
+    const eventName = frame.split(SSE_LINE_ENDING).reverse().find(line => line.startsWith("event:"))?.slice(6).trim();
+    for (const data of sseDataFrames(frame)) {
+      try {
+        const event = JSON.parse(data) as unknown;
+        const model = extractModelFromResponseObject(event);
+        if (!model) continue;
+        lastModel = model;
+        completed = isRecord(event) && event.type === "response.completed" || eventName === "response.completed";
+      } catch {
         continue;
       }
-
-      lastModel = model;
-      if (currentEvent === "response.completed" || eventType(event) === "response.completed") {
-        return model;
-      }
-    } catch {
-      continue;
     }
-  }
+  });
+  decoder.write(Buffer.from(text));
+  decoder.end();
 
   return lastModel;
 }
@@ -102,10 +87,6 @@ function extractModelFromResponseObject(value: unknown): string | null {
   const responseModel = isRecord(value.response) ? readModel(value.response.model) : null;
   const messageModel = isRecord(value.message) ? readModel(value.message.model) : null;
   return responseModel ?? messageModel ?? readModel(value.model);
-}
-
-function eventType(value: unknown): string | null {
-  return isRecord(value) && typeof value.type === "string" ? value.type : null;
 }
 
 function readModel(value: unknown): string | null {

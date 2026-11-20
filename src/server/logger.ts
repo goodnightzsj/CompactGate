@@ -959,6 +959,11 @@ export class RequestLogger extends EventTarget {
       // WAL pages can be reclaimed without deleting any saved body.
       this.checkpointSqliteStorage();
       yield;
+      if (this.databaseFootprintBytes() > this.maxDatabaseBytes &&
+        Number(this.db.prepare("PRAGMA freelist_count;").get()?.freelist_count) > 0) {
+        this.reclaimSqliteStorage();
+        yield;
+      }
       // This body-first check includes every write made before resuming here.
       this.storagePruneRequested = false;
       if (this.databaseFootprintBytes() > this.maxDatabaseBytes) {

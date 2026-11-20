@@ -6,9 +6,8 @@ import {
   zstdDecompressSync
 } from "node:zlib";
 import { isRecord, readTrimmedString } from "../shared/records.js";
+import { DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES, MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES } from "./upstream-response-buffer.js";
 export { isRecord, readTrimmedString };
-
-const DEFAULT_MAX_DECODED_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export function decodeResponseText(
   buffer: Buffer,
@@ -84,7 +83,9 @@ function tryDecodeResponse(buffer: Buffer, headers: IncomingHttpHeaders): Buffer
   const encoding = contentEncoding.includes("br") ? "br"
     : contentEncoding.includes("gzip") || looksLikeGzip(buffer) ? "gzip"
     : contentEncoding.includes("deflate") ? "deflate" : contentEncoding.includes("zstd") ? "zstd" : "identity";
-  return decodeEncodedBody(buffer, encoding, DEFAULT_MAX_DECODED_RESPONSE_BYTES);
+  const maxBytes = readHeader(headers["content-type"])?.toLowerCase().includes("text/event-stream")
+    ? DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES : MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES;
+  return decodeEncodedBody(buffer, encoding, maxBytes);
 }
 
 export function decodeEncodedBody(buffer: Buffer, encoding: string, maxOutputLength: number): Buffer | null {

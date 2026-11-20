@@ -143,7 +143,7 @@ export function candidateSignatures(candidates: PrimaryCandidate[]): Map<string,
 }
 
 function buildCandidate(
-  metadata: Omit<PrimaryCandidate, "config" | "primary">,
+  metadata: Omit<PrimaryCandidate, "config" | "primary" | "compact">,
   snapshot: CompactGateConfig,
   mergedPrimary: CompactGateConfig["primary"],
   key: UpstreamApiKey | undefined
@@ -155,6 +155,9 @@ function buildCandidate(
     ...metadata,
     get primary() {
       return owned?.primary ?? primary;
+    },
+    get compact() {
+      return owned?.compact ?? snapshot.compact;
     },
     get config() {
       return owned ??= { ...cloneConfig(snapshot), primary };

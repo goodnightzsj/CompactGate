@@ -5,11 +5,12 @@ import type { CompactGateConfig } from "../shared/types.js";
 import { ConfigError } from "./config-internals.js";
 
 const CONFIG_FILE_MODE = 0o600;
-const MAX_CONFIG_BACKUPS = 10;
+const MAX_CONFIG_BACKUPS = 3;
 
 export class FileCommitError extends ConfigError {
-  constructor(readonly filePath: string, cause: unknown) {
-    super("File replacement was committed, but its durability could not be confirmed. Saved changes are active; check storage before retrying.", 500);
+  constructor(readonly filePath: string, cause: unknown,
+    message = "File replacement was committed, but its durability could not be confirmed. Saved changes are active; check storage before retrying.") {
+    super(message, 500);
     this.name = "FileCommitError";
     this.cause = cause;
   }
@@ -57,16 +58,30 @@ export async function writeConfigFile(
   const resolvedPath = path.resolve(configPath);
   const directory = path.dirname(resolvedPath);
   await fs.mkdir(directory, { recursive: true });
+  let backupId: string | null;
   try {
-    await backupCurrentConfig(resolvedPath);
+    backupId = await backupCurrentConfig(resolvedPath);
   } catch (error) {
     if (error instanceof FileCommitError) {
       throw new Error("Config was not changed: durability of its backup could not be confirmed.", { cause: error });
     }
     throw error;
   }
-  await pruneConfigBackups(resolvedPath, MAX_CONFIG_BACKUPS);
-  await writeFileAtomically(resolvedPath, `${JSON.stringify(config, null, 2)}\n`);
+  try {
+    await writeFileAtomically(resolvedPath, `${JSON.stringify(config, null, 2)}\n`);
+  } catch (error) {
+    if (!(error instanceof FileCommitError) && backupId) {
+      try { await deleteConfigBackup(resolvedPath, backupId); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "Config was not changed, but cleanup of its redundant backup failed."); }
+    }
+    throw error;
+  }
+  try {
+    await pruneConfigBackups(resolvedPath, MAX_CONFIG_BACKUPS);
+  } catch (error) {
+    throw new FileCommitError(resolvedPath, error,
+      "Config replacement was committed, but backup cleanup failed. Saved changes are active; check storage before retrying.");
+  }
   return new Date().toISOString();
 }
 
@@ -95,7 +110,7 @@ export async function listConfigBackups(configPath: string): Promise<ConfigBacku
           mtimeMs: stats.mtimeMs
         };
       } catch (error) {
-        // A concurrent prune can delete the 11th backup between the readdir and
+        // A concurrent prune can delete an old backup between the readdir and
         // this stat. That is the ring working as intended, not a listing
         // failure, so drop the row instead of failing the whole request.
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -136,13 +151,13 @@ export async function deleteConfigBackup(configPath: string, backupId: string): 
   await syncDirectory(path.dirname(resolvedPath));
 }
 
-async function backupCurrentConfig(configPath: string): Promise<void> {
+async function backupCurrentConfig(configPath: string): Promise<string | null> {
   let raw: Buffer;
   try {
     raw = await fs.readFile(configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
+      return null;
     }
     throw error;
   }
@@ -150,6 +165,7 @@ async function backupCurrentConfig(configPath: string): Promise<void> {
   const timestamp = Date.now().toString().padStart(13, "0");
   const backupId = `${path.basename(configPath)}.backup.${timestamp}.${randomUUID()}.json`;
   await writeFileAtomically(path.join(path.dirname(configPath), backupId), raw);
+  return backupId;
 }
 
 async function pruneConfigBackups(configPath: string, keep: number): Promise<void> {

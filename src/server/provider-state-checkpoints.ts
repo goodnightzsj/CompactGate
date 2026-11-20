@@ -8,6 +8,7 @@ import type { BufferedUpstreamResult } from "./upstream-client.js";
 import { recoveryHash, type ProviderStateRecoveryStore } from "./provider-state-recovery-store.js";
 import { hasEncryptedProviderState, lowerFidelity, type ProviderStateFidelity } from "./provider-state-portability.js";
 import { sseDataFrames } from "./sse-frames.js";
+import { stripResponsesInputItemIds } from "./host-quirks.js";
 
 export function recoveryPlanKey(scope: string, body: Buffer): string {
   const parsed = parseJsonRecord(body);
@@ -46,8 +47,13 @@ export function restoreProviderCheckpoint(
       if (!sameCompaction(item, checkpoint.window[0])) return null;
       tailStart = index + 1;
     } else {
+      // Compare against the same stateless replay cleanup, including reference guards in the tail.
+      const normalized = parseJsonRecord(stripResponsesInputItemIds(Buffer.from(JSON.stringify({
+        ...parsed, input: [...checkpoint.window, ...inputItems.slice(checkpoint.window.length)]
+      }))))?.input;
       if (parsed.input.length < checkpoint.window.length ||
-        !checkpoint.window.every((expected, i) => sameWindowItem(inputItems[i], expected))) return null;
+        !checkpoint.window.every((expected, i) => sameWindowItem(inputItems[i], expected) ||
+          Array.isArray(normalized) && sameWindowItem(inputItems[i], normalized[i]))) return null;
       tailStart = checkpoint.window.length;
     }
     return { body: Buffer.from(JSON.stringify({ ...parsed, input: [...checkpoint.history, ...parsed.input.slice(tailStart)] })), fidelity: checkpoint.fidelity };

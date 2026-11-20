@@ -154,11 +154,12 @@ it.each([false, true])("preserves newer identity snapshots while a write is pend
   store.oauth.close();
   const enabled = { ...new ClientIdentityStore({ statePath: "unused-synthetic-state" }).status(), enabled: true };
   let finishWrite!: (response: Response) => void;
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/config") return Response.json(config);
     if (url === "/api/health") return Response.json({ client_identity: enabled });
     if (url.startsWith("/api/logs/recent?")) return Response.json(emptyLogPage(200));
-    if (url === "/api/client-identity") return new Promise<Response>(resolve => { finishWrite = resolve; });
+    if (url === "/api/client-identity") return init?.method === "POST"
+      ? new Promise<Response>(resolve => { finishWrite = resolve; }) : Response.json(enabled);
     throw new Error("Unexpected synthetic request");
   }));
   const view = await mount(<IdentityHarness page="routes" />);
@@ -172,4 +173,34 @@ it.each([false, true])("preserves newer identity snapshots while a write is pend
   await view.render(<IdentityHarness page="dashboard" />);
   await view.render(<IdentityHarness page="routes" />);
   expect(view.host.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("true");
+});
+
+it("keeps the toggle pending during reconciliation and preserves a snapshot received after the read started", async () => {
+  const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+  const config = store.toPublicConfig();
+  store.oauth.close();
+  const enabled = new ClientIdentityStore({ statePath: "unused-synthetic-state" }).status();
+  let finishWrite!: (response: Response) => void;
+  let finishRead!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/config") return Response.json(config);
+    if (url === "/api/health") return Response.json({ client_identity: enabled });
+    if (url.startsWith("/api/logs/recent?")) return Response.json(emptyLogPage(200));
+    if (url === "/api/client-identity") return new Promise<Response>(resolve => {
+      if (init?.method === "POST") finishWrite = resolve;
+      else finishRead = resolve;
+    });
+    throw new Error("Unexpected synthetic request");
+  }));
+  const view = await mount(<IdentityHarness page="routes" />);
+  const toggle = () => view.host.querySelector<HTMLButtonElement>('[role="switch"]')!;
+  await act(async () => toggle().click());
+  const snapshot = () => SyntheticEventSource.current.snapshot({ config, health: { client_identity: enabled }, log_page: emptyLogPage(200) });
+  await act(async () => snapshot());
+  await act(async () => finishWrite(Response.json({ ...enabled, enabled: false })));
+  expect(toggle().disabled).toBe(true);
+  await act(async () => snapshot());
+  await act(async () => finishRead(Response.json({ ...enabled, enabled: false })));
+  expect(toggle().disabled).toBe(false);
+  expect(toggle().getAttribute("aria-checked")).toBe("true");
 });

@@ -252,10 +252,19 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       return;
     }
 
+    const record = this.readEventRecord(data);
+    if (record?.error != null) {
+      this.summary.sawTerminalEvent = true;
+      this.summary.sawFailedEvent = true;
+      this.summary.terminalEvent = "error";
+      this.summary.errorSummary ??= responseFailureSummary(record);
+      this.summary.generationSample = null;
+    }
+
     if (data === "[DONE]") {
       this.summary.sawDoneMarker = true;
       this.summary.sawTerminalEvent = true;
-      this.summary.terminalEvent = "[DONE]";
+      if (!this.summary.sawFailedEvent && !this.summary.sawIncompleteEvent) this.summary.terminalEvent = "[DONE]";
     }
 
     if (isOpenAiTerminalEvent(eventName) || isOpenAiTerminalEvent(eventType)) {

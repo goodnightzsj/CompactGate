@@ -136,7 +136,7 @@ export function isCompactPath(pathname: string): boolean {
   return pathname === "/v1/responses/compact";
 }
 
-export function deriveCompactModel(sourceModel: string, config: CompactGateConfig): string {
+export function deriveCompactModel(sourceModel: string, config: Pick<CompactGateConfig, "primary" | "compact">): string {
   if (config.compact.model_mode === "custom") {
     return config.compact.model_override;
   }
@@ -145,12 +145,17 @@ export function deriveCompactModel(sourceModel: string, config: CompactGateConfi
   return config.compact.model_template.replaceAll("{model}", linkedSource);
 }
 
+export function deriveOpenAiModel(sourceModel: string | null, config: Pick<CompactGateConfig, "primary" | "compact">,
+  route: "primary" | "compact"): string | null {
+  if (sourceModel === null) return null;
+  return route === "compact" ? deriveCompactModel(sourceModel, config) : config.primary.model_override?.trim() || sourceModel;
+}
+
 export function rewritePrimaryBody(
   rawBody: Buffer,
   config: CompactGateConfig,
   endpoint?: string
 ): RewriteResult {
-  const modelOverride = config.primary.model_override?.trim();
   const reasoningEffort = endpoint === undefined || endpoint === "/responses" || endpoint === "/v1/responses"
     ? config.primary.reasoning_effort
     : "";
@@ -168,14 +173,10 @@ export function rewritePrimaryBody(
   }
 
   let bodyRewritten = false;
-  let targetModel = sourceModel;
-
-  if (modelOverride && sourceModel !== null) {
-    targetModel = modelOverride;
-    if (sourceModel !== modelOverride) {
-      parsed.model = modelOverride;
-      bodyRewritten = true;
-    }
+  const targetModel = deriveOpenAiModel(sourceModel, config, "primary");
+  if (targetModel !== sourceModel) {
+    parsed.model = targetModel;
+    bodyRewritten = true;
   }
 
   if (reasoningEffort) {

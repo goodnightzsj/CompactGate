@@ -306,8 +306,6 @@ export function routeUrlSuggestions(
     return [];
   }
 
-  const scope: ConfigProfileScope = kind.startsWith("claude_") ? "claude" : "codex";
-  const profiles = profileScopeState(config, scope).profiles;
   const seen = new Set<string>();
   const suggestions: RouteUrlSuggestion[] = [];
 
@@ -334,55 +332,7 @@ export function routeUrlSuggestions(
     });
   }
 
-  for (const profile of profiles) {
-    const baseUrl = profileUrlForKind(profile, kind);
-    if (!baseUrl) {
-      continue;
-    }
-
-    const key = normalizeUrlSuggestionKey(baseUrl);
-    if (!key || seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    // `storedApiKey: false` claimed "无绑定密钥" for every profile-derived row, even
-    // one that does hold a credential. The public projection only counts keys per
-    // profile, not per route, so this is profile-level truth — which the row's own
-    // "档案：" label already scopes it to — rather than the false absence it printed.
-    const profileHasKey = profile.stored_api_key_count > 0;
-    suggestions.push({
-      baseUrl,
-      credentialPresetId: "",
-      apiKeyEnv: "",
-      storedApiKey: profileHasKey,
-      apiKeyConfigured: profileHasKey,
-      host: hostLabel(baseUrl),
-      label: `档案：${profile.name}`,
-      updatedAt: profile.updated_at
-    });
-  }
-
   return suggestions;
-}
-
-function profileUrlForKind(
-  profile: PublicConfig["profiles"][number],
-  kind: RouteUrlPresetKind
-): string | null {
-  if (kind === "codex_primary") {
-    return profile.primary_base_url;
-  }
-
-  if (kind === "codex_compact") {
-    return profile.compact_base_url;
-  }
-
-  if (kind === "claude_primary") {
-    return profile.claude_primary_base_url;
-  }
-
-  return profile.claude_compact_base_url;
 }
 
 function normalizeUrlSuggestionKey(value: string): string | null {

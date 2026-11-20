@@ -13,6 +13,7 @@ export function extractResponseErrorSummary(
 ): string | null {
   if (status < 400 && readHeader(headers["content-type"])?.toLowerCase().includes("text/event-stream")) return null;
   const text = decodeResponseText(responseBody, headers);
+  if (text === null && status < 400) return "Upstream response could not be decoded within the complete-response budget.";
   if (status < 400) {
     try { return responseFailureSummary(JSON.parse(text ?? "")); }
     catch { return null; }

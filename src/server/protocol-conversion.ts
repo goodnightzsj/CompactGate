@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord, parseJsonRecord } from "./http-utils.js";
+import { responseFailureSummary } from "./usage-error.js";
 
 export class ProtocolConversionError extends Error {
   constructor(message: string, readonly status = 422) {
@@ -599,7 +600,7 @@ export function openAiResponseToAnthropic(rawBody: Buffer, status: number): Buff
   if (!body) {
     throw new ProtocolConversionError("OpenAI response body was not a JSON object.", 502);
   }
-  if (status >= 400 || isRecord(body.error)) {
+  if (status >= 400 || body.error != null || body.status === "failed") {
     return Buffer.from(JSON.stringify(openAiErrorToAnthropic(body, status)));
   }
 
@@ -647,7 +648,7 @@ export function openAiErrorToAnthropic(
       type: anthropicErrorType(status, source.type),
       message: typeof source.message === "string"
         ? source.message
-        : `OpenAI upstream returned HTTP ${status}.`
+        : responseFailureSummary(body) ?? `OpenAI upstream returned HTTP ${status}.`
     }
   };
 }

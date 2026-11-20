@@ -912,7 +912,8 @@ async function proxyCompactRequest(
           primaryRouteRequestContextFromBody(
             transaction.rawBody,
             req.headers,
-            transaction.requestMetadata.endpoint
+            transaction.requestMetadata.endpoint,
+            "compact"
           )
         )
       : null;

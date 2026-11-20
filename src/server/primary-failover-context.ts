@@ -6,7 +6,8 @@ import type { PrimaryRouteRequestContext } from "./primary-failover-types.js";
 export function primaryRouteRequestContextFromBody(
   rawBody: Buffer,
   headers: IncomingHttpHeaders = {},
-  endpoint: string | null = null
+  endpoint: string | null = null,
+  modelRoute: "primary" | "compact" = "primary"
 ): PrimaryRouteRequestContext {
   const parsed = parseJsonRecord(rawBody);
   const model = readTrimmedString(parsed?.model);
@@ -17,6 +18,7 @@ export function primaryRouteRequestContextFromBody(
   return {
     endpoint,
     model,
+    ...(modelRoute === "compact" ? { modelRoute } : {}),
     previousResponseId,
     sessionKey: readSessionKey(parsed, headers),
     compactionStateKey: readCompactionStateKey(parsed)
@@ -29,6 +31,7 @@ export function normalizeRequestContext(
   return {
     endpoint: context.endpoint ?? null,
     model: context.model ?? null,
+    modelRoute: context.modelRoute ?? "primary",
     previousResponseId: context.previousResponseId ?? null,
     sessionKey: context.sessionKey ?? null,
     compactionStateKey: context.compactionStateKey ?? null

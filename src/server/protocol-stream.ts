@@ -644,7 +644,7 @@ export function createResponsesToAnthropicStream(): Transform {
   });
 
   function convertFrame(data: string, transform: Transform): void {
-    if (data === "[DONE]") {
+    if (completed || data === "[DONE]") {
       return;
     }
     const event = readSseEventRecord(data);
@@ -769,7 +769,11 @@ export function createResponsesToAnthropicStream(): Transform {
     }
 
     if (event.type === "response.completed" || event.type === "response.incomplete") {
-      finishMessage(transform, isRecord(event.response) ? event.response : {});
+      const response = isRecord(event.response) ? event.response : {};
+      if (response.error != null || response.status === "failed") {
+        completed = true;
+        emit(transform, "error", openAiErrorToAnthropic(response, 502));
+      } else finishMessage(transform, response);
       return;
     }
 

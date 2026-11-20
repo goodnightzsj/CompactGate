@@ -84,6 +84,7 @@ export async function runProviderStateMigration(
   let resourceRepair = cached?.stripCompactionIds ? stripCompactionItemIds(options.canonicalBody) : null;
   let failure: ProviderStateFailure | undefined = cached?.failure ?? undefined;
   let rejectedCompaction = cached?.rejectedCompaction ?? false;
+  let checkpointRecovery = cached?.checkpointRecovery;
   const priorEncryptedFailures = [...cached?.priorEncryptedFailures ?? []];
   const finish = (unavailable = false): ProviderStateMigrationResult => {
     if (!finalResult) throw new Error("Provider-state recovery produced no upstream attempt.");
@@ -91,7 +92,7 @@ export async function runProviderStateMigration(
       base: strategy === "error_400" ? priorStrategy : strategy,
       failure: failure ?? null,
       stripCompactionIds: resourceRepair !== null,
-      priorEncryptedFailures, rejectedCompaction, unavailable
+      priorEncryptedFailures, rejectedCompaction, checkpointRecovery, unavailable
     } };
   };
 
@@ -99,7 +100,7 @@ export async function runProviderStateMigration(
     let compiled: CompiledProviderStateAttempt;
     try {
       compiled = compileProviderStateAttempt(resourceRepair?.body ?? options.canonicalBody, {
-        strategy, priorStrategy, errorCode, failure, rejectedCompaction, priorEncryptedFailures,
+        strategy, priorStrategy, errorCode, failure, rejectedCompaction, priorEncryptedFailures, checkpointRecovery,
         allowCompactionDrop: attempts.length > 0,
         targetStateDomain: options.targetStateDomain,
         recoverCompaction: options.recoverCompaction
@@ -112,6 +113,7 @@ export async function runProviderStateMigration(
       errorCode = undefined;
       failure = undefined;
       rejectedCompaction = false;
+      checkpointRecovery = undefined;
       priorEncryptedFailures.length = 0;
       resourceRepair = null;
       trigger = null;
@@ -187,6 +189,10 @@ export async function runProviderStateMigration(
       responseFailure?.itemId == null && responseFailure?.inputIndex == null && responseFailure?.encryptedContentHash == null &&
       failureTargetsCompaction(parseJsonRecord(compiled.body) ?? {}, responseFailure ?? undefined);
     if (responseErrorCode) {
+      if (responseErrorCode === "previous_response_not_found") checkpointRecovery = "continuation";
+      else if (checkpointRecovery !== "continuation" && responseErrorCode === "invalid_responses_request") {
+        checkpointRecovery = "compaction";
+      }
       trigger ??= "explicit_400";
       if (strategy !== "error_400") priorStrategy = strategy;
       if (errorCode === "invalid_encrypted_content" && failure) priorEncryptedFailures.push(failure);

@@ -1,8 +1,9 @@
 import http from "node:http";
 import https from "node:https";
-import { decodeBodyText } from "./http-utils.js";
+import { decodeBodyText, readHeaderString } from "./http-utils.js";
+import { decodeEncodedBody } from "./usage-utils.js";
 import { resolveUpstreamAgent, type UpstreamRequestOptions } from "./upstream-proxy-agent.js";
-import { normalizeMaxJsonResponseBytes } from "./upstream-response-buffer.js";
+import { MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES, normalizeMaxJsonResponseBytes } from "./upstream-response-buffer.js";
 
 export interface RequestJsonOptions {
   maxResponseBytes?: number;
@@ -81,7 +82,14 @@ export function requestJson(
         }
 
         try {
-          resolveOnce(JSON.parse(decodeBodyText(body)) as unknown);
+          const encoding = readHeaderString(response.headers["content-encoding"])?.trim().toLowerCase();
+          let text: string;
+          if (encoding && encoding !== "identity") {
+            const decoded = decodeEncodedBody(body, encoding, MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES);
+            if (!decoded) throw new Error(`Failed to decode upstream JSON response (${encoding}): invalid encoding or decoded body exceeds ${MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES} bytes.`);
+            text = decoded.toString("utf8");
+          } else text = decodeBodyText(body);
+          resolveOnce(JSON.parse(text) as unknown);
         } catch (error) {
           rejectOnce(error instanceof Error ? error : new Error("Failed to parse upstream JSON response."));
         }

@@ -1,18 +1,17 @@
 import { strictEqual } from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
 const keepAlive = process.argv.includes("--keep-alive");
-const sourceServiceUrl = process.env.COMPACTGATE_SOURCE_URL ?? "http://127.0.0.1:7865";
-const iceProfileName = process.env.COMPACTGATE_E2E_PROFILE ?? "冰";
-
-const runtimeRoot = path.join(projectRoot, ".tmp", "isolated-e2e");
-await mkdir(runtimeRoot, { recursive: true });
-const runtimeDir = await mkdtemp(path.join(runtimeRoot, "run-"));
+const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "compactgate-isolated-e2e-"));
+const buildDir = path.join(runtimeDir, "build");
 const tempConfigPath = path.join(runtimeDir, "compactgate.json");
 const tempLogDbPath = path.join(runtimeDir, "compactgate-logs.sqlite");
 const port = await findFreePort();
@@ -20,11 +19,17 @@ const listen = `127.0.0.1:${port}`;
 let child = null;
 
 try {
-  const sourceConfigPath = await resolveSourceConfigPath();
-  const sourceConfig = JSON.parse(await readFile(sourceConfigPath, "utf8"));
-  const { config, copiedProfile } = buildIsolatedConfig(sourceConfig, listen);
+  await buildIsolatedArtifacts();
+  const { DEFAULT_CONFIG } = await import(pathToFileURL(path.join(buildDir, "dist/server/config-defaults.js")).href);
+  const { config, copiedProfile } = buildIsolatedConfig(DEFAULT_CONFIG, listen);
 
-  await writeFile(tempConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  await writeFile(tempConfigPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  const { ClientIdentityStore, resolveClientIdentityStatePath } = await import(pathToFileURL(path.join(buildDir, "dist/server/client-identity-store.js")).href);
+  const identity = new ClientIdentityStore({ statePath: resolveClientIdentityStatePath(tempConfigPath) });
+  await identity.update({ enabled: false, codex: { version_tracked_user_agent: "codex-cli/0.0.0" },
+    claude: { version_tracked_user_agent: "claude-cli/0.0.0" } });
+  identity.close();
+  await identity.flush();
   child = startServer(tempConfigPath, tempLogDbPath);
   await waitForHealth(`http://${listen}`);
   const summary = await validateRuntime(`http://${listen}`, copiedProfile);
@@ -33,7 +38,8 @@ try {
     ok: true,
     url: `http://${listen}`,
     config_path: tempConfigPath,
-    copied_profile: copiedProfile.name,
+    fixture_profile: copiedProfile.name,
+    data_source: "synthetic",
     checks: summary
   };
   console.log(JSON.stringify(result, null, 2));
@@ -42,51 +48,39 @@ try {
     await waitForShutdown();
   }
 } finally {
-  if (child) {
-    await stopServer(child);
-  }
-  if (!keepAlive) {
-    await rm(runtimeDir, { recursive: true, force: true });
-  }
-}
-
-async function resolveSourceConfigPath() {
-  if (process.env.COMPACTGATE_SOURCE_CONFIG) {
-    return path.resolve(process.env.COMPACTGATE_SOURCE_CONFIG);
-  }
-
   try {
-    const response = await fetchWithTimeout(`${sourceServiceUrl}/api/config`, {}, 1500);
-    if (response.ok) {
-      const body = await response.json();
-      if (typeof body.config_path === "string" && body.config_path.trim()) {
-        return body.config_path;
-      }
-    }
-  } catch {
-    // Fall back to the default local config file below.
+    if (child) await stopServer(child);
+  } finally {
+    if (!keepAlive) await rm(runtimeDir, { recursive: true, force: true });
   }
-
-  return path.join(projectRoot, "compactgate.json");
 }
 
-function buildIsolatedConfig(sourceConfig, nextListen) {
-  const config = structuredClone(sourceConfig);
-  const codexScope = config.profile_scopes?.codex;
-  const profiles = Array.isArray(codexScope?.profiles) ? codexScope.profiles : [];
-  const sourceProfile =
-    profiles.find((profile) => profile?.name === iceProfileName) ??
-    profiles.find((profile) => typeof profile?.name === "string" && profile.name.includes(iceProfileName));
-
-  if (!sourceProfile) {
-    throw new Error(`No Codex profile containing "${iceProfileName}" was found in source config.`);
+async function buildIsolatedArtifacts() {
+  await mkdir(buildDir);
+  for (const name of ["src", "public", "index.html", "package.json", "package-lock.json", "tsconfig.json", "tsconfig.server.json", "vite.config.ts", "node_modules"]) {
+    await cp(path.join(projectRoot, name), path.join(buildDir, name), { recursive: true, mode: constants.COPYFILE_FICLONE });
   }
+  const build = spawn("npm", ["run", "build"], { cwd: buildDir,
+    env: { PATH: process.env.PATH, TMPDIR: runtimeDir, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  build.stdout.pipe(process.stderr);
+  build.stderr.pipe(process.stderr);
+  await new Promise((resolve, reject) => {
+    build.once("error", reject);
+    build.once("exit", (code, signal) => code === 0 ? resolve() : reject(new Error(`Isolated build failed (${code ?? signal}).`)));
+  });
+}
 
+function buildIsolatedConfig(defaults, nextListen) {
+  const config = structuredClone(defaults);
+  for (const route of [config.primary, config.compact, config.claude.primary, config.claude.compact]) {
+    route.base_url = "http://127.0.0.1:1/v1";
+    route.api_key = route.api_key_env = "";
+  }
   const iso = new Date().toISOString();
   const copiedProfile = {
-    ...structuredClone(sourceProfile),
-    id: `${sourceProfile.id}-isolated-${Date.now().toString(36)}`,
-    name: `${sourceProfile.name}-isolated-e2e`,
+    id: "synthetic-isolated",
+    name: "Synthetic isolated fixture",
+    config: { primary: config.primary, compact: config.compact },
     created_at: iso,
     updated_at: iso
   };
@@ -95,35 +89,26 @@ function buildIsolatedConfig(sourceConfig, nextListen) {
   config.profile_scopes = {
     ...(config.profile_scopes ?? {}),
     codex: {
-      profiles: [
-        ...profiles.map((profile) => structuredClone(profile)),
-        copiedProfile
-      ],
+      profiles: [copiedProfile],
       active_profile_id: copiedProfile.id
     }
   };
   config.active_profile_id = copiedProfile.id;
 
-  if (copiedProfile.config?.primary) {
-    config.primary = structuredClone(copiedProfile.config.primary);
-  }
-  if (copiedProfile.config?.compact) {
-    config.compact = structuredClone(copiedProfile.config.compact);
-  }
   config.logging = {
-    ...(config.logging ?? {}),
-    keep_recent: Math.min(Math.max(Number(config.logging?.keep_recent ?? 100), 20), 200)
+    ...config.logging, keep_recent: 20, capture_dir: path.join(runtimeDir, "captures")
   };
 
   return { config, copiedProfile };
 }
 
 function startServer(configPath, logDbPath) {
-  const mainPath = path.join(projectRoot, "dist", "server", "main.js");
+  const mainPath = path.join(buildDir, "dist", "server", "main.js");
   const nextChild = spawn(process.execPath, [mainPath], {
-    cwd: projectRoot,
+    cwd: runtimeDir,
     env: {
-      ...process.env,
+      PATH: "",
+      TMPDIR: runtimeDir,
       COMPACTGATE_CONFIG: configPath,
       COMPACTGATE_LOG_DB: logDbPath,
       NODE_ENV: "production"
@@ -152,7 +137,7 @@ function startServer(configPath, logDbPath) {
 async function waitForHealth(baseUrl) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (child?.exitCode !== null) {
+    if (child?.exitCode !== null || child?.signalCode !== null) {
       throw new Error("Isolated CompactGate exited before becoming healthy.");
     }
 
@@ -184,7 +169,7 @@ async function validateRuntime(baseUrl, copiedProfile) {
   strictEqual(publicConfig.listen, new URL(baseUrl).host, "config.listen");
   strictEqual(publicConfig.profile_scopes?.codex?.active_profile_id, copiedProfile.id, "codex.active_profile_id");
   if (!publicConfig.profile_scopes?.codex?.profiles?.some((profile) => profile.id === copiedProfile.id)) {
-    throw new Error("Copied ice profile is missing from public config.");
+    throw new Error("Synthetic profile is missing from public config.");
   }
   checks.push("config");
 
@@ -322,15 +307,13 @@ async function stopServer(serverProcess) {
     return;
   }
 
+  const exited = new Promise((resolve) => serverProcess.once("exit", (code, signal) => resolve({ code, signal })));
   serverProcess.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => serverProcess.once("exit", resolve)),
-    delay(2500).then(() => {
-      if (serverProcess.exitCode === null && serverProcess.signalCode === null) {
-        serverProcess.kill("SIGKILL");
-      }
-    })
-  ]);
+  const deadline = setTimeout(() => serverProcess.kill("SIGKILL"), 12_000);
+  try {
+    const { code, signal } = await exited;
+    if (code !== 0) throw new Error(`Isolated server shutdown failed (${code ?? signal}).`);
+  } finally { clearTimeout(deadline); }
 }
 
 function waitForShutdown() {

@@ -15,6 +15,7 @@ export type PrimaryResultCategory =
 export interface PrimaryRouteRequestContext {
   endpoint?: string | null;
   model?: string | null;
+  modelRoute?: "primary" | "compact";
   previousResponseId?: string | null;
   sessionKey?: string | null;
   compactionStateKey?: string | null;
@@ -59,6 +60,7 @@ export interface PrimaryCandidate {
   keyPriority: number;
   readonly config: CompactGateConfig;
   readonly primary: CompactGateConfig["primary"];
+  readonly compact: CompactGateConfig["compact"];
   order: number;
   active: boolean;
   /** Account-bound credential: automatic rotation must skip it, manual use must not. */

@@ -42,6 +42,7 @@ export interface CompileProviderStateOptions {
   failure?: ProviderStateFailure;
   rejectedCompaction?: boolean;
   priorEncryptedFailures?: ProviderStateFailure[];
+  checkpointRecovery?: "compaction" | "continuation";
   /** Only the coordinator may enable loss after a fresh upstream rejection, never from cache alone. */
   allowCompactionDrop?: boolean;
   recoverCompaction?: (body: Buffer) => { body: Buffer; fidelity: ProviderStateFidelity } | null;
@@ -160,19 +161,16 @@ export function compileProviderStateAttempt(
   const crossDomain = options.strategy === "cross_domain" || options.strategy === "error_400" && options.priorStrategy === "cross_domain";
   const allowCompactionDrop = options.allowCompactionDrop === true && options.strategy === "error_400" &&
     !crossDomain && options.errorCode === "invalid_encrypted_content";
-  if (options.strategy === "error_400" && options.errorCode === "invalid_encrypted_content" &&
-    !crossDomain && !options.failure?.inputItemHash && hasFailureLocator(options.failure) && !options.rejectedCompaction &&
-    (!Array.isArray(parsed.input) || !parsed.input.some((item, index) => matchesFailureTarget(item, index, options.failure)))) {
-    return unchangedResult(canonicalBody);
-  }
-
   const metrics = emptyMetrics();
   let fidelity: ProviderStateFidelity = "exact";
-  const targetsCompaction = crossDomain || options.errorCode === "invalid_responses_request" ||
-    options.errorCode === "invalid_encrypted_content" && (options.rejectedCompaction || failureTargetsCompaction(parsed, options.failure));
-  const requiresContinuation = options.errorCode === "previous_response_not_found" || crossDomain &&
+  const currentTargetsCompaction = options.errorCode === "invalid_responses_request" ||
+    options.errorCode === "invalid_encrypted_content" && failureTargetsCompaction(parsed, options.failure);
+  const targetsCompaction = crossDomain || currentTargetsCompaction || options.rejectedCompaction;
+  const requiresContinuation = options.checkpointRecovery === "continuation" || options.errorCode === "previous_response_not_found" || crossDomain &&
     (parsed.previous_response_id != null || parsed.previousResponseId != null);
-  if ((targetsCompaction || requiresContinuation) && options.recoverCompaction) {
+  const requiresCheckpoint = options.checkpointRecovery !== undefined || targetsCompaction || requiresContinuation ||
+    options.priorEncryptedFailures?.some(prior => failureTargetsCompaction(parsed!, prior));
+  if (requiresCheckpoint && options.recoverCompaction) {
     const recovered = options.recoverCompaction(canonicalBody);
     if (recovered) {
       const restored = parseJsonRecord(recovered.body);
@@ -202,10 +200,13 @@ export function compileProviderStateAttempt(
       } else applyErrorRecovery(parsed, metrics, "invalid_encrypted_content", prior);
     }
     if (targetsCompaction) {
-      fidelity = lowerFidelity(fidelity, recoverRejectedCompactions(parsed, metrics, options.rejectedCompaction ? undefined : options.failure, allowCompactionDrop));
-    } else {
-      applyErrorRecovery(parsed, metrics, options.errorCode, options.failure);
+      fidelity = lowerFidelity(fidelity, recoverRejectedCompactions(parsed, metrics,
+        options.rejectedCompaction ? undefined : options.failure, allowCompactionDrop));
     }
+    if (options.checkpointRecovery === "compaction") {
+      fidelity = lowerFidelity(fidelity, recoverRejectedCompactions(parsed, metrics));
+    }
+    if (!currentTargetsCompaction) applyErrorRecovery(parsed, metrics, options.errorCode, options.failure);
   }
   if (metrics.encryptedAgentMessageBlocksRemoved > 0 || metrics.encryptedReasoningFieldsRemoved > 0 ||
     metrics.encryptedReplayFieldsRemoved > 0 || metrics.reasoningItemsRemoved > 0) {

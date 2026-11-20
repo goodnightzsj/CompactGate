@@ -102,7 +102,7 @@ function describeListener(port: number): string | null {  const result = spawnSy
 
 /**
  * A malformed or invalid config file used to exit with a bare unhandled
- * rejection, and the ten good backups sitting beside it are only reachable
+ * rejection, and the prior backups sitting beside it are only reachable
  * through the HTTP API of the service that just failed to start. Deliberately
  * no auto-restore — `restoreBackup` requires an explicit confirmation for the
  * same reason — but the operator does get told what broke and how to recover.

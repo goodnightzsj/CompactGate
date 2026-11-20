@@ -26,13 +26,15 @@ describe("config backup API", () => {
 
     expect((await patch(11)).status).toBe(200);
     expect((await patch(22)).status).toBe(200);
+    expect((await patch(33)).status).toBe(200);
+    expect((await patch(44)).status).toBe(200);
 
     const listResponse = await fetch(`${app.url}/api/config/backups`);
     const listBody = await listResponse.json() as {
       backups: Array<{ id: string; created_at: string; size_bytes: number }>;
     };
     expect(listResponse.status).toBe(200);
-    expect(listBody.backups.length).toBeGreaterThanOrEqual(2);
+    expect(listBody.backups).toHaveLength(3);
     expect(JSON.stringify(listBody)).not.toContain("api_key");
 
     const backupId = listBody.backups.at(-1)!.id;
@@ -50,18 +52,23 @@ describe("config backup API", () => {
     });
     const restored = await restoreResponse.json() as { logging: { keep_recent: number } };
     expect(restoreResponse.status).toBe(200);
-    expect(restored.logging.keep_recent).not.toBe(22);
+    expect(restored.logging.keep_recent).toBe(11);
+
+    const afterRestore = await fetch(`${app.url}/api/config/backups`);
+    const restoredList = await afterRestore.json() as typeof listBody;
+    expect(restoredList.backups).toHaveLength(3);
+    const deleteId = restoredList.backups[0]!.id;
 
     const deleteResponse = await fetch(`${app.url}/api/config/backups`, {
       method: "DELETE",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ backup_id: backupId, confirm: true })
+      body: JSON.stringify({ backup_id: deleteId, confirm: true })
     });
     expect(deleteResponse.status).toBe(200);
     await expect(fetch(`${app.url}/api/config/backups/restore`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ backup_id: backupId, confirm: true })
+      body: JSON.stringify({ backup_id: deleteId, confirm: true })
     })).resolves.toMatchObject({ status: 400 });
   });
 });
