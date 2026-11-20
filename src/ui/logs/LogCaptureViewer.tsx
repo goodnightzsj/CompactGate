@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEventHandler } from "react";
 import type {
   CapturePayload,
   CaptureRecord,
@@ -24,23 +24,51 @@ type CaptureStage =
 type CaptureView = CaptureStage | "request_diff" | "response_diff";
 type ViewState = "idle" | "loading" | "loaded" | "pending" | "absent" | "purged" | "error";
 
-const STAGES: Array<{ id: CaptureStage; label: string }> = [
+const VIEWS: Array<{ id: CaptureView; label: string }> = [
   { id: "incoming_request", label: "入站请求" },
   { id: "upstream_request", label: "上游请求" },
   { id: "upstream_response", label: "上游响应" },
-  { id: "client_response", label: "客户端响应" }
-];
-const COMPARISONS: Array<{ id: CaptureView; label: string }> = [
+  { id: "client_response", label: "客户端响应" },
   { id: "request_diff", label: "请求 Diff" },
   { id: "response_diff", label: "响应 Diff" }
 ];
 
-export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
+type CaptureEntry = Pick<RequestLogEntry, "request_id" | "capture_status" | "body_status">;
+
+export function LogCaptureViewer({ entry }: { entry: CaptureEntry }) {
+  return <CaptureViewer key={entry.request_id} entry={entry} />;
+}
+
+function CaptureViewer({ entry }: { entry: CaptureEntry }) {
+  const pending = useRef<AbortController | null>(null);
+  const container = useRef<HTMLElement>(null);
+  const restoreFocus = useRef(false);
+  useEffect(() => () => pending.current?.abort(), []);
   const panelId = useId();
   const [viewState, setViewState] = useState<ViewState>("idle");
   const [capture, setCapture] = useState<CaptureRecord | null>(null);
   const [activeStage, setActiveStage] = useState<CaptureView>("incoming_request");
   const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    pending.current?.abort();
+    restoreFocus.current = false;
+    setViewState(state => state === "loaded" ? state : "idle");
+    setError(null);
+  }, [entry.capture_status]);
+  const activeDiff = useMemo(() => {
+    if (!capture) return null;
+    if (activeStage === "request_diff") return captureRequestDiff(capture);
+    if (activeStage === "response_diff") return captureResponseDiff(capture);
+    return null;
+  }, [capture, activeStage]);
+  useLayoutEffect(() => {
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    if (document.activeElement !== document.body) return;
+    const destination = container.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button')
+      ?? container.current;
+    destination?.focus();
+  }, [viewState]);
   const effectiveStatus = capture
     ? "present"
     : viewState === "pending"
@@ -51,14 +79,22 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
           ? "none"
           : entry.capture_status;
 
-  const loadCapture = async () => {
+  const loadCapture = async (trigger: HTMLButtonElement) => {
+    pending.current?.abort();
+    restoreFocus.current = false;
+    const controller = new AbortController();
+    pending.current = controller;
     setViewState("loading");
     setError(null);
     try {
-      const record = await fetchCaptureRecord(entry.request_id);
+      const record = await fetchCaptureRecord(entry.request_id, controller.signal);
+      if (controller.signal.aborted) return;
+      restoreFocus.current = document.activeElement === trigger;
       setCapture(record);
       setViewState("loaded");
     } catch (loadError) {
+      if (controller.signal.aborted) return;
+      restoreFocus.current = document.activeElement === trigger;
       setCapture(null);
       if (loadError instanceof CaptureRequestError) {
         if (loadError.status === 202) {
@@ -76,11 +112,13 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
       }
       setError(loadError instanceof Error ? loadError.message : "抓包读取失败");
       setViewState("error");
+    } finally {
+      if (pending.current === controller) pending.current = null;
     }
   };
 
   return (
-    <section className="log-detail-section is-wide is-capture" aria-labelledby={`${panelId}-title`}>
+    <section ref={container} tabIndex={-1} className="log-detail-section is-wide is-capture" aria-labelledby={`${panelId}-title`}>
       <div className="log-detail-section-head log-capture-head">
         <div>
           <span className="log-detail-kicker">原始数据</span>
@@ -101,7 +139,7 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
           status={effectiveStatus}
           viewState={viewState}
           error={error}
-          onLoad={() => void loadCapture()}
+          onLoad={(event) => void loadCapture(event.currentTarget)}
         />
       )}
 
@@ -109,30 +147,32 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
         <div className="log-capture-viewer">
           <div className="log-capture-toolbar">
             <div className="log-capture-tabs" role="tablist" aria-label="抓包阶段">
-              {STAGES.map((stage) => (
+              {VIEWS.map((stage, index) => (
                 <button
                   key={stage.id}
                   type="button"
                   role="tab"
+                  id={`${panelId}-tab-${stage.id}`}
+                  tabIndex={activeStage === stage.id ? 0 : -1}
                   aria-selected={activeStage === stage.id}
                   aria-controls={`${panelId}-payload`}
                   className={activeStage === stage.id ? "is-active" : ""}
                   onClick={() => setActiveStage(stage.id)}
+                  onKeyDown={(event) => {
+                    let next: number;
+                    switch (event.key) {
+                      case "ArrowLeft": next = (index + VIEWS.length - 1) % VIEWS.length; break;
+                      case "ArrowRight": next = (index + 1) % VIEWS.length; break;
+                      case "Home": next = 0; break;
+                      case "End": next = VIEWS.length - 1; break;
+                      default: return;
+                    }
+                    event.preventDefault();
+                    setActiveStage(VIEWS[next].id);
+                    document.getElementById(`${panelId}-tab-${VIEWS[next].id}`)?.focus();
+                  }}
                 >
                   {stage.label}
-                </button>
-              ))}
-              {COMPARISONS.map((comparison) => (
-                <button
-                  key={comparison.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeStage === comparison.id}
-                  aria-controls={`${panelId}-payload`}
-                  className={activeStage === comparison.id ? "is-active" : ""}
-                  onClick={() => setActiveStage(comparison.id)}
-                >
-                  {comparison.label}
                 </button>
               ))}
             </div>
@@ -144,22 +184,12 @@ export function LogCaptureViewer({ entry }: { entry: RequestLogEntry }) {
               下载 JSON
             </a>
           </div>
-          {activeStage === "request_diff" || activeStage === "response_diff"
-            ? (
-                <CaptureDiffPanel
-                  id={`${panelId}-payload`}
-                  diff={activeStage === "request_diff"
-                    ? captureRequestDiff(capture)
-                    : captureResponseDiff(capture)}
-                />
-              )
-            : (
-                <CapturePayloadPanel
-                  id={`${panelId}-payload`}
-                  stage={activeStage}
-                  payload={payloadForStage(capture, activeStage)}
-                />
-              )}
+          <div className="log-capture-panel" id={`${panelId}-payload`} role="tabpanel" aria-labelledby={`${panelId}-tab-${activeStage}`} tabIndex={0}>
+            {activeDiff && <CaptureDiffPanel diff={activeDiff} />}
+            {activeStage !== "request_diff" && activeStage !== "response_diff" && (
+              <CapturePayloadPanel stage={activeStage} payload={capture[activeStage]} />
+            )}
+          </div>
         </div>
       )}
     </section>
@@ -175,13 +205,16 @@ function CaptureEmptyState({
   status: RequestLogEntry["capture_status"];
   viewState: ViewState;
   error: string | null;
-  onLoad: () => void;
+  onLoad: MouseEventHandler<HTMLButtonElement>;
 }) {
   if (viewState === "loading") {
     return (
       <div className="log-capture-empty" role="status" aria-live="polite">
         <strong>正在读取抓包</strong>
         <span>只在当前展开项中加载原始请求与响应。</span>
+        <button type="button" className="ghost-button" aria-disabled="true">
+          正在读取
+        </button>
       </div>
     );
   }
@@ -236,24 +269,22 @@ function CaptureEmptyState({
 }
 
 function CapturePayloadPanel({
-  id,
   stage,
   payload
 }: {
-  id: string;
   stage: CaptureStage;
   payload: CapturePayload | CaptureResponsePayload | null;
 }) {
   if (!payload) {
     return (
-      <div id={id} role="tabpanel" className="log-capture-payload is-empty">
+      <div className="log-capture-payload is-empty">
         客户端响应未单独缓冲；透明转发时这是正常状态。
       </div>
     );
   }
 
   return (
-    <div id={id} role="tabpanel" className="log-capture-payload">
+    <div className="log-capture-payload">
       <div className="log-capture-payload-meta">
         {"status" in payload && <span>HTTP {payload.status}</span>}
         <span>原始 {formatBytes(payload.body.byte_length)}</span>
@@ -273,14 +304,16 @@ export function CaptureDiffPanel({
   id,
   diff
 }: {
-  id: string;
+  id?: string;
   diff: CaptureDiffResult;
 }) {
   if (!diff.available) {
     return (
-      <div id={id} role="tabpanel" className="log-capture-payload is-empty">
+      <div id={id} className="log-capture-payload is-empty">
         {diff.reason === "truncated"
           ? "正文已截断，无法生成可靠的结构化 Diff。"
+          : diff.reason === "unavailable"
+          ? "客户端响应未完整记录，无法确认与上游等价。"
           : "正文不是有效 JSON，无法生成结构化 Diff。"}
       </div>
     );
@@ -288,7 +321,7 @@ export function CaptureDiffPanel({
 
   if (diff.equivalent) {
     return (
-      <div id={id} role="tabpanel" className="log-capture-payload is-empty is-equivalent">
+      <div id={id} className="log-capture-payload is-empty is-equivalent">
         {diff.reason === "transparent"
           ? "客户端响应为透明转发，与上游响应等价。"
           : "未发现结构差异。"}
@@ -296,11 +329,16 @@ export function CaptureDiffPanel({
     );
   }
 
+  const limitNotice = diff.reason === "depth_limit" ? "深层内容未完整比较" : "已达到 Diff 上限";
+  if (diff.truncated && diff.entries.length === 0) {
+    return <div id={id} className="log-capture-payload is-empty">{limitNotice}。</div>;
+  }
+
   return (
-    <div id={id} role="tabpanel" className="log-capture-diff">
+    <div id={id} className="log-capture-diff">
       <div className="log-capture-payload-meta">
         <span>{diff.entries.length} 项差异</span>
-        {diff.truncated && <span className="is-warn">已达到 Diff 上限</span>}
+        {diff.truncated && <span className="is-warn">{limitNotice}</span>}
       </div>
       <div className="log-capture-diff-scroll">
         <table>
@@ -330,13 +368,6 @@ export function CaptureDiffPanel({
       </div>
     </div>
   );
-}
-
-function payloadForStage(
-  capture: CaptureRecord,
-  stage: CaptureStage
-): CapturePayload | CaptureResponsePayload | null {
-  return capture[stage];
 }
 
 function captureStatusLabel(status: RequestLogEntry["capture_status"]): string {

@@ -5,6 +5,20 @@ import { HealthHeroSection } from "../src/ui/health/HealthHeroSection.js";
 import type { HealthRouteCredentialConfig } from "../src/ui/app-types.js";
 
 describe("health presentation", () => {
+  it("labels the effective compact URL inherited from primary", () => {
+    const upstream = {
+      status: "configured", base_url: "https://dormant.example/v1", host: "dormant.example",
+      effective_base_url: "https://serving.example/v1", effective_host: "serving.example",
+      api_key_env: "", active_api_key_env: null, api_key_configured: true, api_key_source: "config",
+      stored_api_key: false, stored_api_key_tail: "", active_credential_scope: "primary"
+    } as const;
+    const markup = renderToStaticMarkup(<HealthEndpointCard title="Codex 压缩路由" route="compact" credentialScope="compact"
+      badgeLabel="Codex" summary="压缩请求" upstream={upstream} onConfigure={() => undefined} />);
+    expect(markup).toContain("https://serving.example/v1");
+    expect(markup).not.toContain("dormant.example");
+    expect(markup).toContain("Base URL · 复用主路由");
+  });
+
   it.each(["connected", "expired", "needs_reauth", "disconnected", "missing"] as const)("identifies OAuth credentials and %s status without environment-key advice", (oauthStatus) => {
     const configured = oauthStatus === "connected" || oauthStatus === "expired";
     const markup = renderToStaticMarkup(<HealthEndpointCard

@@ -5,12 +5,27 @@ import { crossSiteApiRejection } from "../src/server/http.js";
 // The admin API carries no credential, and `readJsonBody` ignores Content-Type,
 // so a `text/plain` POST from any page is a CORS simple request: no preflight,
 // and the write lands whether or not the page can read the reply. These headers
-// are the only signal separating that page from the operator's own tools.
-function request(headers: Record<string, string | undefined>): IncomingMessage {
-  return { headers } as unknown as IncomingMessage;
+// supplement the real peer check, because non-browser callers can forge them.
+function request(headers: Record<string, string | undefined>, remoteAddress = "127.0.0.1"): IncomingMessage {
+  return { headers, socket: { remoteAddress } } as unknown as IncomingMessage;
 }
 
 describe("admin API cross-site guard", () => {
+  it.each(["192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", ""])(
+    "rejects a non-loopback peer despite forged local headers: %s", remoteAddress => {
+      expect(crossSiteApiRejection(request({
+        host: "127.0.0.1:7865", origin: "http://127.0.0.1:7865"
+      }, remoteAddress))).toMatch(/peer/);
+      expect(crossSiteApiRejection(request({}, remoteAddress))).toMatch(/peer/);
+    }
+  );
+
+  it.each(["127.0.0.2", "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1"])(
+    "accepts a real loopback peer: %s", remoteAddress => {
+      expect(crossSiteApiRejection(request({ host: "localhost:7865" }, remoteAddress))).toBeNull();
+    }
+  );
+
   it("allows the Studio page and CLI callers", () => {
     // Studio, served from the gateway itself.
     expect(crossSiteApiRejection(request({

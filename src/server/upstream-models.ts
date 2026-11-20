@@ -73,7 +73,6 @@ export async function fetchUpstreamModels({
 
 export function buildModelListUrls(baseUrl: string): URL[] {
   const base = new URL(baseUrl);
-  base.search = "";
   base.hash = "";
   const basePath = trimTrailingSlashes(base.pathname);
   const candidates: URL[] = [];

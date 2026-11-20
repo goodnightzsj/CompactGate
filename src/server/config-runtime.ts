@@ -1,4 +1,5 @@
 import { validateHeaderName, validateHeaderValue } from "node:http";
+import { isIPv6 } from "node:net";
 import { isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../shared/api-key-priority.js";
 import type {
   ClaudeModelMap,
@@ -152,7 +153,9 @@ export function parseListenAddress(listen: string): { host: string; port: number
     throw new ConfigError("listen must be formatted as host:port.");
   }
 
-  const host = listen.slice(0, index);
+  const authorityHost = listen.slice(0, index);
+  const host = authorityHost.startsWith("[") && authorityHost.endsWith("]") && isIPv6(authorityHost.slice(1, -1))
+    ? authorityHost.slice(1, -1) : authorityHost;
   const portText = listen.slice(index + 1);
   const port = /^\d+$/.test(portText) ? Number(portText) : Number.NaN;
 

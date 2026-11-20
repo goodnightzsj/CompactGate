@@ -213,6 +213,7 @@ describe("UI routing helpers", () => {
     const markup = renderToStaticMarkup(createElement(DashboardStatsGrid, {
       health: null,
       listen: "127.0.0.1:7865",
+      onNavigate: () => undefined,
       logCounts: { all: 0, primary: 0, compact: 0, claude: 0 }
     }));
     const href = /class="dashboard-health-summary-link" href="([^"]+)"/.exec(markup)?.[1];

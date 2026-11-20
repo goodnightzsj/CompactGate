@@ -50,7 +50,7 @@ export function ProfileScopeCard({
   onSelectedProfileChange: (scope: ConfigProfileScope, profileId: string) => void;
   onSaveProfile: (scope: ConfigProfileScope, name?: string) => void | Promise<boolean>;
   onApplyProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
-  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<void>;
+  onUpdateProfile: (scope: ConfigProfileScope, profileId?: string) => Promise<boolean>;
   onReorderProfiles: (scope: ConfigProfileScope, profileIds: string[]) => void | Promise<void>;
   onDuplicateProfile: (scope: ConfigProfileScope, profileId?: string) => void | Promise<unknown>;
   onCreateProfileForOtherScope: (profile: PublicConfig["profiles"][number]) => void;
@@ -93,7 +93,9 @@ export function ProfileScopeCard({
           : selectedProfile
             ? `保存到档案「${selectedProfile.name}」`
             : `保存当前 ${scopeLabel} 草稿为新档案`;
-  const profileNameHint = createMode
+  const profileNameHint = !config
+    ? "配置尚未加载，加载成功后才能保存档案。"
+    : createMode
     ? "正在新建档案，输入新名称后保存；不会自动切换当前运行时。"
     : selectedNameChanged
       ? saveWillApply
@@ -137,6 +139,9 @@ export function ProfileScopeCard({
       setOverwriteCandidate({
         scope,
         profile: named,
+        willApply: named.id === scopeState.active_profile_id,
+        // Pin both the target ID and the draft action/revision the operator saw.
+        confirm: () => onUpdateProfile(scope, named.id),
         suggestedName: nextUniqueProfileName(trimmedName, profiles.map((profile) => profile.name))
       });
       return;
@@ -148,9 +153,8 @@ export function ProfileScopeCard({
     }
   }
 
-  async function handleOverwriteConfirm(): Promise<boolean> {
-    const ok = await onSaveProfile(scope);
-    if (ok !== false) {
+  async function handleOverwriteConfirm(candidate: ProfileOverwriteCandidate): Promise<boolean> {
+    if (await candidate.confirm()) {
       setOverwriteCandidate(null);
       setCreateMode(false);
       return true;
@@ -214,7 +218,7 @@ export function ProfileScopeCard({
           <button
             className="ghost-button profile-save-button"
             type="button"
-            disabled={profileBusy}
+            disabled={profileBusy || !config}
             title={
               createMode
                 ? "创建新档案；不会自动切换当前运行时。"
@@ -383,10 +387,7 @@ export function ProfileScopeCard({
                         className="ghost-button"
                         type="button"
                         disabled={profileBusy}
-                        onClick={() => {
-                          onSelectedProfileChange(scope, profile.id);
-                          void onDuplicateProfile(scope, profile.id);
-                        }}
+                        onClick={() => void onDuplicateProfile(scope, profile.id)}
                       >
                         {profileState === "duplicating" && isSelected ? "复制中..." : "复制档案"}
                       </button>
@@ -425,11 +426,12 @@ export function ProfileScopeCard({
         <ConfirmProfileOverwriteDialog
           scope={overwriteCandidate.scope}
           profile={overwriteCandidate.profile}
+          willApply={overwriteCandidate.willApply}
           suggestedName={overwriteCandidate.suggestedName}
           existingNames={profiles.map((profile) => profile.name)}
           error={profileError}
           onCancel={() => setOverwriteCandidate(null)}
-          onOverwrite={() => handleOverwriteConfirm()}
+          onOverwrite={() => handleOverwriteConfirm(overwriteCandidate)}
           onSaveAsNew={(name) => handleSaveAsNewConfirm(name)}
         />
       )}

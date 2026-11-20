@@ -23,7 +23,7 @@ function openDisconnectDialog(node: HTMLDialogElement | null) {
 
 export function OAuthProfilesPanel({ config, onConfigChange, onProfileLocate }: {
   config: PublicConfig | null;
-  onConfigChange: (config: PublicConfig) => void;
+  onConfigChange: (config: PublicConfig) => Promise<void>;
   onProfileLocate: (scope: ConfigProfileScope, profileId: string) => void;
 }) {
   const { accounts, loading, error: accountsError, reload } = useOAuthAccounts();
@@ -59,6 +59,9 @@ export function OAuthProfilesPanel({ config, onConfigChange, onProfileLocate }: 
   const busy = action !== null;
   const canUse = (value: OAuthAccountView) => value.status === "connected" || (value.status === "expired" && value.can_refresh);
   const locatedProfile = createdProfile && config?.profile_scopes[createdProfile.scope].profiles.find((item) => item.id === createdProfile.id);
+  const profiles = config ? [...config.profile_scopes.codex.profiles, ...config.profile_scopes.claude.profiles] : [];
+  const linkedProfiles = (accountId: string) => profiles.filter((profile) =>
+    profile.oauth_account_id === accountId || profile.compact_oauth_account_id === accountId);
 
   useEffect(() => {
     if (!account?.id) return;
@@ -134,7 +137,8 @@ export function OAuthProfilesPanel({ config, onConfigChange, onProfileLocate }: 
         method: "POST", signal, body: JSON.stringify({ account_id: account.id, scope, name: name.trim(), model: model.trim(), revision: config.revision })
       });
       if (signal.aborted) return;
-      onConfigChange(next);
+      await onConfigChange(next);
+      if (signal.aborted) return;
       const created = next.profile_scopes[scope].profiles.find((item) => item.name === name.trim() && item.oauth_account_id === account.id);
       if (!created) throw new Error("档案已保存，但返回列表中未找到新档案。请刷新配置后查看。");
       setCreatedProfile({ scope, id: created.id });
@@ -229,10 +233,10 @@ export function OAuthProfilesPanel({ config, onConfigChange, onProfileLocate }: 
       <div className="oauth-list-heading" role="status">{loading ? "正在读取连接..." : accountsError ? "连接读取失败，可刷新重试" : accounts.length === 0 ? "暂无授权连接，从上方添加第一个连接" : `已保存连接 · ${accounts.length}`}</div>
       {accountsError && <p role="alert" className="error-note">{accountsError}</p>}
       <div className="oauth-account-list">{accounts.map((item) => {
-        const linked = config?.profiles.filter((profile) => profile.oauth_account_id === item.id || profile.compact_oauth_account_id === item.id) ?? [];
+        const linked = linkedProfiles(item.id);
         return <article className="oauth-account" key={item.id}>
           <div className="oauth-account-copy"><strong>{item.label}</strong><span className="oauth-account-provider">{OAUTH_PROVIDERS.find((p) => p.id === item.provider)?.name}</span><small>{item.base_url}</small>
-            <small>{linked.length ? `${linked.length} 个档案引用` : "未绑定档案"}{item.expires_at ? ` · 到期 ${new Date(item.expires_at).toLocaleString()}` : " · 无固定到期时间"}</small>
+            <small>{!config ? "等待档案配置" : linked.length ? `${linked.length} 个档案引用` : "未绑定档案"}{item.expires_at ? ` · 到期 ${new Date(item.expires_at).toLocaleString()}` : " · 无固定到期时间"}</small>
             {item.error && <small className="error-note">{item.error}</small>}
           </div>
           <span className={`oauth-status ${item.status === "connected" ? "is-ready" : item.status === "disconnected" ? "is-muted" : "is-warning"}`}>{oauthStatusLabel[item.status]}</span>
@@ -274,7 +278,7 @@ export function OAuthProfilesPanel({ config, onConfigChange, onProfileLocate }: 
         <span className="confirm-icon" aria-hidden="true">!</span>
         <div className="confirm-copy">
           <h2 id={`${id}-disconnect-title`}>断开「{disconnectAccount.label}」？</h2>
-          <p id={`${id}-disconnect-desc`}>{config?.profiles.filter((profile) => profile.oauth_account_id === disconnectAccount.id || profile.compact_oauth_account_id === disconnectAccount.id).length ?? 0} 个引用此连接的档案将无法发送新请求。厂商侧授权不会自动撤销。</p>
+          <p id={`${id}-disconnect-desc`}>{config ? `${linkedProfiles(disconnectAccount.id).length} 个档案引用此连接。` : "档案配置尚未加载，引用数量未知。"}断开后，使用此连接的路由将无法发送新请求。厂商侧授权不会自动撤销。</p>
         </div>
         {error && <p role="alert" className="error-note">{error}</p>}
         <div className="confirm-actions">

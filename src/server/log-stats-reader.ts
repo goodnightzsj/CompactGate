@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
-import type { LogAnalyticsSnapshot } from "../shared/types.js";
+import type { LogAnalyticsSnapshot, RequestLogPage } from "../shared/types.js";
 import type { LogStatsOptions } from "./logger-analytics.js";
+import type { LogPageOptions } from "./logger-helpers.js";
 
 const MAX_PENDING_STATS = 8;
 const STATS_TIMEOUT_MS = 60_000;
@@ -12,15 +13,20 @@ export class LogStatsBusyError extends Error {
   }
 }
 
-interface StatsJob {
+type StatsRequest = { kind: "stats"; options: LogStatsOptions };
+type PageRequest = { kind: "page"; options: LogPageOptions };
+export type LogReadRequest = StatsRequest | PageRequest;
+type LogReadResult = LogAnalyticsSnapshot | RequestLogPage;
+
+interface ReadJob {
   id: number;
-  options: LogStatsOptions;
-  complete(snapshot?: LogAnalyticsSnapshot, error?: unknown): void;
+  request: LogReadRequest;
+  complete(snapshot?: LogReadResult, error?: unknown): void;
 }
 
 type StatsReply = {
   id: number;
-  snapshot?: LogAnalyticsSnapshot;
+  snapshot?: LogReadResult;
   error?: { name: string; message: string };
 };
 
@@ -29,8 +35,8 @@ export class LogStatsReader {
   private stopping: Promise<void> | null = null;
   private closed = false;
   private sequence = 0;
-  private active: StatsJob | null = null;
-  private readonly queue: StatsJob[] = [];
+  private active: ReadJob | null = null;
+  private readonly queue: ReadJob[] = [];
   private readonly maintenance: Array<{ run(): void; reject(error: unknown): void }> = [];
   private maintaining = false;
   private deadline: NodeJS.Timeout | null = null;
@@ -38,16 +44,30 @@ export class LogStatsReader {
   constructor(private readonly databasePath: string) {}
 
   read(options: LogStatsOptions, signal?: AbortSignal): Promise<LogAnalyticsSnapshot> {
+    return this.enqueue({ kind: "stats", options: { ...options } }, signal);
+  }
+
+  readPage(options: LogPageOptions, signal?: AbortSignal): Promise<RequestLogPage> {
+    return this.enqueue({ kind: "page", options: {
+      ...options, ...(options.drilldown ? { drilldown: { ...options.drilldown } } : {})
+    } }, signal);
+  }
+
+  private enqueue(request: StatsRequest, signal?: AbortSignal): Promise<LogAnalyticsSnapshot>;
+  private enqueue(request: PageRequest, signal?: AbortSignal): Promise<RequestLogPage>;
+  private enqueue(request: LogReadRequest, signal?: AbortSignal): Promise<LogReadResult> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.closed) return Promise.reject(new Error("Log statistics reader is closed."));
-    if (this.stopping || this.queue.length + Number(this.active !== null) >= MAX_PENDING_STATS) {
+    const pendingStats = this.queue.filter(job => job.request.kind === "stats").length +
+      Number(this.active?.request.kind === "stats");
+    if (request.kind === "stats" && pendingStats >= MAX_PENDING_STATS) {
       return Promise.reject(new LogStatsBusyError());
     }
     return new Promise((resolve, reject) => {
       let settled = false;
-      const job: StatsJob = {
+      const job: ReadJob = {
         id: ++this.sequence,
-        options: { ...options },
+        request,
         complete(snapshot, error) {
           if (settled) return;
           settled = true;
@@ -70,7 +90,6 @@ export class LogStatsReader {
 
   runMaintenance<T>(operation: () => T): Promise<T> {
     if (this.closed) return Promise.reject(new Error("Log statistics reader is closed."));
-    if (this.stopping) return Promise.reject(new LogStatsBusyError());
     return new Promise((resolve, reject) => {
       this.maintenance.push({
         run() {
@@ -103,11 +122,16 @@ export class LogStatsReader {
     try {
       const worker = this.worker ?? this.startWorker();
       worker.ref();
-      this.deadline = setTimeout(() => {
-        this.failPending(new Error("Log statistics query exceeded its 60 second deadline."));
-        void this.stopWorker();
-      }, STATS_TIMEOUT_MS);
-      worker.postMessage({ id: this.active.id, options: this.active.options });
+      // Keep the existing statistics budget; searches gain no new cap or deadline.
+      if (this.active.request.kind === "stats") {
+        this.deadline = setTimeout(() => {
+          this.deadline = null;
+          this.active?.complete(undefined, new Error("Log statistics query exceeded its 60 second deadline."));
+          this.active = null;
+          void this.stopWorker();
+        }, STATS_TIMEOUT_MS);
+      }
+      worker.postMessage({ id: this.active.id, ...this.active.request });
     } catch (error) {
       this.failPending(error);
       void this.stopWorker();
@@ -171,8 +195,10 @@ export class LogStatsReader {
     this.stopping = stopping;
     void stopping.then(() => {
       this.stopping = null;
+      this.dispatch();
     }, (error) => {
       this.stopping = null;
+      this.failPending(error);
       console.error("Log statistics worker shutdown failed.", error);
     });
     return stopping;

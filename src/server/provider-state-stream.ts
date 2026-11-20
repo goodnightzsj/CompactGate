@@ -18,7 +18,7 @@ export class ProviderStateStreamGate extends Transform {
   private observation: Promise<OpenAiStreamSummary | null> | undefined;
   private readonly timer: ReturnType<typeof setTimeout>;
 
-  constructor(headers: IncomingHttpHeaders) {
+  constructor(headers: IncomingHttpHeaders, private readonly codex = false) {
     super();
     this.observer = createOpenAiStreamObserver(headers, {
       maxEventBytes: PREFIX_BYTES,
@@ -82,8 +82,10 @@ export class ProviderStateStreamGate extends Transform {
       (!response || response.output === undefined || Array.isArray(response.output) && response.output.length === 0);
     if (!this.candidate && noOutput && response && !response.error &&
       (type === "response.created" || type === "response.in_progress")) return;
-    if (noOutput && (type === "response.failed" || type === "error")) {
-      const error = type === "response.failed" ? response?.error : isRecord(record.error) ? record.error : record;
+    const failedResponse = type === "response.failed" ||
+      this.codex && type === "response.done" && response?.status === "failed";
+    if (noOutput && (failedResponse || type === "error")) {
+      const error = failedResponse ? response?.error : isRecord(record.error) ? record.error : record;
       const failure = isRecord(error) ? classifyProviderStateFailure(400, Buffer.from(JSON.stringify({ error }))) : null;
       if (failure) { this.candidate = failure; return; }
     }

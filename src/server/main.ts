@@ -24,7 +24,7 @@ const server = await createCompactGateServer(configStore, logger);
 
 server.on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {
-    const target = `${host}:${port}`;
+    const target = configStore.get().listen;
     const details = describeListener(port);
 
     console.error(`CompactGate could not start because ${target} is already in use.`);

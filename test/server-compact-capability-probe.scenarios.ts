@@ -11,18 +11,33 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("compact capability probe", () => {
-  it("reports a bounded real Remote V1 result without creating request logs", async () => {
+  it.each(["failed", "incomplete"])("rejects %s JSON and SSE even with partial compaction output and later DONE", async status => {
+    for (const sse of [false, true]) {
+      const upstream = await startCapturedOpenAiUpstream([], (_req, res) => {
+        const response = { status, ...(status === "failed" ? { error: { message: "Synthetic failed compaction" } } : {}),
+          output: [{ type: "compaction", encrypted_content: "partial-state" }] };
+        res.writeHead(200, { "content-type": sse ? "text/event-stream" : "application/json" });
+        res.end(sse ? `data: ${JSON.stringify({ type: `response.${status}`, response })}\n\ndata: [DONE]\n\n` : JSON.stringify(response));
+      });
+      const app = await startApp(upstream.url, upstream.url);
+      const result = await postJson(app.url, "/api/compact/capability-probe", { model: "synthetic" }).then(response => response.json());
+      expect(result.supported).toBe(false);
+      expect(result.failure_reason).toEqual(expect.any(String));
+    }
+  });
+
+  it.each(["\n", "\r\n", "\r"])("reports a bounded real Remote V1 result without creating request logs (%j)", async newline => {
     const requests: CapturedRequest[] = [];
     const upstream = await startCapturedOpenAiUpstream(requests, (_req, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({
         type: "response.output_item.done",
         item: { type: "compaction", encrypted_content: "probe-state" }
-      })}\n\n`);
+      })}${newline}${newline}`);
       res.end(`data: ${JSON.stringify({
         type: "response.completed",
         response: { usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 } }
-      })}\n\n`);
+      })}${newline}${newline}`);
     });
     const app = await startApp("http://127.0.0.1:1/v1", upstream.url);
 
@@ -171,20 +186,20 @@ describe("compact capability probe", () => {
     expect(requests[0].headers["accept-encoding"]).toBe("identity");
   });
 
-  it("probes Anthropic native compaction and rejects Chat without a network request", async () => {
+  it.each(["\n", "\r\n", "\r"])("probes Anthropic native compaction and rejects Chat without a network request (%j)", async newline => {
     const anthropicRequests: CapturedRequest[] = [];
     const anthropic = await startClaudeUpstream(async (req, res) => {
       anthropicRequests.push(await captureRequest(req));
       res.writeHead(200, { "content-type": "text/event-stream" });
-      res.write(`event: message_start\ndata: ${JSON.stringify({
+      res.write(`event: message_start${newline}data: ${JSON.stringify({
         type: "message_start",
         message: { id: "msg_probe", usage: { input_tokens: 5, output_tokens: 0 } }
-      })}\n\n`);
-      res.write(`event: content_block_start\ndata: ${JSON.stringify({
+      })}${newline}${newline}`);
+      res.write(`event: content_block_start${newline}data: ${JSON.stringify({
         type: "content_block_start",
         content_block: { type: "compaction", content: "summary" }
-      })}\n\n`);
-      res.end(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
+      })}${newline}${newline}`);
+      res.end(`event: message_stop${newline}data: ${JSON.stringify({ type: "message_stop" })}${newline}${newline}`);
     });
     const anthropicApp = await startApp("http://127.0.0.1:1/v1", anthropic.url, {
       compact: { upstream_protocol: "anthropic_messages", model_template: "{model}" }

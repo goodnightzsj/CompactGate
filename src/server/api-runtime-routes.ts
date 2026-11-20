@@ -16,7 +16,7 @@ import {
 import type { RequestLogger } from "./logger.js";
 import type { LogStatsOptions } from "./logger-analytics.js";
 import { LogStatsBusyError } from "./log-stats-reader.js";
-import type { DebugCaptureWriter } from "./debug-capture.js";
+import type { CaptureReadResult, DebugCaptureWriter } from "./debug-capture.js";
 import { fetchOpenAiModels } from "./openai-models.js";
 import {
   PrimaryFailoverState,
@@ -36,8 +36,10 @@ import {
   type ClientIdentityStore
 } from "./client-identity-store.js";
 import type { ClientIdentityKind, LogDrilldownFilter } from "../shared/types.js";
+import { DAY_MS, MAX_LOG_RANGE_DAYS } from "../shared/log-range.js";
 import { resolveRequestScopedProfile } from "./request-profile.js";
 import { probeCompactCapability } from "./compact-capability-probe.js";
+import { ProtocolConversionError, UnsupportedClientProtocolError } from "./protocol-conversion.js";
 
 export async function handleRuntimeApi(
   req: IncomingMessage,
@@ -106,12 +108,15 @@ export async function handleRuntimeApi(
     }
 
     const method = typeof body.method === "string" ? body.method.toUpperCase() : "POST";
+    const requestBody = method === "GET" ? undefined : body.body;
     try {
       const config = configStore.get();
       const parsedUrl = new URL(body.path, "http://compactgate.local");
       const previewHeaders = isRecord(body.headers)
         ? Object.fromEntries(
-            Object.entries(body.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string")
+            Object.entries(body.headers)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+              .map(([name, value]) => [name.toLowerCase(), value])
           )
         : undefined;
       const requestProfile = resolveRequestScopedProfile(
@@ -122,7 +127,7 @@ export async function handleRuntimeApi(
       );
       let previewConfig = requestProfile?.config ?? config;
       if (!isClaudeIngressPath(parsedUrl.pathname)) {
-        const classification = classifyOpenAiRequest(parsedUrl.pathname, body.body, previewHeaders);
+        const classification = classifyOpenAiRequest(parsedUrl.pathname, requestBody, previewHeaders);
         const usesPrimaryPlan = classification.route === "primary" ||
           classification.compactionMode === "remote_v2" ||
           (classification.route === "compact" && config.compact.upstream_mode === "primary");
@@ -130,7 +135,7 @@ export async function handleRuntimeApi(
           previewConfig = primaryFailover.preview(
             config,
             primaryRouteRequestContextFromBody(
-              Buffer.from(typeof body.body === "string" ? body.body : JSON.stringify(body.body ?? {})),
+              Buffer.from(typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody ?? {})),
               previewHeaders,
               parsedUrl.pathname
             )
@@ -138,7 +143,7 @@ export async function handleRuntimeApi(
         }
       }
       sendJson(res, 200, {
-        ...previewRoute(method, body.path, body.body, previewConfig, previewHeaders),
+        ...previewRoute(method, body.path, requestBody, previewConfig, previewHeaders),
         ...(requestProfile
           ? {
               profile_id: requestProfile.profileId,
@@ -147,6 +152,11 @@ export async function handleRuntimeApi(
           : {})
       });
     } catch (error) {
+      if (error instanceof ProtocolConversionError) {
+        sendJson(res, error.status, { error: error instanceof UnsupportedClientProtocolError
+          ? { type: "invalid_request_error", code: "unsupported_protocol", message: error.message } : error.message });
+        return true;
+      }
       if (error instanceof TypeError) {
         throw new ConfigError("test-route path must be a valid URL or path.");
       }
@@ -172,26 +182,14 @@ export async function handleRuntimeApi(
   }
 
   if (req.method === "GET" && url.pathname === "/api/logs/recent") {
-    sendJson(res, 200, logger.page(readLogPageQuery(url, configStore)));
+    const options = readLogPageQuery(url, configStore);
+    await sendLogReadResponse(req, res, signal => logger.pageAsync(options, signal));
     return true;
   }
 
   if (req.method === "GET" && url.pathname === "/api/logs/stats") {
     const options = readLogStatsQuery(url);
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    res.once("close", abort);
-    try {
-      const stats = await logger.statsAsync(options, controller.signal);
-      if (!res.destroyed) sendJson(res, 200, stats);
-    } catch (error) {
-      if (controller.signal.aborted) return true;
-      if (!(error instanceof LogStatsBusyError)) throw error;
-      res.setHeader("retry-after", "1");
-      sendJson(res, 503, { error: error.message });
-    } finally {
-      res.off("close", abort);
-    }
+    await sendLogReadResponse(req, res, signal => logger.statsAsync(options, signal));
     return true;
   }
 
@@ -213,14 +211,15 @@ export async function handleRuntimeApi(
     /^\/api\/logs\/([^/]+)\/capture(?:\/(download))?$/
   );
   if (req.method === "GET" && captureMatch) {
-    await sendCaptureResponse(
+    await withLogReadSignal(req, res, signal => sendCaptureResponse(
       res,
       captureMatch[1],
       captureMatch[2] === "download",
       logger,
       captureWriter,
-      studioEvents
-    );
+      studioEvents,
+      signal
+    ));
     return true;
   }
 
@@ -254,13 +253,48 @@ export async function handleRuntimeApi(
   return false;
 }
 
+async function sendLogReadResponse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  read: (signal: AbortSignal) => Promise<unknown>
+): Promise<void> {
+  await withLogReadSignal(req, res, async signal => {
+    const data = await read(signal);
+    if (!res.destroyed) sendJson(res, 200, data);
+  });
+}
+
+async function withLogReadSignal(
+  req: IncomingMessage,
+  res: ServerResponse,
+  send: (signal: AbortSignal) => Promise<void>
+): Promise<void> {
+  if (req.aborted || res.destroyed) return;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    await send(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    if (!(error instanceof LogStatsBusyError)) throw error;
+    res.setHeader("retry-after", "1");
+    sendJson(res, 503, { error: error.message });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
+  }
+}
+
 async function sendCaptureResponse(
   res: ServerResponse,
   requestId: string,
   download: boolean,
   logger: RequestLogger,
   captureWriter: DebugCaptureWriter,
-  studioEvents: StudioEventBroadcaster
+  studioEvents: StudioEventBroadcaster,
+  signal: AbortSignal
 ): Promise<void> {
   const lookup = logger.getCaptureByRequestId(requestId);
   if (lookup.status === "not_found") {
@@ -301,10 +335,25 @@ async function sendCaptureResponse(
     return;
   }
 
-  const capture = lookup.capturePath
-    ? await captureWriter.readCapture(lookup.capturePath, requestId, !download)
-    : { status: "unavailable" as const };
-  if (capture.status === "unavailable") {
+  let capture: CaptureReadResult;
+  try {
+    if (!lookup.capturePath) throw new Error("Registered capture has no path.");
+    capture = await captureWriter.readCapture(lookup.capturePath, requestId, !download, signal);
+    if (signal.aborted) return;
+    if (capture.status === "unavailable") {
+      throw new Error("Registered capture is not a managed regular file with the matching request ID.");
+    }
+  } catch (error) {
+    if (signal.aborted) return;
+    console.error(`Capture read failed for request ${requestId}:`, error);
+    sendJson(res, 500, {
+      error: "Capture could not be read.",
+      request_id: requestId,
+      capture_status: lookup.captureStatus
+    });
+    return;
+  }
+  if (capture.status === "missing") {
     const updatedEntry = logger.markCapturePurgedByRequestId(requestId);
     if (updatedEntry) {
       studioEvents.broadcastLog(updatedEntry, "update");
@@ -411,7 +460,7 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
   const host = parseHostFilter(url.searchParams.get("host"));
   const search = parseSearchFilter(url.searchParams.get("search"));
   let drilldown: LogDrilldownFilter | undefined;
-  if (["from", "to", "model"].some((key) => url.searchParams.has(key))) {
+  if (["from", "to", "model", "calendar_tz"].some((key) => url.searchParams.has(key))) {
     if (!url.searchParams.get("from") || !url.searchParams.get("to")) {
       throw new ConfigError("Log drilldown requires both from and to.");
     }
@@ -430,23 +479,46 @@ function readLogPageQuery(url: URL, configStore: ConfigStore) {
   return { route, status, host, search, drilldown, limit, offset };
 }
 
-const MAX_LOG_STATS_RANGE_MS = 31 * 24 * 60 * 60 * 1000;
-
-function readLogStatsRange(url: URL): Pick<LogStatsOptions, "from" | "to"> {
+function readLogStatsRange(url: URL): Pick<LogStatsOptions, "from" | "to" | "calendar_tz"> {
   const toTime = parseStatsTimestamp(url.searchParams.get("to"), Date.now(), "to");
   const fromTime = parseStatsTimestamp(
     url.searchParams.get("from"),
-    toTime - 24 * 60 * 60 * 1000,
+    toTime - DAY_MS,
     "from"
   );
 
   if (fromTime >= toTime) {
     throw new ConfigError("logs stats requires from to be earlier than to.");
   }
-  if (toTime - fromTime > MAX_LOG_STATS_RANGE_MS) {
+  const timeZone = url.searchParams.get("calendar_tz");
+  const range = { from: new Date(fromTime).toISOString(), to: new Date(toTime).toISOString() };
+  if (timeZone !== null) {
+    if (/^[+-]/.test(timeZone)) throw new ConfigError("logs stats calendar_tz must be a named time zone.");
+    let format: Intl.DateTimeFormat;
+    try {
+      format = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric", era: "short" });
+    } catch (error) {
+      if (error instanceof RangeError) throw new ConfigError("logs stats calendar_tz must be a valid time zone.");
+      throw error;
+    }
+    // The exclusive end may be midnight on the next date. Count only dates included in [from, to).
+    if (calendarDay(toTime - 1, format) - calendarDay(fromTime, format) >= MAX_LOG_RANGE_DAYS) {
+      throw new ConfigError(`logs stats range cannot exceed ${MAX_LOG_RANGE_DAYS} calendar days.`);
+    }
+    return { ...range, calendar_tz: timeZone };
+  }
+  if (toTime - fromTime > MAX_LOG_RANGE_DAYS * DAY_MS) {
     throw new ConfigError("logs stats range cannot exceed 31 days.");
   }
-  return { from: new Date(fromTime).toISOString(), to: new Date(toTime).toISOString() };
+  return range;
+}
+
+function calendarDay(time: number, format: Intl.DateTimeFormat): number {
+  const parts = Object.fromEntries(format.formatToParts(time).map(({ type, value }) => [type, value]));
+  const year = Number(parts.year);
+  const utc = new Date(0);
+  utc.setUTCFullYear(parts.era === "BC" ? 1 - year : year, Number(parts.month) - 1, Number(parts.day));
+  return utc.getTime() / DAY_MS;
 }
 
 function readLogStatsQuery(url: URL): LogStatsOptions {
@@ -471,11 +543,16 @@ function parseStatsTimestamp(value: string | null, fallback: number, name: strin
     return fallback;
   }
 
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+  if (!parts) {
     throw new ConfigError(`logs stats ${name} must be an RFC 3339 timestamp.`);
   }
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] = parts.slice(1).map(part => Number(part ?? 0));
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) {
+  if (day < 1 || day > (days[month - 1] ?? 0) || hour > 23 || minute > 59 || second > 59 ||
+    offsetHour > 23 || offsetMinute > 59 || !Number.isFinite(timestamp)) {
     throw new ConfigError(`logs stats ${name} must be an RFC 3339 timestamp.`);
   }
   return timestamp;

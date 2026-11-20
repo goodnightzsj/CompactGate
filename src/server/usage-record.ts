@@ -20,7 +20,7 @@ export function extractUsageFromJsonText(text: string): TokenUsageMetrics | null
   }
 }
 
-function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics {
+export function normalizeUsageRecord(usage: Record<string, unknown>): TokenUsageMetrics {
   const reasoningTokens = readReasoningTokens(usage);
   const inputTokens = readInputTokens(usage);
   const outputTokens = readOutputTokens(usage, reasoningTokens);
@@ -212,6 +212,12 @@ function findUsageRecord(value: unknown, depth = 0): Record<string, unknown> | n
     return null;
   }
 
+  // Protocol envelopes own usage; relay padding at the event root does not.
+  for (const key of ["response", "message"]) {
+    const found = findUsageRecord(value[key], depth + 1);
+    if (found) return found;
+  }
+
   if (isRecord(value.usage)) {
     return value.usage;
   }
@@ -220,25 +226,8 @@ function findUsageRecord(value: unknown, depth = 0): Record<string, unknown> | n
     return value.usageMetadata;
   }
 
-  if (looksLikeUsageRecord(value)) {
+  if (depth === 0 && looksLikeUsageRecord(value)) {
     return value;
-  }
-
-  for (const child of Object.values(value)) {
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        const found = findUsageRecord(item, depth + 1);
-        if (found) {
-          return found;
-        }
-      }
-      continue;
-    }
-
-    const found = findUsageRecord(child, depth + 1);
-    if (found) {
-      return found;
-    }
   }
 
   return null;

@@ -174,7 +174,7 @@ export function ApiKeyPoolEditor({
       <p>优先级 0–{MAX_API_KEY_PRIORITY}，越大越优先；拖动会自动生成严格顺序。单把数字可在展开项中调整。</p>
       <div className="field">
         <label htmlFor={`${editorId}-reserve`}>粘性保留时长（秒）</label>
-        <input id={`${editorId}-reserve`} aria-describedby={`${editorId}-reserve-hint`} type="number" min={0} max={86400} value={stickyReserveSeconds} onChange={(event) => onStickyReserveChange(Number(event.target.value))} />
+        <input id={`${editorId}-reserve`} aria-describedby={`${editorId}-reserve-hint`} type="number" min={0} max={86400} value={Number.isNaN(stickyReserveSeconds) ? "" : stickyReserveSeconds} onChange={(event) => onStickyReserveChange(event.target.valueAsNumber)} />
         <small id={`${editorId}-reserve-hint`}>429 冷却结束后只接原会话的时长；0 关闭。</small>
       </div>
       <label className="key-pool-policy-toggle"><input type="checkbox" checked={rotationOptOut} onChange={(event) => onRotationOptOutChange(event.target.checked)} />

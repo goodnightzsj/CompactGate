@@ -65,13 +65,15 @@ export function RouteConfigPanel({
           onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
             ...previous,
             codexPrimaryBaseUrl: suggestion.baseUrl,
-            codexPrimaryCredentialPresetId: suggestion.credentialPresetId
+            codexPrimaryCredentialPresetId: suggestion.credentialPresetId,
+            codexPrimaryApiKeys: suggestion.credentialPresetId &&
+              previous.codexPrimaryBaseUrl.trim().replace(/\/+$/g, "") !== suggestion.baseUrl.trim().replace(/\/+$/g, "")
+              ? previous.codexPrimaryApiKeys.filter(entry => entry.apiKey.trim()) : previous.codexPrimaryApiKeys
           }))}
           onApiKeyChange={(value) => onFormChange((previous) => ({
             ...previous,
             codexPrimaryApiKey: value,
-            clearCodexPrimaryApiKey: false,
-            codexPrimaryCredentialPresetId: ""
+            clearCodexPrimaryApiKey: false
           }))}
           onUpstreamProtocolChange={(codexPrimaryUpstreamProtocol) => onFormChange((previous) => ({
             ...previous,
@@ -80,8 +82,7 @@ export function RouteConfigPanel({
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             codexPrimaryApiKey: "",
-            clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey,
-            codexPrimaryCredentialPresetId: ""
+            clearCodexPrimaryApiKey: !previous.clearCodexPrimaryApiKey
           }))}
           keyPool={form.codexPrimaryApiKeys}
           keyActivity={form.codexPrimaryBaseUrl === config?.primary.base_url &&
@@ -135,8 +136,7 @@ export function RouteConfigPanel({
           onApiKeyChange={(value) => onFormChange((previous) => ({
             ...previous,
             codexCompactApiKey: value,
-            clearCodexCompactApiKey: false,
-            codexCompactCredentialPresetId: ""
+            clearCodexCompactApiKey: false
           }))}
           onUpstreamProtocolChange={(codexCompactUpstreamProtocol) => onFormChange((previous) => ({
             ...previous,
@@ -145,8 +145,7 @@ export function RouteConfigPanel({
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             codexCompactApiKey: "",
-            clearCodexCompactApiKey: !previous.clearCodexCompactApiKey,
-            codexCompactCredentialPresetId: ""
+            clearCodexCompactApiKey: !previous.clearCodexCompactApiKey
           }))}
         />
           </details>
@@ -175,13 +174,15 @@ export function RouteConfigPanel({
           onSuggestionSelect={(suggestion) => onFormChange((previous) => ({
             ...previous,
             claudePrimaryBaseUrl: suggestion.baseUrl,
-            claudePrimaryCredentialPresetId: suggestion.credentialPresetId
+            claudePrimaryCredentialPresetId: suggestion.credentialPresetId,
+            claudePrimaryApiKeys: suggestion.credentialPresetId &&
+              previous.claudePrimaryBaseUrl.trim().replace(/\/+$/g, "") !== suggestion.baseUrl.trim().replace(/\/+$/g, "")
+              ? previous.claudePrimaryApiKeys.filter(entry => entry.apiKey.trim()) : previous.claudePrimaryApiKeys
           }))}
           onApiKeyChange={(value) => onFormChange((previous) => ({
             ...previous,
             claudePrimaryApiKey: value,
-            clearClaudePrimaryApiKey: false,
-            claudePrimaryCredentialPresetId: ""
+            clearClaudePrimaryApiKey: false
           }))}
           onUpstreamProtocolChange={(claudePrimaryUpstreamProtocol) => onFormChange((previous) => ({
             ...previous,
@@ -190,8 +191,7 @@ export function RouteConfigPanel({
           onToggleClearApiKey={() => onFormChange((previous) => ({
             ...previous,
             claudePrimaryApiKey: "",
-            clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey,
-            claudePrimaryCredentialPresetId: ""
+            clearClaudePrimaryApiKey: !previous.clearClaudePrimaryApiKey
           }))}
           keyPool={form.claudePrimaryApiKeys}
           keyActivity={form.claudePrimaryBaseUrl === config?.claude.primary.base_url &&

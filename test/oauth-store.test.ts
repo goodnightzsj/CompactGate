@@ -23,7 +23,7 @@ async function fixture(provider: OAuthProviderId = "qwen-code") {
     xai: "https://auth.x.ai/device", "github-copilot": "https://github.com/login/device",
     "openai-codex": "https://auth.openai.com/codex/device", openrouter: "", "google-vertex": ""
   }[provider];
-  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => json({
     device_code: "synthetic-device-secret", device_auth_id: "synthetic-device-id", user_code: "ABCD-1234",
     verification_uri: verification, interval: 5, expires_in: 900
   }));
@@ -45,6 +45,40 @@ async function fixture(provider: OAuthProviderId = "qwen-code") {
 }
 
 describe("OAuth connection lifecycle", () => {
+  it.each([9e12, 8.64e12])("rejects non-representable final expiry %s before saving or refreshing", async (expires_in) => {
+    const f = await fixture();
+    const accountId = await f.connect();
+    const file = path.join(f.dir, "compactgate-oauth.json");
+    const before = await readFile(file, "utf8");
+    const accounts = f.store.list();
+    const session = await f.start();
+    f.advance(5000);
+    f.fetcher.mockResolvedValueOnce(json(token({ expires_in })));
+    expect(await f.store.poll(session.id)).toMatchObject({ status: "error", error: "Invalid OAuth field: expires_in." });
+    expect(f.store.list()).toEqual(accounts);
+    expect(await readFile(file, "utf8")).toBe(before);
+    f.fetcher.mockResolvedValueOnce(json(token({ expires_in })));
+    await expect(f.store.refresh(accountId)).rejects.toThrow("Invalid OAuth field: expires_in.");
+    const persisted = JSON.parse(await readFile(file, "utf8"));
+    const originalAccount = JSON.parse(before).accounts[0];
+    expect(persisted.accounts).toHaveLength(1);
+    expect(persisted.accounts[0]).toMatchObject({ id: accountId, state: "active", access_token: originalAccount.access_token,
+      refresh_token: originalAccount.refresh_token, expires_at: originalAccount.expires_at });
+    const reloaded = await OAuthStore.load(f.configPath, { fetcher: f.fetcher, now: f.now }); stores.push(reloaded);
+    expect(reloaded.get(accountId)).toMatchObject({ id: accountId, status: "connected", can_refresh: true,
+      expires_at: accounts[0]!.expires_at, error: "The last OAuth refresh failed. Retry or authorize a new connection." });
+    expect((await reloaded.credentials(accountId)).access_token).toBe("synthetic-access");
+  });
+
+  it("rejects a Copilot absolute expiry that cannot be serialized as a Date", async () => {
+    const f = await fixture("github-copilot");
+    const started = await f.start(); f.advance(5000);
+    f.fetcher.mockResolvedValueOnce(json({ access_token: "synthetic-github" }))
+      .mockResolvedValueOnce(json({ token: "synthetic-copilot", expires_at: 9e12 }));
+    expect(await f.store.poll(started.id)).toMatchObject({ status: "error", error: "Invalid OAuth field: expires_at." });
+    expect(f.store.list()).toEqual([]);
+    await expect(stat(path.join(f.dir, "compactgate-oauth.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("stores private credentials separately and exposes no token, verifier or device secret", async () => {
     const f = await fixture();
     const started = await f.start();

@@ -4,7 +4,7 @@ import { act, StrictMode, useRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
-import type { PublicConfig } from "../src/shared/types.js";
+import type { HealthResponse, PublicConfig } from "../src/shared/types.js";
 import {
   useLogStats, type AnalyticsPreset, type AnalyticsRange, type AnalyticsSnapshotCache
 } from "../src/ui/analytics/analytics-data.js";
@@ -26,6 +26,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 async function mount(node: ReactNode) {
@@ -76,13 +77,17 @@ function BootstrapHarness({ recoveryConfig }: { recoveryConfig?: PublicConfig })
       healthTime: state.health?.time })}</output>
     <button onClick={state.retryBootstrap}>retry</button>
     <button onClick={() => state.setForm((form) => ({ ...form, loggingKeepRecent: 777 }))}>edit</button>
-    {recoveryConfig && <button onClick={() => state.applyRemoteConfig(recoveryConfig)}>snapshot</button>}
+    {recoveryConfig && <button onClick={() => {
+      state.applyRemoteConfig(recoveryConfig);
+      state.setHealth({ time: "snapshot-health" } as HealthResponse);
+      state.notifyServerRecovered(true);
+    }}>snapshot</button>}
     {recoveryConfig && <>
       <button onClick={() => { state.setConfig(recoveryConfig); state.setForm(formFromConfig(recoveryConfig)); }}>import</button>
       <button onClick={() => state.commitConfig(recoveryConfig, state.draftRevision)}>save</button>
       <button onClick={() => state.applyProfileConfig(recoveryConfig, "codex")}>apply profile</button>
     </>}
-    <button onClick={state.notifyServerRecovered}>poll recovered</button>
+    <button onClick={() => state.notifyServerRecovered()}>poll recovered</button>
     <button onClick={() => state.setPageError("export failed")}>operation error</button>
     <button onClick={() => state.setHealth((current) => current && { ...current, time: "newer-health" })}>new health</button>
   </>;
@@ -101,6 +106,51 @@ async function visibility(value: DocumentVisibilityState) {
 }
 
 describe("analytics snapshot lifecycle", () => {
+  it("lets a slow manual refresh finish across automatic ticks and polls from the new sample", async () => {
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ generated_at: "first" })));
+    vi.stubGlobal("fetch", fetcher);
+    const view = await mount(<RetainedStats />);
+    await act(async () => vi.advanceTimersByTime(58_000));
+    const manual = deferredResponse();
+    fetcher.mockImplementationOnce(() => manual.promise);
+    await press(view.container, "refresh");
+    const count = fetcher.mock.calls.length;
+    const signal = fetcher.mock.calls.at(-1)![1].signal;
+    await act(async () => vi.advanceTimersByTime(122_000));
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(signal.aborted).toBe(false);
+    await act(async () => manual.json({ generated_at: "manual" }));
+    expect(state(view.container).sample).toBe("manual");
+    await act(async () => vi.advanceTimersByTime(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(count + 1);
+  });
+
+  it.each(["2026-11-02T04:30:00Z", "2026-03-09T03:30:00Z"])("retains successful preset identity through DST and pending range changes: %s", async now => {
+    vi.stubEnv("TZ", "America/New_York"); vi.setSystemTime(new Date(now));
+    const snapshot: React.RefObject<AnalyticsSnapshotCache | null> = { current: null };
+    const next = deferredResponse();
+    let pending = false;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      const query = new URL(url, "http://synthetic.invalid").searchParams;
+      return pending ? next.promise.then(response => response.clone()) : Promise.resolve(Response.json({
+        generated_at: "7d", range: { from: query.get("from"), to: query.get("to") }
+      }));
+    }));
+    function PresetHarness({ preset }: { preset: AnalyticsPreset }) {
+      const stats = useLogStats(preset, { snapshot });
+      return <output>{JSON.stringify({ sample: stats.data?.generated_at, preset: stats.preset })}</output>;
+    }
+    const view = await mount(<PresetHarness preset="7d" />);
+    expect(state(view.container)).toEqual({ sample: "7d", preset: "7d" });
+    pending = true;
+    await view.render(<PresetHarness preset="30d" />);
+    expect(state(view.container)).toEqual({ sample: "7d", preset: "7d" });
+    await act(async () => next.json({ generated_at: "30d" }));
+    expect(state(view.container)).toEqual({ sample: "30d", preset: "30d" });
+    await view.render(<span>away</span>);
+    await view.render(<PresetHarness preset="30d" />);
+    expect(state(view.container)).toEqual({ sample: "30d", preset: "30d" });
+  });
   it("reuses a fresh snapshot across unmounts, expires at its sample age, and forces manual refresh", async () => {
     const fetcher = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ generated_at: "first" })));
     vi.stubGlobal("fetch", fetcher);
@@ -213,7 +263,7 @@ describe("independent bootstrap requests", () => {
     await press(view.container, "new health");
     await press(view.container, "poll recovered");
     await act(async () => requests.health.json({ time: "stale-health" }));
-    expect(state(view.container)).toMatchObject({ healthTime: "newer-health", error: null });
+    expect(state(view.container)).toMatchObject({ healthTime: "newer-health", error: "config failed" });
   });
 
   it.each(["snapshot", "import", "save", "apply profile"])("keeps newer configuration from %s when an earlier bootstrap succeeds late", async (update) => {
@@ -266,7 +316,7 @@ describe("independent bootstrap requests", () => {
     ["config", "poll recovered", true], ["health", "poll recovered", true],
     ["config", "snapshot", false], ["health", "snapshot", false],
     ["config", "poll recovered", false], ["health", "poll recovered", false]
-  ] as const)("does not revive a recovered %s failure after %s with sibling success=%s", async (failed, recovery, succeeds) => {
+  ] as const)("requires matching data to clear %s after %s with sibling success=%s", async (failed, recovery, succeeds) => {
     const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
     const config = store.toPublicConfig();
     const requests = { config: deferredResponse(), health: deferredResponse() };
@@ -275,17 +325,22 @@ describe("independent bootstrap requests", () => {
     await act(async () => requests[failed].reject(new Error(`${failed} failed`)));
     expect(state(view.container)).toMatchObject({ error: `${failed} failed`, failed: true });
     await press(view.container, recovery);
-    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    expect(state(view.container)).toMatchObject(recovery === "snapshot"
+      ? { error: null, failed: false } : { error: `${failed} failed`, failed: true });
     const sibling = failed === "config" ? "health" : "config";
     await act(async () => {
       if (succeeds) requests[sibling].json(sibling === "config" ? config : { ok: true });
       else requests[sibling].reject(new Error(`${sibling} failed late`));
     });
-    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    if (recovery === "snapshot") expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    else {
+      expect(state(view.container).error).toContain(`${failed} failed`);
+      expect(state(view.container).failed).toBe(true);
+    }
     if (succeeds) expect(state(view.container)[sibling]).toBe(true);
   });
 
-  it.each(["snapshot", "poll recovered"])("ignores both old failures when %s arrives before either result in the same batch", async (recovery) => {
+  it.each(["snapshot", "poll recovered"])("only data recovery supersedes both failures when %s arrives in the same batch", async (recovery) => {
     const config = (await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"))).toPublicConfig();
     const requests = { config: deferredResponse(), health: deferredResponse() };
     const fetcher = vi.fn((url: string) => requests[url === "/api/config" ? "config" : "health"].promise);
@@ -296,7 +351,8 @@ describe("independent bootstrap requests", () => {
       requests.config.reject(new Error("old config failure"));
       requests.health.reject(new Error("old health failure"));
     });
-    expect(state(view.container)).toMatchObject({ error: null, failed: false });
+    expect(state(view.container)).toMatchObject(recovery === "snapshot"
+      ? { error: null, failed: false } : { error: "old config failure; old health failure", failed: true });
 
     fetcher.mockImplementation((url: string) => Promise.reject(new Error(`new failure ${url}`)));
     await press(view.container, "retry");

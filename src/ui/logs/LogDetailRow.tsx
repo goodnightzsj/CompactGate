@@ -14,6 +14,7 @@ import {
   hasAdditiveCachedInput,
   logStatusToneClass,
   logStatusKind,
+  logErrorDetail,
   totalInputTokens,
   responseModelDisplay,
   responseModelSourceLabel,
@@ -101,7 +102,7 @@ export function LogDetailPanel({ entry, onCollapse }: {
 
       {hasError && <section className="log-detail-error" aria-label="错误信息">
         <strong>请求异常</strong>
-        <p>{entry.error_summary ?? [`HTTP ${entry.status}`, entry.stream_outcome, entry.stream_terminal_event].filter(Boolean).join(" · ")}</p>
+        <p>{logErrorDetail(entry)}</p>
       </section>}
 
       <section className="log-detail-performance" aria-label="性能">

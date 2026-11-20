@@ -2,8 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { RequestLogEntry, RequestLogPage } from "../src/shared/types.js";
-import type { StudioLogEvent, HealthResponse } from "../src/shared/types.js";
-import { fetchPendingLogPage, fetchMoreLogPage, mergeCodexStatusIntoHealth } from "../src/ui/hooks/useLogFeed.js";
+import { fetchPendingLogPage, fetchMoreLogPage } from "../src/ui/hooks/useLogFeed.js";
 import { LogsPage } from "../src/ui/logs/LogsPage.js";
 import { LogSampleGroups } from "../src/ui/logs/LogSampleGroups.js";
 import { LogSamplesPage } from "../src/ui/logs/LogSamplesPage.js";
@@ -74,8 +73,9 @@ describe("log request generations", () => {
 
 describe("live log page updates", () => {
   it("carries exact model and time into loads, pagination and interleaved replay", async () => {
-    const drilldown = { from: "2026-09-29T00:00:00.000Z", to: "2026-09-30T00:00:00.000Z", model: "exact + %_" };
+    const drilldown = { from: "2026-09-29T00:00:00.000Z", to: "2026-09-30T00:00:00.000Z", calendar_tz: "America/New_York", model: "exact + %_" };
     const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      controller: new AbortController(),
       generation: 1, query: { route: "all", status: "all", host: "selected.invalid", search: "", limit: 2, drilldown },
       liveEvents: [], snapshot: null
     };
@@ -84,6 +84,7 @@ describe("live log page updates", () => {
       expect(params.get("model")).toBe(drilldown.model);
       expect(params.get("from")).toBe(drilldown.from);
       expect(params.get("to")).toBe(drilldown.to);
+      expect(params.get("calendar_tz")).toBe(drilldown.calendar_tz);
       expect(params.get("host")).toBe("selected.invalid");
       pending.liveEvents.push(...[
         requestLog("included", { time: drilldown.from, response_model: drilldown.model, upstream_host: "selected.invalid" }),
@@ -104,6 +105,7 @@ describe("live log page updates", () => {
     const row = (id: number) => requestLog(String(id), { sequence: id });
     const baseline = { ...emptyPage(2), logs: [row(4), row(3)], latest_sequence: 4, total: 4, all_total: 4, has_more: true };
     const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      controller: new AbortController(),
       generation: 1, query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
       liveEvents: [], snapshot: null
     };
@@ -134,6 +136,7 @@ describe("live log page updates", () => {
     const baseline = { ...emptyPage(2), logs: [requestLog("4"), requestLog("3")], total: 4, has_more: true };
     const remaining = { ...emptyPage(2), logs: [requestLog("4")], total: 1, all_total: 1 };
     const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      controller: new AbortController(),
       generation: 1, query: { route: "primary", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
       liveEvents: [], snapshot: null
     };
@@ -160,6 +163,7 @@ describe("live log page updates", () => {
     const oldPage = { ...emptyPage(2), logs: [requestLog("3"), requestLog("2")], total: 3, all_total: 3, has_more: true };
     const newPage = { ...oldPage, logs: [requestLog("4"), requestLog("3")], total: 4, all_total: 4 };
     const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      controller: new AbortController(),
       generation: 1,
       query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
       liveEvents: [], snapshot: null
@@ -187,6 +191,7 @@ describe("live log page updates", () => {
 
   it("does not re-query a pending load that lost its generation", async () => {
     const pending: Parameters<typeof fetchPendingLogPage>[0] = {
+      controller: new AbortController(),
       generation: 1, query: { route: "all", status: "all", host: ALL_HOSTS_FILTER, search: "", limit: 2 },
       liveEvents: [], snapshot: null
     };
@@ -200,19 +205,6 @@ describe("live log page updates", () => {
     } finally {
       fetcher.mockRestore();
     }
-  });
-
-  it("projects compact event protocol status into the current health snapshot", () => {
-    const health = { codex: { observed_protocol: "remote_v1" } } as HealthResponse;
-    const event = {
-      operation: "insert",
-      entry: requestLog("compact-live", { compaction_mode: "remote_v2" }),
-      codex_status: { observed_protocol: "remote_v2" }
-    } as StudioLogEvent;
-
-    expect(mergeCodexStatusIntoHealth(health, event)?.codex.observed_protocol).toBe("remote_v2");
-    expect(mergeCodexStatusIntoHealth(health, { operation: "insert", entry: requestLog("ordinary") }))
-      .toBe(health);
   });
 
   it("does not increment filtered counts for capture lifecycle updates", () => {

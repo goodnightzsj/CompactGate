@@ -104,7 +104,7 @@ export async function handleConfigApi(
   }
 
   if (req.method === "POST" && url.pathname === "/api/config/import") {
-    const importedConfig = await readJsonBody(req);
+    const importedConfig = await readJsonBody(req, { required: true });
     await commit(() => configStore.importConfig(importedConfig), true);
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
@@ -163,7 +163,7 @@ export async function handleConfigApi(
       throw new ConfigError("config profile reorder requires a profile id list.");
     }
 
-    await commit(() => configStore.reorderProfiles(readProfileScope(body, url), profileIds));
+    await commit(() => configStore.reorderProfiles(readProfileScope(body, url), profileIds, body.revision));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }
@@ -188,7 +188,7 @@ export async function handleConfigApi(
       await readJsonBody(req),
       "config profile delete requires a profile id."
     );
-    await commit(() => configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete")));
+    await commit(() => configStore.deleteProfile(readProfileScope(body, url), readProfileId(body, "delete"), body.revision));
     sendJson(res, 200, configStore.toPublicConfig());
     return true;
   }

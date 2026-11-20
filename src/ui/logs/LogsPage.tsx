@@ -22,7 +22,7 @@ import {
 } from "./log-utils.js";
 import { useLogTableScroll } from "./useLogTableScroll.js";
 import { useMediaQuery, useNarrowViewport } from "./useNarrowViewport.js";
-import { groupLogAnimations, isLogTailTrim, ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
+import { groupLogAnimations, isLogTailTrim, sameLogEntries, ROW_SPRING_TRANSITION } from "./useStaggeredLogs.js";
 
 function logEntryKey(entry: RequestLogEntry): string {
   return `${entry.request_id}-${entry.time}`;
@@ -40,12 +40,20 @@ const detailTransition = {
 // every tick would defeat memoization of the row components below.
 const REDUCED_MOTION_TRANSITION = { duration: 0.01 };
 
-// Keep every loaded row mounted, but measure layout only while it is visible.
-// Motion shares the IntersectionObserver; scrolling does not rebuild the list.
-function LogMotionRow({ reduceMotion, ...props }: HTMLMotionProps<"tr"> & { reduceMotion: boolean }) {
-  const [visible, setVisible] = useState(false);
+// Keep searchable cells and focusable rows; mount heavy cells near the viewport.
+function LogMotionRow({ reduceMotion, entry, showAllColumns, ...props }: HTMLMotionProps<"tr"> & {
+  reduceMotion: boolean; entry: RequestLogEntry; showAllColumns: boolean;
+}) {
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  const [focused, setFocused] = useState(false);
   return <MotionTr {...props} layout layoutDependency={visible && !reduceMotion ? undefined : false}
-    onViewportEnter={() => setVisible(true)} onViewportLeave={() => setVisible(false)} />;
+    viewport={{ margin: "600px 0px" }}
+    onViewportEnter={() => setVisible(true)} onViewportLeave={() => setVisible(false)}
+    onFocusCapture={() => setFocused(true)}
+    onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false); }}>
+    <LogRowCells entry={entry} showAllColumns={showAllColumns}
+      offscreen={!visible && !focused && props["aria-expanded"] !== true} />
+  </MotionTr>;
 }
 
 function LogMotionCard({ reduceMotion, ...props }: HTMLMotionProps<"div"> & { reduceMotion: boolean }) {
@@ -64,7 +72,8 @@ const LogAnimationGroup = memo(function LogAnimationGroup({ group, render, initi
   return <AnimatePresence initial={initial} propagate>{render(group)}</AnimatePresence>;
 }, (previous, next) => previous.render === next.render &&
   // initial only controls newly mounted groups, not existing rows.
-  JSON.stringify(previous.group.logs) === JSON.stringify(next.group.logs));
+  (sameLogEntries(previous.group.logs, next.group.logs) ||
+    JSON.stringify(previous.group.logs) === JSON.stringify(next.group.logs)));
 
 export function LogsPage({
   logs, pendingLogCount = 0,
@@ -168,6 +177,7 @@ export function LogsPage({
           >
             <LogMobileCard
               entry={entry}
+              reduceMotion={reduceMotion}
               logKey={logKey}
               detailId={`mobile-log-detail-${entry.request_id}`}
               expanded={expandedLogKey === logKey}
@@ -186,6 +196,8 @@ export function LogsPage({
           <LogMotionRow
             key={logKey}
             reduceMotion={reduceMotion}
+            entry={entry}
+            showAllColumns={showAllColumns}
             initial={{ opacity: 0, y: reduceMotion ? 0 : -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
@@ -203,9 +215,7 @@ export function LogsPage({
               toggleLog(logKey);
             }}
             onKeyDown={(event) => handleRowKeyDown(event, logKey)}
-          >
-            <LogRowCells entry={entry} showAllColumns={showAllColumns} />
-          </LogMotionRow>
+          />
         ];
 
         if (expanded) {
@@ -345,7 +355,7 @@ export function LogsPage({
               { value: "all", label: "全部响应模型", meta: "保留时间范围及其他筛选" }
             ]}
             onChange={(value) => {
-              if (value === "all") onDrilldownChange({ from: drilldown.from, to: drilldown.to });
+              if (value === "all") onDrilldownChange({ ...drilldown, model: undefined });
             }}
             wide
           />
@@ -466,7 +476,7 @@ export function LogsPage({
         {statusFilter !== "all" && <button type="button" onClick={() => removeFilter(() => onStatusFilterChange("all"))} aria-label="移除状态筛选">{statusFilter === "error" ? "错误" : "正常"} ×</button>}
         {hostFilter !== ALL_HOSTS_FILTER && <button type="button" title={hostFilter} onClick={() => removeFilter(() => onHostFilterChange(ALL_HOSTS_FILTER))} aria-label={`移除上游筛选 ${hostFilter}`}>{hostFilter} ×</button>}
         {searchFilter.trim() && <button type="button" title={searchFilter} onClick={() => removeFilter(() => onSearchFilterChange(""))} aria-label="移除搜索条件">搜索：{searchFilter} ×</button>}
-        {drilldown?.model !== undefined && <button type="button" onClick={() => removeFilter(() => onDrilldownChange({ from: drilldown.from, to: drilldown.to }))} aria-label="移除响应模型筛选">{drilldown.model ?? "未识别模型"} ×</button>}
+        {drilldown?.model !== undefined && <button type="button" onClick={() => removeFilter(() => onDrilldownChange({ ...drilldown, model: undefined }))} aria-label="移除响应模型筛选">{drilldown.model ?? "未识别模型"} ×</button>}
         {drilldown && <button type="button" onClick={clearDrilldown} aria-label="移除时间与模型范围">限定时间与模型 ×</button>}
       </div>}
 

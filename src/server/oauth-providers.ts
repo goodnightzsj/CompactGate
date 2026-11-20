@@ -360,7 +360,7 @@ function tokensFromResponse(input: OAuthStartInput, data: Record<string, unknown
     case "xai": baseUrl = "https://api.x.ai/v1"; break;
     default: throw new OAuthProviderError("Unsupported token response provider.");
   }
-  return { access_token: access, refresh_token: refresh, expires_at: now + expires * 1000, base_url: baseUrl,
+  return { access_token: access, refresh_token: refresh, expires_at: tokenExpiration(now + expires * 1000, "expires_in"), base_url: baseUrl,
     ...(providerAccountId ? { provider_account_id: providerAccountId } : {}) };
 }
 
@@ -370,7 +370,7 @@ async function exchangeCopilotToken(githubToken: string, fetcher: typeof fetch, 
   });
   requireOAuthSuccess(response);
   const access = requiredString(response.body.token, "token");
-  const expiresAt = positiveSeconds(response.body.expires_at, "expires_at") * 1000;
+  const expiresAt = tokenExpiration(positiveSeconds(response.body.expires_at, "expires_at") * 1000, "expires_at");
   if (expiresAt <= now) throw new OAuthProviderError("Copilot returned an expired token.");
   const endpoints = isRecord(response.body.endpoints) ? response.body.endpoints : {};
   const proxyHost = /(?:^|;)proxy-ep=([^;]+)/.exec(access)?.[1];
@@ -433,4 +433,11 @@ function positiveSeconds(value: unknown, field: string): number {
     throw new OAuthProviderError(`Invalid OAuth field: ${field}.`);
   }
   return value;
+}
+
+function tokenExpiration(timestamp: number, field: string): number {
+  if (!Number.isFinite(new Date(timestamp).getTime())) {
+    throw new OAuthProviderError(`Invalid OAuth field: ${field}.`);
+  }
+  return timestamp;
 }

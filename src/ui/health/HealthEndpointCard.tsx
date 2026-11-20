@@ -25,6 +25,7 @@ export function HealthEndpointCard({
   onConfigure: () => void;
 }) {
   const status = upstreamHealthBadge(upstream);
+  const effectiveUrl = upstream && "effective_base_url" in upstream ? upstream.effective_base_url : upstream?.base_url;
 
   return (
     <section className={`panel health-card route-${route} tone-${status.tone}`} aria-label={`${title} 状态`}>
@@ -45,8 +46,8 @@ export function HealthEndpointCard({
       </div>
 
       <div className="health-kv">
-        <span>Base URL</span>
-        <strong>{upstream?.base_url ?? "读取中..."}</strong>
+        <span>{route === "compact" && upstream?.active_credential_scope === "primary" ? "Base URL · 复用主路由" : "Base URL"}</span>
+        <strong>{effectiveUrl ?? "读取中..."}</strong>
       </div>
 
       {upstream ? <details className="health-credential-details" open={status.tone !== "good"}>

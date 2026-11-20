@@ -15,6 +15,8 @@ import type { TokenUsageMetrics } from "./usage-types.js";
 import { isRecord, readTrimmedString } from "../shared/records.js";
 import type { GenerationSample } from "../shared/types.js";
 import { readGenerationSample } from "../shared/generation-metrics.js";
+import { SSE_LINE_ENDING } from "./sse-frames.js";
+import { responseFailureSummary } from "./usage-error.js";
 
 export interface OpenAiStreamSummary {
   sawTerminalEvent: boolean;
@@ -99,6 +101,7 @@ function createProtocolStreamObserver(
 
 class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
   private pending = "";
+  private pendingBytes = 0;
   private eventName: string | null = null;
   private dataLines: string[] = [];
   private retainedEventBytes = 0;
@@ -141,18 +144,23 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
    * text CompactGate reports.
    */
   private readonly decoder = new StringDecoder("utf8");
+  private readonly lineEnding = new RegExp(SSE_LINE_ENDING, "g");
+  private skipLF = false;
 
   observe(chunk: Buffer): void {
     if (this.requestStartedAt !== undefined && !this.summary.sawTerminalEvent) this.observedAt = performance.now();
     const text = this.decoder.write(chunk);
-    let offset = 0;
+    if (!text) return;
+    let offset = this.skipLF && text.startsWith("\n") ? 1 : 0;
+    this.skipLF = false;
 
     while (offset < text.length) {
-      const newlineIndex = text.indexOf("\n", offset);
-      const hasNewline = newlineIndex !== -1;
-      const segment = text.slice(offset, hasNewline ? newlineIndex : text.length);
-      this.observeLineSegment(segment, hasNewline);
-      offset = hasNewline ? newlineIndex + 1 : text.length;
+      this.lineEnding.lastIndex = offset;
+      const newline = this.lineEnding.exec(text);
+      const segment = text.slice(offset, newline ? newline.index : text.length);
+      this.observeLineSegment(segment, newline !== null);
+      offset = newline ? newline.index + newline[0].length : text.length;
+      this.skipLF = offset === text.length && newline?.[0] === "\r";
     }
   }
 
@@ -164,6 +172,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     if (this.pending.length > 0) {
       this.observeLine(this.pending);
       this.pending = "";
+      this.pendingBytes = 0;
     }
     this.flushEvent();
     return { ...this.summary };
@@ -258,13 +267,27 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       );
     }
     if (isOpenAiCompletedEvent(eventName) || isOpenAiCompletedEvent(eventType)) {
-      this.summary.sawCompletedEvent = true;
+      const record = this.readEventRecord(data);
+      const response = isRecord(record?.response) ? record.response : record;
+      const failure = responseFailureSummary(response);
+      if (failure) {
+        this.summary.errorSummary ??= failure;
+        if (response?.status === "incomplete") this.summary.sawIncompleteEvent = true;
+        else this.summary.sawFailedEvent = true;
+        this.summary.generationSample = null;
+      } else {
+        this.summary.sawCompletedEvent = true;
+      }
     }
     if (isOpenAiFailedEvent(eventName) || isOpenAiFailedEvent(eventType)) {
       this.summary.sawFailedEvent = true;
+      this.summary.errorSummary ??= responseFailureSummary(this.readEventRecord(data));
+      this.summary.generationSample = null;
     }
     if (isOpenAiIncompleteEvent(eventName) || isOpenAiIncompleteEvent(eventType)) {
       this.summary.sawIncompleteEvent = true;
+      this.summary.errorSummary ??= responseFailureSummary(this.readEventRecord(data));
+      this.summary.generationSample = null;
     }
     if (isOpenAiOutputEvent(eventName) || isOpenAiOutputEvent(eventType) || hasOpenAiOutputPayload(data)) {
       this.summary.sawOutputEvent = true;
@@ -378,11 +401,13 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
     if (this.discardingLine) {
       this.discardingLine = false;
       this.pending = "";
+      this.pendingBytes = 0;
       return;
     }
 
-    const line = this.pending.endsWith("\r") ? this.pending.slice(0, -1) : this.pending;
+    const line = this.pending;
     this.pending = "";
+    this.pendingBytes = 0;
     this.observeLine(line);
   }
 
@@ -391,14 +416,16 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
       return;
     }
 
-    const nextPending = `${this.pending}${segment}`;
-    if (this.retainedEventBytes + Buffer.byteLength(nextPending, "utf8") > this.maxEventBytes) {
+    // StringDecoder preserves code points, so counting each segment avoids rescanning the growing line.
+    const nextBytes = this.pendingBytes + Buffer.byteLength(segment, "utf8");
+    if (this.retainedEventBytes + nextBytes > this.maxEventBytes) {
       this.markEventOversized();
       this.discardingLine = true;
       return;
     }
 
-    this.pending = nextPending;
+    this.pending += segment;
+    this.pendingBytes = nextBytes;
   }
 
   private retainEventLine(line: string): boolean {
@@ -414,6 +441,7 @@ class OpenAiStreamObserver implements OpenAiStreamObserverHandle {
 
   private markEventOversized(): void {
     this.pending = "";
+    this.pendingBytes = 0;
     this.dataLines = [];
     this.retainedEventBytes = 0;
     if (!this.oversizedEvent) {
@@ -515,7 +543,7 @@ function isAnthropicOutputEvent(type: string | null): boolean {
 }
 
 function isOpenAiTerminalEvent(type: string | null): boolean {
-  return type === "response.completed" || type === "response.failed" || type === "response.incomplete";
+  return type === "response.completed" || isOpenAiFailedEvent(type) || type === "response.incomplete";
 }
 
 function isOpenAiCompletedEvent(type: string | null): boolean {
@@ -523,7 +551,7 @@ function isOpenAiCompletedEvent(type: string | null): boolean {
 }
 
 function isOpenAiFailedEvent(type: string | null): boolean {
-  return type === "response.failed";
+  return type === "response.failed" || type === "error";
 }
 
 function isOpenAiIncompleteEvent(type: string | null): boolean {

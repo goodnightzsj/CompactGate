@@ -104,10 +104,12 @@ export type ConfigTab =
   | "logging"
   | "portable";
 export type PublicConfigProfile = PublicConfig["profiles"][number];
-export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile };
+export type ProfileDeleteCandidate = { scope: ConfigProfileScope; profile: PublicConfigProfile; revision: string };
 export type ProfileOverwriteCandidate = {
+  willApply: boolean;
   scope: ConfigProfileScope;
   profile: PublicConfigProfile;
   suggestedName: string;
+  confirm: () => Promise<boolean>;
 };
 export type ProfileDropPosition = "before" | "after";

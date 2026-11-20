@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { CompactGateConfig, UpstreamProtocol } from "../shared/types.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import { countCompactResponseItems } from "./compact-response-normalizer.js";
@@ -10,11 +12,16 @@ import {
   summaryForError
 } from "./http-utils.js";
 import { buildCompactOpenAiProxyPlan } from "./openai-proxy-plan.js";
-import { sendBufferedUpstreamRequest } from "./upstream-client.js";
+import { sendBufferedUpstreamRequest, type BufferedUpstreamResult } from "./upstream-client.js";
 import { extractResponseUsage } from "./usage.js";
+import { decodeResponseText } from "./usage-utils.js";
 import type { TokenUsageMetrics } from "./usage-types.js";
 import type { OAuthStore } from "./oauth-store.js";
 import { prepareOAuthRequest } from "./oauth-transport.js";
+import { createCodexResponseTransform } from "./oauth-response.js";
+import { createOpenAiStreamObserver } from "./upstream-openai-stream.js";
+import { appendBufferedResponseChunk } from "./upstream-response-buffer.js";
+import { sseDataFrames } from "./sse-frames.js";
 
 const MAX_PROBE_RESPONSE_BYTES = 512 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 30_000;
@@ -39,6 +46,7 @@ export async function probeCompactCapability(input: {
   clientIdentity?: ClientIdentityStore;
   oauth?: OAuthStore;
 }): Promise<CompactCapabilityProbeResult> {
+  const startedAt = performance.now();
   const model = resolveProbeModel(input.config, input.model);
   const rawBody = Buffer.from(JSON.stringify({
     model,
@@ -74,17 +82,18 @@ export async function probeCompactCapability(input: {
       nativeCompaction: true,
       clientIdentity: input.clientIdentity
     });
-    await prepareOAuthRequest(
+    const provider = await prepareOAuthRequest(
       input.config.compact.upstream_mode === "primary" ? input.config.primary : input.config.compact,
-      input.oauth, plan, "POST"
+      input.oauth, plan, "POST", { req: input.req, res: input.res, startedAt,
+        timeoutMs: Math.min(plan.timeoutMs, MAX_PROBE_TIMEOUT_MS), timeoutMessage: plan.timeoutMessage }
     );
     if (input.res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     plan.requestHeaders["accept-encoding"] = "identity";
-    const result = await sendBufferedUpstreamRequest({
+    const source = await sendBufferedUpstreamRequest({
       req: input.req,
       res: input.res,
       upstream: plan.upstream,
-      startedAt: performance.now(),
+      startedAt,
       timeoutMs: Math.min(plan.timeoutMs, MAX_PROBE_TIMEOUT_MS),
       timeoutMessage: plan.timeoutMessage,
       requestHeaders: plan.requestHeaders,
@@ -96,6 +105,9 @@ export async function probeCompactCapability(input: {
       maxObservedStreamEventBytes: MAX_PROBE_RESPONSE_BYTES,
       streamProtocol: protocol === "anthropic_messages" ? "anthropic" : "openai"
     });
+    const result = provider === "openai-codex" && probeTransportFailure(source) === null
+      ? await normalizeCodexProbeResult(source)
+      : source;
     const compactionItemCount = countProbeCompactionItems(
       protocol,
       result.responseBody,
@@ -104,13 +116,8 @@ export async function probeCompactCapability(input: {
     const usage = extractResponseUsage(result.responseBody, result.responseHeaders);
     const failureReason = probeFailureReason({
       protocol,
-      status: result.status,
-      responseBodyTruncated: result.responseBodyTruncated,
+      result,
       compactionItemCount,
-      terminalEvent: result.streamSummary?.terminalEvent ?? null,
-      sawTerminalEvent: result.streamSummary?.sawTerminalEvent ?? false,
-      sse: isSseResponse(result.responseHeaders),
-      errorSummary: result.errorSummary
     });
 
     return {
@@ -155,41 +162,86 @@ function selectedCompactProtocol(config: CompactGateConfig): UpstreamProtocol {
     : config.primary.upstream_protocol;
 }
 
-function probeFailureReason(input: {
-  protocol: UpstreamProtocol;
-  status: number;
-  responseBodyTruncated: boolean;
-  compactionItemCount: number;
-  terminalEvent: string | null;
-  sawTerminalEvent: boolean;
-  sse: boolean;
-  errorSummary: string | null;
-}): string | null {
-  if (input.status < 200 || input.status >= 300) {
-    return input.errorSummary ?? `Upstream returned HTTP ${input.status}.`;
+async function normalizeCodexProbeResult(result: BufferedUpstreamResult): Promise<BufferedUpstreamResult> {
+  try {
+    const adapter = createCodexResponseTransform(result.status, result.responseHeaders, true);
+    if (!adapter) return result;
+    const observer = createOpenAiStreamObserver(adapter.responseHeaders, { maxEventBytes: MAX_PROBE_RESPONSE_BYTES });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let bufferedBytes = 0;
+    await pipeline(Readable.from([result.responseBody]), adapter.stream, async source => {
+      for await (const chunk of source) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        bytes += buffer.length;
+        bufferedBytes = appendBufferedResponseChunk(chunks, bufferedBytes, buffer, MAX_PROBE_RESPONSE_BYTES);
+        observer?.observe(buffer);
+      }
+    });
+    return {
+      ...result,
+      responseBody: Buffer.concat(chunks, bufferedBytes),
+      responseBodyBytes: bytes,
+      responseBodyTruncated: bytes > bufferedBytes,
+      responseHeaders: adapter.responseHeaders,
+      streamSummary: await observer?.finish() ?? null,
+      errorSummary: adapter.translationError ?? null
+    };
+  } catch (error) {
+    return { ...result, errorSummary: summaryForError(error) };
   }
-  if (input.responseBodyTruncated) {
+}
+
+function probeTransportFailure(result: BufferedUpstreamResult): string | null {
+  const summary = result.streamSummary;
+  if (result.status < 200 || result.status >= 300) {
+    return result.errorSummary ?? `Upstream returned HTTP ${result.status}.`;
+  }
+  if (result.responseBodyTruncated) {
     return `Capability probe response exceeded ${MAX_PROBE_RESPONSE_BYTES} bytes.`;
   }
-  if (input.terminalEvent === "response.failed" || input.terminalEvent === "response.incomplete") {
-    return `Capability probe ended with ${input.terminalEvent}.`;
+  const responseError = result.errorSummary ?? summary?.errorSummary;
+  if (responseError) return responseError;
+  if (summary?.decodeError) return "Capability probe response could not be decoded.";
+  if (summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
+    return `Capability probe ended with ${summary.sawFailedEvent ? "response.failed" : "response.incomplete"}.`;
+  }
+  return null;
+}
+
+function probeFailureReason(input: {
+  protocol: UpstreamProtocol;
+  result: BufferedUpstreamResult;
+  compactionItemCount: number;
+}): string | null {
+  const { result } = input;
+  const transportFailure = probeTransportFailure(result);
+  if (transportFailure) return transportFailure;
+  const summary = result.streamSummary;
+  const terminalEvent = summary?.terminalEvent ?? null;
+  const sse = isSseResponse(result.responseHeaders);
+  if (!sse) {
+    const parsed = parseJsonRecord(Buffer.from(decodeResponseText(result.responseBody, result.responseHeaders) ?? ""));
+    if (parsed?.error != null || parsed?.status === "failed" || parsed?.status === "incomplete") {
+      return `Capability probe ended with ${parsed.status === "incomplete" ? "response.incomplete" : "response.failed"}.`;
+    }
   }
   if (input.compactionItemCount === 0) {
     return "Capability probe response did not include a compaction item.";
   }
-  if (input.sse && !input.sawTerminalEvent) {
+  if (sse && !summary?.sawTerminalEvent) {
     return "Capability probe stream ended without a terminal event.";
   }
   if (
-    input.sse &&
+    sse &&
     input.protocol === "openai_responses" &&
-    input.terminalEvent !== "response.completed" &&
-    input.terminalEvent !== "[DONE]"
+    terminalEvent !== "response.completed" &&
+    terminalEvent !== "[DONE]"
   ) {
-    return `Capability probe ended with ${input.terminalEvent ?? "an unknown event"}.`;
+    return `Capability probe ended with ${terminalEvent ?? "an unknown event"}.`;
   }
-  if (input.sse && input.protocol === "anthropic_messages" && input.terminalEvent !== "message_stop") {
-    return `Capability probe ended with ${input.terminalEvent ?? "an unknown event"}.`;
+  if (sse && input.protocol === "anthropic_messages" && terminalEvent !== "message_stop") {
+    return `Capability probe ended with ${terminalEvent ?? "an unknown event"}.`;
   }
   return null;
 }
@@ -209,19 +261,18 @@ function countProbeCompactionItems(
     return countCompactResponseItems(body, headers);
   }
 
-  const parsed = parseJsonRecord(body);
+  const text = decodeResponseText(body, headers);
+  if (text === null) return 0;
+  const parsed = parseJsonRecord(Buffer.from(text));
   if (parsed) {
     const content = Array.isArray(parsed.content) ? parsed.content : [];
     return content.filter((item) => isRecord(item) && item.type === "compaction").length;
   }
 
   let count = 0;
-  for (const line of body.toString("utf8").split(/\r?\n/)) {
-    if (!line.startsWith("data:")) {
-      continue;
-    }
+  for (const data of sseDataFrames(text)) {
     try {
-      const event = JSON.parse(line.slice(5).trim()) as unknown;
+      const event = JSON.parse(data) as unknown;
       if (
         isRecord(event) &&
         event.type === "content_block_start" &&

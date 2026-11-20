@@ -152,6 +152,20 @@ describe("Claude key pool selection", () => {
     expect(state.select(config, "claude-a", HEADERS)?.keyId).toBe("k1");
   });
 
+  it.each([
+    { responseHeaders: { "retry-after-ms": "250", "retry-after": "3" }, delay: 250 },
+    { responseHeaders: { "retry-after": "0.25" }, delay: 250 },
+    { responseHeaders: { "retry-after": new Date(3_000).toUTCString() }, delay: 2_000 },
+    { responseHeaders: { "retry-after-ms": "3600000" }, delay: 600_000 },
+    { responseHeaders: { "retry-after": "0" }, delay: 60_000 },
+    { responseHeaders: { "retry-after": "invalid" }, delay: 60_000 },
+    { responseHeaders: {}, delay: 60_000 }
+  ])("uses the shared Retry-After clock and backoff for $responseHeaders", ({ responseHeaders, delay }) => {
+    const { state, config } = setup([key("k1", "synthetic-1"), key("k2", "synthetic-2")], 1_000);
+    state.recordResult(state.select(config, "claude-a", HEADERS), { status: 429, responseHeaders });
+    expect(state.blockState("claude-a", "k1")).toBe(1_000 + delay);
+  });
+
   it("never disables on 429 — a fresh quota cools, not kills", () => {
     const { state, config, advance } = setup([key("k1", "sk-1"), key("k2", "sk-2")], 1_000);
     const start = Date.now;

@@ -11,6 +11,7 @@ function openAsModal(node: HTMLDialogElement | null) {
 export function ConfirmProfileOverwriteDialog({
   scope,
   profile,
+  willApply,
   suggestedName,
   existingNames,
   error,
@@ -20,6 +21,7 @@ export function ConfirmProfileOverwriteDialog({
 }: {
   scope: ConfigProfileScope;
   profile: PublicConfigProfile;
+  willApply: boolean;
   suggestedName: string;
   existingNames: string[];
   error: string | null;
@@ -62,7 +64,10 @@ export function ConfirmProfileOverwriteDialog({
         <p className="eyebrow">Profile Name Taken</p>
         <h2 id="confirm-profile-overwrite-title">档案「{profile.name}」已存在</h2>
         <p id="confirm-profile-overwrite-desc">
-          这个名字已被 {scopeLabel} 里另一个未选中的档案占用。保存到它会覆盖该档案当前内容，不会切换当前运行时；也可以改个新名字另存为新档案。
+          {willApply
+            ? `这个名字属于当前 ${scopeLabel} 运行时档案。覆盖会立即应用当前草稿，后续请求将使用更新后的配置。`
+            : `这个名字已被 ${scopeLabel} 的另一个档案占用。覆盖只更新该档案，不会切换当前运行时。`}
+          也可以改个新名字另存为新档案。
         </p>
       </div>
       <div className="confirm-overwrite-name">
@@ -94,7 +99,7 @@ export function ConfirmProfileOverwriteDialog({
           disabled={submitting}
           onClick={() => void run("overwrite")}
         >
-          {submitting ? "保存中..." : `覆盖档案「${profile.name}」`}
+          {submitting ? "保存中..." : willApply ? `覆盖并立即应用「${profile.name}」` : `覆盖档案「${profile.name}」`}
         </button>
       </div>
     </dialog>

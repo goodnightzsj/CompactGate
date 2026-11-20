@@ -163,6 +163,13 @@ function publicUpstream(
       credential.apiKey, credential.oauthAccountId ?? null,
       credential.oauthAccountId ? oauth?.status(credential.oauthAccountId) ?? "missing" : null
     ])).digest("base64url"),
+    connection_revision: createHmac("sha256", modelSourceKey).update(JSON.stringify([
+      upstream.base_url, upstream.upstream_protocol, upstream.proxy_url,
+      Object.entries(upstream.extra_headers).sort(([left], [right]) => left.localeCompare(right)),
+      upstream.api_key, upstream.api_key_env, process.env[upstream.api_key_env.trim()] ?? null,
+      (upstream.api_keys ?? []).map(key => [key.id, key.api_key]).sort(([left], [right]) => left.localeCompare(right)),
+      upstream.oauth_account_id ?? null
+    ])).digest("base64url"),
     base_url: upstream.base_url,
     api_key_env: upstream.api_key_env,
     api_key_priority: upstream.api_key_priority ?? 0,

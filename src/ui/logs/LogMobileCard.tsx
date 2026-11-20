@@ -1,6 +1,5 @@
 import { memo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useMediaQuery } from "./useNarrowViewport.js";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
 import { formatDateTime } from "../shared/format.js";
@@ -18,16 +17,17 @@ export const LogMobileCard = memo(function LogMobileCard({
   logKey,
   detailId,
   expanded,
-  onToggle
+  onToggle,
+  reduceMotion
 }: {
   entry: RequestLogEntry;
   logKey: string;
   detailId: string;
   expanded: boolean;
   onToggle: (logKey: string) => void;
+  reduceMotion: boolean;
 }) {
   const hasError = logStatusKind(entry) === "error";
-  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 
   return (
     <article className={`log-mobile-card ${hasError ? "has-error" : ""}`}>

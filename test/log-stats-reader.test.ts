@@ -143,17 +143,27 @@ describe("log statistics reader", () => {
     await expect(reader.read(range)).rejects.toThrow(/unable to open database/i);
   });
 
-  it("fails the bounded queue when its execution deadline expires", async () => {
+  it("times out only the active query and resumes maintenance and searches after the worker exits", async () => {
     const { logger, writer } = await fixture();
-    writer.exec("UPDATE request_logs SET incoming_request_body = 'saved body'");
+    writer.exec("UPDATE request_logs SET incoming_request_body = 'saved body', body_status = 'present'");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const requests = [logger.statsAsync(range), logger.statsAsync(range)];
-    const rejected = Promise.all([...requests, logger.purgeStoredBodies()].map((query) => expect(query).rejects.toThrow("deadline")));
+    const deadline = expect(logger.statsAsync(range)).rejects.toThrow("deadline");
+    const queuedStats = logger.statsAsync(range);
+    const options = { limit: 10, offset: 0, search: "fixture" };
+    const page = logger.pageAsync(options);
+    const purge = logger.purgeStoredBodies();
     vi.advanceTimersByTime(60_000);
-    await rejected;
+    const latePage = logger.pageAsync(options);
+    const controller = new AbortController();
+    const cancelled = expect(logger.pageAsync(options, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
     expect(writer.prepare("SELECT incoming_request_body AS body FROM request_logs").get()?.body).toBe("saved body");
     vi.useRealTimers();
-    await logger.close();
+    await Promise.all([deadline, cancelled]);
+    expect(await purge).toMatchObject({ rows_cleared: 1 });
+    expect((await queuedStats).summary.requests).toBe(1);
+    for (const result of await Promise.all([page, latePage])) expect(result.total).toBe(1);
+    expect(writer.prepare("SELECT incoming_request_body AS body FROM request_logs").get()?.body).toBeNull();
   });
 
   it("closes automatic maintenance waiting behind a worker without touching stored rows", async () => {

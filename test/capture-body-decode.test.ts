@@ -1,4 +1,4 @@
-import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants, deflateSync, gzipSync, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   captureRecordWithDecodedBodies,
@@ -13,10 +13,18 @@ import type { CaptureRecord } from "../src/shared/types.js";
  * the copy that survives. Readable text is derived on the way out instead.
  */
 describe("capture bodies are stored as bytes and decoded on read", () => {
+  it.each([["br", brotliCompressSync], ["gzip", gzipSync], ["deflate", deflateSync], ["zstd", zstdCompressSync]] as const)(
+    "decodes a valid empty %s stream without discarding its stored bytes", (encoding, compress) => {
+      const stored = serializeBody(compress(Buffer.alloc(0)));
+      expect(stored.captured_byte_length).toBeGreaterThan(0);
+      expect(decodeCaptureBody(stored, { "content-encoding": encoding })).toEqual({ ...stored, text: "" });
+    }
+  );
   it.each([
     ["br", brotliCompressSync],
     ["gzip", gzipSync],
-    ["deflate", deflateSync]
+    ["deflate", deflateSync],
+    ["zstd", zstdCompressSync]
   ] as const)("bounds expanded %s captures without changing the stored bytes", (encoding, compress) => {
     const compressed = compress(Buffer.alloc(8 * 1024 * 1024 + 1, "a"));
     const stored = serializeBody(compressed);
@@ -59,12 +67,14 @@ describe("capture bodies are stored as bytes and decoded on read", () => {
     expect(decodeCaptureBody(stored, { "content-encoding": "br" }).text).toBe(original);
   });
 
-  it("decodes gzip and is case insensitive about the header name", () => {
-    const original = '{"ok":true}';
-    const stored = serializeBody(gzipSync(Buffer.from(original)));
+  it.each([["gzip", gzipSync], ["zstd", zstdCompressSync]] as const)(
+    "decodes %s and is case insensitive about the header name", (encoding, compress) => {
+      const original = '{"ok":true}';
+      const stored = serializeBody(compress(Buffer.from(original)));
 
-    expect(decodeCaptureBody(stored, { "Content-Encoding": "gzip" }).text).toBe(original);
-  });
+      expect(decodeCaptureBody(stored, { "Content-Encoding": encoding }).text).toBe(original);
+    }
+  );
 
   it("salvages the readable prefix of a truncated compressed stream", () => {
     // What a capture of an aborted stream actually holds: a brotli body cut off
@@ -121,6 +131,30 @@ describe("capture bodies are stored as bytes and decoded on read", () => {
 });
 
 describe("undecodable compressed capture bodies", () => {
+  it.each([
+    zstdCompressSync(Buffer.alloc(0)),
+    zstdCompressSync(Buffer.alloc(0), { params: { [constants.ZSTD_c_checksumFlag]: 1 } }),
+    zstdCompressSync(Buffer.alloc(0), { params: { [constants.ZSTD_c_contentSizeFlag]: 0 } }),
+    Buffer.from("28b52ffd2000000000010000", "hex"),
+    Buffer.from("502a4d1802000000abcd", "hex")
+  ])("accepts complete empty zstd frames but rejects each truncated prefix: %j", frame => {
+    expect(decodeCaptureBody(serializeBody(frame), { "content-encoding": "zstd" }).text).toBe("");
+    for (let length = 1; length < frame.length; length++) {
+      expect(decodeCaptureBody(serializeBody(frame.subarray(0, length)), { "content-encoding": "zstd" }).text).toContain("正文无法解压");
+    }
+    const combined = Buffer.concat([frame, zstdCompressSync(Buffer.alloc(0))]);
+    expect(decodeCaptureBody(serializeBody(combined), { "content-encoding": "zstd" }).text).toBe("");
+    expect(decodeCaptureBody(serializeBody(combined.subarray(0, -1)), { "content-encoding": "zstd" }).text).toContain("正文无法解压");
+  });
+
+  it.each([["br", brotliCompressSync], ["gzip", gzipSync], ["deflate", deflateSync], ["zstd", zstdCompressSync]] as const)(
+    "does not confuse an incomplete %s header with a valid empty stream", (encoding, compress) => {
+      const compressed = compress(Buffer.from("synthetic nonempty body"));
+      const stored = { ...serializeBody(compressed.subarray(0, 1)), byte_length: compressed.length, truncated: true };
+      expect(decodeCaptureBody(stored, { "content-encoding": encoding })).toEqual({ ...stored,
+        text: expect.stringContaining("正文无法解压") });
+    }
+  );
   it("says so instead of rendering the compressed bytes as text", () => {
     // Brotli cut off before its first flush point: nothing decodes at all. UTF-8
     // decoding the compressed bytes is what made the viewer show mojibake and
@@ -159,7 +193,7 @@ describe("undecodable compressed capture bodies", () => {
     expect(decoded.text).toContain('{"');
   });
 
-  it("reports a body whose declared encoding does not match its bytes", () => {
+  it.each(["br", "zstd"])("reports a body whose declared %s encoding does not match its bytes", (encoding) => {
     const junk = Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04]);
     const decoded = decodeCaptureBody(
       {
@@ -168,7 +202,7 @@ describe("undecodable compressed capture bodies", () => {
         truncated: false,
         base64: junk.toString("base64")
       },
-      { "content-encoding": "br" }
+      { "content-encoding": encoding }
     );
 
     expect(decoded.text?.startsWith("[compactgate]")).toBe(true);

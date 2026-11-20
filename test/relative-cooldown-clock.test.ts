@@ -13,6 +13,24 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
+it("ages selection penalties by elapsed time, unaffected by wall-clock jumps", () => {
+  const { config } = createPool("primary");
+  const profile = config.profile_scopes!.codex!.profiles![0];
+  if (!("primary" in profile.config)) throw new Error("Expected Codex profile.");
+  profile.config.primary.key_strategy = "spread";
+  const state = new PrimaryFailoverState({ random: () => 0 });
+  for (let i = 0; i < 2; i++) {
+    const selected = state.preview(config, { sessionKey: "existing" });
+    state.reserveSelection(selected, true);
+    state.recordResult(selected, { status: 503, errorSummary: "Synthetic transient" });
+  }
+  vi.setSystemTime(START + 7 * 24 * HOUR_MS);
+  expect(state.preview(config).keyId).toBe("k2");
+  vi.advanceTimersByTime(60_001);
+  vi.setSystemTime(START - HOUR_MS);
+  expect(state.preview(config).keyId).toBe("k1");
+});
+
 describe.each(["primary", "claude"] as const)("%s relative cooldown clock", (route) => {
   it.each([HOUR_MS, -HOUR_MS])("keeps a two-second cooldown across a %i ms wall-clock jump", (jump) => {
     const { select } = createPool(route);

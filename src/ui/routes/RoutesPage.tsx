@@ -30,6 +30,7 @@ export function RoutesPage({
   onRetryLogs,
   codexStatus,
   clientIdentity,
+  onClientIdentityChange,
   previewPanel
 }: {
   config: PublicConfig | null;
@@ -46,6 +47,7 @@ export function RoutesPage({
   onRetryLogs: () => void;
   codexStatus: CodexVersionStatus | null;
   clientIdentity: ClientIdentityStatus | null;
+  onClientIdentityChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void;
   previewPanel: ComponentProps<typeof ConfigPreviewPanel>;
 }) {
   const hitTone = activeRouteSource === "latest" && hasLogSnapshot && latestLog
@@ -115,7 +117,7 @@ export function RoutesPage({
       </details>
       <details className="route-advanced-section">
         <summary>客户端 UA 改写 <span>{clientIdentity ? (clientIdentity.enabled ? "已启用 · 修改即时生效" : "已关闭") : "读取中"}</span></summary>
-        <ClientIdentityPanel status={clientIdentity} />
+        <ClientIdentityPanel status={clientIdentity} onStatusChange={onClientIdentityChange} />
       </details>
       </div>
     </div>

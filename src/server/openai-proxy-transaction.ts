@@ -1,4 +1,4 @@
-import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import type {
   ClientDisconnectPhase,
   GenerationSample,
@@ -14,7 +14,7 @@ import type {
 import type { OpenAiStreamSummary } from "./upstream-openai-stream.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import { serializeHeaders } from "./debug-capture.js";
-import { endpointFromPath } from "./http-utils.js";
+import { endpointFromPath, sendJson } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
 import {
   addLog,
@@ -39,6 +39,7 @@ function serializeObservedBody(writer: DebugCaptureWriter, body: Buffer, byteLen
 }
 
 export interface OpenAiProxyTransactionState {
+  clientResponseStatus?: number;
   responseId: string | null;
   responseBodyBytes?: number;
   clientResponseBodyBytes?: number;
@@ -91,6 +92,8 @@ export interface OpenAiProxyUpstreamResult {
 }
 
 export interface OpenAiProxyTransactionInput {
+  clientResponseStatus?: number;
+  compactResponseItemCount?: number;
   responseBodyBytes?: number;
   clientResponseBodyBytes?: number;
   clientResponseBodyTruncated?: boolean;
@@ -174,6 +177,17 @@ export function createOpenAiProxyTransactionState(): OpenAiProxyTransactionState
   };
 }
 
+export function sendTransactionJson(state: OpenAiProxyTransactionState, res: ServerResponse, payload: unknown): void {
+  const body = sendJson(res, state.status, payload);
+  if (!body) return;
+  state.clientResponseStatus = res.statusCode;
+  state.clientResponseBody = body;
+  state.clientResponseBodyBytes = body.byteLength;
+  state.clientResponseBodyTruncated = false;
+  state.clientResponseHeaders = Object.fromEntries(Object.entries(res.getHeaders())
+    .map(([name, value]) => [name, typeof value === "number" ? String(value) : value]));
+}
+
 export function applyOpenAiProxyUpstreamResult(
   state: OpenAiProxyTransactionState,
   result: OpenAiProxyUpstreamResult
@@ -245,6 +259,7 @@ export function applyUpstreamFailureToTransaction(
 
 /** Input fields `finalizeFromTransaction` derives from transaction state. */
 type TransactionDerivedField =
+  | "clientResponseStatus"
   | "status"
   | "upstreamStatus"
   | "streamTerminalEvent"
@@ -290,6 +305,7 @@ export function finalizeFromTransaction(
   overrides: FinalizeFromTransactionInput
 ): Promise<void> {
   return finalizeOpenAiProxyTransaction({
+    clientResponseStatus: transaction.clientResponseStatus,
     status: transaction.status,
     upstreamStatus: transaction.upstreamStatus,
     streamTerminalEvent: transaction.streamTerminalEvent,
@@ -338,6 +354,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
         requestBody: input.rawBody,
         requestHeaders: input.req.headers,
         responseBody: input.clientResponseBody ?? input.responseBody,
+        responseItemCount: input.compactResponseItemCount,
         responseHeaders: input.clientResponseHeaders ?? input.responseHeaders
       })
     : null;
@@ -443,7 +460,7 @@ export async function finalizeOpenAiProxyTransaction(input: OpenAiProxyTransacti
       },
       client_response: input.clientResponseBody
         ? {
-            status: input.upstreamStatus ?? input.status,
+            status: input.clientResponseStatus ?? input.upstreamStatus ?? input.status,
             headers: serializeHeaders(input.clientResponseHeaders ?? {}),
             body: serializeObservedBody(input.captureWriter, input.clientResponseBody, input.clientResponseBodyBytes, input.clientResponseBodyTruncated)
           }

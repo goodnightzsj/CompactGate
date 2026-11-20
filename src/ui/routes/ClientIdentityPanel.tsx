@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type {
   ClientIdentityKind,
   ClientIdentityKindStatus,
@@ -26,32 +26,23 @@ const KIND_META: Record<ClientIdentityKind, { name: string; protocol: string; ch
  * there is no draft to save, because an operator reaching for this is usually
  * chasing a relay that is rejecting requests right now.
  */
-export function ClientIdentityPanel({ status }: { status: ClientIdentityStatus | null }) {
+export function ClientIdentityPanel({ status, onStatusChange }: {
+  status: ClientIdentityStatus | null;
+  onStatusChange: (status: ClientIdentityStatus, baseline: ClientIdentityStatus | null) => void;
+}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [local, setLocal] = useState<{
-    baseline: ClientIdentityStatus | null;
-    status: ClientIdentityStatus;
-  } | null>(null);
-  const current = local?.baseline === status ? local.status : status;
-
-  useEffect(() => {
-    if (local && local.baseline !== status) {
-      setLocal(null);
-    }
-  }, [local, status]);
+  const current = status;
 
   const submit = async (patch: unknown): Promise<boolean> => {
     setPending(true);
     setError(null);
     try {
-      // Keep the response only until a newer remote snapshot arrives, including
-      // one delivered by SSE while this request was still in flight.
       const next = await api<ClientIdentityStatus>("/api/client-identity", {
         method: "POST",
         body: JSON.stringify(patch)
       });
-      setLocal({ baseline: status, status: next });
+      onStatusChange(next, status);
       return true;
     } catch (cause) {
       setError(errorSummary(cause));
@@ -211,6 +202,18 @@ function IdentitySource({
   onSubmit: (patch: unknown) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const editor = useRef<HTMLDivElement>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const editing = draft !== null;
+  const wasEditing = useRef(false);
+  useLayoutEffect(() => {
+    // Removing/disabled controls can leave focus on body; preserve a deliberate move elsewhere.
+    if (!editing && wasEditing.current &&
+      (document.activeElement === document.body || editor.current?.contains(document.activeElement))) {
+      editButton.current?.focus();
+    }
+    wasEditing.current = editing;
+  }, [editing]);
   const empty = state.user_agent.length === 0;
   const field = source === "extracted" ? "extracted_user_agent" : "version_tracked_user_agent";
   // What the upstream would see, which is not the stored value whenever a registry
@@ -228,6 +231,7 @@ function IdentitySource({
 
   return (
     <div
+      ref={editor}
       className={[
         "identity-source",
         selected ? "is-selected" : "",
@@ -257,6 +261,7 @@ function IdentitySource({
       ) : (
         <input
           className="identity-source-input"
+          autoFocus
           value={draft}
           disabled={disabled}
           spellCheck={false}
@@ -282,6 +287,7 @@ function IdentitySource({
               type="button"
               className="btn btn-sm btn-ghost"
               disabled={disabled}
+              ref={editButton}
               onClick={() => setDraft(state.user_agent)}
             >
               手动编辑

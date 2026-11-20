@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ConfigPreviewPanel } from "../src/ui/config/ConfigPreviewPanel.js";
 import { RouteRulesGrid } from "../src/ui/routes/RouteRulesGrid.js";
-import { isLatestPreviewRequest } from "../src/ui/hooks/useRoutePreviewAction.js";
 
 describe("route preview request ordering", () => {
   it("describes Remote V2 as using Primary model settings, not the untouched client model", () => {
@@ -20,15 +19,12 @@ describe("route preview request ordering", () => {
     expect(markup).toContain("预览命中");
     expect(markup).not.toContain("普通请求直通");
   });
-  it("accepts only the latest preview response", () => {
-    expect(isLatestPreviewRequest(2, 2)).toBe(true);
-    expect(isLatestPreviewRequest(1, 2)).toBe(false);
-  });
-
   it("shows friendly protocol and translation labels", () => {
     const markup = renderToStaticMarkup(
       createElement(ConfigPreviewPanel, {
         isPreviewing: false,
+        previewMethod: "POST",
+        onMethodChange: () => undefined,
         previewPath: "/anthropic/v1/messages",
         previewBody: "{}",
         previewHeaders: "{}",
@@ -38,7 +34,7 @@ describe("route preview request ordering", () => {
           detection_source: "path",
           method: "POST",
           path: "/anthropic/v1/messages",
-          upstream_url: "https://openai.example/v1/responses",
+          upstream_url: "https://synthetic-user:synthetic-pass@openai.example/v1/responses?token=synthetic-query",
           upstream_host: "openai.example",
           ingress_protocol: "anthropic_messages",
           upstream_protocol: "openai_responses",
@@ -62,5 +58,8 @@ describe("route preview request ordering", () => {
     expect(markup).toContain("Anthropic Messages (anthropic_messages)");
     expect(markup).toContain("OpenAI Responses (openai_responses)");
     expect(markup).toContain("协议转换 (translate)");
+    expect(markup).toContain("https://openai.example/v1/responses");
+    expect(markup).not.toContain("synthetic-pass");
+    expect(markup).not.toContain("synthetic-query");
   });
 });

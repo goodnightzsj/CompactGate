@@ -47,10 +47,11 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
   }
 
   const strategies = decompressors(encoding);
-  for (const decompress of strategies) {
+  for (const [index, decompress] of strategies.entries()) {
     try {
       const out = decompress(bytes);
-      if (out.byteLength > 0) {
+      // Node's zstd decoder can accept incomplete frames without throwing.
+      if (out.byteLength > 0 || index === 0 && (encoding !== "zstd" || completeZstdFrames(bytes))) {
         return out.toString("utf8");
       }
     } catch (error) {
@@ -72,11 +73,46 @@ function decodeBodyBytes(bytes: Buffer, encoding: string): string {
   return bytes.toString("utf8");
 }
 
+/** Check frame boundaries only; zlib owns decompression and payload validation. */
+function completeZstdFrames(bytes: Buffer): boolean {
+  let offset = 0;
+  while (offset < bytes.length) {
+    if (offset + 4 > bytes.length) return false;
+    const magic = bytes.readUInt32LE(offset);
+    offset += 4;
+    if (magic >= 0x184d2a50 && magic <= 0x184d2a5f) {
+      if (offset + 4 > bytes.length) return false;
+      offset += 4 + bytes.readUInt32LE(offset);
+    } else {
+      if (magic !== 0xfd2fb528 || offset >= bytes.length) return false;
+      const descriptor = bytes[offset++];
+      const singleSegment = (descriptor & 0x20) !== 0;
+      offset += (singleSegment ? 0 : 1) + [0, 1, 2, 4][descriptor & 3] +
+        [singleSegment ? 1 : 0, 2, 4, 8][descriptor >>> 6];
+      let lastBlock = false;
+      while (!lastBlock) {
+        if (offset + 3 > bytes.length) return false;
+        const block = bytes.readUIntLE(offset, 3);
+        const blockType = (block >>> 1) & 3;
+        if (blockType === 3) return false;
+        offset += 3 + (blockType === 1 ? 1 : block >>> 3);
+        lastBlock = (block & 1) !== 0;
+      }
+      if (descriptor & 4) offset += 4;
+    }
+    if (offset > bytes.length) return false;
+  }
+  return true;
+}
+
 /**
  * The strict pass first, then a flushing pass: a capture of an aborted stream
  * holds a truncated compressed body, which only decodes partially.
  */
 function decompressors(encoding: string): Array<(input: Buffer) => Buffer> {
+  if (encoding === "zstd") {
+    return [(input) => zlib.zstdDecompressSync(input, { maxOutputLength: MAX_DECODED_CAPTURE_BYTES })];
+  }
   if (encoding.includes("br")) {
     return [
       (input) => zlib.brotliDecompressSync(input, { maxOutputLength: MAX_DECODED_CAPTURE_BYTES }),

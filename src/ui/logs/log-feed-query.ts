@@ -22,7 +22,7 @@ export function isUnfilteredQuery(query: LogPageQuery): boolean {
 
 export function logPageQueryKey(query: LogPageQuery): string {
   return JSON.stringify([query.route, query.status, query.host, query.search, query.limit,
-    query.drilldown?.from, query.drilldown?.to,
+    query.drilldown?.from, query.drilldown?.to, query.drilldown?.calendar_tz,
     query.drilldown?.model === undefined ? [] : [query.drilldown.model]]);
 }
 

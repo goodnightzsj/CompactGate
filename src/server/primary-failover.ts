@@ -35,13 +35,9 @@ const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 const ACCOUNT_QUARANTINE_MS = 30 * 60 * 1000;
 const MODEL_DISABLE_MS = 12 * 60 * 60 * 1000;
 const TOP_K_SCORE_WINDOW = 100;
-/** Worst-case penalty for a 100%-failure history. Deliberately under
- * TOP_K_SCORE_WINDOW so lifetime counters can rank candidates but never exile
- * one that has since recovered — the blocks and streak counters are what gate
- * a broken profile, and those do reset on a success. */
+/** History only ranks recently observed candidates; hard cooldowns are independent. */
 const ERROR_RATE_PENALTY = 60;
-/** How many near-tied candidates the weighted pick draws from. sub2api's
- * `lb_top_k` is 7; at 3, a spread pool's fourth key could never win a slot. */
+/** Keep the top seven scores and all ties at the cutoff, so pool order cannot starve equal keys. */
 const TOP_K_CANDIDATES = 7;
 /** Jitter added to the soonest-to-unblock fallback. Without it, concurrent
  * requests that all find every candidate blocked wake in lockstep and stampede
@@ -144,6 +140,7 @@ export class PrimaryFailoverState {
 
     const now = this.elapsedNow();
     const category = classifyPrimaryRouteResult(result);
+    if (category !== "client_cancel" && category !== "request_shape") health.lastResultAt = now;
     const staleSuccess = category === "success" && selection.healthVersion !== health.version;
     const countsAsProfileFailure =
       category !== "success" && category !== "request_shape" && category !== "client_cancel";
@@ -205,7 +202,7 @@ export class PrimaryFailoverState {
         const cooldownFailureCount = Math.max(1, health.rateLimitFailures);
         health.rateLimitUntil = Math.max(
           health.rateLimitUntil,
-          now + rateLimitCooldownMs(result, cooldownFailureCount, Date.now())
+          now + rateLimitCooldownMs(result.responseHeaders, cooldownFailureCount, Date.now())
         );
         const reserveMs = (selection.config.primary.sticky_reserve_seconds ?? 0) * 1000;
         if (reserveMs > 0) {
@@ -273,6 +270,7 @@ export class PrimaryFailoverState {
     }
   }
 
+  /** The legacy method name returns a candidate ID, not a public profile ID. */
   boundProfileId(context: PrimaryRouteRequestContext): string | null {
     const now = this.elapsedNow();
     this.cleanupExpiredState(now);
@@ -294,30 +292,17 @@ export class PrimaryFailoverState {
       return;
     }
 
+    this.generation += 1;
     this.stickiness.clear();
     this.forcedProfileId = profileId;
   }
 
   preview(
     config: CompactGateConfig,
-    context: PrimaryRouteRequestContext = {}
+    context: PrimaryRouteRequestContext = {},
+    candidates = codexPrimaryCandidates(config)
   ): PrimaryRouteSelection {
-    const candidates = codexPrimaryCandidates(config);
     const normalizedContext = normalizeRequestContext(context);
-    if (candidates.length === 0) {
-      return {
-        config,
-        profileId: null,
-        keyId: null,
-        keyLabel: null,
-        candidateId: null,
-        profileName: null,
-        generation: this.generation,
-        healthVersion: 0,
-        context: normalizedContext
-      };
-    }
-
     const signatures = candidateSignatures(candidates);
     const changedProfileIds = new Set<string>();
     const removedProfileIds = new Set<string>();
@@ -366,6 +351,19 @@ export class PrimaryFailoverState {
       : null;
     if (this.forcedProfileId && !forcedCandidate) {
       this.forcedProfileId = null;
+    }
+    if (candidates.length === 0) {
+      return {
+        config,
+        profileId: null,
+        keyId: null,
+        keyLabel: null,
+        candidateId: null,
+        profileName: null,
+        generation: this.generation,
+        healthVersion: 0,
+        context: normalizedContext
+      };
     }
     if (forcedCandidate) {
       const health = this.health.forProfile(forcedCandidate.id);
@@ -435,10 +433,10 @@ export class PrimaryFailoverState {
 
     const stickyProfileId = this.stickiness.selectProfileId(
       context,
-      (profileId) => this.usableCandidate(candidates, context, now, profileId) !== null
+      (profileId) => this.usableCandidate(selectionPool, context, now, profileId) !== null
     );
     const sticky = stickyProfileId
-      ? this.usableCandidate(candidates, context, now, stickyProfileId)
+      ? this.usableCandidate(selectionPool, context, now, stickyProfileId)
       : null;
     if (sticky) {
       return sticky;
@@ -480,7 +478,7 @@ export class PrimaryFailoverState {
       .filter((candidate) => candidate.keyPriority === priorities.get(candidate.profileId))
       .map((candidate) => ({
         candidate,
-        score: this.scoreCandidate(candidate)
+        score: this.scoreCandidate(candidate, now)
       }))
       .sort((left, right) => right.score !== left.score
         ? right.score - left.score
@@ -490,9 +488,9 @@ export class PrimaryFailoverState {
       return candidates[0];
     }
 
-    const topK = scored
-      .filter((candidate) => best.score - candidate.score <= TOP_K_SCORE_WINDOW)
-      .slice(0, TOP_K_CANDIDATES);
+    const cutoff = scored[Math.min(TOP_K_CANDIDATES, scored.length) - 1].score;
+    const topK = scored.filter((candidate) =>
+      best.score - candidate.score <= TOP_K_SCORE_WINDOW && candidate.score >= cutoff);
     return topK.length <= 1 ? best.candidate : weightedChoice(topK, this.random);
   }
 
@@ -505,26 +503,22 @@ export class PrimaryFailoverState {
       Math.round(this.random() * UNBLOCK_JITTER_MS);
   }
 
-  private scoreCandidate(candidate: PrimaryCandidate): number {
+  private scoreCandidate(candidate: PrimaryCandidate, now: number): number {
     const health = this.health.forProfile(candidate.id);
     const total = health.successes + health.failures;
     const errorRate = total > 0 ? health.failures / total : 0;
     const latencyPenalty = health.lastFirstTokenMs === null
       ? 0
       : Math.min(200, Math.round(health.lastFirstTokenMs / 100));
+    // Stale observations must reach zero, including when the top-seven cutoff applies.
+    const historyPenalty = health.lastResultAt !== null && now - health.lastResultAt < TRANSIENT_COOLDOWN_MS
+      ? health.transientFailures * 40 + Math.round(errorRate * ERROR_RATE_PENALTY) + latencyPenalty : 0;
 
     return (
       10_000 -
       candidate.order * 500 -
       health.inFlight * 80 -
-      health.transientFailures * 40 -
-      // Capped below TOP_K_SCORE_WINDOW on purpose. At the old 250 a bad history
-      // alone put a candidate further from the leader than the window is wide,
-      // so a key that had recovered — every live counter cleared, no block left —
-      // still never re-entered the draw. The rate belongs in the ranking as a
-      // tiebreak, not as a second, undecayable quarantine.
-      Math.round(errorRate * ERROR_RATE_PENALTY) -
-      latencyPenalty +
+      historyPenalty +
       (candidate.active ? 1_000 : 0)
     );
   }

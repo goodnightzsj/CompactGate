@@ -145,7 +145,7 @@ describe("OAuth configuration UI contracts", () => {
   });
 
   it("renders project OAuth controls and explains the separate connection and profile steps", () => {
-    const markup = renderToStaticMarkup(<OAuthProfilesPanel config={null} onConfigChange={() => {}} onProfileLocate={() => {}} />);
+    const markup = renderToStaticMarkup(<OAuthProfilesPanel config={null} onConfigChange={async () => {}} onProfileLocate={() => {}} />);
     expect(markup).not.toMatch(/<(select|datalist)\b/);
     expect(markup).not.toContain('type="radio"');
     expect(markup).toContain('aria-label="模型厂商：OpenAI · ChatGPT Codex"');

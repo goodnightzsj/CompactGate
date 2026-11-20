@@ -6,6 +6,7 @@ import type {
   UpstreamConfig
 } from "../shared/types.js";
 import { resolveRouteCredential } from "./credentials.js";
+import { compactUpstreamBaseUrl } from "./routing.js";
 import type { RequestLogger } from "./logger.js";
 import { CODEX_PROTOCOL_LOG_LIMIT } from "./codex-version.js";
 import type { CodexVersionMonitor } from "./codex-version.js";
@@ -22,11 +23,12 @@ export function healthForConfig(
 ): HealthResponse {
   const routeState = (
     scope: CredentialScope,
-    upstream: UpstreamConfig
+    upstream: UpstreamConfig,
+    effectiveBaseUrl = upstream.base_url
   ): { status: "configured" | "invalid"; base_url: string; host: string | null } & PublicCredentialState => {
     const credential = resolveRouteCredential(scope, config);
     return {
-      status: isValidBaseUrl(upstream.base_url) ? "configured" : "invalid",
+      status: isValidBaseUrl(effectiveBaseUrl) ? "configured" : "invalid",
       base_url: upstream.base_url,
       host: hostOrNull(upstream.base_url),
       api_key_env: upstream.api_key_env,
@@ -43,6 +45,7 @@ export function healthForConfig(
     };
   };
 
+  const compactBaseUrl = compactUpstreamBaseUrl(config);
   return {
     status: "ok",
     time: new Date().toISOString(),
@@ -53,7 +56,11 @@ export function healthForConfig(
     ),
     client_identity: clientIdentity.status(),
     primary: routeState("primary", config.primary),
-    compact: routeState("compact", config.compact),
+    compact: {
+      ...routeState("compact", config.compact, compactBaseUrl),
+      effective_base_url: compactBaseUrl,
+      effective_host: hostOrNull(compactBaseUrl)
+    },
     claude: {
       primary: routeState("claude_primary", config.claude.primary),
       compact: routeState("claude_compact", config.claude.compact)

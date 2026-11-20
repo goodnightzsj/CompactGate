@@ -40,6 +40,25 @@ async function startCapturedJsonUpstream(target: { current: CapturedRequest | nu
 }
 
 describe("CompactGate config API", () => {
+  it.each(["primary", "split"] as const)("reports the effective Codex compact address in %s mode and preserves saved addresses", async (upstreamMode) => {
+    const primary = "https://primary.example/v1";
+    const compact = "https://compact.example/v1";
+    const claudeCompact = "https://claude-reserved.example/v1";
+    const app = await startApp(primary, compact, {
+      compact: { upstream_mode: upstreamMode },
+      claude: { compact: { base_url: claudeCompact, upstream_mode: "primary" } }
+    });
+    const { body: health } = await fetchJson(`${app.url}/api/health`);
+    const { body: config } = await fetchJson(`${app.url}/api/config`);
+    const effective = upstreamMode === "primary" ? primary : compact;
+    expect(health.compact).toMatchObject({
+      status: "configured", base_url: compact, host: new URL(compact).host,
+      effective_base_url: effective, effective_host: new URL(effective).host
+    });
+    expect(health.claude.compact.base_url).toBe(claudeCompact);
+    expect(config.compact.base_url).toBe(compact);
+  });
+
   it("updates api_key_env names and reports the active credential scope", async () => {
     const app = await startApp(undefined, undefined, {
       compact: {

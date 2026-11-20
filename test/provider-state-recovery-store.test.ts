@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ProviderStateRecoveryStore, recoveryHash, type ProviderStateCheckpoint, type ProviderStateRecoveryPolicy } from "../src/server/provider-state-recovery-store.js";
 import { completedResponseOutput, rememberProviderCheckpoint, restoreProviderCheckpoint } from "../src/server/provider-state-checkpoints.js";
 import type { BufferedUpstreamResult } from "../src/server/upstream-client.js";
+import { createAnthropicStreamObserver, createOpenAiStreamObserver } from "../src/server/upstream-openai-stream.js";
 
 const databases: DatabaseSync[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
@@ -27,6 +28,23 @@ function result(output: unknown[]): BufferedUpstreamResult {
 }
 
 describe("persistent provider-state recovery", () => {
+  it.each(["current", "prior"])("keeps %s item fingerprints request-local without replacing a stored policy", location => {
+    const { store, db } = memoryStore();
+    const fingerprint = { ...policy.failure!, itemId: null, inputIndex: null,
+      encryptedContentHash: null, inputItemHash: "b".repeat(64) };
+    const fingerprintPolicy = { ...policy, failure: location === "current" ? fingerprint : null,
+      priorEncryptedFailures: location === "prior" ? [fingerprint] : [] };
+    store.rememberPolicy("existing", policy, 1, 100);
+    const stored = store.findPolicy("existing", 101);
+    expect(store.rememberPolicy("new", fingerprintPolicy, 2, 100)).toBe(false);
+    expect(store.rememberPolicy("existing", fingerprintPolicy, 2, 100)).toBe(false);
+    expect(store.findPolicy("existing", 101)).toEqual(stored);
+    expect(store.findPolicy("new", 101)).toBeNull();
+    expect(db.prepare("SELECT count(*) AS n FROM provider_state_recovery_plans").get()?.n).toBe(1);
+    db.prepare("UPDATE provider_state_recovery_plans SET policy = ?").run(JSON.stringify(fingerprintPolicy));
+    expect(() => store.findPolicy("existing", 101)).toThrow("Invalid persisted provider-state recovery policy.");
+  });
+
   it("ignores legacy negative rules without deleting them and never persists new ones", () => {
     const { db, store } = memoryStore();
     const negative = { ...policy, unavailable: true,
@@ -103,6 +121,20 @@ describe("persistent provider-state recovery", () => {
     expect(db.prepare("SELECT count(*) AS n FROM provider_state_checkpoints").get()?.n).toBe(0);
   });
 
+  it.each(["remote_v1", "remote_v2"] as const)("permanently revokes pre-disable %s writes", mode => {
+    const { store, db } = memoryStore();
+    store.configureRetention(24);
+    const input = { store, checkpointGeneration: store.checkpointGeneration, retentionHours: 24,
+      conversationHash: "session", requestBody: Buffer.from(JSON.stringify({ input: [user] })), result: result([state]), mode };
+    store.configureRetention(0);
+    const disabled = store.checkpointGeneration;
+    store.configureRetention(24);
+    expect(rememberProviderCheckpoint(input)).toBe(false);
+    expect(rememberProviderCheckpoint({ ...input, checkpointGeneration: disabled })).toBe(false);
+    expect(db.prepare("SELECT count(*) AS n FROM provider_state_checkpoints").get()?.n).toBe(0);
+    expect(rememberProviderCheckpoint({ ...input, checkpointGeneration: store.checkpointGeneration })).toBe(true);
+  });
+
   it("expires checkpoints and rejects oversized snapshots without truncating context", () => {
     const { store } = memoryStore();
     expect(store.rememberCheckpoint("key", checkpoint, 1, 100)).toBe(true);
@@ -139,11 +171,83 @@ describe("persistent provider-state recovery", () => {
 });
 
 describe("checkpoint context coverage", () => {
+  it.each((["openai_chat", "anthropic_messages"] as const).flatMap(upstreamProtocol =>
+    ["valid", "disabled", "revoked", "source-truncated", "client-truncated", "missing-client", "missing-adapter",
+      "failed", "cancelled", "incomplete", "oversized-source", "corrupt-source"].map(scenario => ({ upstreamProtocol, scenario }))))(
+    "retains only complete translated checkpoints: $upstreamProtocol / $scenario", async ({ upstreamProtocol, scenario }) => {
+      const { store } = memoryStore();
+      store.configureRetention(1);
+      const generation = store.checkpointGeneration;
+      const answer = { type: "message", role: "assistant", content: "42" };
+      const response = result([answer]);
+      response.clientResponseBody = response.responseBody;
+      response.clientResponseHeaders = response.responseHeaders;
+      response.clientResponseBodyTruncated = scenario === "client-truncated";
+      response.responseHeaders = { "content-type": "text/event-stream" };
+      response.responseBody = Buffer.from(upstreamProtocol === "openai_chat" ? "data: [DONE]\n\n" : 'data: {"type":"message_stop"}\n\n');
+      if (scenario === "oversized-source") response.responseBody = Buffer.concat([
+        Buffer.from(`data: ${"x".repeat(2048)}\n\n`), response.responseBody
+      ]);
+      if (scenario === "corrupt-source") {
+        response.responseHeaders["content-encoding"] = "gzip";
+        response.responseBody = Buffer.from("invalid gzip");
+      }
+      const createObserver = upstreamProtocol === "openai_chat" ? createOpenAiStreamObserver : createAnthropicStreamObserver;
+      const observer = createObserver(response.responseHeaders, { maxEventBytes: 1024 })!;
+      observer.observe(response.responseBody);
+      response.streamSummary = await observer.finish();
+      response.responseBodyTruncated = scenario === "source-truncated";
+      if (scenario === "missing-client") response.clientResponseBody = null;
+      if (scenario === "missing-adapter") response.clientResponseHeaders = undefined;
+      if (scenario === "failed") response.errorSummary = "Adapter failed";
+      if (scenario === "cancelled") response.clientDisconnectPhase = "before_terminal";
+      if (scenario === "incomplete") response.clientResponseBody = Buffer.from(JSON.stringify({ id: "resp_fixture", status: "incomplete", output: [answer] }));
+      if (scenario === "revoked") { store.configureRetention(0); store.configureRetention(1); }
+      expect(rememberProviderCheckpoint({ store, checkpointGeneration: generation, conversationHash: "session",
+        retentionHours: scenario === "disabled" ? 0 : 1, requestBody: Buffer.from(JSON.stringify({ input: [user] })),
+        result: response, mode: "remote_v2", upstreamProtocol })).toBe(scenario === "valid");
+      const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({ previous_response_id: "resp_fixture", input: "continue" })), 1);
+      if (scenario === "valid") expect(JSON.parse(restored!.body.toString()).input).toEqual([user, answer, { type: "message", role: "user", content: "continue" }]);
+      else expect(restored).toBeNull();
+    }
+  );
+
+  it.each(["valid", "valid-items", "disabled", "source-truncated", "client-truncated", "missing-client", "failed", "cancelled"])(
+    "validates adapted Responses before retaining a checkpoint: %s", async scenario => {
+      const { store } = memoryStore();
+      const response = result([state]);
+      response.clientResponseBody = response.responseBody;
+      response.clientResponseHeaders = response.responseHeaders;
+      response.clientResponseBodyTruncated = scenario === "client-truncated";
+      response.responseHeaders = { "content-type": "text/event-stream" };
+      response.responseBody = Buffer.from(`data: ${JSON.stringify({ type: "response.done", response: JSON.parse(response.responseBody.toString()) })}\n\n`);
+      if (scenario === "valid-items") response.responseBody = Buffer.from([
+        { type: "response.output_item.done", output_index: 0, item: state },
+        { type: "response.done", response: { id: "resp_fixture", status: "completed", output: [] } }
+      ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(""));
+      const observer = createOpenAiStreamObserver(response.responseHeaders)!;
+      observer.observe(response.responseBody);
+      response.streamSummary = await observer.finish();
+      response.responseBodyTruncated = scenario === "source-truncated";
+      if (scenario === "missing-client") response.clientResponseBody = null;
+      if (scenario === "failed") response.errorSummary = "Adapter failed";
+      if (scenario === "cancelled") response.clientDisconnectPhase = "before_terminal";
+      expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration,
+        conversationHash: "session", retentionHours: scenario === "disabled" ? 0 : 1,
+        requestBody: Buffer.from(JSON.stringify({ input: [user] })), result: response, mode: "remote_v2"
+      })).toBe(scenario.startsWith("valid"));
+      const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({
+        previous_response_id: "resp_fixture", input: "continue"
+      })), 1);
+      expect(restored !== null).toBe(scenario.startsWith("valid"));
+    }
+  );
+
   it("replaces a complete V1 window without duplicating retained messages or losing tool results", () => {
     const { store } = memoryStore();
     const call = { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" };
     const tool = { type: "function_call_output", call_id: "call_1", output: "42" };
-    expect(rememberProviderCheckpoint({ store, conversationHash: "session", retentionHours: 1,
+    expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration, conversationHash: "session", retentionHours: 1,
       requestBody: Buffer.from(JSON.stringify({ input: [user, call, tool] })), result: result([user, state]), mode: "remote_v1" })).toBe(true);
     const next = { type: "message", role: "user", content: "what number?" };
     const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({ input: [user, state, next] })), 1);
@@ -155,7 +259,7 @@ describe("checkpoint context coverage", () => {
   it("restores V2 after pruning while rejecting unrecognized content before the state", () => {
     const { store } = memoryStore();
     const answer = { type: "message", role: "assistant", content: [{ type: "output_text", text: "Recorded." }] };
-    expect(rememberProviderCheckpoint({ store, conversationHash: "session", retentionHours: 1,
+    expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration, conversationHash: "session", retentionHours: 1,
       requestBody: Buffer.from(JSON.stringify({ input: [user] })), result: result([answer, state]), mode: "remote_v2" })).toBe(true);
     for (const prefix of [[], [user, answer]]) {
       const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({ input: [...prefix, state] })), 1);
@@ -168,9 +272,9 @@ describe("checkpoint context coverage", () => {
     const { store } = memoryStore();
     const next = { type: "message", role: "user", content: "and remember 43" };
     const secondState = { ...state, id: "cmp_second", encrypted_content: "second-opaque-state" };
-    expect(rememberProviderCheckpoint({ store, conversationHash: "session", retentionHours: 1,
+    expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration, conversationHash: "session", retentionHours: 1,
       requestBody: Buffer.from(JSON.stringify({ input: [user] })), result: result([state]), mode: "remote_v2" })).toBe(true);
-    expect(rememberProviderCheckpoint({ store, conversationHash: "session", retentionHours: 1,
+    expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration, conversationHash: "session", retentionHours: 1,
       requestBody: Buffer.from(JSON.stringify({ input: [state, next] })), result: result([secondState]), mode: "remote_v2" })).toBe(true);
     for (const input of [[secondState], [state, next, secondState]]) {
       const restored = restoreProviderCheckpoint(store, "session", Buffer.from(JSON.stringify({ input })), 1);
@@ -183,8 +287,23 @@ describe("checkpoint context coverage", () => {
     const response = result([state]);
     if (scenario === "truncated") response.responseBodyTruncated = true;
     if (scenario === "incomplete") response.responseBody = Buffer.from(JSON.stringify({ status: "in_progress", output: [state] }));
-    expect(rememberProviderCheckpoint({ store, conversationHash: "session", retentionHours: scenario === "disabled" ? 0 : 1,
+    expect(rememberProviderCheckpoint({ store, checkpointGeneration: store.checkpointGeneration, conversationHash: "session", retentionHours: scenario === "disabled" ? 0 : 1,
       requestBody: Buffer.from(JSON.stringify({ input: scenario === "missing-history" ? [state] : [user] })), result: response, mode: "remote_v2" })).toBe(false);
+  });
+
+  it.each(["failed", "incomplete", "error"])("rejects a contradictory Codex %s terminal checkpoint", failure => {
+    const response = result([state]);
+    response.responseHeaders = { "content-type": "text/event-stream" };
+    response.streamSummary = { sawTerminalEvent: false, sawCompletedEvent: false, sawFailedEvent: false, sawIncompleteEvent: false,
+      sawOutputEvent: true, sawDoneMarker: false, terminalEvent: null, eventCount: 2, oversizedEventCount: 0,
+      decodeError: false, errorSummary: null, responseModel: null, usage: null };
+    response.responseBody = Buffer.from(`data: ${JSON.stringify({ type: "response.done", response: { status: "completed", output: [state] } })}\n\n`);
+    expect(completedResponseOutput(response, true)).toEqual([state]);
+    expect(completedResponseOutput(response)).toBeNull();
+    const late = { type: "response.done", response: { status: failure === "error" ? "completed" : failure, output: [state],
+      ...(failure === "error" ? { error: { message: "Synthetic failure." } } : {}) } };
+    response.responseBody = Buffer.concat([response.responseBody, Buffer.from(`data: ${JSON.stringify(late)}\n\n`)]);
+    expect(completedResponseOutput(response, true)).toBeNull();
   });
 
   it("never mistakes a partial added item for a completed replay item", () => {

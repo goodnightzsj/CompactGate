@@ -12,6 +12,7 @@ import { saveLabel } from "../src/ui/config/save-state.js";
 describe("a failed profile write is visible from wherever it was started", () => {
   it("shows overwrite failures inside the modal while keeping the suggested name", () => {
     const markup = renderToStaticMarkup(<ConfirmProfileOverwriteDialog
+      willApply={false}
       scope="codex"
       profile={{ name: "Existing" } as PublicConfigProfile}
       suggestedName="Existing 2"

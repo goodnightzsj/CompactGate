@@ -1,4 +1,6 @@
 import { hash } from "node:crypto";
+import { extractScopedProfileConfig } from "../shared/config-profile.js";
+export { extractScopedProfileConfig } from "../shared/config-profile.js";
 import type {
   ClaudeCompactConfig,
   ClaudePrimaryConfig,
@@ -32,28 +34,6 @@ import {
 } from "./config-runtime.js";
 
 const EPOCH_ISO = new Date(0).toISOString();
-
-export function extractScopedProfileConfig(
-  runtime: CompactGateRuntimeConfig,
-  scope: ConfigProfileScope
-): SavedCodexProfileConfig | SavedClaudeProfileConfig {
-  if (scope === "codex") {
-    return {
-      primary: { ...runtime.primary },
-      compact: { ...runtime.compact }
-    };
-  }
-
-  return {
-    claude: {
-      primary: { ...runtime.claude.primary },
-      compact: { ...runtime.claude.compact },
-      model_map: { ...runtime.claude.model_map },
-      scene_map: structuredClone(runtime.claude.scene_map),
-      long_context_bytes: runtime.claude.long_context_bytes
-    }
-  };
-}
 
 /**
  * Re-file a saved profile under the other scope, carrying the credential with it.

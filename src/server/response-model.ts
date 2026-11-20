@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import type { ResponseModelSource } from "../shared/types.js";
 import { decodeResponseText } from "./usage-utils.js";
 import { isRecord } from "../shared/records.js";
+import { SSE_LINE_ENDING } from "./sse-frames.js";
 
 export function extractResponseModelFromBodies(
   upstreamResponseBody: Buffer,
@@ -58,7 +59,7 @@ function extractSseResponseModel(text: string): string | null {
   let currentEvent = "";
   let lastModel: string | null = null;
 
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (const rawLine of text.split(SSE_LINE_ENDING)) {
     const line = rawLine.trimEnd();
     if (line.startsWith("event:")) {
       currentEvent = line.slice("event:".length).trim();

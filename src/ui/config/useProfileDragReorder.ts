@@ -18,34 +18,37 @@ export function useProfileDragReorder({
   });
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ profileId: string; position: ProfileDropPosition } | null>(null);
+  const reorderAtDragStart = useRef<typeof moveProfile | null>(null);
 
   useEffect(() => () => stopProfileAutoScroll(), []);
 
-  function nextProfileOrder(
+  function moveProfile(
     draggedId: string,
     targetId: string,
     position: ProfileDropPosition
-  ): string[] | null {
+  ): void {
     if (draggedId === targetId) {
-      return null;
+      return;
     }
 
     const currentIds = profiles.map((profile) => profile.id);
     if (!currentIds.includes(draggedId) || !currentIds.includes(targetId)) {
-      return null;
+      return;
     }
 
     const withoutDragged = currentIds.filter((profileId) => profileId !== draggedId);
     const targetIndex = withoutDragged.indexOf(targetId);
     if (targetIndex < 0) {
-      return null;
+      return;
     }
 
     const insertIndex = position === "after" ? targetIndex + 1 : targetIndex;
     const nextIds = [...withoutDragged];
     nextIds.splice(insertIndex, 0, draggedId);
 
-    return nextIds.every((profileId, index) => profileId === currentIds[index]) ? null : nextIds;
+    if (nextIds.some((profileId, index) => profileId !== currentIds[index])) {
+      void onReorderProfiles(nextIds);
+    }
   }
 
   function dropPositionForEvent(event: React.DragEvent<HTMLElement>): ProfileDropPosition {
@@ -117,6 +120,7 @@ export function useProfileDragReorder({
 
   function resetDragState() {
     stopProfileAutoScroll();
+    reorderAtDragStart.current = null;
     setDraggedProfileId(null);
     setDropTarget(null);
   }
@@ -134,6 +138,8 @@ export function useProfileDragReorder({
     }
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", profileId);
+    // A Studio snapshot during the drag must not silently rebase the operator's order.
+    reorderAtDragStart.current = moveProfile;
     setDraggedProfileId(profileId);
     setDropTarget(null);
   }
@@ -190,12 +196,9 @@ export function useProfileDragReorder({
     const position = dropTarget?.profileId === profileId
       ? dropTarget.position
       : dropPositionForEvent(event);
-    const nextIds = nextProfileOrder(draggedId, profileId, position);
-
+    const reorder = reorderAtDragStart.current ?? moveProfile;
     resetDragState();
-    if (nextIds) {
-      void onReorderProfiles(nextIds);
-    }
+    reorder(draggedId, profileId, position);
   }
 
   return {

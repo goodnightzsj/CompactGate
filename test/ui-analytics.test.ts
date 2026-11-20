@@ -11,7 +11,6 @@ import {
   fetchLogStats,
   groupTrend,
   platformBreakdown,
-  presetForRange,
   rangeForPreset,
   usageCsv
 } from "../src/ui/analytics/analytics-data.js";
@@ -49,7 +48,7 @@ describe("analytics data helpers", () => {
     const data = snapshot([{ bucket_start: "2026-08-07T00:00:00.000Z", ...metric({ requests: 1 }) }]);
     data.range = dateInputsToRange("2026-08-01", "2026-08-07");
     data.summary.requests = 1;
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data, loading: false, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data, preset: null, loading: false, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
       preferences: { from: "2026-08-01", to: "2026-08-07", granularity: "hour", endpointMeasure: "requests" }
     }));
@@ -91,7 +90,7 @@ describe("analytics data helpers", () => {
     const query = new URL(String(fetcher.mock.calls[0][0]), "https://synthetic.example").searchParams;
     expect(query.get("view")).toBe("usage");
     expect(query.has("overview")).toBe(false);
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: usage, loading: false, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: usage, preset: null, loading: false, error: null, refresh: vi.fn() });
     expect(renderToStaticMarkup(createElement(UsageAnalyticsPage, pageProps))).toContain("保留日志用量");
   });
 
@@ -195,7 +194,7 @@ describe("analytics data helpers", () => {
   });
 
   it("keeps existing statistics visible and announces a refresh", () => {
-    const stats = vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), loading: true, error: null, refresh: vi.fn() });
+    const stats = vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: snapshot([]), preset: null, loading: true, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(AnalyticsDashboardPage, pageProps));
     expect(stats).toHaveBeenCalledWith("24h", { includeOverview: true, transitionUpdates: true, snapshot: undefined });
     expect(markup).toContain("正在更新，当前显示上次统计");
@@ -210,7 +209,7 @@ describe("analytics data helpers", () => {
     // the copy says so. "自动" must stay qualified by the cadence — an unqualified
     // claim would overstate it the same way "手动" understated it before.
     const stats = snapshot([]);
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, preset: null, loading: false, error: null, refresh: vi.fn() });
     for (const page of [createElement(AnalyticsDashboardPage, pageProps), createElement(UsageAnalyticsPage, pageProps)]) {
       const markup = renderToStaticMarkup(page);
       expect(markup).toContain("采样于");
@@ -235,7 +234,7 @@ describe("analytics data helpers", () => {
     const stats = snapshot([]);
     stats.summary.total_tokens = 1_900_000;
     stats.summary.input_tokens = 1_800_000;
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, preset: null, loading: false, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, pageProps));
     const primary = markup.match(/<section class="usage-metric-grid"[^>]*>(.*?)<\/section>/)?.[1] ?? "";
     expect(primary.match(/<article /g)).toHaveLength(7);
@@ -279,6 +278,7 @@ describe("analytics data helpers", () => {
     };
     vi.spyOn(analyticsData, "useLogStats").mockReturnValue({
       data: stats,
+      preset: null,
       error: null,
       loading: false,
       refresh: vi.fn()
@@ -313,7 +313,7 @@ describe("analytics data helpers", () => {
   it.each([true, false])("blocks export of a different date range while preserving its labeled sample (loading=%s)", (loading) => {
     const stats = snapshot([]);
     stats.range = dateInputsToRange("2026-08-01", "2026-08-07");
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading, error: loading ? null : "fixture failed", refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, preset: null, loading, error: loading ? null : "fixture failed", refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
       preferences: { from: "2026-08-08", to: "2026-08-14", granularity: "day", endpointMeasure: "requests" }
     }));
@@ -324,7 +324,7 @@ describe("analytics data helpers", () => {
   it("allows exporting the current date range during a background refresh", () => {
     const stats = snapshot([]);
     stats.range = dateInputsToRange("2026-08-01", "2026-08-07");
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: true, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, preset: null, loading: true, error: null, refresh: vi.fn() });
     const markup = renderToStaticMarkup(createElement(UsageAnalyticsPage, { ...pageProps,
       preferences: { from: "2026-08-01", to: "2026-08-07", granularity: "day", endpointMeasure: "requests" }
     }));
@@ -335,7 +335,7 @@ describe("analytics data helpers", () => {
   it.each([false, true])("uses one actionable empty state without removing metrics (retained=%s)", (retained) => {
     const stats = snapshot([]);
     if (retained) stats.retained_range = { oldest_at: "2026-07-01T00:00:00.000Z", newest_at: "2026-07-02T00:00:00.000Z" };
-    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, loading: false, error: null, refresh: vi.fn() });
+    vi.spyOn(analyticsData, "useLogStats").mockReturnValue({ data: stats, preset: null, loading: false, error: null, refresh: vi.fn() });
     for (const page of [createElement(AnalyticsDashboardPage, pageProps), createElement(UsageAnalyticsPage, pageProps)]) {
       const markup = renderToStaticMarkup(page);
       expect(markup.match(/class="analytics-empty-state"/g)).toHaveLength(1);
@@ -349,6 +349,7 @@ describe("analytics data helpers", () => {
 
   it("treats date inputs as inclusive local calendar days with a 31-day limit", () => {
     const range = dateInputsToRange("2026-08-01", "2026-08-31");
+    expect(range).toHaveProperty("calendar_tz", Intl.DateTimeFormat().resolvedOptions().timeZone);
     const from = new Date(range.from);
     const to = new Date(range.to);
 
@@ -374,14 +375,7 @@ describe("analytics data helpers", () => {
       0
     ]);
     expect(range.to).toBe(now.toISOString());
-  });
-
-  it("derives the displayed preset from the rendered snapshot range", () => {
-    const now = new Date(2026, 7, 7, 15, 30, 0).getTime();
-
-    expect(presetForRange(rangeForPreset("24h", now))).toBe("24h");
-    expect(presetForRange(rangeForPreset("7d", now))).toBe("7d");
-    expect(presetForRange(rangeForPreset("30d", now))).toBe("30d");
+    expect(range.calendar_tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 
   it("fills missing hours and exports the visible usage rows", () => {
@@ -398,6 +392,25 @@ describe("analytics data helpers", () => {
     ]);
     expect(usageCsv(points)).toContain("period,requests,normal_requests,error_requests");
     expect(usageCsv(points)).toContain("2026-08-07T01:00:00.000Z,0,0,0");
+  });
+
+  it("formats a month of occupied and empty hours with the current browser timezone on each pass", () => {
+    const range = { from: "2026-10-15T00:00:00.000Z", to: "2026-11-15T00:00:00.000Z" };
+    const stats = { range, trend: [{ bucket_start: range.from, ...metric({ requests: 1 }) }] };
+    const NativeFormat = Intl.DateTimeFormat;
+    let browserZone = "Asia/Kathmandu";
+    const formats = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locale, options) {
+      return new NativeFormat(locale, { timeZone: browserZone, ...options });
+    });
+    for (const zone of ["Asia/Kathmandu", "America/New_York"]) {
+      browserZone = zone;
+      formats.mockClear();
+      const hours = groupTrend(stats, "hour");
+      expect(formats).toHaveBeenCalledTimes(1);
+      expect(hours).toHaveLength(744);
+      const expected = new NativeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", timeZone: zone });
+      expect(hours.map(hour => hour.label)).toEqual(hours.map(hour => expected.format(new Date(hour.key))));
+    }
   });
 });
 

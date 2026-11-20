@@ -18,37 +18,7 @@ describe("compaction continuity matrix", () => {
       { type: "message", role: "assistant", content: "An adjacent answer is not proof of summarized history." }, compaction
     ] })), { scope });
     const body = Buffer.from(JSON.stringify({ input: [compaction] }));
-    expect(store.rewritePrimaryBody(body, scope)).toEqual({ body, replacedCompactionCount: 0, remainingCompactionCount: 1, knownMissingCompactionCount: 1 });
-  });
-  it("retains compact tombstones as bounded digests until their original TTL", () => {
-    let now = 1_000;
-    const store = new CompactionBridgeStore({ maxEntries: 1, ttlMs: 1_000, now: () => now });
-    const scope = { compactUpstream: "https://compact.example", sourceModel: "a", targetModel: "b" };
-    const states = ["A", "B", "C"].map((prefix) => prefix.repeat(16 * 1024));
-    for (const [index, encrypted_content] of states.entries()) {
-      store.storeCompactResponse(Buffer.from(JSON.stringify({ output: [
-        ...(index < 2 ? [{ type: "message", role: "assistant", content: "summary" }] : []),
-        { type: "compaction", encrypted_content }
-      ] })), { scope });
-    }
-    // This resource invariant is deliberately checked alongside the public behavior:
-    // tombstones may not be evicted early just to reduce their memory footprint.
-    const tombstones = Reflect.get(store, "knownCompactionStateByContent") as Map<string, number>;
-    expect([...tombstones.keys()]).toEqual(states.map(() => expect.stringMatching(/^[0-9a-f]{64}$/)));
-    const body = Buffer.from(JSON.stringify({ input: states.map((encrypted_content) => ({
-      type: "compaction", encrypted_content
-    })) }));
-    expect(store.rewritePrimaryBody(body, scope)).toMatchObject({
-      replacedCompactionCount: 0, knownMissingCompactionCount: 3
-    });
-    expect(store.rewritePrimaryBody(body, { ...scope, sourceModel: "other" })).toMatchObject({
-      replacedCompactionCount: 0, knownMissingCompactionCount: 3
-    });
-    now += 1_000;
-    expect(store.rewritePrimaryBody(body, scope)).toMatchObject({
-      replacedCompactionCount: 0, knownMissingCompactionCount: 0
-    });
-    expect(tombstones.size).toBe(0);
+    expect(store.rewritePrimaryBody(body, scope)).toEqual({ body, replacedCompactionCount: 0, remainingCompactionCount: 1 });
   });
 
   it.each([

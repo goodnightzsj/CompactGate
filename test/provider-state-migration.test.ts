@@ -67,6 +67,65 @@ function canonicalCompactionBody(): Buffer {
 }
 
 describe("provider-state recovery state machine", () => {
+  it.each(["out-of-bounds", "readable", "missing-cipher", "compaction"])("does not broaden an invalid block locator (%s)", async target => {
+    const canonicalBody = Buffer.from(JSON.stringify({ input: [
+      { type: "agent_message", content: [{ type: "input_text", text: "Keep this" },
+        { type: "encrypted_content", encrypted_content: "valid-state" }, { type: "encrypted_content" }] },
+      { type: "compaction", id: "cmp_valid", encrypted_content: "valid-compaction" }
+    ] }));
+    const param = target === "compaction" ? "input[1].content[0].encrypted_content"
+      : `input[0].content[${target === "out-of-bounds" ? 99 : target === "readable" ? 0 : 2}].encrypted_content`;
+    const rejected = upstreamResult(400, { error: { code: "invalid_encrypted_content", param } });
+    const sent: Buffer[] = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { sent.push(body); return rejected; }
+    });
+    expect(sent).toEqual([canonicalBody]);
+    expect(recovery.result).toBe(rejected);
+    expect(recovery.policy?.stripCompactionIds).toBe(false);
+  });
+
+  it.each(["block", "cipher-and-index", "item", "two-blocks"])("keeps agent targets stable after earlier removals (%s)", async locator => {
+    const compaction = { type: "compaction", encrypted_content: "valid-compaction" };
+    const readable = { type: "input_text", text: "Keep readable agent context" };
+    const blocks = ["keep-agent", "rejected-agent"].map(encrypted_content => ({ type: "encrypted_content", encrypted_content }));
+    const canonicalBody = Buffer.from(JSON.stringify({ store: false, input: [
+      { type: "reasoning", encrypted_content: "rejected-reasoning", summary: [] }, compaction,
+      { type: "agent_message", content: [readable, ...blocks] },
+      { type: "message", role: "user", content: "Continue" }
+    ] }));
+    const original = Buffer.from(canonicalBody);
+    const sent: Array<{ input: Array<Record<string, unknown>> }> = [];
+    const recovery = await runProviderStateMigration({ canonicalBody, targetStateDomain: "same",
+      canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => {
+        const parsed = JSON.parse(body.toString());
+        sent.push(parsed);
+        if (sent.length === 1) return upstreamResult(400, { error: { code: "invalid_encrypted_content", param: "input[0].encrypted_content" } });
+        if (sent.length === 2 || locator === "two-blocks" && sent.length === 3) {
+          const block = sent.length === 2 ? 2 : 1;
+          return upstreamResult(400, { error: { code: "invalid_encrypted_content",
+            param: locator === "item" ? "input[1]" : `input[1].content[${block}].encrypted_content`,
+            ...(locator === "cipher-and-index" ? { message: "The encrypted content rejected-agent could not be verified." } : {})
+          } });
+        }
+        return upstreamResult(200, { output: [] });
+      }
+    });
+    expect(recovery.result.status).toBe(200);
+    expect(sent).toHaveLength(locator === "two-blocks" ? 4 : 3);
+    expect(sent[2].input[0]).toEqual(compaction);
+    expect(sent[2].input[1].content).toEqual(locator === "item" ? [readable] : [readable, blocks[0]]);
+    if (locator === "two-blocks") expect(sent[3].input[1].content).toEqual([readable]);
+    expect(canonicalBody).toEqual(original);
+    const cached = await runProviderStateMigration({ canonicalBody, cachedPolicy: recovery.policy,
+      targetStateDomain: "same", canReplay: () => true, startGenericRecovery: () => null,
+      send: async body => { expect(JSON.parse(body.toString())).toEqual(sent.at(-1)); return upstreamResult(200, { output: [] }); }
+    });
+    expect(cached.attempts).toHaveLength(1);
+  });
+
   it.each([false, true])("retries the original request when a cached repair has no history (unavailable=%s)", async unavailable => {
     const canonicalBody = Buffer.from(JSON.stringify({ input: [{ type: "compaction", encrypted_content: "opaque-state" }] }));
     const cachedPolicy: ProviderStateRecoveryPolicy = { base: "original", stripCompactionIds: false, rejectedCompaction: true,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestLogger } from "../src/server/logger.js";
 import type { RequestLogEntry } from "../src/shared/types.js";
+import { groupTrend, usageCsv } from "../src/ui/analytics/analytics-data.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -15,6 +16,46 @@ afterEach(async () => {
 });
 
 describe("RequestLogger stats", () => {
+  it.each([
+    ["Asia/Kathmandu", "2026-11-17T18:15:00Z", 24, "2026-11-18"],
+    ["Asia/Kolkata", "2026-11-17T18:30:00Z", 24, "2026-11-18"],
+    ["America/New_York", "2026-03-08T05:00:00Z", 23, "2026-03-08"],
+    ["America/New_York", "2026-11-01T04:00:00Z", 25, "2026-11-01"],
+    ["Australia/Lord_Howe", "2026-04-04T13:00:00Z", 24.5, "2026-04-05"]
+  ] as const)("keeps the SQLite summary, day table and CSV aligned in %s from %s", async (calendar_tz, start, hours, date) => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-calendar-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const logger = new RequestLogger(20, path.join(dir, "logs.sqlite"));
+    const startMs = Date.parse(start);
+    const nextMs = startMs + hours * 3_600_000;
+    const toMs = nextMs + 48 * 3_600_000;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    try {
+      for (const [time, total_tokens] of [[startMs - 1, 400], [startMs + 5 * 60_000, 23], [nextMs - 1, 7], [nextMs, 11], [toMs, 800]]) {
+        logger.add(logEntry({ time: iso(time), request_id: String(time), total_tokens }));
+      }
+      const options = { from: iso(startMs), to: iso(toMs) };
+      const legacy = logger.stats({ ...options, view: "usage" });
+      expect(legacy).not.toHaveProperty("daily_trend");
+      const nextDate = iso(Date.parse(date) + 86_400_000).slice(0, 10);
+      const lastDate = iso(Date.parse(date) + 2 * 86_400_000).slice(0, 10);
+      const usage = await logger.statsAsync({ ...options, calendar_tz, view: "usage" });
+      const full = logger.stats({ ...options, calendar_tz });
+      expect(usage.daily_trend).toEqual(full.daily_trend);
+      expect(usage.trend).toEqual(legacy.trend);
+      expect(usage.summary).toEqual(legacy.summary);
+      const days = groupTrend(usage, "day");
+      expect(days.map(({ key, requests, total_tokens }) => [key, requests, total_tokens])).toEqual([
+        [date, 2, 30], [nextDate, 1, 11], [lastDate, 0, 0]
+      ]);
+      const csvRows = usageCsv(days).trim().split("\n").slice(1).map(row => row.split(","));
+      expect(csvRows.map(row => row[0])).toEqual([date, nextDate, lastDate]);
+      expect(csvRows.reduce((total, row) => total + Number(row[1]), 0)).toBe(usage.summary.requests);
+      expect(csvRows.reduce((total, row) => total + Number(row.at(-1)), 0)).toBe(usage.summary.total_tokens);
+      expect(groupTrend(usage, "hour")).toEqual(groupTrend(legacy, "hour"));
+    } finally { await logger.close(); }
+  });
+
   it("aggregates retained logs with the existing error, token, and model semantics", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "compactgate-stats-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));

@@ -85,7 +85,7 @@ export class ConfigStore {
 
   static async load(configPath: string, oauthOptions: OAuthStoreOptions = {}): Promise<ConfigStore> {
     const loaded = await readConfigFile(configPath);
-    const config = loaded.missing ? DEFAULT_CONFIG : mergeConfig(DEFAULT_CONFIG, loaded.value);
+    const config = loaded.missing ? DEFAULT_CONFIG : mergeConfig(DEFAULT_CONFIG, loaded.value, true);
 
     validateConfig(config);
     const store = new ConfigStore(loaded.resolvedPath, config, await OAuthStore.load(loaded.resolvedPath, oauthOptions));
@@ -202,12 +202,12 @@ export class ConfigStore {
     }, revision);
   }
 
-  async deleteProfile(scope: ConfigProfileScope, profileId: string): Promise<CompactGateConfig> {
-    return this.mutate(() => deleteConfigProfile(this.current, scope, profileId));
+  async deleteProfile(scope: ConfigProfileScope, profileId: string, revision?: unknown): Promise<CompactGateConfig> {
+    return this.mutate(() => deleteConfigProfile(this.current, scope, profileId), revision);
   }
 
-  async reorderProfiles(scope: ConfigProfileScope, orderedProfileIds: string[]): Promise<CompactGateConfig> {
-    return this.mutate(() => reorderConfigProfiles(this.current, scope, orderedProfileIds));
+  async reorderProfiles(scope: ConfigProfileScope, orderedProfileIds: string[], revision?: unknown): Promise<CompactGateConfig> {
+    return this.mutate(() => reorderConfigProfiles(this.current, scope, orderedProfileIds), revision);
   }
 
   async applyProfile(scope: ConfigProfileScope, profileId: string, revision?: string): Promise<CompactGateConfig> {
@@ -231,7 +231,7 @@ export class ConfigStore {
         throw error;
       }
 
-      const next = mergeConfig(DEFAULT_CONFIG, value);
+      const next = mergeConfig(DEFAULT_CONFIG, value, true);
       validateConfig(next);
       this.validateOAuthBindings(next);
       return this.persist(next);
@@ -323,8 +323,12 @@ export class ConfigStore {
 export function validateConfig(config: CompactGateConfig): void {
   validateRuntimeConfig(config);
 
+  const presetIds = new Set<string>();
   for (const preset of config.route_url_presets ?? []) {
     validateRouteUrlPreset(preset);
+    const key = `${preset.kind}:${preset.id}`;
+    if (presetIds.has(key)) throw new ConfigError(`${preset.kind} URL preset ids must be unique.`);
+    presetIds.add(key);
   }
 
   for (const scope of ["codex", "claude"] as const) {

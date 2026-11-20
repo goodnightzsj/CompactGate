@@ -1,3 +1,5 @@
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import type { LogStatsSnapshot } from "../src/shared/types.js";
 import { RequestLogger } from "../src/server/logger.js";
@@ -8,6 +10,70 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("log stats API", () => {
+  it("validates calendar dates without rejecting leap years or timezone offsets", async () => {
+    const app = await startApp();
+    for (const endpoint of ["stats", "recent"]) {
+      for (const from of ["2026-02-30T00:00:00Z", "2025-02-29T00:00:00Z", "1900-02-29T00:00:00Z",
+        "2026-04-31T00:00:00Z", "2026-11-20T24:00:00Z", "2026-11-20T00:00:00+24:00"]) {
+        const response = await fetch(`${app.url}/api/logs/${endpoint}?${new URLSearchParams({ from,
+          to: Number.isFinite(Date.parse(from)) ? new Date(Date.parse(from) + 3600000).toISOString() : "2026-11-21T00:00:00Z" })}`);
+        expect(response.status, `${endpoint}: ${from}`).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("RFC 3339") });
+      }
+      for (const from of ["2024-02-29T23:59:59.123Z", "2000-02-29T00:00:00+08:00",
+        "0096-02-29T00:00:00-04:30", "2026-04-30T23:59:59+05:45"]) {
+        const response = await fetch(`${app.url}/api/logs/${endpoint}?${new URLSearchParams({ from,
+          to: new Date(Date.parse(from) + 3600000).toISOString() })}`);
+        expect(response.status, `${endpoint}: ${from}`).toBe(200);
+        const result = await response.json();
+        if (endpoint === "stats") expect(result.range.from).toBe(new Date(Date.parse(from)).toISOString());
+        else expect(result.logs).toEqual([]);
+      }
+    }
+  });
+
+  it("applies the selected timezone's calendar dates to statistics and log drilldowns", async () => {
+    const app = await startApp();
+    const from = "2026-10-15T04:00:00.000Z";
+    const to = "2026-11-15T05:00:00.000Z"; // New York's 31 dates include the fall-back hour.
+    const db = new DatabaseSync(path.join(app.dir, "compactgate-logs.sqlite"));
+    try {
+      const insert = db.prepare(`INSERT INTO request_logs (time, route, method, path, status, duration_ms, upstream_host, request_id, response_model)
+        VALUES (?, 'primary', 'POST', '/v1/responses', 200, 1, 'synthetic.invalid', ?, 'selected')`);
+      for (const time of [Date.parse(from) - 1, Date.parse(from), Date.parse(to) - 1, Date.parse(to)]) {
+        insert.run(new Date(time).toISOString(), String(time));
+      }
+    } finally { db.close(); }
+    for (const path of ["/api/logs/stats?view=usage", "/api/logs/recent?model=selected"]) {
+      async function request(fields: Record<string, string>) {
+        return fetch(`${app.url}${path}&${new URLSearchParams(fields)}`);
+      }
+      const response = await request({ from, to, calendar_tz: "America/New_York" });
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      if (path.includes("stats")) {
+        expect(result.range).toEqual({ from, to, calendar_tz: "America/New_York" });
+        expect(result.summary.requests).toBe(2);
+      } else {
+        expect(result.logs.map((row: { time: string }) => row.time)).toEqual([new Date(Date.parse(to) - 1).toISOString(), from]);
+      }
+      const invalidRanges: Record<string, string>[] = [
+        { from, to }, { from, to, calendar_tz: "UTC" }, { from, to, calendar_tz: "invalid/zone" }, { from, to, calendar_tz: "-04:00" },
+        { from, to: "2026-11-15T05:00:00.001Z", calendar_tz: "America/New_York" },
+        // Spans 32 named dates despite containing less than 31 x 24 hours.
+        { from: "2026-02-15T04:59:00Z", to: "2026-03-17T04:01:00Z", calendar_tz: "America/New_York" }
+      ];
+      for (const fields of invalidRanges) {
+        const invalid = await request(fields);
+        expect(invalid.status).toBe(400);
+        await invalid.arrayBuffer();
+      }
+      const halfHour = await request({ from: "2026-03-15T13:00:00Z", to: "2026-04-15T13:30:00Z", calendar_tz: "Australia/Lord_Howe" });
+      expect(halfHour.status).toBe(200);
+      await halfHour.arrayBuffer();
+    }
+  });
+
   it("preserves full statistics range fields and ignores statistics-only options on recent logs", async () => {
     const app = await startApp();
     const range = { from: "2026-08-07T00:00:00.000Z", to: "2026-08-08T00:00:00.000Z" };

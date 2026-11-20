@@ -165,10 +165,10 @@
 
 /* The expand/collapse spring animates this wrapper rather than the <tr> around
    it: a table row's specified height is only a minimum, so collapsing the row
-   never had any effect and the panel popped open instantly. Keep the content
-   clipped while the wrapper collapses. */
+   never had any effect and the panel popped open instantly. Clip without an
+   inner scroll offset so button focus keeps the pointer on its target. */
 .log-detail-collapse {
-  overflow: hidden;
+  overflow: clip;
 }
 
 .logs-clear-filters-motion {
@@ -1268,6 +1268,10 @@
 .log-capture-download {
   flex: 0 0 auto;
   text-decoration: none;
+}
+
+.log-capture-panel {
+  min-width: 0;
 }
 
 .log-capture-payload {

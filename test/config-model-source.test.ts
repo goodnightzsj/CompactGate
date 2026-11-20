@@ -1,6 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config-defaults.js";
 import { buildPublicConfig } from "../src/server/config-public.js";
+
+afterEach(() => vi.unstubAllEnvs());
+
+it("tracks hidden connection material even when it does not select the model catalogue credential", () => {
+  const config = structuredClone(DEFAULT_CONFIG);
+  config.primary.api_key_env = "COMPACTGATE_TEST_CONNECTION_REVISION";
+  vi.stubEnv(config.primary.api_key_env, "synthetic-env-first");
+  config.primary.api_keys = [{ id: "preferred", label: "Preferred", api_key: "synthetic-pool", enabled: true, priority: 100 }];
+  const project = () => buildPublicConfig({ config, configPath: "/synthetic/config.json", lastSavedAt: null, revision: "test" }).primary;
+  const modelSource = project().model_source_revision;
+  let previous = project().connection_revision;
+  for (const change of [
+    () => { config.primary.api_key = "synthetic-direct"; },
+    () => { vi.stubEnv(config.primary.api_key_env, "synthetic-env-second"); },
+    () => { config.primary.api_keys!.push({ id: "inactive", label: "Inactive", api_key: "synthetic-inactive", enabled: false, priority: 0 }); }
+  ]) {
+    change();
+    const next = project();
+    expect(next.model_source_revision).toBe(modelSource);
+    expect(next.connection_revision).not.toBe(previous);
+    expect(next.connection_revision).toMatch(/^[\w-]{43}$/);
+    previous = next.connection_revision;
+  }
+  expect(JSON.stringify(project())).not.toMatch(/synthetic-(?:direct|env|pool|inactive)/);
+});
 
 describe("public model catalogue identity", () => {
   it.each(["codex", "claude"] as const)("tracks the effective %s connection without leaking its credentials", (scope) => {

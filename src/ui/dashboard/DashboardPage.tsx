@@ -61,6 +61,7 @@ export function DashboardPage({
         health={health}
         listen={listen}
         logCounts={logCounts}
+        onNavigate={onNavigate}
       />
 
       {config && <section className="dashboard-routing" aria-labelledby="dashboard-routing-title">

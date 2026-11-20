@@ -1,10 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { MAX_LOG_RANGE_DAYS } from "../../shared/log-range.js";
 import { clamp } from "../shared/format.js";
 import { inputDate, parseInputDate } from "./analytics-data.js";
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
-const MAX_RANGE_DAYS = 31;
 const DAY_MOVES: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
 
 interface DatePreset {
@@ -124,7 +124,7 @@ export function DateRangePicker({
   }
 
   function exceedsCap(value: string) {
-    return parseInputDate(value) > addDays(draftFrom, MAX_RANGE_DAYS - 1);
+    return parseInputDate(value) > addDays(draftFrom, MAX_LOG_RANGE_DAYS - 1);
   }
 
   function showPicker() {

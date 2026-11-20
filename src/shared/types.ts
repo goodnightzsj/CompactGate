@@ -333,6 +333,8 @@ export interface PublicApiKeyEntry {
 export interface PublicUpstreamConfig extends PublicCredentialState {
   /** Opaque, process-local identity of the model catalogue connection. */
   model_source_revision: string;
+  /** Opaque equality token for all stored connection material, including inactive keys. */
+  connection_revision: string;
   base_url: string;
   host: string;
   extra_header_names: string[];
@@ -346,6 +348,7 @@ export interface PublicUpstreamConfig extends PublicCredentialState {
 }
 
 export interface PublicCompactConfig extends PublicCredentialState {
+  connection_revision: string;
   base_url: string;
   host: string;
   extra_header_names: string[];
@@ -623,6 +626,8 @@ export type StatusLogCounts = Record<"all" | LogStatusKind, number>;
 export interface LogDrilldownFilter {
   from: string;
   to: string;
+  /** Named time zone for a range selected as local calendar dates. */
+  calendar_tz?: string;
   /** Omitted means all models; null selects the unobserved/unavailable group. */
   model?: string | null;
 }
@@ -668,9 +673,7 @@ export interface LogStatsSummary extends LogStatsMetric {
 
 export interface LogStatsSnapshot {
   generated_at: string;
-  range: {
-    from: string;
-    to: string;
+  range: Pick<LogDrilldownFilter, "from" | "to" | "calendar_tz"> & {
     includeOverview?: boolean;
   };
   retained_range: {
@@ -679,6 +682,8 @@ export interface LogStatsSnapshot {
   };
   summary: LogStatsSummary;
   trend: Array<LogStatsMetric & { bucket_start: string }>;
+  /** Dates covered by [from, to) in calendar_tz, including dates with no requests. */
+  daily_trend?: Array<LogStatsMetric & { date: string }>;
   by_route: Array<LogStatsMetric & { route: RouteKind }>;
   by_host: Array<LogStatsMetric & { host: string }>;
   by_model: Array<{
@@ -817,6 +822,9 @@ export interface HealthResponse {
     status: "configured" | "invalid";
     base_url: string;
     host: string | null;
+    /** Selected for local/Remote V1 compaction. base_url and host are the saved split endpoint. */
+    effective_base_url: string;
+    effective_host: string | null;
   } & PublicCredentialState;
   claude: {
     primary: {

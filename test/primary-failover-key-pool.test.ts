@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
 import { mergeRuntimeConfig, validateRuntimeConfig } from "../src/server/config-runtime.js";
 import { resolveRouteCredential, DIRECT_API_KEY_ID } from "../src/server/credentials.js";
@@ -73,7 +73,7 @@ describe("primary key pool candidates", () => {
     const candidates = codexPrimaryCandidates(config);
 
     expect(candidates.map((candidate) => candidate.id))
-      .toEqual([`codex-a#${DIRECT_API_KEY_ID}`, "codex-a#k1"]);
+      .toEqual(["codex-a", "codex-a#k1"]);
     // Through the resolver the request path uses, not the raw field.
     expect(candidates.map((candidate) => resolveRouteCredential("primary", candidate.config).apiKey))
       .toEqual(["sk-original", "sk-added"]);
@@ -154,6 +154,46 @@ describe("primary key pool candidates", () => {
 });
 
 describe("primary key pool isolation", () => {
+  it("keeps profile snapshots and nested headers private to each candidate", () => {
+    const config = configWithKeyPool("codex-a", "A", [key("k1", "", "one"), key("k2", "", "two")]);
+    const profile = config.profile_scopes!.codex!.profiles![0].config;
+    if (!("primary" in profile)) throw new Error("Expected Codex profile.");
+    profile.primary.extra_headers = { "x-project": "original" };
+    const [first, second] = codexPrimaryCandidates(config);
+    profile.primary.extra_headers["x-project"] = "updated";
+    config.logging.keep_recent = 1;
+
+    const firstConfig = first.config;
+    expect(firstConfig.primary.extra_headers["x-project"]).toBe("original");
+    firstConfig.primary.extra_headers["x-project"] = "first";
+    firstConfig.logging.keep_recent = 2;
+    firstConfig.profile_scopes!.codex!.profiles![0].name = "first";
+    expect(first.config).toBe(firstConfig);
+    expect(first.primary).toBe(first.config.primary);
+    expect(second.primary.extra_headers["x-project"]).toBe("original");
+    expect(second.config.primary.extra_headers["x-project"]).toBe("original");
+    expect(second.config.logging.keep_recent).toBe(DEFAULT_CONFIG.logging.keep_recent);
+    expect(second.config.profile_scopes!.codex!.profiles![0].name).toBe("A");
+    expect(profile.primary.extra_headers["x-project"]).toBe("updated");
+  });
+
+  it("can sign and select a key without deep-copying the full profile catalog per candidate", () => {
+    const config = configWithKeyPool("codex-a", "A",
+      Array.from({ length: 8 }, (_, i) => key("k" + i, "", "synthetic-" + i)));
+    const clones = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const candidates = codexPrimaryCandidates(config);
+      const { state } = createState();
+      const selected = state.preview(config, { model: "fixture" }, candidates);
+      expect(selected.config.primary.api_key).toBe("synthetic-0");
+      const catalogCopies = clones.mock.calls.filter(([value]) =>
+        value && typeof value === "object" && "profile_scopes" in value);
+      expect(catalogCopies.length).toBeLessThanOrEqual(2);
+    } finally {
+      clones.mockRestore();
+    }
+  });
+
   it("quarantines one key without touching its siblings", () => {
     const config = configWithCodexProfiles([
       pooledProfile("codex-a", "A", [key("k1", "", "sk-1"), key("k2", "", "sk-2")])
@@ -200,6 +240,29 @@ describe("primary key pool isolation", () => {
     ]);
   });
 
+  it.each([false, true])("spreads across all 16 equal keys plus direct=%s without truncating ties", (direct) => {
+    const keys = Array.from({ length: 16 }, (_, index) => key(`k${index}`, "", `synthetic-${index}`));
+    const profile = pooledProfile("codex-a", "A", keys);
+    if (!("primary" in profile.config)) throw new Error("Expected Codex profile.");
+    profile.config.primary.key_strategy = "spread";
+    profile.config.primary.api_key = direct ? "synthetic-direct" : "";
+    const config = configWithCodexProfiles([profile]);
+    validateRuntimeConfig({ ...config, primary: profile.config.primary });
+    const ids = direct ? [DIRECT_API_KEY_ID, ...keys.map(entry => entry.id)] : keys.map(entry => entry.id);
+    let roll = 0;
+    const state = new PrimaryFailoverState({ random: () => roll });
+    const hits = ids.map((_, index) => {
+      roll = (index + 0.5) / ids.length;
+      return state.preview(config, { model: "fixture" }).keyId;
+    });
+    expect(hits).toEqual(ids);
+    // An established session still wins before the draw, even with a changed roll.
+    const pinned = selectAndReserve(state, config, { model: "fixture", sessionKey: "pinned" });
+    state.recordResult(pinned, 200, null);
+    roll = 0;
+    expect(state.preview(config, { model: "fixture", sessionKey: "pinned" }).keyId).toBe(pinned.keyId);
+  });
+
   it("lets a recovered key back into the draw despite a losing lifetime record", () => {
     const config = configWithCodexProfiles([
       pooledProfile("codex-a", "A", [key("k1", "", "sk-1"), key("k2", "", "sk-2")])
@@ -240,6 +303,35 @@ describe("primary key pool isolation", () => {
     // draw for good, since fresh successes can never outrun accumulated failures.
     // Capped at 60 the gap is 55, and the rate ranks k1 second instead of erasing it.
     expect(state.preview(config, { model: "gpt-5.5" }).keyId).toBe("k1");
+  });
+
+  it.each([2, 11, "latency"] as const)("expires historical %s penalties without requiring a success", failures => {
+    const keys = Array.from({ length: 10 }, (_, index) => key(`k${index}`, "", `synthetic-${index}`));
+    const profile = pooledProfile("pool", "Pool", keys);
+    if (!("primary" in profile.config)) throw new Error("Expected Codex profile.");
+    profile.config.primary.key_strategy = "spread";
+    const config = configWithCodexProfiles([profile]);
+    let now = 1000;
+    let roll = 0;
+    const state = new PrimaryFailoverState({ now: () => now, random: () => roll });
+    for (let attempt = 0; attempt < (typeof failures === "number" ? failures : 1); attempt++) {
+      const selected = selectAndReserve(state, config, { sessionKey: "existing", model: "fixture" });
+      expect(selected.keyId).toBe("k0");
+      state.recordResult(selected, failures === "latency"
+        ? { status: 200, errorSummary: null, firstTokenMs: 30_000 }
+        : { status: 503, errorSummary: "Synthetic transient" });
+    }
+    for (let i = 0; i < 20; i++) {
+      roll = i / 20;
+      expect(state.preview(config, { model: "fixture" }).keyId).not.toBe("k0");
+    }
+    now += 60_001;
+    const hits = new Set<string | null>();
+    for (let i = 0; i < 1000; i++) {
+      roll = i / 1000;
+      hits.add(state.preview(config, { model: "fixture" }).keyId);
+    }
+    expect(hits).toEqual(new Set(keys.map(entry => entry.id)));
   });
 
   it("forgets only the rotated key's health, not its siblings'", () => {
@@ -359,6 +451,24 @@ describe("sticky-only three-zone admission", () => {
 });
 
 describe("rotation opt-out", () => {
+  it("stops serving an old sticky session through an inactive profile after opt-out", () => {
+    const a = codexProfile("a", "A", "https://a.example.test/v1", "synthetic-a");
+    const b = codexProfile("b", "B", "https://b.example.test/v1", "synthetic-b");
+    const config = configWithCodexProfiles([a, b]);
+    const clock = createClock();
+    clock.state.recordResult(selectAndReserve(clock.state, config, { sessionKey: "a" }), {
+      status: 429, errorSummary: "limited", responseHeaders: { "retry-after": "1" }
+    });
+    const bound = selectAndReserve(clock.state, config, { sessionKey: "b" });
+    expect(bound.profileId).toBe("b");
+    clock.state.recordResult(bound, 200, null);
+    clock.advance(1100);
+    if (!("primary" in b.config)) throw new Error("Expected primary profile");
+    b.config.primary.rotation_opt_out = true;
+    expect(clock.state.preview(config, { sessionKey: "b" }).profileId).toBe("a");
+    expect(clock.state.preview(config, { sessionKey: "fresh" }).profileId).toBe("a");
+  });
+
   it("keeps an opted-out profile out of automatic rotation but reachable manually", () => {
     const oauth = codexProfile("codex-oauth", "OAuth", "http://127.0.0.1:9101/v1", "sk-oauth");
     if (!("primary" in oauth.config)) {

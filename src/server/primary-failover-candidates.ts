@@ -6,34 +6,35 @@ import type {
   UpstreamConfig
 } from "../shared/types.js";
 import { cloneConfig } from "./config-internals.js";
-import { enabledApiKeyPool, DIRECT_API_KEY_ID, resolveRouteCredential } from "./credentials.js";
+import { enabledApiKeyPool, DIRECT_API_KEY_ID, resolveUpstreamCredential, credentialCandidateId } from "./credentials.js";
 import { isRecord } from "./http-utils.js";
 import type { PrimaryCandidate } from "./primary-failover-types.js";
 
 /**
  * Expand each codex profile into one candidate per schedulable key. Health,
- * cooldowns and stickiness are keyed by the composite `profileId#keyId`, so a
- * single profile's keys quarantine and recover independently — the same
- * per-candidate isolation profiles already have. A profile without a pool keeps
- * its plain profile id, which is also what keeps existing configs' state
- * domains and stickiness keys stable across the upgrade.
+ * cooldowns and stickiness use escaped candidate IDs so keys recover independently.
+ * Direct credentials keep the profile ID even when backup keys are added;
+ * ordinary pool entries use `profileId#keyId`.
  */
 export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandidate[] {
-  const state = config.profile_scopes?.codex;
-  const profiles = state?.profiles ?? [];
-  if (profiles.length === 0 || !state?.active_profile_id) {
+  const scope = config.profile_scopes?.codex;
+  if (!scope?.profiles?.length || !scope.active_profile_id) {
     return [];
   }
 
-  const eligible = profiles.filter((profile) => Boolean(readProfilePrimary(profile)));
-  const activeIndex = eligible.findIndex((profile) => profile.id === state.active_profile_id);
+  // Capture the catalog once. Only a candidate whose full config is requested
+  // needs its own writable copy of it.
+  const snapshot = cloneConfig(config);
+  const eligible = (snapshot.profile_scopes?.codex?.profiles ?? [])
+    .filter((profile) => Boolean(readProfilePrimary(profile)));
+  const activeIndex = eligible.findIndex((profile) => profile.id === scope.active_profile_id);
   // The profile's position in the failover sequence, rotated so the active
   // profile is order 0. Keys inherit it: `fill_first` offsets each key from it,
   // `spread` shares it so the top-K weighted pick distributes across the keys.
   const profileOrder = (index: number) =>
     activeIndex >= 0 ? (index - activeIndex + eligible.length) % eligible.length : index;
 
-  const runtimeStrategy = config.primary.key_strategy ?? "fill_first";
+  const runtimeStrategy = snapshot.primary.key_strategy ?? "fill_first";
   const candidates: PrimaryCandidate[] = [];
 
   // fill_first needs globally unique orders — keys must be strictly adjacent to
@@ -53,8 +54,10 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
   for (const { profile } of rotation) {
     const profilePrimary = readProfilePrimary(profile) as Partial<UpstreamConfig>;
     const mergedPrimary = {
-      ...config.primary,
+      ...snapshot.primary,
       ...profilePrimary,
+      // These fields belong to the profile even when its saved entry omits them.
+      api_keys: profilePrimary.api_keys,
       api_key_priority: profilePrimary.api_key_priority,
       oauth_account_id: profilePrimary.oauth_account_id
     };
@@ -73,7 +76,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
     // Every key of the active profile carries the active bonus. Marking only
     // the first key gave it +1000, which pushed its spread siblings out of the
     // top-K window and silently reverted the pool to fill_first.
-    const profileIsActive = profile.id === state.active_profile_id;
+    const profileIsActive = profile.id === scope.active_profile_id;
     const rotationOptOut = (profilePrimary as Partial<{ rotation_opt_out: boolean }>)
       .rotation_opt_out === true;
 
@@ -81,13 +84,13 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
       // Single key (or none): the profile itself is the candidate, exactly as
       // before pools existed. A one-entry pool keeps its composite id so that
       // adding a second key later starts the new key's history from zero without
-      // touching the first key's. The direct `api_key` alone is the exception —
+      // touching the first key's. The direct `api_key` is the exception —
       // it is what every pool-free profile has always been, so it keeps the plain
       // profile id rather than minting `profile#__direct__` and orphaning every
       // stored state domain and session pin on upgrade.
       const single = pool[0]?.id === DIRECT_API_KEY_ID ? undefined : pool[0];
-      candidates.push({
-        id: single ? `${profile.id}#${single.id}` : profile.id,
+      candidates.push(buildCandidate({
+        id: credentialCandidateId(profile.id, single?.id ?? null),
         profileId: profile.id,
         keyId: single?.id ?? null,
         keyLabel: single?.label ?? null,
@@ -95,15 +98,14 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         name: single?.label ? `${profile.name} · ${single.label}` : profile.name,
         order: sequentialOrder++,
         active: profileIsActive,
-        rotationOptOut,
-        config: withPrimaryConfig(config, profilePrimary, single)
-      });
+        rotationOptOut
+      }, snapshot, mergedPrimary, single));
       continue;
     }
 
     pool.forEach((key, keyIndex) => {
-      candidates.push({
-        id: `${profile.id}#${key.id}`,
+      candidates.push(buildCandidate({
+        id: credentialCandidateId(profile.id, key.id),
         profileId: profile.id,
         keyId: key.id,
         keyLabel: key.label || null,
@@ -113,9 +115,8 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
         // slot so sibling keys land in the same top-K score window.
         order: spread ? sharedOrder : sequentialOrder++,
         active: profileIsActive,
-        rotationOptOut,
-        config: withPrimaryConfig(config, profilePrimary, key)
-      });
+        rotationOptOut
+      }, snapshot, mergedPrimary, key));
     });
 
     if (spread) {
@@ -128,7 +129,7 @@ export function codexPrimaryCandidates(config: CompactGateConfig): PrimaryCandid
 }
 
 export function candidateSignature(candidates: PrimaryCandidate[]): string {
-  return candidates.map((candidate) => profileSignature(candidate)).join("::");
+  return candidates.map(profileSignature).join("::");
 }
 
 /**
@@ -141,47 +142,37 @@ export function candidateSignatures(candidates: PrimaryCandidate[]): Map<string,
   return new Map(candidates.map((candidate) => [candidate.id, profileSignature(candidate)]));
 }
 
-function withPrimaryConfig(
-  config: CompactGateConfig,
-  profilePrimary: Partial<UpstreamConfig>,
+function buildCandidate(
+  metadata: Omit<PrimaryCandidate, "config" | "primary">,
+  snapshot: CompactGateConfig,
+  mergedPrimary: CompactGateConfig["primary"],
   key: UpstreamApiKey | undefined
-): CompactGateConfig {
+): PrimaryCandidate {
+  // Resolving a selected key must never fall through to a sibling in its pool.
+  const primary = structuredClone(key ? { ...mergedPrimary, api_key: key.api_key, api_keys: [] } : mergedPrimary);
+  let owned: CompactGateConfig | undefined;
   return {
-    ...cloneConfig(config),
-    primary: {
-      ...config.primary,
-      ...profilePrimary,
-      // Optional profile-owned fields must not inherit the active profile's
-      // priority or OAuth binding. An omitted priority means zero here.
-      api_key_priority: profilePrimary.api_key_priority,
-      oauth_account_id: profilePrimary.oauth_account_id,
-      // The pool has to be emptied alongside, or the selection is inert:
-      // `resolveRouteCredential` reads the pool's first enabled entry *before*
-      // `api_key`, so every candidate resolved to pool[0] no matter which key it
-      // was built for. A pool of three then sent one key three times and, once
-      // that key hit a 429, burned all three candidates into isolation — worse
-      // than configuring no pool at all. `primaryCredentialSignature` reads the
-      // same resolver, so every candidate was also hashing pool[0]: rotating a
-      // non-first key moved no signature at all, while rotating the first moved
-      // its siblings' too. This copy is per-candidate and in memory only, so
-      // emptying the array here can never reach the file, where an empty pool
-      // does mean "cleared".
-      ...(key ? { api_key: key.api_key, api_keys: [] } : {})
+    ...metadata,
+    get primary() {
+      return owned?.primary ?? primary;
+    },
+    get config() {
+      return owned ??= { ...cloneConfig(snapshot), primary };
     }
   };
 }
 
-function profileSignature(candidate: PrimaryCandidate): string {
+function profileSignature({ id, primary }: PrimaryCandidate): string {
   return [
-    candidate.id,
-    candidate.config.primary.base_url,
-    candidate.config.primary.api_key_env,
-    candidate.config.primary.upstream_protocol,
-    candidate.config.primary.model_override ?? "",
-    candidate.config.primary.reasoning_effort,
-    candidate.config.primary.state_domain_id,
-    primaryTransportSignature(candidate.config.primary),
-    primaryCredentialSignature(candidate.config)
+    id,
+    primary.base_url,
+    primary.api_key_env,
+    primary.upstream_protocol,
+    primary.model_override ?? "",
+    primary.reasoning_effort,
+    primary.state_domain_id,
+    primaryTransportSignature(primary),
+    primaryCredentialSignature(primary)
   ].join("|");
 }
 
@@ -192,8 +183,8 @@ function primaryTransportSignature(primary: CompactGateConfig["primary"]): strin
   })).digest("hex");
 }
 
-function primaryCredentialSignature(config: CompactGateConfig): string {
-  const credential = resolveRouteCredential("primary", config);
+function primaryCredentialSignature(primary: CompactGateConfig["primary"]): string {
+  const credential = resolveUpstreamCredential("primary", primary);
   return [
     credential.apiKeySource,
     credential.activeApiKeyEnv ?? "",

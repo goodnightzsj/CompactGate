@@ -1,4 +1,5 @@
 import type { CapturePayload, CaptureRecord, CaptureResponsePayload } from "./types.js";
+import { isRecord } from "./records.js";
 
 export type CaptureDiffKind = "added" | "removed" | "changed";
 
@@ -12,7 +13,7 @@ export interface CaptureDiffEntry {
 export interface CaptureDiffResult {
   available: boolean;
   equivalent: boolean;
-  reason: "transparent" | "invalid_json" | "truncated" | "diff_limit" | null;
+  reason: "transparent" | "unavailable" | "invalid_json" | "truncated" | "diff_limit" | "depth_limit" | null;
   entries: CaptureDiffEntry[];
   truncated: boolean;
 }
@@ -33,6 +34,7 @@ export function captureResponseDiff(
   maxEntries = DEFAULT_MAX_ENTRIES
 ): CaptureDiffResult {
   if (capture.client_response === null) {
+    if (capture.stream_outcome !== "success") return unavailable("unavailable");
     return {
       available: true,
       equivalent: true,
@@ -62,31 +64,22 @@ function diffPayload(
   }
 
   const beforeValue = parsePayload(before);
-  const afterValue = parsePayload(after);
-  if (beforeValue === null || afterValue === null) {
+  const afterValue = before.body.text === after.body.text ? beforeValue : parsePayload(after);
+  if (beforeValue === undefined || afterValue === undefined) {
     return unavailable("invalid_json");
   }
 
-  const entries: CaptureDiffEntry[] = [];
-  let truncated = false;
-  walkDiff(beforeValue, afterValue, "$", entries, () => {
-    truncated = true;
-  }, maxEntries, 0);
-  return {
-    available: true,
-    equivalent: entries.length === 0 && !truncated,
-    reason: truncated ? "diff_limit" : null,
-    entries,
-    truncated
-  };
+  const result: CaptureDiffResult = { available: true, equivalent: true, reason: null, entries: [], truncated: false };
+  walkDiff(beforeValue, afterValue, "$", result, maxEntries, 0);
+  return result;
 }
 
-function parsePayload(payload: CapturePayload | CaptureResponsePayload): unknown | null {
+function parsePayload(payload: CapturePayload | CaptureResponsePayload): unknown {
   try {
     // Absent only on a capture read straight off disk; the API decodes it first.
     return JSON.parse(payload.body.text ?? "") as unknown;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -94,87 +87,71 @@ function walkDiff(
   before: unknown,
   after: unknown,
   path: string,
-  entries: CaptureDiffEntry[],
-  markTruncated: () => void,
+  result: CaptureDiffResult,
   maxEntries: number,
   depth: number
 ): void {
-  if (entries.length >= maxEntries) {
-    markTruncated();
-    return;
-  }
-  if (Object.is(before, after)) {
-    return;
-  }
-  if (depth >= MAX_DEPTH || !isContainer(before) || !isContainer(after)) {
-    entries.push({ path, kind: "changed", before: preview(before), after: preview(after) });
-    return;
-  }
-
-  if (Array.isArray(before) && Array.isArray(after)) {
-    const length = Math.max(before.length, after.length);
-    for (let index = 0; index < length; index += 1) {
-      const childPath = `${path}[${index}]`;
-      if (index >= before.length) {
-        addEntry(entries, markTruncated, maxEntries, {
-          path: childPath,
-          kind: "added",
-          before: null,
-          after: preview(after[index])
-        });
-      } else if (index >= after.length) {
-        addEntry(entries, markTruncated, maxEntries, {
-          path: childPath,
-          kind: "removed",
-          before: preview(before[index]),
-          after: null
-        });
-      } else {
-        walkDiff(before[index], after[index], childPath, entries, markTruncated, maxEntries, depth + 1);
+  if (Object.is(before, after)) return;
+  if (isContainer(before) && isContainer(after) && Array.isArray(before) === Array.isArray(after)) {
+    if (depth === MAX_DEPTH) {
+      const equal = compareImmediateChildren(before, after);
+      if (equal === true) return;
+      if (equal === undefined) {
+        result.reason = "depth_limit";
+        result.truncated = true;
+        result.equivalent = false;
+        return;
       }
-    }
-    return;
-  }
-
-  if (!Array.isArray(before) && !Array.isArray(after)) {
-    const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
-    for (const key of keys) {
-      const childPath = `${path}.${key}`;
-      if (!Object.hasOwn(before, key)) {
-        addEntry(entries, markTruncated, maxEntries, {
-          path: childPath,
-          kind: "added",
-          before: null,
-          after: preview(after[key])
-        });
-      } else if (!Object.hasOwn(after, key)) {
-        addEntry(entries, markTruncated, maxEntries, {
-          path: childPath,
-          kind: "removed",
-          before: preview(before[key]),
-          after: null
-        });
-      } else {
-        walkDiff(before[key], after[key], childPath, entries, markTruncated, maxEntries, depth + 1);
+    } else if (Array.isArray(before) && Array.isArray(after)) {
+      for (let i = 0; i < Math.max(before.length, after.length); i++) {
+        walkDiff(before[i], after[i], `${path}[${i}]`, result, maxEntries, depth + 1);
+        if (result.reason === "diff_limit") break;
       }
+      return;
+    } else {
+      const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+      for (const key of keys) {
+        walkDiff(child(before, key), child(after, key), `${path}.${key}`, result, maxEntries, depth + 1);
+        if (result.reason === "diff_limit") break;
+      }
+      return;
     }
-    return;
   }
 
-  entries.push({ path, kind: "changed", before: preview(before), after: preview(after) });
+  result.equivalent = false;
+  if (result.entries.length >= maxEntries) {
+    result.reason = "diff_limit";
+    result.truncated = true;
+    return;
+  }
+  result.entries.push({
+    path,
+    kind: before === undefined ? "added" : after === undefined ? "removed" : "changed",
+    before: before === undefined ? null : preview(before),
+    after: after === undefined ? null : preview(after)
+  });
 }
 
-function addEntry(
-  entries: CaptureDiffEntry[],
-  markTruncated: () => void,
-  maxEntries: number,
-  entry: CaptureDiffEntry
-): void {
-  if (entries.length >= maxEntries) {
-    markTruncated();
-    return;
+function child(container: Record<string, unknown> | unknown[], key: string): unknown {
+  if (!Object.hasOwn(container, key)) return undefined;
+  return Array.isArray(container) ? container[Number(key)] : container[key];
+}
+
+/** At the path limit a differing key or scalar still proves the whole subtree changed. */
+function compareImmediateChildren(
+  before: Record<string, unknown> | unknown[], after: Record<string, unknown> | unknown[]
+): boolean | undefined {
+  const keys = Object.keys(before);
+  if (keys.length !== Object.keys(after).length) return false;
+  let unresolved = false;
+  for (const key of keys) {
+    const a = child(before, key);
+    const b = child(after, key);
+    if (Object.is(a, b)) continue;
+    if (!isContainer(a) || !isContainer(b) || Array.isArray(a) !== Array.isArray(b)) return false;
+    unresolved = true;
   }
-  entries.push(entry);
+  return unresolved ? undefined : true;
 }
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {
@@ -182,18 +159,41 @@ function isContainer(value: unknown): value is Record<string, unknown> | unknown
 }
 
 function preview(value: unknown): string {
-  let text: string;
-  try {
-    text = JSON.stringify(value) ?? "null";
-  } catch {
-    text = String(value);
+  let text = "";
+  function write(item: unknown): void {
+    if (text.length > DEFAULT_MAX_VALUE_CHARS) return;
+    // Each opening delimiter consumes a character, so even extremely deep JSON is bounded.
+    if (Array.isArray(item)) {
+      text += "[";
+      for (let i = 0; i < item.length && text.length <= DEFAULT_MAX_VALUE_CHARS; i++) {
+        if (i) text += ",";
+        write(item[i]);
+      }
+      text += "]";
+    } else if (isRecord(item)) {
+      text += "{";
+      let first = true;
+      for (const key in item) {
+        if (text.length > DEFAULT_MAX_VALUE_CHARS) break;
+        if (!Object.hasOwn(item, key)) continue;
+        if (!first) text += ",";
+        first = false;
+        write(key);
+        text += ":";
+        write(item[key]);
+      }
+      text += "}";
+    } else {
+      text += JSON.stringify(typeof item === "string" ? item.slice(0, DEFAULT_MAX_VALUE_CHARS + 1) : item);
+    }
   }
+  write(value);
   return text.length > DEFAULT_MAX_VALUE_CHARS
     ? `${text.slice(0, DEFAULT_MAX_VALUE_CHARS)}...`
     : text;
 }
 
-function unavailable(reason: "invalid_json" | "truncated"): CaptureDiffResult {
+function unavailable(reason: "unavailable" | "invalid_json" | "truncated"): CaptureDiffResult {
   return {
     available: false,
     equivalent: false,

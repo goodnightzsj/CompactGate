@@ -38,15 +38,23 @@ describe.each(protocols)("agent model discovery through %s", (upstream_protocol)
     });
     const base_url = `${upstream.url}/vendor${upstream_protocol === "anthropic_messages" ? "" : "/v4"}?flag=keep&client_version=old`;
     const route = { base_url, upstream_protocol, api_key: "synthetic-key" };
-    const app = await startApp(undefined, undefined, { primary: route, claude: { primary: route } });
+    const app = await startApp(undefined, undefined, { primary: route, claude: { primary: route, model_map: { default: "generation-default" } } });
     const response = await fetch(`${app.url}${path}?client_version=pi&tag=a&tag=b&after_id=cursor`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(catalog);
     const prefix = upstream_protocol === "anthropic_messages" ? "/vendor/v1" : "/vendor/v4";
     expect(requests).toEqual([`${prefix}/models?flag=keep&client_version=pi&tag=a&tag=b&after_id=cursor`]);
     expect(previewRoute("GET", `${path}?client_version=pi&tag=a&tag=b&after_id=cursor`, undefined, app.config.get())).toMatchObject({
-      upstream_url: `${upstream.url}${requests[0]}`, translation_mode: "passthrough"
+      upstream_url: `${upstream.url}${requests[0]}`, translation_mode: "passthrough", target_model: null
     });
+    const preview = await postJson(app.url, "/api/test-route", {
+      method: "GET", path: `${path}?client_version=pi&tag=a&tag=b&after_id=cursor`, body: { model: "post-draft" }
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({
+      method: "GET", upstream_url: `${upstream.url}${requests[0]}`, source_model: null, target_model: null, body_rewritten: false
+    });
+    expect(requests).toHaveLength(1);
   });
 });
 
@@ -97,7 +105,8 @@ describe("generic agent generation", () => {
     ["/anthropic/v1/responses", "openai_responses"],
     ["/v1/chat/completions", "openai_responses"],
     ["/v1/chat/completions", "anthropic_messages"],
-    ["/v1/messages", "anthropic_messages"]
+    ["/v1/messages", "anthropic_messages"],
+    ["/v1/messages/count_tokens", "openai_responses"]
   ] as const)("rejects incompatible %s to %s before sending", async (path, upstream_protocol) => {
     let calls = 0;
     const upstream = await startClaudeUpstream((_req, res) => { calls++; writeJsonResponse(res, chatResponse); });
@@ -105,9 +114,40 @@ describe("generic agent generation", () => {
     const app = await startApp(undefined, undefined, { primary: route, claude: { primary: route } });
     const response = await postJson(app.url, path, { ...chatRequest, stream: true }, { "user-agent": "pi (synthetic)" });
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error", code: "unsupported_protocol", message: expect.any(String) } });
+    const { error } = await response.json();
+    expect(error).toMatchObject({ type: "invalid_request_error", code: "unsupported_protocol", message: expect.any(String) });
+    const preview = await postJson(app.url, "/api/test-route", { method: "POST", path, body: chatRequest });
+    expect(preview.status).toBe(response.status);
+    expect(await preview.json()).toMatchObject({ error });
     expect(calls).toBe(0);
     expect(await waitForLogEntry(app.url, () => true)).toMatchObject({ status: 400, upstream_status: null });
+  });
+
+  it.each(["/v1/responses/compact", "/v1/responses"])("matches rejected Chat compaction at %s in Studio", async path => {
+    let calls = 0;
+    const upstream = await startClaudeUpstream((_req, res) => { calls++; writeJsonResponse(res, chatResponse); });
+    const app = await startApp(upstream.url, upstream.url, {
+      compact: { upstream_mode: "split", upstream_protocol: "openai_chat" }
+    });
+    const headers = { "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" }) };
+    const body = { model: "fixture", input: "summarize" };
+    const response = await postJson(app.url, path, body, headers);
+    const preview = await postJson(app.url, "/api/test-route", { path, body, headers });
+    expect(response.status).toBe(422);
+    expect(preview.status).toBe(response.status);
+    expect(await preview.json()).toMatchObject({ error: (await response.json()).error });
+    expect(calls).toBe(0);
+  });
+
+  it("matches the unavailable Messages token count on a Chat upstream in Studio", async () => {
+    const app = await startApp(undefined, undefined, { claude: { primary: { upstream_protocol: "openai_chat" } } });
+    const path = "/anthropic/v1/messages/count_tokens";
+    const body = { model: "fixture", messages: [{ role: "user", content: "count" }] };
+    const response = await postJson(app.url, path, body);
+    const preview = await postJson(app.url, "/api/test-route", { path, body });
+    expect(response.status).toBe(501);
+    expect(preview.status).toBe(response.status);
+    expect(await preview.json()).toMatchObject({ error: (await response.json()).error });
   });
 
   it.each(["/anthropic/messages", "/anthropic/v1/messages"])("forwards native Messages from other agents at %s", async (path) => {

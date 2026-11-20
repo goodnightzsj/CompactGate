@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   HealthResponse,
   LogStatusKind,
@@ -33,16 +33,8 @@ import { errorSummary } from "../shared/api.js";
 
 const STREAM_RECONNECTING_MESSAGE = "实时日志流暂时断开，浏览器正在重连。";
 
-export function mergeCodexStatusIntoHealth(
-  health: HealthResponse | null,
-  event: StudioLogEvent
-): HealthResponse | null {
-  return health && event.codex_status
-    ? { ...health, codex: event.codex_status }
-    : health;
-}
-
 interface PendingLogLoad {
+  controller: AbortController;
   generation: number;
   query: LogPageQuery;
   liveEvents: StudioLogEvent[];
@@ -66,7 +58,7 @@ export async function fetchPendingLogPage(
     // rows without an insert. Re-query their window rather than mixing totals.
     pending.snapshot = null;
     pending.liveEvents = [];
-    page = await fetchLogPage({ ...query, offset: 0 });
+    page = await fetchLogPage({ ...query, offset: 0 }, pending.controller.signal);
   } while (pending.snapshot && isCurrent());
   return replayLiveLogEvents(
     page,
@@ -85,7 +77,7 @@ export async function fetchMoreLogPage(
   isCurrent: () => boolean
 ): Promise<RequestLogPage> {
   const { query } = pending;
-  const next = await fetchLogPage({ ...query, offset: baseline.logs.length });
+  const next = await fetchLogPage({ ...query, offset: baseline.logs.length }, pending.controller.signal);
   if (pending.snapshot && isCurrent()) return fetchPendingLogPage(pending, isCurrent);
   // Live inserts may have cropped the displayed tail while this request was
   // pending. Start from its original window and grow it before replaying.
@@ -108,7 +100,8 @@ export function useLogFeed({
   logPageLimit,
   applyRemoteConfig,
   onServerRecovered,
-  setHealth
+  setHealth,
+  setCodexStatus
 }: {
   enabled: boolean;
   filterLogs: boolean;
@@ -116,8 +109,9 @@ export function useLogFeed({
   logPageLimit: number;
   applyRemoteConfig: (config: PublicConfig) => void;
   /** A page that answers proves the proxy is back, not just the log feed. */
-  onServerRecovered: () => void;
+  onServerRecovered: (healthRecovered?: boolean) => void;
   setHealth: React.Dispatch<React.SetStateAction<HealthResponse | null>>;
+  setCodexStatus: (codex: HealthResponse["codex"]) => void;
 }) {
   const [logState, setLogState] = useState<LogPresentationState>(() => ({
     page: emptyLogPage(DEFAULT_LOG_PAGE_LIMIT),
@@ -141,6 +135,8 @@ export function useLogFeed({
   const loadMoreRequestIdRef = useRef(0);
   const pendingLogLoadRef = useRef<PendingLogLoad | null>(null);
   const pendingMoreLoadRef = useRef<PendingLogLoad | null>(null);
+  const pendingRefreshRef = useRef<PendingLogLoad | null>(null);
+  const lastRequestedQueryRef = useRef<LogPageQuery | null>(null);
   const appliedQueryRef = useRef<LogPageQuery>({
     route: "all",
     status: "all",
@@ -156,11 +152,6 @@ export function useLogFeed({
 
   const logPage = logState.page;
 
-  const deferredFilter = useDeferredValue(requestedQuery.route);
-  const deferredStatusFilter = useDeferredValue(requestedQuery.status);
-  const deferredHostFilter = useDeferredValue(requestedQuery.host);
-  const deferredSearchFilter = useDeferredValue(requestedQuery.search);
-  const deferredDrilldown = useDeferredValue(requestedQuery.drilldown);
   const hostOptions = useMemo(
     () => buildHostFilterOptions(logPage.host_counts, hostFilter),
     [logPage.host_counts, hostFilter]
@@ -168,45 +159,51 @@ export function useLogFeed({
 
   useEffect(() => {
     if (!enabled || !hasConfig) {
+      lastRequestedQueryRef.current = null;
       isLoadingLogsRef.current = false;
       pendingLogLoadRef.current = null;
       pendingMoreLoadRef.current = null;
       setIsLoadingLogs(false);
+      isLoadingMoreLogsRef.current = false;
+      setIsLoadingMoreLogs(false);
       return;
     }
 
-    let cancelled = false;
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     loadMoreRequestIdRef.current += 1;
+    pendingMoreLoadRef.current?.controller.abort();
     pendingMoreLoadRef.current = null;
     isLoadingMoreLogsRef.current = false;
     setIsLoadingMoreLogs(false);
     const query: LogPageQuery = {
-      route: deferredFilter,
-      status: deferredStatusFilter,
-      host: deferredHostFilter,
-      search: deferredSearchFilter,
-      drilldown: deferredDrilldown,
+      route: requestedQuery.route,
+      status: requestedQuery.status,
+      host: requestedQuery.host,
+      search: requestedQuery.search,
+      drilldown: requestedQuery.drilldown,
       limit: logPageLimit
     };
     isLoadingLogsRef.current = true;
     const pendingLoad: PendingLogLoad = {
+      controller: new AbortController(),
       generation,
       query,
       liveEvents: [],
       snapshot: null
     };
     pendingLogLoadRef.current = pendingLoad;
+    const isCurrent = () => !pendingLoad.controller.signal.aborted &&
+      isCurrentLogRequest(generation, generationRef.current);
 
     async function loadLogs() {
       setIsLoadingLogs(true);
 
       try {
         const nextPage = await fetchPendingLogPage(pendingLoad,
-          () => !cancelled && isCurrentLogRequest(generation, generationRef.current));
+          isCurrent);
 
-        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+        if (isCurrent()) {
           pendingLogLoadRef.current = null;
           appliedQueryRef.current = query;
           setLogState((previous) => ({
@@ -218,24 +215,35 @@ export function useLogFeed({
           setRequestError(null);
         }
       } catch (error) {
-        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+        if (isCurrent()) {
           pendingLogLoadRef.current = null;
           setRequestError({ message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "first-page" });
         }
       } finally {
-        if (!cancelled && isCurrentLogRequest(generation, generationRef.current)) {
+        if (isCurrent()) {
           isLoadingLogsRef.current = false;
           setIsLoadingLogs(false);
         }
       }
     }
 
-    void loadLogs();
+    const previousQuery = lastRequestedQueryRef.current;
+    lastRequestedQueryRef.current = query;
+    // Only typing waits; explicit filters, retries and clearing remain instant.
+    const debounce = query.search !== "" && previousQuery && previousQuery.search !== query.search &&
+      logPageQueryKey({ ...previousQuery, search: "" }) === logPageQueryKey({ ...query, search: "" });
+    setIsLoadingLogs(true);
+    const timer = debounce ? window.setTimeout(() => void loadLogs(), 250) : null;
+    if (timer === null) void loadLogs();
 
     return () => {
-      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      pendingLoad.controller.abort();
+      pendingMoreLoadRef.current?.controller.abort();
+      pendingRefreshRef.current?.controller.abort();
+      pendingRefreshRef.current = null;
     };
-  }, [deferredFilter, deferredStatusFilter, deferredHostFilter, deferredSearchFilter, deferredDrilldown, enabled, hasConfig, logPageLimit, reloadToken]);
+  }, [requestedQuery.route, requestedQuery.status, requestedQuery.host, requestedQuery.search, requestedQuery.drilldown, enabled, hasConfig, logPageLimit, reloadToken]);
 
   useEffect(() => {
     setKeyActivity([]);
@@ -245,25 +253,25 @@ export function useLogFeed({
 
     let closed = false;
     let refreshRequestId = 0;
-    let pendingRefresh: PendingLogLoad | null = null;
 
     async function refreshAppliedLogPage(isStillRelevant: () => boolean): Promise<boolean> {
       // In-flight loads already replay maintenance invalidations. Do not launch
       // a second owner that can replace their newer query or release its flags.
-      if (pendingLogLoadRef.current || pendingRefresh) return false;
+      if (pendingLogLoadRef.current || pendingRefreshRef.current) return false;
       const generation = generationRef.current;
       const query = appliedQueryRef.current;
       const requestId = refreshRequestId + 1;
       refreshRequestId = requestId;
-      const pendingLoad: PendingLogLoad = { generation, query, liveEvents: [], snapshot: null };
-      pendingRefresh = pendingLoad;
+      const pendingLoad: PendingLogLoad = { controller: new AbortController(), generation, query, liveEvents: [], snapshot: null };
+      pendingRefreshRef.current = pendingLoad;
       loadMoreRequestIdRef.current += 1;
+      pendingMoreLoadRef.current?.controller.abort();
       pendingMoreLoadRef.current = null;
       isLoadingMoreLogsRef.current = false;
       setIsLoadingMoreLogs(false);
       isLoadingLogsRef.current = true;
       setIsLoadingLogs(true);
-      const isCurrent = () => !closed && isStillRelevant() && isCurrentLogPageRequest(
+      const isCurrent = () => !closed && !pendingLoad.controller.signal.aborted && isStillRelevant() && isCurrentLogPageRequest(
         generation, generationRef.current, query, appliedQueryRef.current, requestId, refreshRequestId
       );
       try {
@@ -294,10 +302,12 @@ export function useLogFeed({
           });
         }
       } finally {
-        if (pendingRefresh === pendingLoad) pendingRefresh = null;
-        if (!closed && generation === generationRef.current && !pendingLogLoadRef.current) {
-          isLoadingLogsRef.current = false;
-          setIsLoadingLogs(false);
+        if (pendingRefreshRef.current === pendingLoad) {
+          pendingRefreshRef.current = null;
+          if (!closed && generation === generationRef.current && !pendingLogLoadRef.current) {
+            isLoadingLogsRef.current = false;
+            setIsLoadingLogs(false);
+          }
         }
       }
       return false;
@@ -311,6 +321,8 @@ export function useLogFeed({
 
       return () => {
         closed = true;
+        pendingRefreshRef.current?.controller.abort();
+        pendingRefreshRef.current = null;
         window.clearInterval(interval);
       };
     }
@@ -341,6 +353,9 @@ export function useLogFeed({
       // A reconnect snapshot may not overlap the loaded window. Re-query even
       // unfiltered pages so subsequent offsets start from a contiguous page.
       if (wasInterrupted) {
+        // The interrupted poll can no longer commit; hand its slot to recovery.
+        pendingRefreshRef.current?.controller.abort();
+        pendingRefreshRef.current = null;
         void refreshAppliedLogPage(() => !streamInterrupted);
       }
     }
@@ -354,13 +369,15 @@ export function useLogFeed({
         setKeyActivity((previous) => previous.filter((entry) => entry.config_revision === snapshot.config.revision));
         applyRemoteConfig(snapshot.config);
         setHealth(snapshot.health);
-        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh, pendingMoreLoadRef.current]) {
+        onServerRecovered(true);
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefreshRef.current, pendingMoreLoadRef.current]) {
           if (pendingLoad?.generation === generationRef.current) {
             pendingLoad.snapshot = snapshot.log_page;
           }
         }
         if (snapshot.logs_invalidated) {
           loadMoreRequestIdRef.current += 1;
+          pendingMoreLoadRef.current?.controller.abort();
           pendingMoreLoadRef.current = null;
           isLoadingMoreLogsRef.current = false;
           setIsLoadingMoreLogs(false);
@@ -380,8 +397,8 @@ export function useLogFeed({
     const handleLog = (event: MessageEvent<string>) => {
       try {
         const payload = JSON.parse(event.data) as StudioLogEvent;
-        setHealth((previous) => mergeCodexStatusIntoHealth(previous, payload));
-        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefresh, pendingMoreLoadRef.current]) {
+        if (payload.codex_status) setCodexStatus(payload.codex_status);
+        for (const pendingLoad of [pendingLogLoadRef.current, pendingRefreshRef.current, pendingMoreLoadRef.current]) {
           if (pendingLoad?.generation === generationRef.current) {
             pendingLoad.liveEvents.push(payload);
           }
@@ -454,6 +471,8 @@ export function useLogFeed({
 
     return () => {
       closed = true;
+      pendingRefreshRef.current?.controller.abort();
+      pendingRefreshRef.current = null;
       window.clearInterval(recoveryPollTimer);
       stream.removeEventListener("open", handleOpen);
       stream.removeEventListener("snapshot", handleSnapshot as EventListener);
@@ -466,7 +485,8 @@ export function useLogFeed({
     enabled,
     applyRemoteConfig,
     onServerRecovered,
-    setHealth
+    setHealth,
+    setCodexStatus
   ]);
 
   function retryLogs() {
@@ -484,21 +504,14 @@ export function useLogFeed({
     const requestId = loadMoreRequestIdRef.current + 1;
     loadMoreRequestIdRef.current = requestId;
     const query = appliedQueryRef.current;
-    const pending: PendingLogLoad = { generation, query, liveEvents: [], snapshot: null };
+    const pending: PendingLogLoad = { controller: new AbortController(), generation, query, liveEvents: [], snapshot: null };
     pendingMoreLoadRef.current = pending;
-    const isCurrent = () => isCurrentLogPageRequest(generation, generationRef.current,
+    const isCurrent = () => !pending.controller.signal.aborted && isCurrentLogPageRequest(generation, generationRef.current,
       query, appliedQueryRef.current, requestId, loadMoreRequestIdRef.current);
 
     try {
       const nextPage = await fetchMoreLogPage(pending, logPage, isCurrent);
-      if (isCurrentLogPageRequest(
-        generation,
-        generationRef.current,
-        query,
-        appliedQueryRef.current,
-        requestId,
-        loadMoreRequestIdRef.current
-      )) {
+      if (isCurrent()) {
         setLogState((previous) => ({
           ...previous,
           page: nextPage
@@ -506,28 +519,14 @@ export function useLogFeed({
         setRequestError((previous) => previous?.operation === "more" && previous.queryKey === logPageQueryKey(query) ? null : previous);
       }
     } catch (error) {
-      if (isCurrentLogPageRequest(
-        generation,
-        generationRef.current,
-        query,
-        appliedQueryRef.current,
-        requestId,
-        loadMoreRequestIdRef.current
-      )) {
+      if (isCurrent()) {
         setRequestError((previous) => previous?.operation === "first-page" ? previous : {
           message: errorSummary(error), queryKey: logPageQueryKey(query), operation: "more"
         });
       }
     } finally {
       if (pendingMoreLoadRef.current === pending) pendingMoreLoadRef.current = null;
-      if (isCurrentLogPageRequest(
-        generation,
-        generationRef.current,
-        query,
-        appliedQueryRef.current,
-        requestId,
-        loadMoreRequestIdRef.current
-      )) {
+      if (isCurrent()) {
         isLoadingMoreLogsRef.current = false;
         setIsLoadingMoreLogs(false);
       }

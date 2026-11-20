@@ -7,6 +7,7 @@ import { COPILOT_HEADERS, OAuthProviderError } from "./oauth-providers.js";
 import type { OAuthStore } from "./oauth-store.js";
 import { requestJson, UpstreamStatusError } from "./upstream-json-client.js";
 import { extractModelIds, type UpstreamModelsResponse } from "./upstream-models.js";
+import { waitForRequestPreparation, type RequestPreparationBudget } from "./request-preparation.js";
 
 interface OAuthRequest {
   upstream: URL;
@@ -19,7 +20,8 @@ export async function prepareOAuthRequest(
   route: UpstreamConfig,
   oauth: OAuthStore | undefined,
   request: OAuthRequest,
-  method = "POST"
+  method = "POST",
+  budget?: RequestPreparationBudget
 ): Promise<OAuthProviderId | null> {
   if (!route.oauth_account_id) return null;
   if (!oauth) throw new OAuthProviderError("OAuth service is unavailable for this request.", false, 503);
@@ -39,7 +41,9 @@ export async function prepareOAuthRequest(
     (relativePath.endsWith("/models") ? method !== "GET" : method !== "POST")) {
     throw new ConfigError("This OAuth provider does not support the requested endpoint or method. Use its supported model protocol.");
   }
-  const tokens = await oauth.credentials(route.oauth_account_id);
+  const tokens = budget
+    ? await waitForRequestPreparation(() => oauth.credentials(route.oauth_account_id!), budget)
+    : await oauth.credentials(route.oauth_account_id);
   const headers = request.requestHeaders;
   // A caller's API key, tenant, or cookie must never accompany a different account.
   for (const name of Object.keys(headers)) {
@@ -126,6 +130,7 @@ export async function fetchOAuthModels(
   userAgent?: string | null
 ): Promise<UpstreamModelsResponse> {
   const upstreamHost = new URL(route.base_url).host;
+  const budget = { startedAt: performance.now(), timeoutMs: Math.min(timeoutMs, 30_000), timeoutMessage: "OAuth model request timed out." };
   try {
     const account = oauth?.get(route.oauth_account_id ?? "");
     if (!account) throw new OAuthProviderError("OAuth connection is missing. Reconnect it in Profiles.", true, 401);
@@ -137,13 +142,15 @@ export async function fetchOAuthModels(
       upstream, upstreamBody: Buffer.alloc(0),
       requestHeaders: { accept: "application/json", ...(userAgent ? { "user-agent": userAgent } : {}), ...route.extra_headers }
     };
-    await prepareOAuthRequest(route, oauth, request, "GET");
+    await prepareOAuthRequest(route, oauth, request, "GET", budget);
     if (account.provider === "openai-codex") {
       // Same local identity baseline used by ordinary model discovery.
       const version = /\/(\d+\.\d+\.\d+)/.exec(userAgent || factoryClientUserAgent("codex"))?.[1];
       if (version) upstream.searchParams.set("client_version", version);
     }
-    const body = await requestJson(upstream, request.requestHeaders, Math.min(timeoutMs, 30_000), { proxyUrl: route.proxy_url });
+    const remaining = budget.startedAt + budget.timeoutMs - performance.now();
+    if (remaining <= 0) throw new Error(budget.timeoutMessage);
+    const body = await requestJson(upstream, request.requestHeaders, remaining, { proxyUrl: route.proxy_url });
     const models = oauthModelIds(account.provider, body);
     return { models, upstream_host: upstreamHost, error: models.length ? null : "厂商未返回当前连接可用的模型，请检查账号权限或手动填写模型 ID。" };
   } catch (error) {

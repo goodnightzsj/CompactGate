@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigStore, DEFAULT_CONFIG } from "../src/server/config.js";
@@ -76,8 +76,59 @@ const invalidImports = [
   { profiles: [profile(null)] },
   { profile_scopes: { codex: { profiles: [profile([])] } } },
   { profile_scopes: { claude: { profiles: [profile({ claude: { compact: [] } })] } } },
-  { profiles: [profile({ primary: { api_keys: {} } })] }
+  { profiles: [profile({ primary: { api_keys: {} } })] },
+  { primary: { api_key: 12345 } }, { primary: { base_url: 123 } },
+  { logging: { persist_body: "false" } }, { logging: { capture_dir: 123 } },
+  { timeouts: { primary_ms: "1000" } }, { primary: { rotation_opt_out: 1 } },
+  { claude: { model_map: { default: false } } }, { claude: { scene_map: { thinking: { model: 1 } } } },
+  { claude: { api_key: false } }, { profile_scopes: { codex: { active_profile_id: 123 } } },
+  { profiles: [profile({ primary: { api_key: false } })] },
+  { profile_scopes: { claude: { profiles: [profile({ claude: { primary: { api_key: null } } })] } } },
+  { primary: { api_keys: [{ id: "synthetic", api_key: "synthetic", enabled: "false" }] } },
+  { route_url_presets: [{ kind: "codex_primary", base_url: "https://synthetic.invalid", api_key: 123 }] }
 ];
+
+describe("strict persisted config", () => {
+  it.each(invalidImports)("rejects malformed load and restore without replacing saved state: %j", async (input) => {
+    const dir = await makeConfigDir();
+    const invalidPath = path.join(dir, "invalid.json");
+    const invalidJson = JSON.stringify(input);
+    await writeFile(invalidPath, invalidJson);
+    await expect(ConfigStore.load(invalidPath)).rejects.toBeInstanceOf(ConfigError);
+    expect(await readFile(invalidPath, "utf8")).toBe(invalidJson);
+
+    const file = path.join(dir, "synthetic.json");
+    const store = await ConfigStore.load(file);
+    try {
+      await store.patch({ primary: { model_override: "synthetic-retained-model" } });
+      await store.saveProfile("codex", "Synthetic retained", {});
+      const before = store.get();
+      const revision = store.revision;
+      const persisted = await readFile(file, "utf8");
+      const [backup] = await store.listBackups();
+      await writeFile(path.join(dir, backup!.id), invalidJson);
+      await expect(store.restoreBackup(backup!.id)).rejects.toBeInstanceOf(ConfigError);
+      expect(store.get()).toEqual(before);
+      expect(store.revision).toBe(revision);
+      expect(await readFile(file, "utf8")).toBe(persisted);
+    } finally { store.oauth.close(); }
+  });
+
+  it.each([{}, { profiles: [profile({})] }, {
+    profiles: [profile({ claude: { base_url: "https://synthetic.invalid/claude" } })]
+  }])("keeps legitimate omissions and legacy profiles on load and restore: %j", async (input) => {
+    const dir = await makeConfigDir();
+    const file = path.join(dir, "synthetic.json");
+    await writeFile(file, JSON.stringify(input));
+    const store = await ConfigStore.load(file);
+    try {
+      const expected = store.get();
+      await store.patch({ primary: { model_override: "synthetic-changed-model" } });
+      const [backup] = await store.listBackups();
+      expect(await store.restoreBackup(backup!.id)).toEqual(expected);
+    } finally { store.oauth.close(); }
+  });
+});
 
 describe("strict config import", () => {
   it.each(invalidImports)("rejects malformed containers without mutating any saved state: %j", async (input) => {

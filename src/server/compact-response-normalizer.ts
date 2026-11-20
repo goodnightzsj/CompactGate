@@ -1,8 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { sseDataFrames } from "./sse-frames.js";
 import type { IncomingHttpHeaders } from "node:http";
 import {
   decodeBodyText,
   isRecord,
+  looksLikeGzip,
+  looksLikeZstd,
   parseJsonRecord,
   readHeaderString
 } from "./http-utils.js";
@@ -10,10 +12,12 @@ import type {
   CompactResponseNormalizeReason,
   CompactResponseSyntheticSource
 } from "../shared/types.js";
+import { MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES } from "./upstream-response-buffer.js";
+import { decodeEncodedBody } from "./usage-utils.js";
 
 export interface CompactResponseNormalizationResult {
-  body: Buffer;
-  headers: IncomingHttpHeaders;
+  bridgeOutput: Array<Record<string, unknown>>;
+  responseItemCount: number;
   normalized: boolean;
   reason: CompactResponseNormalizeReason | null;
   syntheticSource: CompactResponseSyntheticSource | null;
@@ -24,8 +28,6 @@ export interface CompactResponseNormalizationOptions {
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
   requestBody: Buffer;
-  now?: () => number;
-  idFactory?: () => string;
 }
 
 const MAX_SYNTHETIC_SUMMARY_CHARS = 200_000;
@@ -33,55 +35,39 @@ const MAX_SYNTHETIC_SUMMARY_CHARS = 200_000;
 interface RawCompactResponseExtraction {
   outputItems: Array<Record<string, unknown>>;
   summaryText: string | null;
-  usage: Record<string, unknown> | null;
 }
 
 export function normalizeCompactResponse({
   status,
   responseBody,
   responseHeaders,
-  requestBody,
-  now = Date.now,
-  idFactory = createCompactGateResponseId
+  requestBody
 }: CompactResponseNormalizationOptions): CompactResponseNormalizationResult {
-  if (status !== 200) {
-    return unchangedCompactResponse(responseBody, responseHeaders);
-  }
-
-  const parsedResponse = parseJsonRecord(responseBody);
+  const inspected = inspectCompactResponse(responseBody, responseHeaders);
+  const outputItems = inspected?.outputItems ?? [];
+  const responseItemCount = outputItems.filter(isCompactionItem).length;
+  const unchanged = { normalized: false, reason: null,
+    syntheticSource: null, bridgeOutput: outputItems, responseItemCount };
+  if (status !== 200 || !inspected) return unchanged;
+  const { parsed: parsedResponse, eventStream } = inspected;
   const reason = compactResponseNormalizeReason(
     parsedResponse,
-    (readHeaderString(responseHeaders["content-type"]) ?? "").toLowerCase().includes("text/event-stream")
+    eventStream
   );
-  if (!reason) {
-    return unchangedCompactResponse(responseBody, responseHeaders);
-  }
-
-  const rawResponseExtraction = parsedResponse
-    ? null
-    : extractRawCompactResponse(responseBody, responseHeaders);
+  if (!reason) return unchanged;
   const upstreamSummary = parsedResponse
     ? usableSummaryOrNull(extractSummaryFromResponse(parsedResponse))
-    : usableSummaryOrNull(rawResponseExtraction?.summaryText ?? null);
-  const hasUpstreamStructuredOutput = Boolean(rawResponseExtraction && rawResponseExtraction.outputItems.length > 0);
-  const requestSummary = upstreamSummary ? null : usableSummaryOrNull(extractSummaryFromRequest(requestBody));
-  const syntheticSource: CompactResponseSyntheticSource = upstreamSummary || hasUpstreamStructuredOutput
+    : inspected.summaryText;
+  const requestSummary = upstreamSummary || responseItemCount > 0 ? null : usableSummaryOrNull(extractSummaryFromRequest(requestBody));
+  const syntheticSource: CompactResponseSyntheticSource = upstreamSummary || responseItemCount > 0
     ? "upstream_response"
     : "request_input";
   const summaryText = upstreamSummary ?? requestSummary ?? "Compact response did not include readable context.";
-  const synthetic = buildSyntheticCompactResponse({
-    parsedResponse,
-    outputItems: rawResponseExtraction?.outputItems ?? [],
-    rawUsage: rawResponseExtraction?.usage ?? null,
-    summaryText: truncateSyntheticSummary(summaryText),
-    now,
-    idFactory
-  });
-  const body = Buffer.from(JSON.stringify(synthetic));
-
   return {
-    body,
-    headers: syntheticResponseHeaders(responseHeaders, body),
+    bridgeOutput: responseItemCount > 0 ? outputItems : [{
+      type: "compaction", encrypted_content: truncateSyntheticSummary(summaryText)
+    }],
+    responseItemCount,
     normalized: true,
     reason,
     syntheticSource
@@ -92,23 +78,31 @@ export function countCompactResponseItems(
   responseBody: Buffer,
   responseHeaders: IncomingHttpHeaders
 ): number {
-  const parsed = parseJsonRecord(responseBody);
-  if (parsed) {
-    return Array.isArray(parsed.output) ? parsed.output.filter(isCompactionItem).length : 0;
-  }
-  return extractRawCompactResponse(responseBody, responseHeaders).outputItems.filter(isCompactionItem).length;
+  return inspectCompactResponse(responseBody, responseHeaders)?.outputItems.filter(isCompactionItem).length ?? 0;
 }
 
-function unchangedCompactResponse(
+function inspectCompactResponse(
   body: Buffer,
   headers: IncomingHttpHeaders
-): CompactResponseNormalizationResult {
+): (RawCompactResponseExtraction & { parsed: Record<string, unknown> | null; eventStream: boolean }) | null {
+  const declared = readHeaderString(headers["content-encoding"])?.trim().toLowerCase();
+  const encoding = declared || (looksLikeGzip(body) ? "gzip" : looksLikeZstd(body) ? "zstd" : "identity");
+  if (body.length > MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES) return null;
+  const decoded = decodeEncodedBody(body, encoding, MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES);
+  if (!decoded) return null;
+  const text = decoded.toString("utf8").trim();
+  const eventStream = (readHeaderString(headers["content-type"]) ?? "").toLowerCase().includes("text/event-stream");
+  if (text.startsWith("{")) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (isRecord(parsed)) return {
+        parsed, eventStream, outputItems: Array.isArray(parsed.output) ? parsed.output.filter(isRecord) : [],
+        summaryText: null
+      };
+    } catch { /* Some compatible upstreams return a readable summary instead of JSON. */ }
+  }
   return {
-    body,
-    headers,
-    normalized: false,
-    reason: null,
-    syntheticSource: null
+    parsed: null, eventStream, ...extractRawCompactResponse(text, eventStream)
   };
 }
 
@@ -124,64 +118,6 @@ function compactResponseNormalizeReason(
   }
 
   return Array.isArray(parsed.output) ? null : "missing_compaction_output";
-}
-
-function buildSyntheticCompactResponse({
-  parsedResponse,
-  outputItems,
-  rawUsage,
-  summaryText,
-  now,
-  idFactory
-}: {
-  parsedResponse: Record<string, unknown> | null;
-  outputItems: Array<Record<string, unknown>>;
-  rawUsage: Record<string, unknown> | null;
-  summaryText: string;
-  now: () => number;
-  idFactory: () => string;
-}): Record<string, unknown> {
-  const responseId = typeof parsedResponse?.id === "string" && parsedResponse.id.length > 0
-    ? parsedResponse.id
-    : idFactory();
-  const createdAt = typeof parsedResponse?.created_at === "number"
-    ? parsedResponse.created_at
-    : Math.floor(now() / 1000);
-  const normalizedOutput = outputItems.some(isCompactionItem)
-    ? outputItems
-    : [
-        {
-          type: "compaction",
-          encrypted_content: summaryText
-        }
-      ];
-  const synthetic: Record<string, unknown> = {
-    id: responseId,
-    object: "response.compaction",
-    created_at: createdAt,
-    output: normalizedOutput
-  };
-
-  if (isRecord(parsedResponse?.usage)) {
-    synthetic.usage = parsedResponse.usage;
-  } else if (rawUsage) {
-    synthetic.usage = rawUsage;
-  }
-
-  return synthetic;
-}
-
-function syntheticResponseHeaders(
-  upstreamHeaders: IncomingHttpHeaders,
-  body: Buffer
-): IncomingHttpHeaders {
-  const headers: IncomingHttpHeaders = { ...upstreamHeaders };
-  delete headers["content-encoding"];
-  delete headers["content-length"];
-  delete headers["transfer-encoding"];
-  headers["content-type"] = "application/json; charset=utf-8";
-  headers["content-length"] = String(body.byteLength);
-  return headers;
 }
 
 function extractSummaryFromResponse(response: Record<string, unknown>): string | null {
@@ -233,46 +169,19 @@ function extractOutputItemFromStreamEvent(value: unknown): Record<string, unknow
     : null;
 }
 
-function extractUsageFromStreamEvent(value: unknown): Record<string, unknown> | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  if (isRecord(value.usage)) {
-    return value.usage;
-  }
-
-  return isRecord(value.response) && isRecord(value.response.usage) ? value.response.usage : null;
-}
-
-function extractRawCompactResponse(
-  responseBody: Buffer,
-  responseHeaders: IncomingHttpHeaders
-): RawCompactResponseExtraction {
-  const contentType = (readHeaderString(responseHeaders["content-type"]) ?? "").toLowerCase();
-  const text = decodeBodyText(responseBody).trim();
+function extractRawCompactResponse(text: string, eventStream: boolean): RawCompactResponseExtraction {
   if (!text) {
-    return { outputItems: [], summaryText: null, usage: null };
+    return { outputItems: [], summaryText: null };
   }
 
-  if (!contentType.includes("text/event-stream")) {
-    return { outputItems: [], summaryText: text, usage: null };
+  if (!eventStream) {
+    return { outputItems: [], summaryText: usableSummaryOrNull(text) };
   }
 
   const deltas: string[] = [];
-  const outputItems: Array<Record<string, unknown>> = [];
-  let usage: Record<string, unknown> | null = null;
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) {
-      continue;
-    }
-
-    const payload = trimmed.slice(5).trim();
-    if (!payload || payload === "[DONE]") {
-      continue;
-    }
-
+  let outputItems: Array<Record<string, unknown>> = [];
+  let completedSummary: string | null = null;
+  for (const payload of sseDataFrames(text)) {
     try {
       const event = JSON.parse(payload) as unknown;
       if (isRecord(event) && event.type === "response.output_text.delta" && typeof event.delta === "string") {
@@ -282,9 +191,10 @@ function extractRawCompactResponse(
       if (outputItem) {
         outputItems.push(outputItem);
       }
-      const eventUsage = extractUsageFromStreamEvent(event);
-      if (eventUsage) {
-        usage = eventUsage;
+      if (isRecord(event) && event.type === "response.completed" && isRecord(event.response) && Array.isArray(event.response.output)) {
+        const completed = event.response.output.filter(isRecord);
+        if (completed.some(isCompactionItem)) outputItems = completed;
+        completedSummary = completed.flatMap(extractAssistantMessageText).join("\n\n").trim() || null;
       }
     } catch {
       continue;
@@ -298,8 +208,7 @@ function extractRawCompactResponse(
   const streamedText = deltas.join("").trim();
   return {
     outputItems,
-    summaryText: itemSummary || streamedText || null,
-    usage
+    summaryText: completedSummary ?? (itemSummary || streamedText || null)
   };
 }
 
@@ -378,8 +287,4 @@ function isCompactionItem(value: unknown): value is { type: "compaction"; encryp
     value.type === "compaction" &&
     typeof value.encrypted_content === "string"
   );
-}
-
-function createCompactGateResponseId(): string {
-  return `resp_compactgate_${randomUUID().replaceAll("-", "")}`;
 }

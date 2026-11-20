@@ -88,9 +88,11 @@ describe("OAuth request boundary", () => {
 });
 
 const frame = (event: unknown) => `data: ${JSON.stringify(event)}\r\n\r\n`;
-async function transformed(stream: Duplex, body: string) {
+async function transformed(stream: Duplex, body: string, chunkBytes?: number) {
   const bytes = Buffer.from(body);
-  Readable.from([bytes.subarray(0, 13), bytes.subarray(13, 29), bytes.subarray(29)]).pipe(stream);
+  Readable.from(chunkBytes
+    ? Array.from({ length: Math.ceil(bytes.length / chunkBytes) }, (_, index) => bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes))
+    : [bytes.subarray(0, 13), bytes.subarray(13, 29), bytes.subarray(29)]).pipe(stream);
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks).toString();
@@ -135,5 +137,92 @@ describe("Codex response adaptation", () => {
     await expect(transformed(result.stream, "data: not-json\n\n")).rejects.toThrow(/invalid SSE/);
     expect(createCodexResponseTransform(401, headers, true)).toBeNull();
     expect(createCodexResponseTransform(200, { "content-type": "application/json" }, false)).toBeNull();
+  });
+
+  it.each([false, true].flatMap((stream) => [false, true].map((anthropic) => ({ stream, anthropic }))))(
+    "preserves output above 8 MiB with stream=$stream and anthropic=$anthropic", async ({ stream, anthropic }) => {
+      const text = "x".repeat(9 * 1024 * 1024) + "\u4e2d\u6587\ud83d\ude42";
+      const largeItem = { ...item, content: [{ type: "output_text", text }] };
+      const result = createCodexResponseTransform(200, headers, stream, anthropic)!;
+      const output = await transformed(result.stream,
+        frame({ type: "response.output_item.done", output_index: 0, item: largeItem }) + frame(done()));
+      expect(output.includes(text)).toBe(true);
+      expect(result.sawTerminalEvent).toBe(true);
+      expect(result.translationError).toBeUndefined();
+      if (stream) expect(output).toContain(anthropic ? "message_stop" : "response.completed");
+      else expect(JSON.parse(output).usage).toMatchObject({ input_tokens: 8, output_tokens: 2 });
+    }
+  );
+
+  it("accepts a terminal SSE frame of exactly 32 MiB", async () => {
+    const part = { type: "output_text", text: "\u4e2d\u6587\ud83d\ude42" };
+    const event = { ...done(), response: { ...done().response, output: [{ ...item, content: [part] }] } };
+    part.text = "x".repeat(32 * 1024 * 1024 - Buffer.byteLength(frame(event)) + 4) + part.text;
+    const source = frame(event);
+    expect(Buffer.byteLength(source) - 4).toBe(32 * 1024 * 1024);
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const output = JSON.parse(await transformed(result.stream, source, 64 * 1024));
+    expect(output.output[0].content[0].text === part.text).toBe(true);
+    expect(result.sawTerminalEvent).toBe(true);
+  });
+
+  it.each(["\n\n", "\r\n\r\n", "\n\r\n", "\r\n\n"])("keeps delimiters and Unicode intact across one-byte chunks: %j", async (separator) => {
+    const source = [
+      { type: "response.output_item.done", output_index: 0, item }, done()
+    ].map((event) => "data: " + JSON.stringify(event) + separator).join("");
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const output = JSON.parse(await transformed(result.stream, source, 1));
+    expect(output.output).toEqual([item]);
+    expect(result.sawTerminalEvent).toBe(true);
+  });
+
+  it.each(["", "\r", "\n", "\r\n"])("flushes a final unseparated event ending in %j", async (suffix) => {
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const output = JSON.parse(await transformed(result.stream, "data: " + JSON.stringify(done()) + suffix, 1));
+    expect(output.id).toBe("resp_test");
+    expect(output.status).toBe("completed");
+    expect(result.sawTerminalEvent).toBe(true);
+  });
+
+  it("preserves multiline data and comments across fragmented frames", async () => {
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const event = { type: "response.output_item.done", output_index: 0, item };
+    const source = ": heartbeat\r\n\r\n" + JSON.stringify(event, null, 2)
+      .split("\n").map((line) => "data: " + line).join("\r\n") + "\r\n\r\n" + frame(done());
+    const output = JSON.parse(await transformed(result.stream, source, 7));
+    expect(output.output).toEqual([item]);
+    expect(result.sawTerminalEvent).toBe(true);
+  });
+
+  it.each([false, true])("rejects an SSE frame above 32 MiB, complete=%s", async (complete) => {
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const source = "data: " + "x".repeat(32 * 1024 * 1024 + 1 - 6) + (complete ? "\r\n\r\n" : "");
+    await expect(transformed(result.stream, source)).rejects.toThrow("SSE event exceeded the size limit");
+    expect(result.sawTerminalEvent).toBeUndefined();
+  });
+
+  it.each([0, 1])("keeps a 32 MiB aggregate byte boundary with overflow=%s", async (overflow) => {
+    const items = Array.from({ length: 4 }, (_, index) => {
+      const part = { type: "output_text", text: "\u4e2d\u6587\ud83d\ude42" };
+      const largeItem = { ...item, id: `msg_large_${index}`, content: [part] };
+      const bytes = 8 * 1024 * 1024 + (index === 3 ? overflow : 0);
+      part.text = "x".repeat(bytes - Buffer.byteLength(JSON.stringify(largeItem))) + part.text;
+      return largeItem;
+    });
+    expect(items.reduce((sum, value) => sum + Buffer.byteLength(JSON.stringify(value)), 0))
+      .toBe(32 * 1024 * 1024 + overflow);
+    const result = createCodexResponseTransform(200, headers, false)!;
+    const source = items.map((value, index) => frame({ type: "response.output_item.done", output_index: index, item: value })).join("") + frame(done());
+    if (overflow) {
+      await expect(transformed(result.stream, source)).rejects.toThrow("exceeded the aggregation limit");
+      expect(result.sawTerminalEvent).toBeUndefined();
+    } else {
+      const output = JSON.parse(await transformed(result.stream, source));
+      expect(output.output).toHaveLength(4);
+      for (const [index, value] of items.entries()) {
+        expect(output.output[index].content[0].text === value.content[0].text).toBe(true);
+      }
+      expect(result.sawTerminalEvent).toBe(true);
+    }
   });
 });

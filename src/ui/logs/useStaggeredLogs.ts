@@ -272,7 +272,7 @@ export function revealStaggeredLog(
   return [...current, ...stale].slice(0, targetLength);
 }
 
-function sameLogEntries(left: RequestLogEntry[], right: RequestLogEntry[]): boolean {
+export function sameLogEntries(left: RequestLogEntry[], right: RequestLogEntry[]): boolean {
   return (
     left.length === right.length &&
     left.every((entry, index) => entry === right[index])

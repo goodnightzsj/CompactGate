@@ -96,7 +96,7 @@ try {
   const upstream = await start((_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(process.argv[1] === "oversize"
-      ? "data: " + "x".repeat(8 * 1024 * 1024 + 1)
+      ? "data: " + "x".repeat(32 * 1024 * 1024 + 1)
       : "data: not-json\\n\\n");
   });
   const proxy = await start(async (req, res) => {

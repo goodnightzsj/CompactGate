@@ -29,6 +29,7 @@ import { serveStatic } from "./static-assets.js";
 import { createStudioSnapshot, StudioEventBroadcaster } from "./studio-events.js";
 import { CodexVersionMonitor } from "./codex-version.js";
 import { retainUpstreamProxyAgents } from "./upstream-proxy-agent.js";
+import { isLoopbackAddress } from "./request-profile.js";
 
 /**
  * Why a rejection reason rather than a boolean: the two headers fail for different
@@ -39,6 +40,9 @@ import { retainUpstreamProxyAgents } from "./upstream-proxy-agent.js";
  * callers omit both.
  */
 export function crossSiteApiRejection(req: IncomingMessage): string | null {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    return "Admin API is reachable from loopback peers only; remote peer refused.";
+  }
   const origin = req.headers.origin;
   if (origin !== undefined) {
     let originUrl: URL;
@@ -233,15 +237,18 @@ export async function createCompactGateServer(
     clientIdentity.close();
     configStore.oauth.close();
     // HTTP completion is earlier than proxy finally/capture persistence.
-    try {
-      await Promise.all(requests);
-    } finally {
-      releaseUpstreamAgents();
-    }
-    await actualCaptureWriter.flush();
-    await Promise.all([clientIdentity.flush(), configStore.oauth.flush()]);
+    const failures: unknown[] = [];
+    const collectFailures = (results: PromiseSettledResult<unknown>[]) => {
+      for (const result of results) if (result.status === "rejected") failures.push(result.reason);
+    };
+    collectFailures(await Promise.allSettled(requests));
+    try { releaseUpstreamAgents(); } catch (error) { failures.push(error); }
+    try { await actualCaptureWriter.flush(); } catch (error) { failures.push(error); }
+    collectFailures(await Promise.allSettled([clientIdentity.flush(), configStore.oauth.flush()]));
     actualLogger.removeEventListener("storage-pruned", notifyLogPrune);
-    await actualLogger.close();
+    try { await actualLogger.close(); } catch (error) { failures.push(error); }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "CompactGate resource shutdown failed.", { cause: failures[0] });
   }
   server.once("close", () => {
     void closeResources().catch((error) => console.error("CompactGate resource shutdown failed.", error));
@@ -350,6 +357,7 @@ async function routeRequest(
 
     await serveStatic(req, res, url);
   } catch (error) {
+    if (res.headersSent || res.destroyed) throw error;
     sendJson(res, statusForError(error), { error: summaryForError(error) });
   }
 }

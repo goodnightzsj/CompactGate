@@ -60,7 +60,7 @@ describe.each(["agentrouter.org", "api.anyrouter.top", "relay.example", "127.0.0
         res.writeHead(400, { "content-type": "application/json", "content-encoding": "gzip" });
         res.end(gzipSync(JSON.stringify({ error: { type: "invalid_request_error", code: null, param: "",
           message: `OpenAI Responses bad request: The encrypted content ${sent.length === 1
-            ? "for item cmp_synthetic" : "gAAA...8A=="} could not be verified. Reason: Encrypted content could not be decrypted or parsed. [trace_id=synthetic]`
+            ? "for item cmp_synthetic" : "gAAA...8A=="} could not be verified. Reason: Encrypted content could not be decrypted or parsed. [hub-] [trace_id=synthetic]`
         } })));
         return;
       }
@@ -101,6 +101,27 @@ describe.each(["agentrouter.org", "api.anyrouter.top", "relay.example", "127.0.0
       expect(request.headers["x-codex-beta-features"]).toBe("remote_compaction_v2");
       expect(Number(request.headers["content-length"])).toBe(Buffer.byteLength(request.body));
     }
+  });
+});
+
+describe("diagnostic decorations never authorize recovery on their own", () => {
+  it.each([
+    "[hub-] Gateway error: The encrypted content was not rejected. [trace_id=synthetic]",
+    "[hub-] The user wrote: The encrypted content could not be verified. [trace_id=synthetic]",
+    "The encrypted content could not be verified. [trace_id=first] [trace-id=second]"
+  ])("preserves the original HTTP error and all provider state: %s", async message => {
+    const sent: CapturedRequest[] = [];
+    const error = { error: { type: "invalid_request_error", code: null, message } };
+    const upstream = await startUpstream(async (req, res) => {
+      sent.push(await captureRequest(req));
+      writeJsonResponse(res, error, 400);
+    });
+    const app = await startApp(upstream.url, undefined, { primary: { api_key: "synthetic-key" } });
+    const response = await postJson(app.url, "/v1/responses", requestBody(), betaHeaders);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual(error);
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0].body)).toEqual(requestBody());
   });
 });
 

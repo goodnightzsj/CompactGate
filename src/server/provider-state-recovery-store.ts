@@ -28,6 +28,11 @@ const MAX_TOTAL_CHECKPOINT_BYTES = 64 * 1024 * 1024;
 /** Shares the logger's connection and lifetime, but owns only recovery tables. */
 export class ProviderStateRecoveryStore {
   private activeRetentionHours: number | null = null;
+  private generation = 0;
+
+  get checkpointGeneration(): number | null {
+    return this.activeRetentionHours === 0 ? null : this.generation;
+  }
   constructor(private readonly db: DatabaseSync, private readonly onWriteFailure?: (error: unknown) => void) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS provider_state_recovery_plans (
@@ -58,6 +63,8 @@ export class ProviderStateRecoveryStore {
     if (policy.unavailable || policy.priorEncryptedFailures.length > 3) return false;
     // Persist only hashes and bounded classifications, never error text or item IDs.
     const failures = [...policy.priorEncryptedFailures, ...(policy.failure ? [policy.failure] : [])];
+    // Older binaries cannot safely interpret request-local item fingerprints.
+    if (failures.some(failure => failure.inputItemHash !== undefined)) return false;
     if (failures.some(failure => (failure.itemId !== null || failure.inputIndex !== null) && failure.encryptedContentHash === null)) return false;
     const safePolicy = { ...policy, failure: policy.failure ? storedFailure(policy.failure) : null,
       priorEncryptedFailures: policy.priorEncryptedFailures.map(storedFailure) };
@@ -123,7 +130,10 @@ export class ProviderStateRecoveryStore {
 
   configureRetention(hours: number, now = Date.now()): void {
     this.activeRetentionHours = hours;
-    if (hours === 0) this.purgeCheckpoints();
+    if (hours === 0) {
+      this.generation += 1;
+      this.purgeCheckpoints();
+    }
     else this.db.prepare("DELETE FROM provider_state_checkpoints WHERE expires_at <= ? OR updated_at <= ?")
       .run(now, now - hours * 3_600_000);
   }
@@ -142,7 +152,8 @@ function nullableHash(value: unknown): boolean {
 function validStoredFailure(value: unknown): boolean {
   return isRecord(value) && ["encrypted_content", "compaction", "continuation", "resource_mismatch"].includes(String(value.kind)) &&
     (value.code === null || ["invalid_encrypted_content", "invalid_responses_request", "previous_response_not_found"].includes(String(value.code))) &&
-    ["code", "message"].includes(String(value.evidence)) && value.itemId === null && value.inputIndex === null && nullableHash(value.encryptedContentHash);
+    ["code", "message"].includes(String(value.evidence)) && value.itemId === null && value.inputIndex === null && nullableHash(value.encryptedContentHash) &&
+    value.inputItemHash === undefined;
 }
 
 function storedFailure(failure: ProviderStateFailure): ProviderStateFailure {

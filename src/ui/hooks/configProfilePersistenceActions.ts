@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
 import {
   formAfterScopedProfileChange,
-  formToPatch
+  formToProfilePatch
 } from "../config/config-form-state.js";
 import { profileScopeState } from "../config/profile-utils.js";
 import type { ConfigFormState, SaveState } from "../config/types.js";
@@ -14,7 +14,6 @@ export function createConfigProfilePersistenceActions({
   form,
   formRevision,
   setConfig,
-  setForm,
   applyProfileConfig,
   refreshHealthAfterWrite,
   setSaveError,
@@ -24,9 +23,8 @@ export function createConfigProfilePersistenceActions({
   config: PublicConfig | null;
   form: ConfigFormState;
   formRevision: string | null;
-  setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
-  setForm: Dispatch<SetStateAction<ConfigFormState>>;
-  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => void;
+  setConfig: (config: PublicConfig, form?: SetStateAction<ConfigFormState>) => Promise<void>;
+  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => Promise<void>;
   refreshHealthAfterWrite: () => Promise<void>;
   setSaveError: Dispatch<SetStateAction<string | null>>;
   setSaveState: Dispatch<SetStateAction<SaveState>>;
@@ -37,7 +35,7 @@ export function createConfigProfilePersistenceActions({
     nameOverride?: string
   ): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
-    const submittedName = { name: accessors.name, selectedId: accessors.selectedId };
+    const submittedName = { name: accessors.name, selectedId: accessors.selectedId, selectionRevision: accessors.selectionRevision };
     const trimmedName = (nameOverride ?? accessors.name).trim();
     if (!trimmedName) {
       accessors.setState("error");
@@ -49,6 +47,7 @@ export function createConfigProfilePersistenceActions({
     accessors.setError(null);
 
     try {
+      if (!config || !formRevision) throw new Error("配置尚未加载，请重试加载后再保存档案。");
       const nextConfig = await api<PublicConfig>("/api/config/profiles", {
         method: "POST",
         body: JSON.stringify({
@@ -58,7 +57,7 @@ export function createConfigProfilePersistenceActions({
           // PATCH /api/config. `applySelectedProfile` deliberately omits it:
           // it sends no draft, only a profile id.
           revision: formRevision,
-          config: formToPatch(form)
+          config: formToProfilePatch(form, scope)
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);
@@ -73,11 +72,10 @@ export function createConfigProfilePersistenceActions({
       // anything that can fail. Letting a health-probe error fall to the catch
       // block used to leave the UI showing the pre-save profile while the file
       // on disk had already changed.
-      setConfig(nextConfig);
+      // Rebuild only the saved scope; other draft fields never reached the server.
+      await setConfig(nextConfig, savedProfileIsActive
+        ? (current) => formAfterScopedProfileChange(current, nextConfig, scope, form) : undefined);
       if (savedProfileIsActive) {
-        // Only the saved scope round-tripped through the server; rebuilding the
-        // whole form here would revert untouched draft fields.
-        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope, form));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(
@@ -120,14 +118,8 @@ export function createConfigProfilePersistenceActions({
           profile_id: targetProfileId
         })
       });
-      const nextScope = profileScopeState(nextConfig, scope);
-      const nextActiveProfileId = nextScope.active_profile_id ?? targetProfileId;
-
-      applyProfileConfig(nextConfig, scope);
-      accessors.setSelectedId(nextActiveProfileId);
-      // Applying a profile stores no name, so it must not reset the rename draft:
-      // the sync effect fills the field from the selected profile whenever the
-      // operator is not mid-edit.
+      await applyProfileConfig(nextConfig, scope);
+      // The click already selected the target; keep later selection and rename edits.
       setSaveError(null);
       setSaveState("saved");
       accessors.setState("applied");
@@ -144,14 +136,14 @@ export function createConfigProfilePersistenceActions({
     }
   }
 
-  async function updateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string) {
+  async function updateSelectedProfile(scope: ConfigProfileScope = "codex", profileId?: string): Promise<boolean> {
     const accessors = scopedProfileAccessors(scope);
-    const submittedName = { name: accessors.name, selectedId: accessors.selectedId };
+    const submittedName = { name: accessors.name, selectedId: accessors.selectedId, selectionRevision: accessors.selectionRevision };
     const targetProfileId = profileId ?? accessors.selectedId;
     if (!targetProfileId) {
       accessors.setState("error");
       accessors.setError("请先选择一个已保存的配置档案。");
-      return;
+      return false;
     }
 
     const scopeState = config ? profileScopeState(config, scope) : null;
@@ -160,13 +152,14 @@ export function createConfigProfilePersistenceActions({
     if (targetProfileId === accessors.selectedId && !trimmedName) {
       accessors.setState("error");
       accessors.setError("请先填写配置档案名称。");
-      return;
+      return false;
     }
 
     accessors.setState("updating");
     accessors.setError(null);
 
     try {
+      if (!config || !formRevision) throw new Error("配置尚未加载，请重试加载后再保存档案。");
       const nextConfig = await api<PublicConfig>("/api/config/profiles", {
         method: "PATCH",
         body: JSON.stringify({
@@ -174,15 +167,15 @@ export function createConfigProfilePersistenceActions({
           profile_id: targetProfileId,
           revision: formRevision,
           ...(trimmedName ? { name: trimmedName } : {}),
-          config: formToPatch(form)
+          config: formToProfilePatch(form, scope)
         })
       });
       const nextScope = profileScopeState(nextConfig, scope);
       const profileIsActive = targetProfileId === nextScope.active_profile_id;
 
-      setConfig(nextConfig);
+      await setConfig(nextConfig, profileIsActive
+        ? (current) => formAfterScopedProfileChange(current, nextConfig, scope, form) : undefined);
       if (profileIsActive) {
-        setForm((current) => formAfterScopedProfileChange(current, nextConfig, scope, form));
         setSaveError(null);
         setSaveState("saved");
         window.setTimeout(
@@ -198,9 +191,14 @@ export function createConfigProfilePersistenceActions({
         1600
       );
       if (profileIsActive) await refreshHealthAfterWrite();
+      return true;
     } catch (error) {
+      const message = errorSummary(error);
       accessors.setState("error");
-      accessors.setError(errorSummary(error));
+      accessors.setError(/superseded revision/i.test(message)
+        ? "配置已更新，档案未写入。请核对最新档案后重新确认保存。"
+        : message);
+      return false;
     }
   }
 

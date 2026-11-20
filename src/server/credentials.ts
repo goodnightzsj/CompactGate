@@ -17,6 +17,15 @@ export interface ResolvedCredential {
   oauthAccountId?: string;
 }
 
+/** Escape delimiters and UTF-16 surrogates without collapsing them during domain hashing. */
+export function credentialCandidateId(profileId: string | null, keyId: string | null): string {
+  const escape = (value: string) => value.replace(/[%#:\uD800-\uDFFF]/g,
+    char => `%${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  const profile = profileId === null ? "" : escape(profileId);
+  // The direct key keeps the legacy profile identity regardless of backup count.
+  return keyId === null || keyId === DIRECT_API_KEY_ID ? profile : `${profile}#${escape(keyId)}`;
+}
+
 /**
  * The schedulable entries, highest priority first. Ties keep the direct
  * `api_key` first, then the configured pool order.
@@ -52,7 +61,13 @@ export function resolveRouteCredential(
       : route === "claude_compact" && config.claude.compact.upstream_mode === "primary"
         ? "claude_primary"
         : route;
-  const activeConfig = configForCredentialScope(activeCredentialScope, config);
+  return resolveUpstreamCredential(activeCredentialScope, configForCredentialScope(activeCredentialScope, config));
+}
+
+export function resolveUpstreamCredential(
+  activeCredentialScope: CredentialScope,
+  activeConfig: UpstreamConfig
+): ResolvedCredential {
   if (activeConfig.oauth_account_id) {
     return {
       apiKey: null, apiKeyConfigured: true, apiKeySource: "oauth",

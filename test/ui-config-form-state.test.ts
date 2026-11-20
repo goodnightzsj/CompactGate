@@ -12,6 +12,19 @@ import {
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 describe("UI config form state", () => {
+  it("preserves saved recovery retention when exporting and importing a draft", async () => {
+    const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+    await store.patch({ primary_failover: { state_recovery_retention_hours: 24 } });
+    const form = { ...formFromConfig(store.toPublicConfig()), autoSchedulePrimaryFailover: false };
+    const exported = applyDraftToConfigExport(store.get(), form);
+    await store.importConfig(exported);
+    expect(store.get().primary_failover).toMatchObject({
+      state_recovery_retention_hours: 24,
+      auto_schedule: false,
+      state_portability: form.primaryStatePortability
+    });
+  });
+
   it("reports changes in both clients and global settings without narrowing the saved payload", async () => {
     const dir = await makeConfigDir();
     const store = await ConfigStore.load(path.join(dir, "compactgate.json"));

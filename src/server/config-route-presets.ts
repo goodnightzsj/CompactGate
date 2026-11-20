@@ -31,6 +31,7 @@ type RouteConfigWithCredentialPreset = {
   base_url?: unknown;
   api_key?: unknown;
   api_key_env?: unknown;
+  api_keys?: unknown;
   credential_preset_id?: unknown;
 };
 
@@ -141,8 +142,13 @@ export function withRecordedRouteUrlPresets(
       continue;
     }
 
+    const baseId = createRouteUrlPresetId(kind, baseUrl);
+    let id = baseId;
+    for (let suffix = 2; presets.some(preset => preset.kind === kind && preset.id === id); suffix += 1) {
+      id = `${baseId}-${suffix}`;
+    }
     presets.push({
-      id: createRouteUrlPresetId(kind, baseUrl),
+      id,
       kind,
       base_url: baseUrl,
       api_key: apiKey,
@@ -233,8 +239,16 @@ function applyCredentialPresetToRoutePatch(
     throw new ConfigError(`${kind}.credential_preset_id must match the selected base_url.`);
   }
 
+  const routes = kind.startsWith("claude_") ? config.claude : config;
+  const current = kind.endsWith("_primary") ? routes.primary : routes.compact;
+  const changesTarget = normalizeRouteUrl(current.base_url) !== normalizeRouteUrl(preset.base_url);
+
   return {
     ...patch,
+    // A URL preset owns only its direct credential; old pool handles must not cross targets.
+    ...(changesTarget ? { api_keys: Array.isArray(patch.api_keys)
+      ? patch.api_keys.filter(entry => !isRecord(entry) || Object.hasOwn(entry, "api_key"))
+      : patch.api_keys === undefined ? [] : patch.api_keys } : {}),
     base_url: patchBaseUrl || preset.base_url,
     ...(!Object.hasOwn(patch, "api_key") ? { api_key: preset.api_key } : {}),
     ...(!Object.hasOwn(patch, "api_key_env") ? { api_key_env: preset.api_key_env } : {})

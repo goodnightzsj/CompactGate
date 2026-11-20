@@ -14,7 +14,7 @@ describe("upstream retry delay headers", () => {
     [{ "retry-after-ms": "2oops" }, null]
   ])("parses %j", (headers, expected) => expect(parseRetryAfterMs(headers, now)).toBe(expected));
   it("shares millisecond timing with account cooldown and retains its cap", () => {
-    expect(rateLimitCooldownMs({ status: 429, errorSummary: "rate limit", responseHeaders: { "retry-after-ms": "1250" } }, 1, now)).toBe(1250);
-    expect(rateLimitCooldownMs({ status: 429, errorSummary: "rate limit", responseHeaders: { "retry-after-ms": "3600000" } }, 1, now)).toBe(600000);
+    expect(rateLimitCooldownMs({ "retry-after-ms": "1250" }, 1, now)).toBe(1250);
+    expect(rateLimitCooldownMs({ "retry-after-ms": "3600000" }, 1, now)).toBe(600000);
   });
 });

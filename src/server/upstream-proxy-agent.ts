@@ -170,9 +170,9 @@ class HttpConnectHttpsAgent extends HttpsAgent {
     options: UpstreamRequestOptions & { servername?: string },
     callback?: (error: Error | null, stream: Duplex) => void
   ): Duplex | null | undefined {
-    const targetHost = String(options.hostname ?? options.host ?? "");
+    const targetHost = String(options.hostname ?? options.host ?? "").replace(/^\[|\]$/g, "");
     const targetPort = Number(options.port ?? 443);
-    const proxyHost = this.proxy.hostname;
+    const proxyHost = this.proxy.hostname.replace(/^\[|\]$/g, "");
     const proxyPort = Number(this.proxy.port || 80);
     const proxySocket = net.connect(proxyPort, proxyHost);
     const complete = callback ?? (() => undefined);
@@ -216,9 +216,10 @@ class HttpConnectHttpsAgent extends HttpsAgent {
     };
 
     const handleConnect = () => {
+      const authority = `${net.isIP(targetHost) === 6 ? `[${targetHost}]` : targetHost}:${targetPort}`;
       const lines = [
-        `CONNECT ${targetHost}:${targetPort} HTTP/1.1`,
-        `Host: ${targetHost}:${targetPort}`,
+        `CONNECT ${authority} HTTP/1.1`,
+        `Host: ${authority}`,
         "Proxy-Connection: Keep-Alive"
       ];
       let auth: string | null;
@@ -361,7 +362,7 @@ function resolveHttpsProxy(upstream: URL, explicitProxyUrl: string): URL | null 
 
 function hostMatchesNoProxy(upstream: URL): boolean {
   const configured = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
-  const host = upstream.hostname.toLowerCase();
+  const host = upstream.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   const port = upstream.port || (upstream.protocol === "https:" ? "443" : "80");
 
   for (const rawPattern of configured.split(",")) {
@@ -396,6 +397,9 @@ function hostMatchesNoProxy(upstream: URL): boolean {
 }
 
 function splitNoProxyPattern(pattern: string): [host: string, port: string | null] {
+  const bracketed = pattern.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketed) return [bracketed[1], bracketed[2] ?? null];
+  if (net.isIP(pattern) === 6) return [pattern, null];
   const index = pattern.lastIndexOf(":");
   if (index <= 0 || pattern.includes("]")) {
     return [pattern, null];

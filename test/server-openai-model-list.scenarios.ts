@@ -10,6 +10,16 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("CompactGate OpenAI model list", () => {
+  it("uses Anthropic authentication for an Anthropic Primary catalogue", async () => {
+    const primary = await startUpstream((req, res) => {
+      const ok = req.headers["x-api-key"] === "fixture" && req.headers["anthropic-version"] === "2023-06-01";
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+      res.end(JSON.stringify(ok ? { data: [{ id: "fixture-model" }] } : { error: "unauthorized" }));
+    });
+    const app = await startApp(primary.url, undefined, { primary: { api_key: "fixture", upstream_protocol: "anthropic_messages" } });
+    expect(await (await fetch(`${app.url}/api/openai/models`)).json()).toMatchObject({ models: ["fixture-model"], error: null });
+  });
+
   it("fetches models from the active Primary upstream", async () => {
     const primary = await startUpstream((req, res) => {
       expect(req.url).toBe("/v1/models");

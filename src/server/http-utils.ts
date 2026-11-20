@@ -5,7 +5,7 @@ import type { LogStatusKind, RouteKind } from "../shared/types.js";
 import { isRecord, readTrimmedString } from "../shared/records.js";
 export { isRecord, readTrimmedString };
 
-const DEFAULT_MAX_DECODED_BODY_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_DECODED_BODY_BYTES = 32 * 1024 * 1024;
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -72,9 +72,10 @@ export function copyResponseHeaders(headers: IncomingHttpHeaders, res: ServerRes
   }
 }
 
-export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+export async function readJsonBody(req: IncomingMessage, { required = false } = {}): Promise<unknown> {
   const rawBody = await readRawBody(req);
   if (rawBody.byteLength === 0) {
+    if (required) throw new ConfigError("A non-empty JSON document is required.");
     return {};
   }
 
@@ -89,12 +90,12 @@ export class RequestBodyTooLargeError extends Error {
 
 export function readRawBody(
   req: IncomingMessage,
-  limitBytes = 10 * 1024 * 1024
+  limitBytes?: number,
+  signal?: AbortSignal
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
-    let bodyTooLarge = false;
     let settled = false;
 
     const settle = (finish: () => void) => {
@@ -103,50 +104,59 @@ export function readRawBody(
       }
 
       settled = true;
-      finish();
+      try {
+        finish();
+      } finally {
+        chunks.length = 0;
+        signal?.removeEventListener("abort", abort);
+        req.off("data", onData);
+        req.off("end", onEnd);
+        req.off("aborted", rejectClientAbort);
+        req.off("close", rejectClientAbort);
+      }
     };
 
     const rejectClientAbort = () => {
-      if (bodyTooLarge || req.complete) {
+      if (req.complete) {
         return;
       }
 
       settle(() => reject(new Error("Client disconnected before request body completed.")));
     };
 
-    req.on("data", (chunk: Buffer) => {
-      if (bodyTooLarge) {
+    const abort = () => {
+      req.pause();
+      settle(() => reject(signal!.reason));
+    };
+    const onData = (chunk: Buffer) => {
+      if (settled) {
         return;
       }
 
       total += chunk.byteLength;
-      if (total > limitBytes) {
-        bodyTooLarge = true;
-        chunks.length = 0;
+      if (limitBytes !== undefined && total > limitBytes) {
         settle(() => reject(new RequestBodyTooLargeError()));
         req.resume();
         return;
       }
 
       chunks.push(chunk);
-    });
+    };
 
-    req.on("end", () => {
-      if (bodyTooLarge) {
-        return;
-      }
-
+    const onEnd = () => {
       settle(() => resolve(Buffer.concat(chunks)));
-    });
+    };
 
+    req.on("data", onData);
+    req.on("end", onEnd);
     req.on("error", (error) => {
-      if (!bodyTooLarge) {
-        settle(() => reject(error));
-      }
+      settle(() => reject(error));
     });
 
     req.on("aborted", rejectClientAbort);
     req.on("close", rejectClientAbort);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -173,7 +183,7 @@ export function endpointFromPath(pathname: string): string {
   return pathname || "/";
 }
 
-export function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+export function sendJson(res: ServerResponse, status: number, payload: unknown): Buffer | undefined {
   if (res.headersSent) {
     res.end();
     return;
@@ -184,6 +194,7 @@ export function sendJson(res: ServerResponse, status: number, payload: unknown):
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", String(body.byteLength));
   res.end(body);
+  return body;
 }
 
 export function statusForError(error: unknown): number {

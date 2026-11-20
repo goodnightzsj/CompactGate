@@ -1,12 +1,12 @@
-import { type Dispatch, type FormEvent, type SetStateAction, useState } from "react";
+import { type Dispatch, type FormEvent, type SetStateAction, useRef, useState } from "react";
 import type {
   CompactGateConfig,
   ConfigProfileScope,
-  HealthResponse,
   PublicConfig
 } from "../../shared/types.js";
 import {
   applyDraftToConfigExport,
+  formAfterConfigConflict,
   formAfterConfigImport,
   formToPatch
 } from "../config/config-form-state.js";
@@ -23,32 +23,33 @@ export function useConfigActions({
   linkedCompactModel,
   draftRevision,
   formRevision,
+  formBaseline,
   commitConfig,
-  rebaseFormRevision,
-  applyRemoteConfig,
+  applyWrittenConfig,
   applyProfileConfig,
   setConfig,
   setForm,
-  setHealth,
-  setPageError
+  refreshHealthAfterWrite
 }: {
   config: PublicConfig | null;
   form: ConfigFormState;
   linkedCompactModel: string;
   draftRevision: number;
   formRevision: string | null;
-  commitConfig: (config: PublicConfig, submittedRevision: number) => void;
-  rebaseFormRevision: () => void;
-  applyRemoteConfig: (config: PublicConfig) => void;
-  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => void;
-  setConfig: Dispatch<SetStateAction<PublicConfig | null>>;
+  formBaseline: PublicConfig | null;
+  commitConfig: (config: PublicConfig, submittedRevision: number) => Promise<void>;
+  applyWrittenConfig: (config: PublicConfig) => Promise<void>;
+  applyProfileConfig: (config: PublicConfig, scope: ConfigProfileScope) => Promise<void>;
+  setConfig: (config: PublicConfig, form?: SetStateAction<ConfigFormState>) => Promise<void>;
   setForm: Dispatch<SetStateAction<ConfigFormState>>;
-  setHealth: Dispatch<SetStateAction<HealthResponse | null>>;
-  setPageError: Dispatch<SetStateAction<string | null>>;
+  refreshHealthAfterWrite: () => Promise<void>;
 }) {
-  const routePreview = useRoutePreviewAction();
+  const routePreview = useRoutePreviewAction(config?.revision ?? null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportRequest = useRef(0);
+  const exportWithDraft = useRef(true);
   // A save refused for a superseded revision is the one error the operator can
   // resolve without losing the draft, so it gets its own affordance instead of a
   // dead end that only a browser reload clears.
@@ -73,7 +74,6 @@ export function useConfigActions({
     form,
     formRevision,
     setConfig,
-    setForm,
     applyProfileConfig,
     refreshHealthAfterWrite,
     setSaveError,
@@ -83,7 +83,7 @@ export function useConfigActions({
   const collectionActions = createConfigProfileCollectionActions({
     config,
     profileDeleteCandidate,
-    onConfigChange: applyRemoteConfig,
+    onConfigChange: applyWrittenConfig,
     setProfileDeleteCandidate,
     scopedProfileAccessors
   });
@@ -92,6 +92,8 @@ export function useConfigActions({
     if (!config) {
       return;
     }
+    const request = ++exportRequest.current;
+    exportWithDraft.current = includeDraft;
 
     try {
       if (includeDraft && !formRevision) throw new Error("草稿版本尚未就绪，请重新加载配置后再导出。");
@@ -107,10 +109,11 @@ export function useConfigActions({
       link.download = "compactgate.json";
       link.click();
       URL.revokeObjectURL(url);
-      setPageError(null);
+      if (request === exportRequest.current) setExportError(null);
     } catch (error) {
+      if (request !== exportRequest.current) return;
       const summary = errorSummary(error);
-      setPageError(/superseded revision/i.test(summary)
+      setExportError(/superseded revision/i.test(summary)
         ? "配置已在其他页面或调度中更新，未导出混合版本。请先处理草稿冲突，或选择“仅导出已保存配置”。"
         : summary);
     }
@@ -123,37 +126,30 @@ export function useConfigActions({
       body: JSON.stringify(payload)
     });
     // Import replaces the baseline, unlike a patch of this form's own values.
-    setConfig(nextConfig);
-    setForm((current) => formAfterConfigImport(current, submittedDraft, nextConfig));
+    await setConfig(nextConfig, (current) => formAfterConfigImport(current, submittedDraft, nextConfig));
     setSaveError(null);
     setSaveConflict(false);
     setSaveState("idle");
-    setPageError(null);
+    // The follow-up owns clearing prior errors together with its health result.
     await refreshHealthAfterWrite();
   }
 
-  async function refreshHealthAfterWrite() {
-    try {
-      setHealth(await api<HealthResponse>("/api/health", { method: "GET" }));
-      setPageError(null);
-    } catch (error) {
-      setHealth(null);
-      setPageError(`配置已写入，但健康状态刷新失败：${errorSummary(error)}。请重试状态刷新，无需重复保存。`);
-    }
-  }
-
-  async function submitConfigPatch(revision: string | null | undefined) {
+  async function submitConfigPatch(revision: string | null | undefined, resolveConflict = false) {
     const submittedRevision = draftRevision;
     setSaveState("saving");
     setSaveError(null);
     setSaveConflict(false);
 
     try {
+      const submittedForm = resolveConflict && formBaseline && config
+        ? formAfterConfigConflict(form, formBaseline, config) : form;
+      if (submittedForm.importConnectionConflict) setForm(current => ({ ...current, importConnectionConflict: true }));
       const nextConfig = await api<PublicConfig>("/api/config", {
         method: "PATCH",
-        body: JSON.stringify({ ...formToPatch(form), revision })
+        body: JSON.stringify({ ...formToPatch(submittedForm), revision })
       });
-      commitConfig(nextConfig, submittedRevision);
+      if (resolveConflict) await setConfig(nextConfig, current => formAfterConfigImport(current, form, nextConfig));
+      else await commitConfig(nextConfig, submittedRevision);
       setSaveState("saved");
       window.setTimeout(() => setSaveState((current) => current === "saved" ? "idle" : current), 1400);
     } catch (error) {
@@ -176,14 +172,12 @@ export function useConfigActions({
   }
 
   /**
-   * The operator read the conflict and chose their draft anyway. Saves against
-   * the current server revision and re-pins the draft to it, so this is a
-   * deliberate one-click override rather than a state the only reload clears.
+   * Merge edited fields onto the latest snapshot; only a successful write
+   * advances the baseline that owns omitted credentials.
    */
   async function overrideSaveConflict(event: FormEvent) {
     event.preventDefault();
-    rebaseFormRevision();
-    await submitConfigPatch(config?.revision);
+    if (config && formBaseline) await submitConfigPatch(config.revision, true);
   }
 
   function unlockCompactModel() {
@@ -210,13 +204,15 @@ export function useConfigActions({
     claudeProfileName,
     claudeProfileState,
     exportConfig,
+    exportError,
     exportSavedConfig: () => exportConfig(false),
+    retryExport: () => exportConfig(exportWithDraft.current),
     importConfig,
     profileDeleteCandidate,
     profileError,
     profileName,
     profileState,
-    receiveOAuthConfig: applyRemoteConfig,
+    receiveOAuthConfig: applyWrittenConfig,
     overrideSaveConflict,
     restoreLinkedMode,
     saveConfig,

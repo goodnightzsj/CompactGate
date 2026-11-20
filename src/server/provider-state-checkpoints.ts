@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../shared/records.js";
+import type { UpstreamProtocol } from "../shared/types.js";
 import { parseJsonRecord } from "./http-utils.js";
 import { decodeResponseText } from "./usage-utils.js";
 import { synthesizeAssistantMessage } from "./compaction-bridge.js";
 import type { BufferedUpstreamResult } from "./upstream-client.js";
 import { recoveryHash, type ProviderStateRecoveryStore } from "./provider-state-recovery-store.js";
-import { hasEncryptedProviderState, type ProviderStateFidelity } from "./provider-state-portability.js";
+import { hasEncryptedProviderState, lowerFidelity, type ProviderStateFidelity } from "./provider-state-portability.js";
+import { sseDataFrames } from "./sse-frames.js";
 
 export function recoveryPlanKey(scope: string, body: Buffer): string {
   const parsed = parseJsonRecord(body);
@@ -55,20 +57,39 @@ export function restoreProviderCheckpoint(
 
 export function rememberProviderCheckpoint(input: {
   store: ProviderStateRecoveryStore;
+  checkpointGeneration: number | null;
   conversationHash: string | null;
   retentionHours: number;
   requestBody: Buffer;
+  requestFidelity?: ProviderStateFidelity;
   result: BufferedUpstreamResult;
   mode: "remote_v1" | "remote_v2";
+  upstreamProtocol?: UpstreamProtocol;
 }): boolean {
-  if (input.retentionHours === 0 || !input.conversationHash) return false;
+  if (input.retentionHours === 0 || !input.conversationHash || input.checkpointGeneration === null ||
+    input.checkpointGeneration !== input.store.checkpointGeneration) return false;
   try {
-    const output = completedResponseOutput(input.result);
+    let result = input.result;
+    const translated = input.upstreamProtocol !== undefined && input.upstreamProtocol !== "openai_responses";
+    if (translated && !result.clientResponseHeaders) return false;
+    const sourceSummary = result.streamSummary;
+    if (sourceSummary && (sourceSummary.decodeError || sourceSummary.sawFailedEvent || sourceSummary.sawIncompleteEvent ||
+      sourceSummary.oversizedEventCount > 0 || sourceSummary.errorSummary)) return false;
+    if (result.clientResponseHeaders) {
+      if (!result.clientResponseBody || result.clientResponseBodyTruncated !== false) return false;
+      // Adapters own terminal normalization; retain source failure/truncation guards.
+      result = { ...result, responseBody: result.clientResponseBody, responseHeaders: result.clientResponseHeaders,
+        streamSummary: result.clientStreamSummary ?? null };
+    }
+    const output = completedResponseOutput(result);
     if (!output) return false;
+    // JSON adaptation can hide missing/contradictory SSE items; validate the source window too.
+    if (!translated && input.result.clientResponseHeaders && !isDeepStrictEqual(output, completedResponseOutput(input.result, true))) return false;
     let compactionIndex = -1;
     output.forEach((item, index) => { if (isRecord(item) && item.type === "compaction") compactionIndex = index; });
     const compaction = output[compactionIndex];
     const restored = restoreProviderCheckpoint(input.store, input.conversationHash, input.requestBody, input.retentionHours);
+    const requestFidelity = lowerFidelity(input.requestFidelity ?? "exact", restored?.fidelity ?? "exact");
     const request = parseJsonRecord(restored?.body ?? input.requestBody);
     if (!request || request.previous_response_id != null || request.previousResponseId != null) return false;
     const history = typeof request.input === "string" ? [{ type: "message", role: "user", content: request.input }]
@@ -84,18 +105,16 @@ export function rememberProviderCheckpoint(input: {
     if (isRecord(compaction) && typeof compaction.encrypted_content === "string") saved = input.store.rememberCheckpoint(recoveryHash(input.conversationHash, compaction.encrypted_content), {
       window: input.mode === "remote_v1" ? output : [compaction],
       history: portable.items,
-      fidelity: portable.fidelity === "degraded" || restored?.fidelity === "degraded" ? "degraded"
-        : portable.fidelity === "summary" || restored?.fidelity === "summary" ? "summary" : "exact",
+      fidelity: lowerFidelity(requestFidelity, portable.fidelity),
       prefixHash: input.mode === "remote_v2" ? recoveryHash(JSON.stringify([...observedHistory, ...output.slice(0, compactionIndex)])) : null
     }, input.retentionHours);
     if (input.mode === "remote_v2") {
-      const responseId = input.result.streamSummary?.responseId ?? parseJsonRecord(Buffer.from(decodeResponseText(input.result.responseBody, input.result.responseHeaders) ?? ""))?.id;
+      const responseId = result.streamSummary?.responseId ?? parseJsonRecord(Buffer.from(decodeResponseText(result.responseBody, result.responseHeaders) ?? ""))?.id;
       const completeHistory = portableHistory([...history, ...output.filter(item => !isRecord(item) || item.type !== "compaction")]);
       if (typeof responseId === "string" && completeHistory) saved = input.store.rememberCheckpoint(
         recoveryHash(input.conversationHash, "response", responseId), {
           window: [], history: completeHistory.items, prefixHash: null,
-          fidelity: completeHistory.fidelity === "degraded" || restored?.fidelity === "degraded" ? "degraded"
-            : completeHistory.fidelity === "summary" || restored?.fidelity === "summary" ? "summary" : "exact"
+          fidelity: lowerFidelity(requestFidelity, completeHistory.fidelity)
         }, input.retentionHours
       ) || saved;
     }
@@ -105,7 +124,7 @@ export function rememberProviderCheckpoint(input: {
   }
 }
 
-export function completedResponseOutput(result: BufferedUpstreamResult): unknown[] | null {
+export function completedResponseOutput(result: BufferedUpstreamResult, allowDoneEvent = false): unknown[] | null {
   if (result.status < 200 || result.status >= 300 || result.errorSummary || result.responseBodyTruncated ||
     result.clientDisconnectPhase === "before_terminal") return null;
   const text = decodeResponseText(result.responseBody, result.responseHeaders);
@@ -114,15 +133,13 @@ export function completedResponseOutput(result: BufferedUpstreamResult): unknown
     const parsed = parseJsonRecord(Buffer.from(text));
     return parsed && !parsed.error && (parsed.status == null || parsed.status === "completed") && Array.isArray(parsed.output) ? parsed.output : null;
   }
-  if (!result.streamSummary?.sawCompletedEvent || result.streamSummary.decodeError ||
+  if (!result.streamSummary || !result.streamSummary.sawCompletedEvent && !allowDoneEvent || result.streamSummary.decodeError ||
     result.streamSummary.sawFailedEvent || result.streamSummary.sawIncompleteEvent || result.streamSummary.oversizedEventCount > 0) return null;
   const items = new Map<number, unknown>();
   const added = new Set<number>();
   let completed = false;
   let completedOutput: unknown[] | null = null;
-  for (const frame of text.split(/\r?\n\r?\n/)) {
-    const data = frame.split(/\r?\n/).filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n").trim();
-    if (!data || data === "[DONE]") continue;
+  for (const data of sseDataFrames(text)) {
     const event = parseJsonRecord(Buffer.from(data));
     if (!event) return null;
     if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error") return null;
@@ -136,11 +153,15 @@ export function completedResponseOutput(result: BufferedUpstreamResult): unknown
       if (items.has(index) && !isDeepStrictEqual(items.get(index), event.item)) return null;
       items.set(index, event.item);
     }
-    if (event.type === "response.completed") {
+    if (event.type === "response.completed" || allowDoneEvent && event.type === "response.done") {
+      if (isRecord(event.response) && (event.response.error != null ||
+        event.response.status != null && event.response.status !== "completed")) return null;
       completed = true;
       if (isRecord(event.response) && Array.isArray(event.response.output)) completedOutput = event.response.output;
     }
   }
+  // Codex may leave terminal output empty and provide the full items in done events.
+  if (allowDoneEvent && completedOutput?.length === 0 && items.size > 0) completedOutput = null;
   if (completedOutput) {
     const output = completedOutput;
     return [...added].every(index => index < output.length) && [...items].every(([index, item]) => isDeepStrictEqual(output[index], item)) ? output : null;

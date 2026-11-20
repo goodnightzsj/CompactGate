@@ -22,7 +22,6 @@ import {
 import {
   groupTrend,
   platformBreakdown,
-  presetForRange,
   type AnalyticsPreset,
   type AnalyticsSnapshotCache,
   useLogStats
@@ -65,7 +64,7 @@ export function AnalyticsDashboardPage({ preferences, onPreferencesChange, onNav
   };
   const { preset, sourceDimension, sourceMeasure, modelMeasure } = current;
   const stats = useLogStats(preset, { includeOverview: true, transitionUpdates: true, snapshot });
-  const displayedPreset = stats.data ? presetForRange(stats.data.range) : preset;
+  const displayedPreset = stats.preset ?? preset;
   const granularity = displayedPreset === "24h" ? "hour" : "day";
   const trend = useMemo(
     () => stats.data ? groupTrend(stats.data, granularity) : [],

@@ -1,4 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigStore, parseListenAddress } from "../src/server/config.js";
@@ -144,6 +145,20 @@ describe("ConfigStore", () => {
     })).rejects.toThrow(
       "primary.reasoning_effort must be empty, none, low, medium, high, xhigh, or max."
     );
+  });
+
+  it("binds a bracketed IPv6 address and serves a request at its bracketed URL", async () => {
+    const { host } = parseListenAddress("[::1]:7865");
+    expect(host).toBe("::1");
+    const server = createServer((_req, res) => res.end("ready"));
+    await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, host, resolve));
+    try {
+      const bound = server.address();
+      if (!bound || typeof bound === "string") throw new Error("Expected IPv6 listener");
+      expect(await (await fetch(`http://[::1]:${bound.port}/`)).text()).toBe("ready");
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 
   it("rejects listen ports with trailing characters", async () => {

@@ -3,6 +3,38 @@ import type { PublicConfig } from "../src/shared/types.js";
 import { fetchJson, startApp } from "./helpers/server-test-utils.js";
 
 describe("CompactGate config API", () => {
+  it("keeps the winning reorder when two tabs submit the same revision", async () => {
+    const { url } = await startApp();
+    const profiles = url + "/api/config/profiles";
+    for (const name of ["A", "B"]) await fetchJson(profiles, "POST", { name });
+    const { body: initial } = await fetchJson<PublicConfig>(profiles, "POST", { name: "C" });
+    const [a, b, c] = initial.profiles.map(profile => profile.id);
+    const orders = [[b, a, c], [a, c, b]];
+    const results = await Promise.all(orders.map(profile_ids => fetchJson<PublicConfig>(
+      profiles + "/reorder", "POST", { profile_ids, revision: initial.revision }
+    )));
+    expect(results.map(result => result.response.status).sort()).toEqual([200, 409]);
+    const { body: saved } = await fetchJson<PublicConfig>(url + "/api/config", "GET");
+    const winner = results.findIndex(result => result.response.ok);
+    expect(saved.profiles.map(profile => profile.id)).toEqual(orders[winner]);
+    expect(saved.revision).toBe(results[winner].body.revision);
+  });
+
+  it("preserves an edited profile until deletion is confirmed against its new revision", async () => {
+    const { url } = await startApp();
+    const profiles = url + "/api/config/profiles";
+    const { body: first } = await fetchJson<PublicConfig>(profiles, "POST", { scope: "codex", name: "Original" });
+    const target = { scope: "codex", profile_id: first.profiles[0].id, revision: first.revision };
+    const { body: latest } = await fetchJson<PublicConfig>(profiles, "PATCH", { ...target, name: "Updated" });
+    expect((await fetchJson(profiles, "DELETE", target)).response.status).toBe(409);
+    const { body: preserved } = await fetchJson<PublicConfig>(url + "/api/config", "GET");
+    expect(preserved.profiles[0].name).toBe("Updated");
+    expect(preserved.revision).toBe(latest.revision);
+    const deleted = await fetchJson<PublicConfig>(profiles, "DELETE", { ...target, revision: latest.revision });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.profiles).toHaveLength(0);
+  });
+
   it("saves and applies config profiles through the public API", async () => {
     const app = await startApp();
 

@@ -19,6 +19,15 @@ describe("studio API failure reporting", () => {
     await expect(api("/api/health")).rejects.toBeInstanceOf(SyntaxError);
   });
 
+  it("shows a route preview's structured protocol error and falls back for unknown shapes", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: { code: "unsupported_protocol", message: "This route requires Responses." } }, { status: 422 }))
+      .mockResolvedValueOnce(Response.json({ error: { code: "unknown" } }, { status: 422 }));
+    vi.stubGlobal("fetch", fetcher);
+    await expect(api("/api/test-route")).rejects.toThrow(/^This route requires Responses\.$/);
+    await expect(api("/api/test-route")).rejects.toThrow(/^HTTP 422$/);
+  });
+
   it("preserves body-read cancellation instead of replacing it with an HTTP error", async () => {
     const aborted = new DOMException("Synthetic abort", "AbortError");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503, json: () => Promise.reject(aborted) }));

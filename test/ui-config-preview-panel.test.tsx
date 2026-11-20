@@ -6,6 +6,8 @@ describe("ConfigPreviewPanel", () => {
   it("labels inputs, distinguishes saved configuration and exposes pending state", () => {
     const markup = renderToStaticMarkup(<ConfigPreviewPanel
       isPreviewing
+      previewMethod="POST"
+      onMethodChange={() => undefined}
       previewPath="/v1/responses"
       previewBody="{}"
       previewHeaders="{}"
@@ -30,6 +32,8 @@ describe("ConfigPreviewPanel", () => {
   it("keeps request headers mounted and exposes them when a preview fails", () => {
     const markup = renderToStaticMarkup(<ConfigPreviewPanel
       isPreviewing={false}
+      previewMethod="POST"
+      onMethodChange={() => undefined}
       previewPath="/v1/responses"
       previewBody="{}"
       previewHeaders={'{"synthetic-header":"kept"}'}

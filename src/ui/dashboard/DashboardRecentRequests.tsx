@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import { routeLabel } from "../../shared/route-meta.js";
 import type { RequestLogEntry } from "../../shared/types.js";
-import { logStatusToneClass } from "../logs/log-utils.js";
+import { logErrorDetail, logStatusKind } from "../logs/log-utils.js";
 import { useNarrowViewport } from "../logs/useNarrowViewport.js";
 import { LogTextTooltip } from "../logs/LogTooltips.js";
 import { formatDateTime, formatDurationMs } from "../shared/format.js";
@@ -29,6 +29,7 @@ export function DashboardRecentRequests({
   const recent = useMemo(() => logs.slice(0, DASHBOARD_REQUEST_LIMIT), [logs]);
   const rows = useMemo(() => recent.map((entry) => ({
     entry,
+    failed: logStatusKind(entry) === "error",
     startedAt: formatDateTime(entry.time),
     completedAt: formatDateTime(entry.completed_at),
     duration: formatDurationMs(entry.duration_ms)
@@ -51,12 +52,13 @@ export function DashboardRecentRequests({
         ["开始时间", expandedRow.startedAt],
         ["完成时间", expandedRow.completedAt],
         ["耗时", expandedRow.duration],
-        ["状态", String(expandedRow.entry.status)],
+        ["状态", expandedRow.failed ? `${expandedRow.entry.status} 请求异常` : String(expandedRow.entry.status)],
         ["通道", routeLabel(expandedRow.entry.route)],
         ["类型", expandedRow.entry.request_type],
         ["模型", expandedRow.entry.source_model ?? "-"],
         ["上游 Host", expandedRow.entry.upstream_host],
-        ["端点", expandedRow.entry.endpoint]
+        ["端点", expandedRow.entry.endpoint],
+        ...(expandedRow.failed ? [["错误信息", logErrorDetail(expandedRow.entry)]] : [])
       ].map(([label, value], index) => (
         <div key={label} className={index >= 6 ? "is-wide" : undefined}>
           <dt>{label}</dt>
@@ -80,7 +82,7 @@ export function DashboardRecentRequests({
         </div>
       ) : narrowViewport ? (
         <div className="dashboard-request-list" aria-label="最近请求摘要">
-          {rows.map(({ entry, startedAt, duration }) => (
+          {rows.map(({ entry, failed, startedAt, duration }) => (
             <article key={entry.request_id}>
               <button type="button" className="dashboard-request-item"
                 id={`${keyboardHintId}-trigger-${entry.request_id}`}
@@ -89,7 +91,7 @@ export function DashboardRecentRequests({
                 onClick={() => toggleRow(entry.request_id)}
                 onKeyDown={(event) => { if (event.key === "Escape") setExpandedId(null); }}>
               <span className="dashboard-request-item-head">
-                <span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span>
+                <span className={`log-status ${failed ? "is-err" : "is-ok"}`}>{entry.status}{failed && " 异常"}</span>
                 <span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span>
                 <time>{startedAt}</time>
               </span>
@@ -131,7 +133,7 @@ export function DashboardRecentRequests({
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ entry, startedAt, completedAt, duration }) => (
+                {rows.map(({ entry, failed, startedAt, completedAt, duration }) => (
                   <tr
                     key={entry.request_id}
                     className={`log-row is-clickable ${expandedId === entry.request_id ? "is-expanded" : ""}`}
@@ -140,7 +142,7 @@ export function DashboardRecentRequests({
                     aria-expanded={expandedId === entry.request_id}
                     aria-describedby={keyboardHintId}
                     aria-controls={expandedId === entry.request_id ? detailId : undefined}
-                    aria-label={`${entry.status} ${entry.source_model ?? "未知模型"}，${expandedId === entry.request_id ? "收起" : "查看"}完整信息`}
+                    aria-label={`${entry.status}${failed ? " 请求异常" : ""} ${entry.source_model ?? "未知模型"}，${expandedId === entry.request_id ? "收起" : "查看"}完整信息`}
                     onClick={() => toggleRow(entry.request_id)}
                     onKeyDown={(event) => {
                       if (event.target !== event.currentTarget) return;
@@ -155,7 +157,8 @@ export function DashboardRecentRequests({
                     <td><LogTextTooltip className="log-cell-time" value={startedAt} /></td>
                     <td><LogTextTooltip className="log-cell-time" value={completedAt} /></td>
                     <td><LogTextTooltip className="log-cell-model" value={entry.source_model ?? "-"} /></td>
-                    <td><span className={`log-status ${logStatusToneClass(entry)}`}>{entry.status}</span></td>
+                    <td><span className="log-summary-stack"><span className={`log-status ${failed ? "is-err" : "is-ok"}`}>{entry.status}</span>
+                      {failed && <small>异常</small>}</span></td>
                     <td><LogTextTooltip className="log-cell-code" value={entry.upstream_host} /></td>
                     <td><LogTextTooltip className="log-cell-code" value={entry.endpoint} /></td>
                     <td><span className={`route-chip ${entry.route}`}>{routeLabel(entry.route)}</span></td>

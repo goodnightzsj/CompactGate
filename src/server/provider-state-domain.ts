@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { CompactGateConfig, PrimaryUpstreamConfig } from "../shared/types.js";
 import { codexPrimaryCandidates } from "./primary-failover-candidates.js";
+import { credentialCandidateId } from "./credentials.js";
 
 /**
  * The default domain must isolate by key, not just by profile: each key in a
@@ -21,10 +22,7 @@ export function stateDomainForPrimary(
   if (primary.oauth_account_id) {
     return `oauth:${primary.oauth_account_id}:${origin}`;
   }
-  if (profileId && keyId) {
-    return `profile:${profileId}#${keyId}:${origin}`;
-  }
-  return profileId ? `profile:${profileId}:${origin}` : origin;
+  return profileId ? `profile:${credentialCandidateId(profileId, keyId)}:${origin}` : origin;
 }
 
 export function stateDomainForProfile(
@@ -41,7 +39,7 @@ export function stateDomainForProfile(
     .filter((item) => item.profileId === profileId)
     .sort((left, right) => left.order - right.order)[0];
   return candidate
-    ? stateDomainForPrimary(candidate.config.primary, profileId, candidate.keyId)
+    ? stateDomainForPrimary(candidate.primary, profileId, candidate.keyId)
     : null;
 }
 

@@ -114,6 +114,13 @@
   .usage-calendar button:focus-visible { outline-offset: -2px; }
 }
 
+@media (max-width: 640px), (pointer: coarse) {
+  :where(.page-header, .dashboard-page, .config-preview-actions, .logs-toolbar, .health-card-status) .btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
   button,
   .btn,

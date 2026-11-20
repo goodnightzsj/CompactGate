@@ -1,11 +1,11 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Duplex, Transform } from "node:stream";
-import { StringDecoder } from "node:string_decoder";
-import { isRecord, readHeaderString } from "./http-utils.js";
+import { isRecord, parseJsonRecord, readHeaderString } from "./http-utils.js";
 import { openAiResponseToAnthropic } from "./protocol-conversion.js";
 import { createResponsesToAnthropicStream } from "./protocol-stream.js";
-import { sseDataFrames } from "./sse-frames.js";
+import { createSseFrameDecoder, sseDataFrames } from "./sse-frames.js";
 import type { UpstreamResponseTransform } from "./upstream-client.js";
+import { responseFailureSummary } from "./usage-error.js";
 
 /** Codex speaks SSE even for a JSON request; normalize its terminal event once. */
 export function createCodexResponseTransform(
@@ -17,24 +17,22 @@ export function createCodexResponseTransform(
   }
   const responseHeaders: IncomingHttpHeaders = { ...headers, "content-type": clientStream ? "text/event-stream; charset=utf-8" : "application/json; charset=utf-8" };
   for (const name of ["content-length", "content-encoding", "transfer-encoding"]) delete responseHeaders[name];
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
   let outputBytes = 0;
   const items = new Map<number, unknown>();
-  const limit = 8 * 1024 * 1024;
-  const result: UpstreamResponseTransform = {
-    stream: new Transform({
+  const limit = 32 * 1024 * 1024;
+  const decoder = createSseFrameDecoder(raw => frame(stream, raw), bytes => {
+    if (bytes > limit) throw new Error("Codex SSE event exceeded the size limit.");
+  });
+  const stream = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         try {
-          pending += decoder.write(chunk);
-          drain(this, false);
+          decoder.write(chunk);
           callback();
         } catch (error) { callback(error as Error); }
       },
       flush(callback) {
         try {
-          pending += decoder.end();
-          drain(this, true);
+          decoder.end();
           if (!result.sawTerminalEvent) {
             const message = "Codex stream ended without a terminal response.";
             result.translationError = message;
@@ -43,7 +41,10 @@ export function createCodexResponseTransform(
           callback();
         } catch (error) { callback(error as Error); }
       }
-    }),
+    });
+  const result: UpstreamResponseTransform = {
+    stream,
+    sourceStreamProtocol: "codex",
     responseHeaders, streamProtocol: anthropic ? "anthropic" : "openai"
   };
   if (clientStream && anthropic) {
@@ -62,8 +63,17 @@ export function createCodexResponseTransform(
   }
 
   function frame(stream: Transform, raw: string): void {
-    if (result.sawTerminalEvent) return;
     for (const data of sseDataFrames(raw)) {
+      if (result.sawTerminalEvent) {
+        // Retain late failure evidence without emitting another terminal or replaying output.
+        const late = parseJsonRecord(Buffer.from(data));
+        if (late && ["response.done", "response.completed", "response.failed", "response.incomplete", "error"].includes(String(late.type))) {
+          result.translationError ??= responseFailureSummary(
+            late.type === "response.done" || late.type === "response.completed" ? late.response : late
+          ) ?? undefined;
+        }
+        continue;
+      }
       let parsed: unknown;
       try { parsed = JSON.parse(data); } catch { throw new Error("Codex returned an invalid SSE event."); }
       if (!isRecord(parsed) || typeof parsed.type !== "string") throw new Error("Codex returned a malformed SSE event.");
@@ -94,15 +104,4 @@ export function createCodexResponseTransform(
     }
   }
 
-  function drain(stream: Transform, final: boolean): void {
-    for (;;) {
-      const separator = /\r?\n\r?\n/.exec(pending);
-      if (!separator) break;
-      if (Buffer.byteLength(pending.slice(0, separator.index)) > limit) throw new Error("Codex SSE event exceeded the size limit.");
-      frame(stream, pending.slice(0, separator.index));
-      pending = pending.slice(separator.index + separator[0].length);
-    }
-    if (Buffer.byteLength(pending) > limit) throw new Error("Codex SSE event exceeded the size limit.");
-    if (final && pending.trim()) frame(stream, pending);
-  }
 }

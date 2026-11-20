@@ -49,12 +49,13 @@ export function UsageAnalyticsPage({ preferences, onPreferencesChange, onNavigat
   const range = useMemo(() => dateInputsToRange(fromDate, toDate), [fromDate, toDate]);
   const [formError, setFormError] = useState<string | null>(null);
   const stats = useLogStats(range, { view: "usage", snapshot });
-  const matchesSelectedRange = stats.data?.range.from === range.from && stats.data.range.to === range.to;
+  const matchesSelectedRange = stats.data?.range.from === range.from && stats.data.range.to === range.to &&
+    stats.data.range.calendar_tz === range.calendar_tz;
   const trend = useMemo(
     () => stats.data ? groupTrend(stats.data, granularity) : [],
     [granularity, stats.data]
   );
-  const tableKey = `${stats.data?.range.from}/${stats.data?.range.to}/${granularity}`;
+  const tableKey = `${stats.data?.range.from}/${stats.data?.range.to}/${stats.data?.range.calendar_tz}/${granularity}`;
   const [tablePosition, setTablePosition] = useState({ key: "", page: 0 });
   const pageCount = Math.max(1, Math.ceil(trend.length / TABLE_PAGE_SIZE));
   const tablePage = tablePosition.key === tableKey ? Math.min(tablePosition.page, pageCount - 1) : 0;

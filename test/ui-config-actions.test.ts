@@ -5,12 +5,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigStore } from "../src/server/config.js";
 import { formFromConfig, formToPatch } from "../src/ui/config/config-form-state.js";
 import { INITIAL_STUDIO_CONFIG_STATE, reduceStudioConfigState, type StudioConfigAction } from "../src/ui/config/studio-config-state.js";
+import { createConfigProfileCollectionActions } from "../src/ui/hooks/configProfileCollectionActions.js";
 import { useConfigActions } from "../src/ui/hooks/useConfigActions.js";
+import { useHealthRefresh } from "../src/ui/hooks/useHealthRefresh.js";
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("profile operations that do not submit a draft", () => {
+  it("pins a profile delete to the version shown when its confirmation opened", async () => {
+    const { config } = await setup(200, 200, true);
+    const profile = config.profiles[0];
+    const controls = { selectedId: profile.id, name: profile.name, selectionRevision: 0, interactionRevision: 0, state: "idle" as const,
+      setName: vi.fn(), commitSavedName: vi.fn(), setSelectedId: vi.fn(), setState: vi.fn(), setError: vi.fn() };
+    const dialog = vi.fn();
+    const args = { config, profileDeleteCandidate: null, setProfileDeleteCandidate: dialog, onConfigChange: vi.fn(), scopedProfileAccessors: () => controls };
+    createConfigProfileCollectionActions(args).requestDeleteSelectedProfile();
+    const candidate = dialog.mock.calls[0][0];
+    const send = vi.fn().mockResolvedValue(Response.json({ error: "superseded revision" }, { status: 409 }));
+    vi.stubGlobal("fetch", send);
+    await createConfigProfileCollectionActions({ ...args, config: { ...config, revision: "later" }, profileDeleteCandidate: candidate }).confirmDeleteSelectedProfile();
+    expect(JSON.parse(send.mock.calls[0][1].body)).toEqual({ scope: "codex", profile_id: profile.id, revision: config.revision });
+    expect(controls.setError).toHaveBeenLastCalledWith(expect.stringContaining("重新确认"));
+    expect(args.onConfigChange).not.toHaveBeenCalled();
+  });
+
   it.each(["duplicate", "reorder", "apply"] as const)("keeps an unrelated conflict after %s, with or without an earlier snapshot", async (operation) => {
     for (const sawSnapshot of [false, true]) {
       const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
@@ -36,14 +55,12 @@ describe("profile operations that do not submit a draft", () => {
         const baselineRevision = state.formRevision;
         actions = useConfigActions({
           ...state, linkedCompactModel: "synthetic",
-          commitConfig: (config, submittedRevision) => dispatch({ type: "commit_config", config, submittedRevision }),
-          rebaseFormRevision: () => dispatch({ type: "rebase_form_revision" }),
-          applyRemoteConfig: (config) => dispatch({ type: "remote_config", config }),
-          applyProfileConfig: (config, scope) => dispatch({ type: "apply_profile", config, scope, baselineConfig, baselineRevision }),
-          setConfig: (value) => dispatch({ type: "set_config", value }),
+          commitConfig: async (config, submittedRevision) => dispatch({ type: "commit_config", config, submittedRevision }),
+          applyWrittenConfig: async (config) => dispatch({ type: "remote_config", config }),
+          applyProfileConfig: async (config, scope) => dispatch({ type: "apply_profile", config, scope, baselineConfig, baselineRevision }),
+          setConfig: async (value, form) => dispatch({ type: "set_config", value, form }),
           setForm: (value) => dispatch({ type: "set_form", value }),
-          setHealth: () => undefined,
-          setPageError: () => undefined
+          refreshHealthAfterWrite: async () => {}
         });
         return null;
       }
@@ -77,13 +94,12 @@ describe("config writes and their health follow-up", () => {
     let actions!: ReturnType<typeof useConfigActions>;
     function Harness() {
       actions = useConfigActions({ ...state, linkedCompactModel: "synthetic",
-        commitConfig: (config, submittedRevision) => dispatch({ type: "commit_config", config, submittedRevision }),
-        rebaseFormRevision: () => dispatch({ type: "rebase_form_revision" }),
-        applyRemoteConfig: (config) => dispatch({ type: "remote_config", config }),
-        applyProfileConfig: () => undefined,
-        setConfig: (value) => dispatch({ type: "set_config", value }),
+        commitConfig: async (config, submittedRevision) => dispatch({ type: "commit_config", config, submittedRevision }),
+        applyWrittenConfig: async (config) => dispatch({ type: "remote_config", config }),
+        applyProfileConfig: async () => undefined,
+        setConfig: async (value, form) => dispatch({ type: "set_config", value, form }),
         setForm: (value) => dispatch({ type: "set_form", value }),
-        setHealth: () => undefined, setPageError: () => undefined });
+        refreshHealthAfterWrite: async () => {} });
       return null;
     }
     renderToStaticMarkup(createElement(Harness));
@@ -99,13 +115,12 @@ describe("config writes and their health follow-up", () => {
   });
 
   it("pins exports to the draft revision and does not download a rejected snapshot", async () => {
-    const { actions, config, callbacks, fetchMock } = await setup(409, 200);
+    const { actions, config, fetchMock } = await setup(409, 200);
     const createElementMock = vi.fn();
     vi.stubGlobal("document", { createElement: createElementMock });
     await actions.exportConfig();
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/config/export?revision=${encodeURIComponent(config.revision)}`);
     expect(createElementMock).not.toHaveBeenCalled();
-    expect(callbacks.setPageError).toHaveBeenCalledWith("Synthetic write failure");
   });
 
   it.each(["save", "update", "apply"] as const)("commits an active profile %s before its health follow-up", async (operation) => {
@@ -115,8 +130,7 @@ describe("config writes and their health follow-up", () => {
     else await actions.applySelectedProfile("codex", config.profile_scopes.codex.active_profile_id!);
     if (operation === "apply") expect(callbacks.applyProfileConfig).toHaveBeenCalledWith(config, "codex");
     else {
-      expect(callbacks.setConfig).toHaveBeenCalledWith(config);
-      expect(callbacks.setForm).toHaveBeenCalledOnce();
+      expect(callbacks.setConfig).toHaveBeenCalledWith(config, expect.any(Function));
     }
     expect(callbacks.setHealth).toHaveBeenCalledWith(null);
     expect(callbacks.setPageError).toHaveBeenCalledWith(expect.stringContaining("配置已写入，但健康状态刷新失败"));
@@ -127,8 +141,7 @@ describe("config writes and their health follow-up", () => {
     await expect(run(actions, operation)).resolves.toBeUndefined();
     if (operation === "save") expect(callbacks.commitConfig).toHaveBeenCalledWith(config, 3);
     else {
-      expect(callbacks.setConfig).toHaveBeenCalledWith(config);
-      expect(callbacks.setForm).toHaveBeenCalledOnce();
+      expect(callbacks.setConfig).toHaveBeenCalledWith(config, expect.any(Function));
     }
     expect(callbacks.setHealth).toHaveBeenCalledWith(null);
     expect(callbacks.setPageError).toHaveBeenCalledWith(expect.stringContaining("配置已写入，但健康状态刷新失败：Synthetic health failure"));
@@ -175,7 +188,7 @@ async function setup(writeStatus: number, healthStatus: number, activeProfile = 
   }
   const config = store.toPublicConfig();
   const callbacks = {
-    commitConfig: vi.fn(), rebaseFormRevision: vi.fn(), applyRemoteConfig: vi.fn(), applyProfileConfig: vi.fn(),
+    commitConfig: vi.fn(), applyWrittenConfig: vi.fn(), applyProfileConfig: vi.fn(),
     setConfig: vi.fn(), setForm: vi.fn(), setHealth: vi.fn(), setPageError: vi.fn()
   };
   const fetchMock = vi.fn(async (url: RequestInfo | URL) => {
@@ -192,8 +205,14 @@ async function setup(writeStatus: number, healthStatus: number, activeProfile = 
   vi.stubGlobal("window", { setTimeout: vi.fn() });
   let actions!: ReturnType<typeof useConfigActions>;
   function Harness() {
+    const healthRefresh = useHealthRefresh({
+      enabled: false, health: null, healthRevision: { current: 0 }, pageErrorRevision: 0,
+      setHealth: value => callbacks.setHealth(typeof value === "function" ? value(null) : value),
+      applyHealthRefreshResult: error => callbacks.setPageError(error)
+    });
     actions = useConfigActions({ config, form: formFromConfig(config), linkedCompactModel: "synthetic",
-      draftRevision: 3, formRevision: config.revision, ...callbacks });
+      draftRevision: 3, formRevision: config.revision, formBaseline: config, ...callbacks,
+      refreshHealthAfterWrite: healthRefresh.refreshHealthAfterWrite });
     return null;
   }
   renderToStaticMarkup(createElement(Harness));

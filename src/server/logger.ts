@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
-  HostLogCount,
   LogBodyPurgeResult,
   LogPersistenceHealth,
   LogStatsSnapshot,
@@ -11,19 +10,11 @@ import type {
   RequestLogEntry,
   RequestLogPage,
   RouteKind,
-  StatusLogCounts
 } from "../shared/types.js";
 import {
-  buildFacetWhereClause,
-  buildWhereClause,
   type LogPageOptions,
-  LOG_STANDALONE_ERROR_SQL,
-  normalizeLogStatus,
-  normalizeRoute,
-  providerCountsFromRouteCounts,
   readCount,
   readCaptureStatus,
-  readNullableNumber,
   rowToLogEntry
 } from "./logger-helpers.js";
 import {
@@ -39,6 +30,7 @@ import {
 } from "./logger-schema.js";
 import { readLogStats, type LogStatsOptions } from "./logger-analytics.js";
 import { LogStatsReader } from "./log-stats-reader.js";
+import { readFacetTotal, readLogPage, readLogRows } from "./logger-page.js";
 import type { ProviderStateBinding } from "./provider-state-binding.js";
 import { extractResponseModelFromText } from "./response-model.js";
 import { ProviderStateRecoveryStore } from "./provider-state-recovery-store.js";
@@ -537,58 +529,24 @@ export class RequestLogger extends EventTarget {
    * the health probe, which run far more often than anyone opens the log table.
    */
   recentLogs(options: { route?: RouteKind; limit: number; offset?: number }): RequestLogEntry[] {
-    return this.queryLogRows(
+    return readLogRows(this.db,
       { route: options.route },
       Math.max(1, Math.floor(options.limit)),
       options.offset ?? 0
     );
   }
 
-  private queryLogRows(
-    options: Omit<LogPageOptions, "limit" | "offset">,
-    limit: number,
-    offset: number
-  ): RequestLogEntry[] {
-    const where = buildWhereClause(options);
-    return (
-      this.db
-        .prepare(
-          `
-            SELECT ${RECENT_LOG_FIELDS}
-            FROM request_logs
-            ${where.sql}
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-          `
-        )
-        .all(...where.params, limit, offset) as Array<Record<string, unknown>>
-    ).map(rowToLogEntry);
-  }
 
   page(options: LogPageOptions): RequestLogPage {
-    const limit = Math.max(1, Math.floor(options.limit));
-    const offset = Number.isSafeInteger(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
-      : 0;
-    const logs = this.queryLogRows(options, limit, offset);
-    const total = this.facetTotal(options);
-    const allTotal = this.facetTotal({});
-    const counts = this.routeCounts(options);
-    const statusCounts = this.statusCounts(options);
+    return readLogPage(this.db, options);
+  }
 
-    return {
-      logs,
-      latest_sequence: Number(this.db.prepare("SELECT COALESCE(MAX(id), 0) AS sequence FROM request_logs").get()!.sequence),
-      limit,
-      offset,
-      total,
-      all_total: allTotal,
-      has_more: offset + logs.length < total,
-      counts,
-      provider_counts: providerCountsFromRouteCounts(counts),
-      status_counts: statusCounts,
-      host_counts: this.hostCounts(options)
-    };
+  async pageAsync(options: LogPageOptions, signal?: AbortSignal): Promise<RequestLogPage> {
+    if (signal?.aborted) throw signal.reason;
+    if (this.closed) throw new Error("Request logger is closed.");
+    if (!options.search && !options.drilldown && !options.host && !options.status) return this.page(options);
+    this.statsReader ??= new LogStatsReader(this.databasePath);
+    return this.statsReader.readPage(options, signal);
   }
 
   stats(options: LogStatsOptions & { view: "usage" }): LogUsageStatsSnapshot;
@@ -839,7 +797,7 @@ export class RequestLogger extends EventTarget {
     const persistedTotal = readCount(
       this.db.prepare("SELECT COUNT(*) AS count FROM request_logs").get()
     );
-    const facetTotal = this.facetTotal({});
+    const facetTotal = readFacetTotal(this.db, {});
     const facetVersionRow = this.db.prepare(
       "SELECT value FROM request_log_internal_state WHERE key = 'facet_classification_version'"
     ).get() as { value?: unknown } | undefined;
@@ -984,126 +942,6 @@ export class RequestLogger extends EventTarget {
       .run();
   }
 
-  private routeCounts(options: Omit<LogPageOptions, "limit" | "offset" | "route">): Record<"all" | RouteKind, number> {
-    // Callers pass the whole LogPageOptions, so the counted dimension has to be
-    // dropped explicitly rather than relied on being absent from the Pick type.
-    const raw = Boolean(options.search || options.drilldown);
-    const facet = { status: options.status, host: options.host };
-    const where = raw
-      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
-      : buildFacetWhereClause(facet);
-    const rows = this.db
-      .prepare(
-        `
-          SELECT route, ${raw ? "COUNT(*)" : "SUM(count)"} AS count
-          FROM ${raw ? "request_logs" : "request_log_facets"}
-          ${where.sql}
-          GROUP BY route
-        `
-      )
-      .all(...where.params) as Array<Record<string, unknown>>;
-    const counts = {
-      all: 0,
-      primary: 0,
-      compact: 0,
-      claude: 0
-    };
-
-    for (const row of rows) {
-      // Accumulated, not assigned: `normalizeRoute` folds an unrecognised route
-      // into `primary`, so two facet rows can land in the same bucket and the
-      // second used to overwrite the first, leaving `all` disagreeing with the
-      // sum of its parts.
-      const route = normalizeRoute(row.route);
-      const count = readCount(row);
-      counts[route] += count;
-      counts.all += count;
-    }
-
-    return counts;
-  }
-
-  private statusCounts(options: Omit<LogPageOptions, "limit" | "offset" | "status">): StatusLogCounts {
-    const raw = Boolean(options.search || options.drilldown);
-    const facet = { route: options.route, host: options.host };
-    const where = raw
-      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
-      : buildFacetWhereClause(facet);
-    const statusColumn = raw
-      ? `CASE WHEN ${LOG_STANDALONE_ERROR_SQL} THEN 'error' ELSE 'normal' END`
-      : "log_status";
-    const rows = this.db
-      .prepare(
-        `
-          SELECT ${statusColumn} AS status_kind, ${raw ? "COUNT(*)" : "SUM(count)"} AS count
-          FROM ${raw ? "request_logs" : "request_log_facets"}
-          ${where.sql}
-          GROUP BY status_kind
-        `
-      )
-      .all(...where.params) as Array<Record<string, unknown>>;
-    const counts: StatusLogCounts = {
-      all: 0,
-      normal: 0,
-      error: 0
-    };
-
-    for (const row of rows) {
-      // Accumulated for the same reason as the route buckets above.
-      const status = normalizeLogStatus(row.status_kind);
-      const count = readCount(row);
-      counts[status] += count;
-      counts.all += count;
-    }
-
-    return counts;
-  }
-
-  private hostCounts(options: Omit<LogPageOptions, "limit" | "offset" | "host">): HostLogCount[] {
-    const raw = Boolean(options.search || options.drilldown);
-    const facet = { route: options.route, status: options.status };
-    const where = raw
-      ? buildWhereClause({ ...facet, search: options.search, drilldown: options.drilldown })
-      : buildFacetWhereClause(facet);
-    const rows = this.db
-      .prepare(
-        `
-          SELECT
-            upstream_host AS host,
-            ${raw ? "COUNT(*)" : "SUM(count)"} AS total,
-            SUM(CASE WHEN route = 'primary' THEN ${raw ? "1" : "count"} ELSE 0 END) AS primary_count,
-            SUM(CASE WHEN route = 'compact' THEN ${raw ? "1" : "count"} ELSE 0 END) AS compact_count,
-            SUM(CASE WHEN route = 'claude' THEN ${raw ? "1" : "count"} ELSE 0 END) AS claude_count
-          FROM ${raw ? "request_logs" : "request_log_facets"}
-          ${where.sql}
-          GROUP BY upstream_host
-          ORDER BY total DESC, upstream_host ASC
-        `
-      )
-      .all(...where.params) as Array<Record<string, unknown>>;
-
-    return rows.map((row) => ({
-      host: String(row.host),
-      total: readNullableNumber(row.total) ?? 0,
-      primary: readNullableNumber(row.primary_count) ?? 0,
-      compact: readNullableNumber(row.compact_count) ?? 0,
-      claude: readNullableNumber(row.claude_count) ?? 0
-    }));
-  }
-
-  private facetTotal(options: Omit<LogPageOptions, "limit" | "offset">): number {
-    const raw = Boolean(options.search || options.drilldown);
-    const where = raw
-      ? buildWhereClause(options)
-      : buildFacetWhereClause(options);
-    return readCount(
-      this.db
-        .prepare(
-          `SELECT ${raw ? "COUNT(*)" : "COALESCE(SUM(count), 0)"} AS count FROM ${raw ? "request_logs" : "request_log_facets"} ${where.sql}`
-        )
-        .get(...where.params)
-    );
-  }
 
   private prunePersistedStorage(): void {
     const steps = this.prunePersistedStorageSteps();
@@ -1128,6 +966,9 @@ export class RequestLogger extends EventTarget {
         if (rowsCleared > 0) {
           changed = true;
           yield;
+        }
+        // Checkpoint retention can free pages without clearing any log bodies.
+        if (rowsCleared > 0 || Number(this.db.prepare("PRAGMA freelist_count;").get()?.freelist_count) > 0) {
           this.reclaimSqliteStorage();
           yield;
         }

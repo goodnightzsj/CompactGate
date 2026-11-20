@@ -22,6 +22,7 @@ export async function fetchCaptureRecord(
     },
     signal
   });
+  signal?.throwIfAborted();
   const payload = await readJsonPayload(response);
   if (response.status !== 200) {
     throw new CaptureRequestError(
@@ -31,7 +32,8 @@ export async function fetchCaptureRecord(
     );
   }
 
-  return payload as CaptureRecord;
+  if (!isRecord(payload)) throw new TypeError("Capture response must be a JSON object.");
+  return payload as unknown as CaptureRecord;
 }
 
 export function captureDownloadUrl(requestId: string): string {
@@ -45,7 +47,8 @@ function captureViewUrl(requestId: string): string {
 async function readJsonPayload(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
+  } catch (error) {
+    if (response.status === 200 || !(error instanceof SyntaxError)) throw error;
     return null;
   }
 }

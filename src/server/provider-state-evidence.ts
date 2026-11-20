@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BufferedUpstreamResult } from "./upstream-client.js";
-import { decodeBodyText, isRecord, parseJsonRecord } from "./http-utils.js";
+import { isRecord } from "./http-utils.js";
+import { decodeResponseText } from "./usage-utils.js";
 import { providerStateErrorCode } from "./provider-state-portability.js";
 
 export interface ProviderStateTargetScope {
@@ -58,7 +59,9 @@ export function isEligibleGenericProviderStateFailure(
     return false;
   }
 
-  const summary = `${result.errorSummary ?? ""}\n${decodeBodyText(result.responseBody)}`.toLowerCase();
+  const text = decodeResponseText(result.responseBody, result.responseHeaders);
+  if (text === null) return false;
+  const summary = `${result.errorSummary ?? ""}\n${text}`.toLowerCase();
   if ([
     "invalid api key",
     "invalid_api_key",
@@ -82,7 +85,7 @@ export function isEligibleGenericProviderStateFailure(
     return false;
   }
 
-  return !isUnavailableResourceFailure(summary, result);
+  return !isUnavailableResourceFailure(summary, text);
 }
 
 /**
@@ -123,8 +126,8 @@ const RESOURCE_UNAVAILABLE_PHRASE = new RegExp([
   "|(?:no such|unknown|unsupported|invalid|nonexistent)\\s+(?:model|endpoint)"
 ].join(""));
 
-function isUnavailableResourceFailure(summary: string, result: BufferedUpstreamResult): boolean {
-  const code = readUpstreamErrorCode(result.responseBody);
+function isUnavailableResourceFailure(summary: string, text: string): boolean {
+  const code = readUpstreamErrorCode(text);
   if (code && RESOURCE_UNAVAILABLE_CODE.test(code)) {
     return true;
   }
@@ -132,8 +135,10 @@ function isUnavailableResourceFailure(summary: string, result: BufferedUpstreamR
   return RESOURCE_UNAVAILABLE_PHRASE.test(summary);
 }
 
-function readUpstreamErrorCode(responseBody: Buffer): string | null {
-  const parsed = parseJsonRecord(responseBody);
+function readUpstreamErrorCode(text: string): string | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!isRecord(parsed)) return null;
   const error = isRecord(parsed?.error) ? parsed.error : null;
   for (const candidate of [error?.code, error?.type, parsed?.code, parsed?.type]) {
     if (typeof candidate === "string" && candidate.trim().length > 0) {

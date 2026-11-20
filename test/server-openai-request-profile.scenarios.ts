@@ -12,7 +12,7 @@ import {
 } from "./helpers/server-test-utils.js";
 
 describe("Codex request-scoped profiles", () => {
-  it("selects primary and compact transport without active or stickiness side effects", async () => {
+  it.each(["x-compactgate-profile", "X-CompactGate-Profile"])("selects primary and compact transport without active or stickiness side effects (%s)", async profileHeader => {
     const aRequests: CapturedRequest[] = [];
     const bPrimaryRequests: CapturedRequest[] = [];
     const bCompactRequests: CapturedRequest[] = [];
@@ -68,7 +68,7 @@ describe("Codex request-scoped profiles", () => {
       "POST",
       {
         path: "/v1/responses",
-        headers: { "x-compactgate-profile": profileB.id },
+        headers: { [profileHeader]: profileB.id },
         body: { model: "client-model", input: "preview" }
       }
     );
@@ -85,7 +85,7 @@ describe("Codex request-scoped profiles", () => {
       model: "client-model",
       input: [{ type: "compaction_trigger" }]
     }, {
-      "x-compactgate-profile": profileB.id,
+      [profileHeader]: profileB.id,
       "x-compactgate-session": "request-profile-session"
     });
     expect(explicitV2.status).toBe(200);
@@ -102,7 +102,7 @@ describe("Codex request-scoped profiles", () => {
     const explicitCompact = await postOpenAi(app.url, "/v1/responses/compact", {
       model: "client-model",
       input: "compact profile"
-    }, { "x-compactgate-profile": profileB.id });
+    }, { [profileHeader]: profileB.id });
     expect(explicitCompact.status).toBe(200);
     expect(explicitCompact.headers.get("x-compactgate-profile")).toBe(profileB.id);
 

@@ -8,8 +8,8 @@ const failed = 'event: response.failed\ndata: {"type":"response.failed","respons
 const started = 'event: response.created\ndata: {"type":"response.created","response":{"output":[]}}\n\n';
 afterEach(() => vi.useRealTimers());
 
-function observe(encoding?: string) {
-  const gate = new ProviderStateStreamGate({ ...headers, ...(encoding ? { "content-encoding": encoding } : {}) });
+function observe(encoding?: string, codex = false) {
+  const gate = new ProviderStateStreamGate({ ...headers, ...(encoding ? { "content-encoding": encoding } : {}) }, codex);
   const output: Buffer[] = [];
   gate.on("data", chunk => output.push(Buffer.from(chunk)));
   const done = finished(gate);
@@ -17,6 +17,36 @@ function observe(encoding?: string) {
 }
 
 describe("bounded provider-state SSE prefix", () => {
+  it.each([false, true])("scopes response.done failure recovery to Codex (%s)", async codex => {
+    const body = failed.replaceAll("response.failed", "response.done").replace('"output":[]', '"status":"failed","output":[]');
+    const { gate, done, text } = observe(undefined, codex);
+    gate.end(Buffer.from(body)); await done;
+    expect(Boolean(gate.failure)).toBe(codex);
+    expect(text()).toBe(codex ? "" : body);
+  });
+
+  it.each([
+    '"status":"completed","output":[]',
+    '"status":"incomplete","output":[]',
+    '"status":"failed","output":[{"type":"function_call","name":"write"}]'
+  ])("does not recover a Codex terminal with output or a non-failed status (%s)", async output => {
+    const body = failed.replaceAll("response.failed", "response.done").replace('"output":[]', output);
+    const { gate, done, text } = observe(undefined, true);
+    gate.end(Buffer.from(body)); await done;
+    expect(gate.failure).toBeNull();
+    expect(text()).toBe(body);
+  });
+
+  it.each(["response.failed", "error"])("recognizes request-ID diagnostics in an early %s envelope", async type => {
+    const error = { type: "invalid_request_error", code: null,
+      message: "[edge-v2] Gateway error: The encrypted content for item cmp_a could not be verified. Reason: Encrypted content could not be decrypted or parsed. [hub-] [trace_id=synthetic] (request id: request_123-X)" };
+    const record = type === "response.failed" ? { type, response: { output: [], error } } : { type, error };
+    const { gate, done, text } = observe();
+    gate.end(Buffer.from(started + `event: ${type}\ndata: ${JSON.stringify(record)}\n\n`)); await done;
+    expect(gate.failure).toMatchObject({ code: "invalid_encrypted_content", evidence: "message", itemId: "cmp_a" });
+    expect(text()).toBe("");
+  });
+
   it.each([["gzip", gzipSync], ["br", brotliCompressSync], ["deflate", deflateSync], ["zstd", zstdCompressSync]] as const)(
     "decodes chunked %s failures without exposing bytes", async (encoding, compress) => {
       const { gate, done, text } = observe(encoding);
@@ -27,9 +57,9 @@ describe("bounded provider-state SSE prefix", () => {
       expect(gate.failure?.code).toBe("invalid_encrypted_content");
     });
 
-  it("accepts multiline data and byte-split UTF-8 plus a trailing DONE", async () => {
+  it.each(["\n", "\r\n", "\r"])("accepts multiline data and byte-split UTF-8 plus a trailing DONE (%j)", async newline => {
     const { gate, done, text } = observe();
-    const bytes = Buffer.from(failed.replace(',"response":', ',\ndata: "response":') + 'data: [DONE]\n\n');
+    const bytes = Buffer.from((failed.replace(',"response":', ',\ndata: "response":') + 'data: [DONE]\n\n').replaceAll("\n", newline));
     for (const byte of bytes) gate.write(Buffer.from([byte]));
     gate.end(); await done;
     expect(gate.failure?.code).toBe("invalid_encrypted_content");

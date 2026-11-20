@@ -24,6 +24,7 @@ export interface ProfileHealth {
   /** End of the sticky-only zone: rate-limited recently, still serving bound sessions. */
   stickyOnlyUntil: number;
   lastFirstTokenMs: number | null;
+  lastResultAt: number | null;
   lastSelectedAt: number;
   modelCooldowns: Map<string, ModelCooldown>;
 }
@@ -81,6 +82,7 @@ export class PrimaryProfileHealthStore {
       rateLimitUntil: 0,
       stickyOnlyUntil: 0,
       lastFirstTokenMs: null,
+      lastResultAt: null,
       lastSelectedAt: 0,
       modelCooldowns: new Map()
     };

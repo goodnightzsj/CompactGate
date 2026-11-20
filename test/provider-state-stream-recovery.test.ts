@@ -3,23 +3,25 @@ import { gzipSync } from "node:zlib";
 import { captureRequest, startApp, startUpstream, JSON_HEADERS } from "./helpers/server-test-utils.js";
 
 const frame = (type: string, rest: Record<string, unknown> = {}) => `event: ${type}\ndata: ${JSON.stringify({ type, ...rest })}\n\n`;
-const failed = frame("response.failed", { response: { status: "failed", output: [], error: { code: "invalid_encrypted_content", message: "Encrypted content could not be decrypted or parsed." } } });
+const failed = frame("response.failed", { response: { status: "failed", output: [], error: { type: "invalid_request_error", code: null,
+  message: "[edge-v2] Gateway error: Encrypted content could not be decrypted or parsed. [hub-] [trace_id=synthetic] (request id: request123)" } } });
 const completed = frame("response.completed", { response: { id: "resp_fixture", status: "completed", output: [] } });
 const input = [{ type: "reasoning", id: "rs_fixture", summary: [], encrypted_content: "sealed-fixture" }, { role: "user", content: "continue" }];
 
 describe("early Responses SSE state rejection", () => {
-  it.each(["identity", "gzip"])("recovers a %s stream before any output", async encoding => {
+  it.each(["identity", "gzip"].flatMap(encoding => ["\n", "\r\n", "\r"].map(newline => ({ encoding, newline }))))(
+    "recovers a $encoding stream before any output with $newline", async ({ encoding, newline }) => {
     const sent: unknown[][] = [];
     const upstream = await startUpstream(async (req, res) => {
       sent.push(JSON.parse((await captureRequest(req)).body).input);
-      const text = sent.length === 1 ? frame("response.created", { response: { output: [] } }) + failed : completed;
+      const text = (sent.length === 1 ? frame("response.created", { response: { output: [] } }) + failed : completed).replaceAll("\n", newline);
       res.writeHead(200, { "content-type": "text/event-stream", ...(encoding === "gzip" ? { "content-encoding": "gzip" } : {}) });
       res.end(encoding === "gzip" ? gzipSync(text) : text);
     });
     const app = await startApp(upstream.url, upstream.url);
     const response = await fetch(`${app.url}/v1/responses`, { method: "POST", headers: JSON_HEADERS,
       body: JSON.stringify({ model: "gpt-fixture", store: false, stream: true, input }) });
-    expect(await response.text()).toBe(completed);
+    expect(await response.text()).toBe(completed.replaceAll("\n", newline));
     expect(sent).toEqual([input, [input[1]]]);
     expect(response.headers.get("x-compactgate-context-fidelity")).toBe("degraded");
   });

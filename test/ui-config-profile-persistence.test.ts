@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emptyForm, formFromConfig } from "../src/ui/config/config-form-state.js";
+import { emptyForm, formFromConfig, formToPatch } from "../src/ui/config/config-form-state.js";
 import { createConfigProfilePersistenceActions } from "../src/ui/hooks/configProfilePersistenceActions.js";
 import type { ConfigFormState } from "../src/ui/config/types.js";
 import { ConfigStore } from "../src/server/config.js";
@@ -9,6 +9,39 @@ import { INITIAL_STUDIO_CONFIG_STATE, reduceStudioConfigState } from "../src/ui/
 import { makeConfigDir } from "./helpers/config-test-utils.js";
 
 describe("config profile persistence", () => {
+  it.each(["codex", "claude"] as const)("validates only the submitted %s scope for create and update", async scope => {
+    for (const operation of ["save", "update"] as const) {
+      const store = await ConfigStore.load(path.join(await makeConfigDir(), "compactgate.json"));
+      await store.saveProfile(scope, "Synthetic", {});
+      const config = store.toPublicConfig();
+      const id = config.profile_scopes[scope].profiles[0].id;
+      const otherPriority = scope === "codex" ? "claudePrimaryApiKeyPriority" : "codexPrimaryApiKeyPriority";
+      const ownPriority = scope === "codex" ? "codexPrimaryApiKeyPriority" : "claudePrimaryApiKeyPriority";
+      const form = { ...formFromConfig(config), [otherPriority]: 101 };
+      const fetcher = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        const sent = JSON.parse(String(init?.body));
+        expect(Object.keys(sent.config).sort()).toEqual(scope === "codex" ? ["compact", "primary"] : ["claude"]);
+        if (operation === "save") await store.saveProfile(scope, "Synthetic", sent.config, sent.revision);
+        else await store.updateProfile(scope, id, "Synthetic", sent.config, sent.revision);
+        return Response.json(store.toPublicConfig());
+      });
+      vi.stubGlobal("fetch", fetcher);
+      vi.stubGlobal("window", { setTimeout: vi.fn() });
+      const controls = { name: "Synthetic", selectedId: id, selectionRevision: 0, interactionRevision: 0, state: "idle" as const,
+        setName: vi.fn(), commitSavedName: vi.fn(), setSelectedId: vi.fn(), setState: vi.fn(), setError: vi.fn() };
+      const makeActions = () => createConfigProfilePersistenceActions({ config, form, formRevision: config.revision,
+        setConfig: vi.fn(), applyProfileConfig: vi.fn(), refreshHealthAfterWrite: async () => {},
+        setSaveError: vi.fn(), setSaveState: vi.fn(), scopedProfileAccessors: () => controls });
+      const submit = () => operation === "save" ? makeActions().saveConfigProfile(scope) : makeActions().updateSelectedProfile(scope, id);
+      expect(await submit()).toBe(true);
+      expect(form[otherPriority]).toBe(101);
+      expect(() => formToPatch(form)).toThrow(/优先级/);
+      form[ownPriority] = 101;
+      expect(await submit()).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(controls.setError).toHaveBeenLastCalledWith(expect.stringContaining("优先级"));
+    }
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -36,6 +69,8 @@ describe("config profile persistence", () => {
     const accessors = {
       name: "",
       selectedId: "",
+      selectionRevision: 0,
+      interactionRevision: 0,
       state: "idle" as const,
       setName: vi.fn(),
       commitSavedName: vi.fn(),
@@ -44,11 +79,10 @@ describe("config profile persistence", () => {
       setError: vi.fn()
     };
     const actions = createConfigProfilePersistenceActions({
-      config: null,
+      config: createdClaudeProfile(),
       form: currentForm,
-      formRevision: null,
+      formRevision: "loaded-revision",
       setConfig: vi.fn(),
-      setForm: vi.fn(),
       applyProfileConfig: vi.fn(),
       refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
@@ -58,7 +92,7 @@ describe("config profile persistence", () => {
 
     await expect(actions.saveConfigProfile("claude", "Mapped")).resolves.toBe(true);
     expect(accessors.commitSavedName).toHaveBeenCalledExactlyOnceWith(
-      { name: "", selectedId: "" }, "created", "Mapped"
+      { name: "", selectedId: "", selectionRevision: 0 }, "created", "Mapped"
     );
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
@@ -103,6 +137,8 @@ describe("config profile persistence", () => {
     const accessors = {
       name: "1zzzcoding",
       selectedId: "current",
+      selectionRevision: 0,
+      interactionRevision: 0,
       state: "idle" as const,
       setName: vi.fn(),
       commitSavedName: vi.fn(),
@@ -113,9 +149,8 @@ describe("config profile persistence", () => {
     const actions = createConfigProfilePersistenceActions({
       config: renamedConfig,
       form: emptyForm(),
-      formRevision: null,
+      formRevision: "loaded-revision",
       setConfig: vi.fn(),
-      setForm: vi.fn(),
       applyProfileConfig: vi.fn(),
       refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
@@ -125,7 +160,7 @@ describe("config profile persistence", () => {
 
     await actions.updateSelectedProfile("codex");
     expect(accessors.commitSavedName).toHaveBeenCalledExactlyOnceWith(
-      { name: "1zzzcoding", selectedId: "current" }, "current", "1zzzcoding"
+      { name: "1zzzcoding", selectedId: "current", selectionRevision: 0 }, "current", "1zzzcoding"
     );
     const [url, request] = fetchMock.mock.calls[0] ?? [];
     const payload = JSON.parse(String(request?.body));
@@ -168,11 +203,13 @@ describe("config profile persistence", () => {
       headers: { "content-type": "application/json" }
     })));
     vi.stubGlobal("window", { setTimeout: vi.fn() });
-    const setForm = vi.fn();
+    const setConfig = vi.fn();
     const applyProfileConfig = vi.fn();
     const accessors = {
       name: "Active",
       selectedId: profileId,
+      selectionRevision: 0,
+      interactionRevision: 0,
       state: "idle" as const,
       setName: vi.fn(),
       commitSavedName: vi.fn(),
@@ -183,9 +220,8 @@ describe("config profile persistence", () => {
     const actions = createConfigProfilePersistenceActions({
       config: serverConfig,
       form: draft,
-      formRevision: null,
-      setConfig: vi.fn(),
-      setForm,
+      formRevision: serverConfig.revision,
+      setConfig,
       applyProfileConfig,
       refreshHealthAfterWrite: async () => undefined,
       setSaveError: vi.fn(),
@@ -202,9 +238,9 @@ describe("config profile persistence", () => {
         { ...INITIAL_STUDIO_CONFIG_STATE, config: serverConfig, form: current, formRevision: serverConfig.revision },
         { type: "apply_profile", config: applyProfileConfig.mock.calls[0][0], scope: applyProfileConfig.mock.calls[0][1], baselineConfig: serverConfig, baselineRevision: serverConfig.revision }
       ).form
-      : setForm.mock.calls[0]?.[0] as (current: ConfigFormState) => ConfigFormState;
+      : setConfig.mock.calls[0]?.[1] as (current: ConfigFormState) => ConfigFormState;
     if (operation === "apply") expect(applyProfileConfig).toHaveBeenCalledExactlyOnceWith(serverConfig, "codex");
-    else expect(setForm).toHaveBeenCalledTimes(1);
+    else expect(setConfig).toHaveBeenCalledTimes(1);
     const nextForm = updater(draft);
     expect(nextForm.loggingKeepRecent).toBe(999);
     expect(nextForm.claudePrimaryBaseUrl).toBe("https://claude-draft.example");

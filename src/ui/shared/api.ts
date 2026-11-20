@@ -1,3 +1,5 @@
+import { isRecord } from "../../shared/records.js";
+
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -23,16 +25,10 @@ export async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 function readApiError(payload: unknown): string | null {
-  if (
-    typeof payload === "object" &&
-    payload !== null &&
-    "error" in payload &&
-    typeof payload.error === "string"
-  ) {
-    return payload.error;
-  }
-
-  return null;
+  if (!isRecord(payload)) return null;
+  const error = payload.error;
+  if (typeof error === "string") return error;
+  return isRecord(error) && typeof error.message === "string" ? error.message : null;
 }
 
 export function errorSummary(error: unknown): string {

@@ -2,6 +2,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import {
   decodeResponseText,
   isRecord,
+  readHeader,
   readTrimmedString
 } from "./usage-utils.js";
 
@@ -10,11 +11,12 @@ export function extractResponseErrorSummary(
   responseBody: Buffer,
   headers: IncomingHttpHeaders = {}
 ): string | null {
-  if (status < 400) {
-    return null;
-  }
-
+  if (status < 400 && readHeader(headers["content-type"])?.toLowerCase().includes("text/event-stream")) return null;
   const text = decodeResponseText(responseBody, headers);
+  if (status < 400) {
+    try { return responseFailureSummary(JSON.parse(text ?? "")); }
+    catch { return null; }
+  }
   if (!text) {
     return `Upstream returned HTTP ${status}.`;
   }
@@ -29,6 +31,21 @@ export function extractResponseErrorSummary(
   return summary.length > 0
     ? `Upstream returned HTTP ${status}: ${truncateSummary(summary)}`
     : `Upstream returned HTTP ${status}.`;
+}
+
+/** Only protocol envelopes declare failure; output and metadata are user content. */
+export function responseFailureSummary(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const response = (value.type === "response.completed" || value.type === "response.failed" || value.type === "response.incomplete") && isRecord(value.response)
+    ? value.response : value;
+  const status = response.status ?? value.type;
+  if (response.error == null && status !== "failed" && status !== "incomplete" &&
+    status !== "response.failed" && status !== "response.incomplete" && value.type !== "error") return null;
+  const reason = isRecord(response.incomplete_details) ? readTrimmedString(response.incomplete_details.reason) : null;
+  const fallback = value.type === "response.failed" || value.type === "response.incomplete"
+    ? `OpenAI stream ended with ${value.type}.` : `Upstream response ended with ${status ?? "error"}.`;
+  const summary = findErrorSummary(response) ?? reason ?? fallback;
+  return truncateSummary(appendErrorQualifier(summary, readTrimmedString(response.code)) ?? summary);
 }
 
 function extractJsonErrorSummary(text: string): string | null {

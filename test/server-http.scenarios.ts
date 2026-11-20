@@ -758,20 +758,59 @@ describe("CompactGate HTTP basics", () => {
     });
   });
 
-  it("returns a controlled error for oversized OpenAI request bodies", async () => {
-    const app = await startApp();
-    const body = Buffer.concat([
-      Buffer.from('{"model":"gpt-5.5","input":"'),
-      Buffer.alloc(10 * 1024 * 1024 + 1, 0x61),
-      Buffer.from('"}')
-    ]);
+  it.each(["primary", "primary-chunked", "remote-v1", "local", "remote-v2", "chat"] as const)(
+    "forwards %s request bodies larger than 10 MiB without truncation",
+    async (mode) => {
+      const upstreamBodies: string[] = [];
+      const upstream = await startUpstream(async (req, res) => {
+        upstreamBodies.push(await captureBody(req));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ output: [] }));
+      });
+      const app = await startApp(upstream.url, upstream.url, {
+        primary: { upstream_protocol: mode === "chat" ? "openai_chat" : "openai_responses" },
+        compact: { model_mode: "custom", model_override: "gpt-5.5" }
+      });
+      const content = "a".repeat(11 * 1024 * 1024) + "完整尾部";
+      const payload = mode === "chat"
+        ? { model: "gpt-5.5", messages: [{ role: "user", content }] }
+        : {
+            model: "gpt-5.5",
+            input: [
+              { role: "user", content },
+              ...(mode === "remote-v2" ? [{ type: "compaction_trigger" }] : [])
+            ],
+            ...(mode === "local" ? {
+              client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "compaction" }) }
+            } : {})
+          };
+      const pathname = mode === "remote-v1" ? "/v1/responses/compact"
+        : mode === "chat" ? "/v1/chat/completions" : "/v1/responses";
+      const result = await postRawBody(
+        `${app.url}${pathname}`, Buffer.from(JSON.stringify(payload)), mode === "primary-chunked"
+      );
 
-    const result = await postRawBody(`${app.url}/v1/responses`, body);
-
-    expect(result).toMatchObject({ status: 413 });
-    if ("text" in result) {
-      expect(JSON.parse(result.text)).toMatchObject({ error: "Request body is too large." });
+      expect(result).toMatchObject({ status: 200 });
+      expect(upstreamBodies).toHaveLength(1);
+      expect(JSON.parse(upstreamBodies[0])).toEqual(payload);
     }
+  );
+
+  it("accepts management JSON bodies larger than 10 MiB without changing validation", async () => {
+    const app = await startApp();
+    const padding = "a".repeat(11 * 1024 * 1024);
+    const body = Buffer.from(JSON.stringify({
+      path: "/v1/responses", body: { model: "gpt-5.5", input: padding }
+    }));
+
+    const result = await postRawBody(`${app.url}/api/test-route`, body);
+
+    expect(result).toMatchObject({ status: 200 });
+    if ("text" in result) {
+      expect(JSON.parse(result.text)).toMatchObject({ route: "primary", source_model: "gpt-5.5" });
+    }
+    const invalid = await postRawBody(`${app.url}/api/test-route`, body.subarray(0, body.byteLength - 1));
+    expect(invalid).toMatchObject({ status: 400 });
   });
 
   it("settles OpenAI request body reads when the client disconnects mid-upload", async () => {
@@ -805,7 +844,8 @@ describe("CompactGate HTTP basics", () => {
 
 function postRawBody(
   targetUrl: string,
-  body: Buffer
+  body: Buffer,
+  chunked = false
 ): Promise<{ status: number | undefined; text: string } | { error: string }> {
   const target = new URL(targetUrl);
   return new Promise((resolve) => {
@@ -817,7 +857,7 @@ function postRawBody(
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "content-length": String(body.byteLength)
+          ...(chunked ? {} : { "content-length": String(body.byteLength) })
         }
       },
       (response) => {
@@ -834,7 +874,12 @@ function postRawBody(
     request.on("error", (error: NodeJS.ErrnoException) => {
       resolve({ error: error.code ?? error.message });
     });
-    request.end(body);
+    if (chunked) {
+      request.write(body.subarray(0, body.byteLength / 2));
+      request.end(body.subarray(body.byteLength / 2));
+    } else {
+      request.end(body);
+    }
   });
 }
 

@@ -246,6 +246,25 @@ describe("CompactGate config API", () => {
     });
   });
 
+  it("rejects a missing import document without resetting config, and accepts an explicit empty object", async () => {
+    const app = await startApp();
+    const url = `${app.url}/api/config/import`;
+    const headers = { "content-type": "application/json" };
+    const initial = await fetch(`${app.url}/api/config/profiles`, {
+      method: "POST", headers, body: JSON.stringify({ scope: "codex", name: "Retain me" })
+    });
+    expect(initial.status).toBe(200);
+    const saved: PublicConfig = await initial.json();
+    expect(saved.profiles).toHaveLength(1);
+    const missing = await fetch(url, { method: "POST", headers });
+    expect(missing.status).toBe(400);
+    const current = await fetch(`${app.url}/api/config`);
+    expect(await current.json()).toMatchObject({ revision: saved.revision, profiles: saved.profiles });
+    const reset = await fetch(url, { method: "POST", headers, body: "{}" });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ profiles: [] });
+  });
+
   it("imports config through the public API without exposing secrets or recording URL preset usage", async () => {
     const app = await startApp();
 

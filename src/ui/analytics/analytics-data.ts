@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import type { LogStatsMetric, LogStatsSnapshot, LogUsageStatsSnapshot } from "../../shared/types.js";
+import { DAY_MS, MAX_LOG_RANGE_DAYS } from "../../shared/log-range.js";
 import { api, errorSummary } from "../shared/api.js";
 
 export type AnalyticsGranularity = "hour" | "day";
@@ -13,9 +14,8 @@ export interface AnalyticsSnapshotCache<View extends AnalyticsView = "full"> {
   key: string;
   receivedAt: number;
   data: AnalyticsSnapshot<View>;
+  preset: AnalyticsPreset | null;
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How often an open analytics page re-reads its statistics. The dashboard shows
@@ -58,8 +58,9 @@ export function fetchLogStats<View extends AnalyticsView = "full">(
   view?: View
 ): Promise<AnalyticsSnapshot<View>> {
   // Resolve relative ranges at request time, including timer/visibility refreshes.
-  const { from, to } = typeof range === "string" ? rangeForPreset(range) : range;
+  const { from, to, calendar_tz } = typeof range === "string" ? rangeForPreset(range) : range;
   const query = new URLSearchParams({ from, to });
+  if (calendar_tz) query.set("calendar_tz", calendar_tz);
   if (includeOverview) query.set("overview", "1");
   if (view === "usage") query.set("view", view);
   return api<AnalyticsSnapshot<View>>(`/api/logs/stats?${query.toString()}`, { signal });
@@ -75,16 +76,18 @@ export function useLogStats<View extends AnalyticsView = "full">(
   } = {}
 ) {
   const { includeOverview = false, transitionUpdates = false, view, snapshot } = options;
-  const key = JSON.stringify([view ?? "full", includeOverview, typeof range === "string" ? range : [range.from, range.to]]);
+  const key = JSON.stringify([view ?? "full", includeOverview, typeof range === "string" ? range : [range.from, range.to, range.calendar_tz]]);
   const [initial] = useState(() => snapshot?.current?.key === key ? snapshot.current : null);
-  const [data, setData] = useState<AnalyticsSnapshot<View> | null>(initial?.data ?? null);
-  const [receivedAt, setReceivedAt] = useState<number | null>(initial?.receivedAt ?? null);
+  const [result, setResult] = useState<AnalyticsSnapshotCache<View> | null>(initial);
+  const data = result?.data ?? null;
+  const receivedAt = result?.receivedAt ?? null;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(() => !initial || Date.now() - initial.receivedAt >= STATS_REFRESH_MS);
   const [revision, setRevision] = useState(0);
   const hasData = useRef(initial !== null);
   const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, readDocumentVisible, () => false);
   const autoRefreshRef = useRef(false);
+  const inFlight = useRef(false);
   const forceRefreshRef = useRef(false);
   const previousVisible = useRef(documentVisible);
 
@@ -99,13 +102,13 @@ export function useLogStats<View extends AnalyticsView = "full">(
     forceRefreshRef.current = false;
     const cached = snapshot?.current;
     if (!forceRefresh && !resumed && cached?.key === key && Date.now() - cached.receivedAt < STATS_REFRESH_MS) {
-      setData(cached.data);
-      setReceivedAt(cached.receivedAt);
+      setResult(cached);
       setError(null);
       setLoading(false);
       return;
     }
     const controller = new AbortController();
+    inFlight.current = true;
     let transition: ViewTransition | null = null;
     const isAutoRefresh = resumed || autoRefreshRef.current;
     autoRefreshRef.current = false;
@@ -121,9 +124,9 @@ export function useLogStats<View extends AnalyticsView = "full">(
       const commit = () => {
         if (controller.signal.aborted) return;
         const receivedAt = Date.now();
-        if (snapshot) snapshot.current = { key, receivedAt, data: nextData };
-        setData(nextData);
-        setReceivedAt(receivedAt);
+        const result = { key, receivedAt, data: nextData, preset: typeof range === "string" ? range : null };
+        if (snapshot) snapshot.current = result;
+        setResult(result);
         hasData.current = true;
       };
       if (
@@ -146,11 +149,13 @@ export function useLogStats<View extends AnalyticsView = "full">(
       }
     }).catch(reportError).finally(() => {
       if (!controller.signal.aborted) {
+        inFlight.current = false;
         setLoading(false);
       }
     });
 
     return () => {
+      inFlight.current = false;
       controller.abort();
       transition?.skipTransition();
     };
@@ -166,6 +171,7 @@ export function useLogStats<View extends AnalyticsView = "full">(
     }
 
     const bump = () => {
+      if (inFlight.current) return;
       // An automatic refresh must not drive a view transition: that cross-fade
       // belongs to a range change the user asked for, and one every minute would
       // flicker the whole panel for no reason.
@@ -187,6 +193,7 @@ export function useLogStats<View extends AnalyticsView = "full">(
 
   return {
     data,
+    preset: result?.preset ?? null,
     error,
     loading,
     refresh: () => {
@@ -227,13 +234,9 @@ export function rangeForPreset(preset: AnalyticsPreset, now = Date.now()): Analy
   from.setDate(from.getDate() - (preset === "7d" ? 6 : 29));
   return {
     from: from.toISOString(),
-    to: end.toISOString()
+    to: end.toISOString(),
+    calendar_tz: Intl.DateTimeFormat().resolvedOptions().timeZone
   };
-}
-
-export function presetForRange(range: AnalyticsRange): AnalyticsPreset {
-  const duration = Date.parse(range.to) - Date.parse(range.from);
-  return duration <= DAY_MS ? "24h" : duration <= 7 * DAY_MS ? "7d" : "30d";
 }
 
 export function defaultUsageDates(now = new Date()): { from: string; to: string } {
@@ -254,38 +257,43 @@ export function dateInputsToRange(fromValue: string, toValue: string): Analytics
     lastDay.getFullYear(),
     lastDay.getMonth(),
     lastDay.getDate()
-  ) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86_400_000) + 1;
-  if (calendarDays > 31) {
+  ) - Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / DAY_MS) + 1;
+  if (calendarDays > MAX_LOG_RANGE_DAYS) {
     throw new Error("日期范围最多为 31 天。");
   }
 
-  const to = new Date(lastDay);
-  to.setDate(to.getDate() + 1);
-  return { from: from.toISOString(), to: to.toISOString() };
+  const to = new Date(lastDay.getFullYear(), lastDay.getMonth(), lastDay.getDate() + 1);
+  return { from: from.toISOString(), to: to.toISOString(), calendar_tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
 export function groupTrend(
-  snapshot: Pick<LogStatsSnapshot, "range" | "trend">,
+  snapshot: Pick<LogStatsSnapshot, "range" | "trend" | "daily_trend">,
   granularity: AnalyticsGranularity
 ): AnalyticsTrendPoint[] {
+  const formatter = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    ...(granularity === "hour" ? { hour: "2-digit" } : snapshot.daily_trend ? { timeZone: "UTC" } : {})
+  });
+  if (granularity === "day" && snapshot.daily_trend) {
+    return snapshot.daily_trend.map(point => {
+      const day = emptyTrendPoint(point.date, formatter.format(new Date(point.date + "T00:00:00Z")));
+      addMetric(day, point);
+      return day;
+    });
+  }
   const grouped = new Map<string, AnalyticsTrendPoint>();
   for (const point of snapshot.trend) {
     const date = new Date(point.bucket_start);
-    // ponytail: buckets are whole UTC hours, so in a timezone whose offset is
-    // not a whole hour (UTC+5:30, +9:30) one bucket straddles local midnight and
-    // its whole count lands on the earlier day — up to 30 or 45 minutes of
-    // traffic in the wrong column of the daily view. Fixing it properly means
-    // bucketing server-side against the client's UTC offset; the summary tiles
-    // are unaffected because they come straight from the SQL instant range.
     const key = granularity === "hour" ? point.bucket_start : localDateKey(date);
-    const current = grouped.get(key) ?? emptyTrendPoint(key, date, granularity);
+    const current = grouped.get(key) ?? emptyTrendPoint(key, formatter.format(date));
     addMetric(current, point);
     grouped.set(key, current);
   }
 
   return granularity === "hour"
-    ? filledHours(snapshot.range, grouped)
-    : filledDays(snapshot.range, grouped);
+    ? filledHours(snapshot.range, grouped, formatter)
+    : filledDays(snapshot.range, grouped, formatter);
 }
 
 export function usageCsv(points: AnalyticsTrendPoint[]): string {
@@ -328,7 +336,8 @@ export function downloadUsageCsv(points: AnalyticsTrendPoint[]): void {
 
 function filledHours(
   range: AnalyticsRange,
-  grouped: Map<string, AnalyticsTrendPoint>
+  grouped: Map<string, AnalyticsTrendPoint>,
+  formatter: Intl.DateTimeFormat
 ): AnalyticsTrendPoint[] {
   const cursor = new Date(range.from);
   cursor.setUTCMinutes(0, 0, 0);
@@ -336,7 +345,7 @@ function filledHours(
   const result: AnalyticsTrendPoint[] = [];
   while (cursor.getTime() < end) {
     const key = cursor.toISOString();
-    result.push(grouped.get(key) ?? emptyTrendPoint(key, cursor, "hour"));
+    result.push(grouped.get(key) ?? emptyTrendPoint(key, formatter.format(cursor)));
     cursor.setUTCHours(cursor.getUTCHours() + 1);
   }
   return result;
@@ -344,7 +353,8 @@ function filledHours(
 
 function filledDays(
   range: AnalyticsRange,
-  grouped: Map<string, AnalyticsTrendPoint>
+  grouped: Map<string, AnalyticsTrendPoint>,
+  formatter: Intl.DateTimeFormat
 ): AnalyticsTrendPoint[] {
   const start = new Date(range.from);
   const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
@@ -352,22 +362,16 @@ function filledDays(
   const result: AnalyticsTrendPoint[] = [];
   while (cursor.getTime() < end) {
     const key = localDateKey(cursor);
-    result.push(grouped.get(key) ?? emptyTrendPoint(key, cursor, "day"));
+    result.push(grouped.get(key) ?? emptyTrendPoint(key, formatter.format(cursor)));
     cursor.setDate(cursor.getDate() + 1);
   }
   return result;
 }
 
-function emptyTrendPoint(
-  key: string,
-  date: Date,
-  granularity: AnalyticsGranularity
-): AnalyticsTrendPoint {
+function emptyTrendPoint(key: string, label: string): AnalyticsTrendPoint {
   return {
     key,
-    label: new Intl.DateTimeFormat("zh-CN", granularity === "hour"
-      ? { month: "2-digit", day: "2-digit", hour: "2-digit" }
-      : { month: "2-digit", day: "2-digit" }).format(date),
+    label,
     requests: 0,
     normal_requests: 0,
     error_requests: 0,

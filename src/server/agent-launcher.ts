@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { validateHeaderValue } from "node:http";
+import { constants } from "node:os";
 
 export type AgentKind = "codex" | "claude";
 
@@ -205,11 +206,7 @@ function waitForChild(child: ChildProcess): Promise<number> {
     });
     child.once("exit", (code, signal) => {
       cleanup();
-      resolve(code ?? (signal ? 128 + signalNumber(signal) : 1));
+      resolve(code ?? (signal ? 128 + constants.signals[signal] : 1));
     });
   });
-}
-
-function signalNumber(signal: NodeJS.Signals): number {
-  return ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 } as Record<NodeJS.Signals, number>)[signal] ?? 1;
 }

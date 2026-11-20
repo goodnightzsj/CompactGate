@@ -191,8 +191,6 @@ describe("shared caches do not hand one request's state to another", () => {
         "content-type": "text/event-stream",
         "set-cookie": ["session=session-a-secret; Path=/"]
       },
-      clientResponseBody: Buffer.from("{}"),
-      clientResponseHeaders: { "content-type": "application/json" },
       compactResponseNormalized: false,
       compactResponseNormalizeReason: null,
       compactResponseSyntheticSource: null,

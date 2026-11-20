@@ -100,7 +100,7 @@ export function analyzeProviderState(body: Buffer): ProviderStateAnalysis {
   }
 
   const previousResponseIdPresent = Boolean(
-    parsed && (Object.hasOwn(parsed, "previous_response_id") || Object.hasOwn(parsed, "previousResponseId"))
+    parsed && (parsed.previous_response_id != null || parsed.previousResponseId != null)
   );
 
   return {
@@ -161,7 +161,7 @@ export function compileProviderStateAttempt(
   const allowCompactionDrop = options.allowCompactionDrop === true && options.strategy === "error_400" &&
     !crossDomain && options.errorCode === "invalid_encrypted_content";
   if (options.strategy === "error_400" && options.errorCode === "invalid_encrypted_content" &&
-    !crossDomain && hasFailureLocator(options.failure) && !options.rejectedCompaction &&
+    !crossDomain && !options.failure?.inputItemHash && hasFailureLocator(options.failure) && !options.rejectedCompaction &&
     (!Array.isArray(parsed.input) || !parsed.input.some((item, index) => matchesFailureTarget(item, index, options.failure)))) {
     return unchangedResult(canonicalBody);
   }
@@ -525,18 +525,19 @@ function recoverRejectedCompactions(
   return fidelity;
 }
 
-function lowerFidelity(left: ProviderStateFidelity, right: ProviderStateFidelity): ProviderStateFidelity {
+export function lowerFidelity(left: ProviderStateFidelity, right: ProviderStateFidelity): ProviderStateFidelity {
   return left === "degraded" || right === "degraded" ? "degraded"
     : left === "summary" || right === "summary" ? "summary" : "exact";
 }
 
 function hasFailureLocator(failure?: ProviderStateFailure): boolean {
-  return failure?.itemId != null || failure?.inputIndex != null || failure?.encryptedContentHash != null;
+  return failure?.itemId != null || failure?.inputIndex != null || failure?.encryptedContentHash != null || failure?.inputItemHash != null;
 }
 
 function matchesFailureTarget(item: unknown, index: number, failure?: ProviderStateFailure): boolean {
   if (!hasFailureLocator(failure)) return true;
   if (!isRecord(item)) return false;
+  if (failure?.inputItemHash) return hashProviderStateBody(Buffer.from(JSON.stringify(item))) === failure.inputItemHash;
   if (failure?.inputIndex != null) return index === failure.inputIndex;
   if (failure?.itemId != null) return item.id === failure.itemId;
   return ciphertextMatches(item.encrypted_content, failure?.encryptedContentHash) || item.type === "agent_message" &&

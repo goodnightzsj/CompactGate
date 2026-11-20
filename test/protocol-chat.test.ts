@@ -36,6 +36,14 @@ describe("OpenAI Chat upstream conversion", () => {
       content: expect.stringContaining("summary text only")
     });
 
+    const stringInput = responsesRemoteV2CompactionToChat(Buffer.from(JSON.stringify({
+      model: "gpt-5.5-chat", input: "Context supplied with a metadata trigger."
+    })));
+    expect(JSON.parse(stringInput.toString()).messages).toEqual([
+      { role: "user", content: "Context supplied with a metadata trigger." },
+      request.messages.at(-1)
+    ]);
+
     const response = chatCompletionToResponsesCompaction(Buffer.from(JSON.stringify({
       id: "chat-compaction",
       model: "gpt-5.5-chat",
@@ -571,6 +579,20 @@ describe("OpenAI Chat upstream conversion", () => {
     expect(await followUp.json()).toMatchObject({ output_text: "Chat portable summary." });
     expect(captures).toHaveLength(2);
 
+    const secondCompact = await postJson(app.url, "/v1/responses", {
+      model: "gpt-5.5", input: [
+        { type: "compaction", encrypted_content: state },
+        { type: "message", role: "user", content: "New turn." }, { type: "compaction_trigger" }
+      ]
+    });
+    expect(secondCompact.status).toBe(200);
+    expect((await secondCompact.json()).output[0].encrypted_content).toMatch(/^cg1_/);
+    expect(JSON.parse(captures[2].body).messages).toEqual([
+      { role: "assistant", content: "Chat portable summary." },
+      { role: "user", content: "New turn." },
+      { role: "user", content: expect.stringContaining("summary text only") }
+    ]);
+
     const opaque = await postJson(app.url, "/v1/responses", {
       model: "gpt-5.5",
       input: [{ type: "compaction", encrypted_content: "provider-owned" }]
@@ -579,7 +601,7 @@ describe("OpenAI Chat upstream conversion", () => {
     expect(await opaque.json()).toMatchObject({
       error: expect.stringContaining("opaque compaction state")
     });
-    expect(captures).toHaveLength(2);
+    expect(captures).toHaveLength(3);
   });
 
   it("streams Chat output to Anthropic before the upstream closes", async () => {

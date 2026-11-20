@@ -142,7 +142,7 @@ export function updateProfile(
             ...mergeRuntimeForProfileScope(nextConfig, profileConfig, scope)
           }
         : nextConfig;
-    return recordProfileRouteUrls(updatedConfig, profileConfig, scope);
+    return patch === undefined ? updatedConfig : recordProfileRouteUrls(updatedConfig, profileConfig, scope);
 }
 
 /**

@@ -9,6 +9,7 @@ import { emptyClaudeModelMap, normalizeClaudeModelMap } from "./model-map.js";
 import type { ConfigFormState } from "./types.js";
 import type { OAuthAccountView } from "../../shared/oauth.js";
 import { isApiKeyPriority, MAX_API_KEY_PRIORITY } from "../../shared/api-key-priority.js";
+import { extractScopedProfileConfig } from "../../shared/config-profile.js";
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * 1024 * 1024;
@@ -22,7 +23,36 @@ const IMPORT_INDEPENDENT_FIELDS: ReadonlyArray<keyof ConfigFormState> = [
   "loggingCaptureDirMaxGiB", "loggingMaxDatabaseMiB"
 ];
 
-export const IMPORT_CONNECTION_CONFLICT_MESSAGE = "导入已完成，但导入期间的连接编辑仍基于旧凭据。输入已保留；请先采用已保存连接，再重新编辑连接。模型和日志编辑会保留。";
+export const IMPORT_CONNECTION_CONFLICT_MESSAGE = "配置已更新，但连接编辑仍基于旧凭据。输入已保留；请先采用已保存连接，再重新编辑连接。模型和日志编辑会保留。";
+
+export function formAfterConfigConflict(draft: ConfigFormState, baseline: PublicConfig, config: PublicConfig): ConfigFormState {
+  const original = formFromConfig(baseline);
+  const saved = formFromConfig(config);
+  const next = formAfterConfigImport(draft, original, config);
+  const routes = [
+    ["codexPrimary", baseline.primary, config.primary],
+    ["codexCompact", baseline.compact, config.compact],
+    ["claudePrimary", baseline.claude.primary, config.claude.primary],
+    ["claudeCompact", baseline.claude.compact, config.claude.compact]
+  ] as const;
+  next.importConnectionConflict = draft.importConnectionConflict || routes.some(([prefix, before, after]) => {
+    if (before.connection_revision === after.connection_revision &&
+      before.base_url === after.base_url && before.upstream_protocol === after.upstream_protocol) return false;
+    return (Object.keys(saved) as Array<keyof ConfigFormState>).some(field =>
+      (field.startsWith(prefix) || field === `clear${prefix[0].toUpperCase()}${prefix.slice(1)}ApiKey`) &&
+      !IMPORT_INDEPENDENT_FIELDS.includes(field) &&
+      JSON.stringify(draft[field]) !== JSON.stringify(original[field]) &&
+      JSON.stringify(draft[field]) !== JSON.stringify(saved[field]));
+  });
+  return next;
+}
+
+export function configConnectionsChanged(before: PublicConfig, after: PublicConfig): boolean {
+  return before.primary.connection_revision !== after.primary.connection_revision ||
+    before.compact.connection_revision !== after.compact.connection_revision ||
+    before.claude.primary.connection_revision !== after.claude.primary.connection_revision ||
+    before.claude.compact.connection_revision !== after.claude.compact.connection_revision;
+}
 
 export function formAfterConfigImport(
   draft: ConfigFormState,
@@ -283,7 +313,30 @@ export function formFromConfig(config: PublicConfig): ConfigFormState {
 
 export function formToPatch(form: ConfigFormState) {
   assertImportResolved(form);
-  const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
+  return {
+    ...codexProfilePatch(form),
+    ...claudeProfilePatch(form),
+    primary_failover: {
+      auto_schedule: form.autoSchedulePrimaryFailover,
+      state_portability: form.primaryStatePortability
+    },
+    logging: {
+      persist_body: form.loggingPersistBody,
+      keep_recent: boundedKeepRecent(form.loggingKeepRecent),
+      capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
+      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
+      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
+      max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
+    }
+  };
+}
+
+export function formToProfilePatch(form: ConfigFormState, scope: ConfigProfileScope) {
+  assertImportResolved(form);
+  return scope === "codex" ? codexProfilePatch(form) : claudeProfilePatch(form);
+}
+
+function codexProfilePatch(form: ConfigFormState) {
   const primary = {
     base_url: form.codexPrimaryBaseUrl,
     ...credentialPresetPatch(form.codexPrimaryCredentialPresetId),
@@ -320,6 +373,11 @@ export function formToPatch(form: ConfigFormState) {
     model_override: form.modelOverride,
     upstream_protocol: form.codexCompactUpstreamProtocol
   };
+  return { primary, compact };
+}
+
+function claudeProfilePatch(form: ConfigFormState) {
+  const claudeModelMap = normalizeClaudeModelMap(form.claudeModelMap);
   const claude = {
     primary: {
       base_url: form.claudePrimaryBaseUrl,
@@ -354,23 +412,7 @@ export function formToPatch(form: ConfigFormState) {
     }
   };
 
-  return {
-    primary,
-    compact,
-    claude,
-    primary_failover: {
-      auto_schedule: form.autoSchedulePrimaryFailover,
-      state_portability: form.primaryStatePortability
-    },
-    logging: {
-      persist_body: form.loggingPersistBody,
-      keep_recent: boundedKeepRecent(form.loggingKeepRecent),
-      capture_dir: normalizedCaptureDir(form.loggingCaptureDir),
-      capture_body_max_bytes: bytesFromUnit(form.loggingCaptureBodyMaxMiB, MEBIBYTE),
-      capture_dir_max_bytes: bytesFromUnit(form.loggingCaptureDirMaxGiB, GIBIBYTE),
-      max_database_bytes: bytesFromUnit(form.loggingMaxDatabaseMiB, MEBIBYTE)
-    }
-  };
+  return { claude };
 }
 
 export function isFormDirty(config: PublicConfig, form: ConfigFormState): boolean {
@@ -417,7 +459,8 @@ export function applyDraftToConfigExport(
       // back to what is stored rather than being omitted.
       sticky_reserve_seconds: boundedStickyReserve(form.codexPrimaryStickyReserveSeconds)
         ?? config.primary.sticky_reserve_seconds,
-      api_keys: form.codexPrimaryApiKeys.map((entry) => {
+      api_keys: form.codexPrimaryApiKeys.filter(entry => entry.apiKey.trim() ||
+        canInheritKeyPool(config.primary.base_url, form.codexPrimaryBaseUrl, form.codexPrimaryCredentialPresetId)).map((entry) => {
         // The export baseline is the full plaintext config, so an untouched
         // entry keeps its stored secret here — unlike the patch path, which has
         // to inherit by id on the server.
@@ -433,6 +476,7 @@ export function applyDraftToConfigExport(
     },
     compact: {
       ...config.compact,
+      api_keys: canInheritKeyPool(config.compact.base_url, form.codexCompactBaseUrl, form.codexCompactCredentialPresetId) ? config.compact.api_keys : [],
       ...oauthCredentialDraft(form.codexCompactOAuthAccountId),
       base_url: form.codexCompactBaseUrl,
       upstream_protocol: form.codexCompactUpstreamProtocol,
@@ -453,7 +497,8 @@ export function applyDraftToConfigExport(
         rotation_opt_out: form.claudePrimaryRotationOptOut,
         sticky_reserve_seconds: boundedStickyReserve(form.claudePrimaryStickyReserveSeconds)
           ?? config.claude.primary.sticky_reserve_seconds,
-        api_keys: form.claudePrimaryApiKeys.map((entry) => {
+        api_keys: form.claudePrimaryApiKeys.filter(entry => entry.apiKey.trim() ||
+          canInheritKeyPool(config.claude.primary.base_url, form.claudePrimaryBaseUrl, form.claudePrimaryCredentialPresetId)).map((entry) => {
           const stored = config.claude.primary.api_keys?.find((candidate) => candidate.id === entry.id);
           return {
             id: entry.id,
@@ -466,6 +511,7 @@ export function applyDraftToConfigExport(
       },
       compact: {
         ...config.claude.compact,
+        api_keys: canInheritKeyPool(config.claude.compact.base_url, form.claudeCompactBaseUrl, form.claudeCompactCredentialPresetId) ? config.claude.compact.api_keys : [],
         ...oauthCredentialDraft(form.claudeCompactOAuthAccountId),
         base_url: form.claudeCompactBaseUrl,
         upstream_protocol: form.claudeCompactUpstreamProtocol,
@@ -493,12 +539,13 @@ export function applyDraftToConfigExport(
         ?? config.logging.max_database_bytes
     },
     primary_failover: {
+      ...config.primary_failover,
       auto_schedule: form.autoSchedulePrimaryFailover,
       state_portability: form.primaryStatePortability
     },
     profiles: config.profiles,
     active_profile_id: config.active_profile_id,
-    profile_scopes: config.profile_scopes,
+    profile_scopes: { ...config.profile_scopes },
     route_url_presets: config.route_url_presets
   };
 
@@ -534,6 +581,23 @@ export function applyDraftToConfigExport(
     form.claudeCompactCredentialPresetId,
     "claude_compact"
   );
+
+  next.route_url_presets = next.route_url_presets?.map(preset => {
+    const routes = preset.kind.startsWith("claude_") ? next.claude : next;
+    const route = preset.kind.endsWith("_primary") ? routes.primary : routes.compact;
+    if (route.oauth_account_id ||
+      preset.kind.endsWith("_compact") && routes.compact.upstream_mode === "primary" && routes.primary.oauth_account_id ||
+      normalizeRouteUrl(preset.base_url) !== normalizeRouteUrl(route.base_url)) return preset;
+    return { ...preset, api_key: route.api_key, api_key_env: route.api_key_env };
+  });
+
+  for (const scope of ["codex", "claude"] as const) {
+    const state = next.profile_scopes?.[scope];
+    if (!state?.active_profile_id) continue;
+    next.profile_scopes![scope] = { ...state, profiles: state.profiles?.map(profile =>
+      profile.id === state.active_profile_id ? { ...profile, config: extractScopedProfileConfig(next, scope) } : profile) };
+  }
+  if (next.profiles && next.profile_scopes?.codex) next.profiles = next.profile_scopes.codex.profiles;
 
   return next;
 }
@@ -660,6 +724,10 @@ function credentialPresetPatch(value: string): { credential_preset_id?: string }
   return presetId.length > 0 ? { credential_preset_id: presetId } : {};
 }
 
+function canInheritKeyPool(savedBaseUrl: string, draftBaseUrl: string, credentialPresetId: string): boolean {
+  return !credentialPresetId || normalizeRouteUrl(savedBaseUrl) === normalizeRouteUrl(draftBaseUrl);
+}
+
 function applyApiKeyDraft(
   target: UpstreamConfig,
   value: string,
@@ -668,17 +736,7 @@ function applyApiKeyDraft(
   credentialPresetId: string,
   kind: RouteUrlPresetKind
 ): void {
-  if (shouldClear) {
-    target.api_key = "";
-    return;
-  }
-
-  const apiKey = normalizedApiKey(value);
-  if (apiKey.length > 0) {
-    target.api_key = apiKey;
-    return;
-  }
-
+  if (target.oauth_account_id) return;
   const preset = (presets ?? []).find((candidate) =>
     candidate.id === credentialPresetId && candidate.kind === kind && normalizeRouteUrl(candidate.base_url) === normalizeRouteUrl(target.base_url)
   );
@@ -686,6 +744,8 @@ function applyApiKeyDraft(
     target.api_key = preset.api_key;
     target.api_key_env = preset.api_key_env;
   }
+  // Explicit key edits override only that field, just as in the config PATCH.
+  Object.assign(target, apiKeyPatch(value, shouldClear));
 }
 
 function normalizedApiKey(value: string): string {

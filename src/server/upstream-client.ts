@@ -60,6 +60,7 @@ export interface UpstreamResponseTransform {
   stream: Duplex;
   responseHeaders: IncomingHttpHeaders;
   streamProtocol: "openai" | "anthropic";
+  sourceStreamProtocol?: "codex";
   /** Source terminal observed by a protocol adapter, even when output is JSON. */
   sawTerminalEvent?: boolean;
   /**
@@ -309,13 +310,6 @@ export function sendBufferedUpstreamRequest(
           options.deferRetryableStreamErrors === true && status >= 500;
         const shouldDeferResponse = shouldDeferHttpError || shouldDeferRetryableResponse;
         const shouldWriteResponse = options.writeResponse !== false && !shouldDeferResponse;
-        const providerStateGate = shouldWriteResponse && options.deferProviderStateStreamErrors === true &&
-          status >= 200 && status < 300 && String(response.headers["content-type"] ?? "").toLowerCase().includes("text/event-stream")
-          ? new ProviderStateStreamGate(response.headers) : null;
-        const providerStateGateCompletion = providerStateGate ? finished(providerStateGate, { cleanup: true }).catch((error: unknown) => {
-          rejectOnce(new UpstreamRequestError(error instanceof Error ? error.message : "Upstream state observation failed.",
-            responseDetails("upstream_stream_incomplete", "before_terminal"), { cause: error }));
-        }) : null;
         const requireCompleteJson = options.requireCompleteJsonResponse === true && status < 400 &&
           String(response.headers["content-type"] ?? "").toLowerCase().includes("application/json");
         const requireCompleteResponse = options.requireCompleteResponse || requireCompleteJson;
@@ -334,7 +328,6 @@ export function sendBufferedUpstreamRequest(
             ? options.responseTransform?.(status, response.headers) ?? null
             : null;
         } catch (error) {
-          providerStateGate?.destroy();
           response.resume();
           rejectOnce(new UpstreamRequestError(
             error instanceof Error ? error.message : "Upstream response transform failed.",
@@ -343,6 +336,13 @@ export function sendBufferedUpstreamRequest(
           ));
           return;
         }
+        const providerStateGate = shouldWriteResponse && options.deferProviderStateStreamErrors === true &&
+          status >= 200 && status < 300 && String(response.headers["content-type"] ?? "").toLowerCase().includes("text/event-stream")
+          ? new ProviderStateStreamGate(response.headers, responseTransform?.sourceStreamProtocol === "codex") : null;
+        const providerStateGateCompletion = providerStateGate ? finished(providerStateGate, { cleanup: true }).catch((error: unknown) => {
+          rejectOnce(new UpstreamRequestError(error instanceof Error ? error.message : "Upstream state observation failed.",
+            responseDetails("upstream_stream_incomplete", "before_terminal"), { cause: error }));
+        }) : null;
         const clientResponseChunks: Buffer[] = [];
         let clientResponseBytes = 0;
         const clientStreamObserver = responseTransform
@@ -521,6 +521,15 @@ export function sendBufferedUpstreamRequest(
         clientResponseHeaders: responseState.responseTransform?.responseHeaders ?? null,
         clientDisconnectPhase: responseState.clientDisconnectPhase
       };
+      // Adapters can omit source events; explicit source failures still own the outcome.
+      if (responseState.responseTransform && streamSummary &&
+        (streamSummary.sawFailedEvent || streamSummary.sawIncompleteEvent || streamSummary.decodeError)) {
+        result.errorSummary ??= streamSummary.decodeError
+          ? "Upstream stream could not be decoded for completion observation."
+          : options.streamProtocol === "anthropic"
+            ? summarizeAnthropicStreamFailure(result)
+            : summarizeOpenAiStreamFailure(result);
+      }
       const afterTerminal = responseState.clientDisconnectPhase === "after_terminal" && agent !== undefined;
       const successful = afterTerminal && result.status >= 200 && result.status < 300 &&
         (options.streamProtocol === "anthropic" ? classifyAnthropicUpstreamResult(result) : classifyOpenAiUpstreamResult(result)) === "success" &&
@@ -620,7 +629,7 @@ export async function sendOpenAiUpstreamRequest(
   const maxStatusRetries = Math.max(0, Math.floor(options.maxHttpStatusRetries ?? 0));
   // `timeoutMs` is the budget for the whole request, not for one attempt. Passing
   // it unchanged to each of the up-to-four attempts below turned a 900 s compact
-  // timeout into a connection held for an hour. `sendRecoveringPrimaryRequest`
+  // timeout into a connection held for an hour. `sendRecoveringResponsesRequest`
   // already spends the budget this way; the retry loop simply had not.
   const remainingTimeoutMs = () =>
     Math.max(0, options.timeoutMs - (performance.now() - options.startedAt));
@@ -759,6 +768,7 @@ export function summarizeOpenAiStreamFailure(result: BufferedUpstreamResult): st
   }
 
   const summary = result.streamSummary;
+  if (summary.errorSummary) return summary.errorSummary;
   if (summary.sawFailedEvent) {
     return "OpenAI stream ended with response.failed.";
   }
@@ -786,7 +796,7 @@ export function classifyOpenAiUpstreamResult(result: BufferedUpstreamResult): St
   }
 
   const summary = result.streamSummary;
-  if (result.errorSummary || summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
+  if (result.errorSummary || summary?.errorSummary || summary?.sawFailedEvent || summary?.sawIncompleteEvent) {
     return "upstream_stream_incomplete";
   }
 

@@ -17,6 +17,8 @@ const tail = [message, message,
   { type: "custom_tool_call_output", call_id: "call_b", output: "visible result" }];
 const error = (target = "gAAA...1pU=") => ({ error: { type: "invalid_request_error", code: null, param: "",
   message: `OpenAI Responses bad request: The encrypted content ${target} could not be verified. Reason: Encrypted content could not be decrypted or parsed. [trace_id=synthetic]` } });
+const requestIdError = { error: { ...error().error,
+  message: "The encrypted content gAAA...NZs= could not be verified. Reason: Encrypted content could not be decrypted or parsed. (request id: 20261118172142279851059wOjRhakM) [trace_id=219be03eb78413375f7dc7d79852d3db]" } };
 const encode = (body: unknown) => Buffer.from(JSON.stringify(body));
 const failure = classifyProviderStateFailure(400, encode(error()))!;
 const targetedFailure = classifyProviderStateFailure(400, encode(error("for item cmp_drop")))!;
@@ -124,7 +126,7 @@ describe("explicitly rejected compaction lossy continuation", () => {
     expect(recovered.attempts.every(attempt => attempt.compiled.metrics.compactionItemsRemoved === 0)).toBe(true);
   });
 
-  it.each(["json", "sse"])("continues through a real HTTP %s boundary without history retention", async transport => {
+  it.each(["json", "sse"])("continues through a real HTTP %s boundary after request-ID rejection without history retention", async transport => {
     const requests: Array<Record<string, unknown>> = [];
     const upstream = await startUpstream(async (req, res) => {
       const body = JSON.parse((await captureRequest(req)).body) as Record<string, unknown>;
@@ -133,7 +135,9 @@ describe("explicitly rejected compaction lossy continuation", () => {
       if (items.some(item => item.type === "compaction" && typeof item.id === "string")) {
         writeJsonResponse(res, error("for item cmp_drop"), 400); return;
       }
-      if (items.some(item => item.type === "compaction")) { writeJsonResponse(res, error(), 400); return; }
+      if (items.some(item => item.type === "compaction")) {
+        writeJsonResponse(res, requests.length === 3 ? requestIdError : error(), 400); return;
+      }
       const response = { id: "resp_synthetic", status: "completed", output: [{ type: "message", role: "assistant",
         content: [{ type: "output_text", text: "Continued using the visible context." }] }] };
       if (transport === "json") writeJsonResponse(res, response);
@@ -152,6 +156,7 @@ describe("explicitly rejected compaction lossy continuation", () => {
     expect(requests[3].input).toEqual([
       { ...encryptedAgentMessage, content: [encryptedAgentMessage.content[0]] }, ...tail]);
     const log = await waitForLogEntry(app.url, entry => entry.status === 200 && entry.provider_state_portability?.trigger === "explicit_400");
+    expect(log.provider_state_portability?.attempts[2]?.error_code).toBe("invalid_encrypted_content");
     expect(log.provider_state_portability?.attempts[3]).toMatchObject({ fidelity: "degraded", migration_counts: { compactionItemsRemoved: 1 } });
   });
 });

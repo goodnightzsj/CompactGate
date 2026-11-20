@@ -84,7 +84,7 @@ describe("rate-limit cooldown never resolves to no cooldown at all", () => {
   it("falls back to the backoff when Retry-After says zero", () => {
     const now = Date.now();
     const zero = rateLimitCooldownMs(
-      { responseHeaders: { "retry-after": "0" } } as never,
+      { "retry-after": "0" },
       11,
       now
     );
@@ -93,7 +93,7 @@ describe("rate-limit cooldown never resolves to no cooldown at all", () => {
     expect(zero).toBeGreaterThan(0);
 
     const honoured = rateLimitCooldownMs(
-      { responseHeaders: { "retry-after": "30" } } as never,
+      { "retry-after": "30" },
       1,
       now
     );

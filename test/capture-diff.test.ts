@@ -58,8 +58,18 @@ describe("capture structural diff", () => {
     ]));
   });
 
+  it("distinguishes a valid JSON null from a parse failure or an absent response", () => {
+    expect(diffCapturePayloads(payload(null), payload(null))).toMatchObject({ available: true, equivalent: true, reason: null });
+    expect(captureResponseDiff(capture({ upstream_response: response(null), client_response: response({}) }))).toMatchObject({
+      available: true, equivalent: false, entries: [{ path: "$", kind: "changed", before: "null", after: "{}" }]
+    });
+    const malformed = payload(null);
+    malformed.body.text = "";
+    expect(diffCapturePayloads(payload(null), malformed).reason).toBe("invalid_json");
+  });
+
   it("treats transparent client responses as equivalent", () => {
-    const diff = captureResponseDiff(capture({ client_response: null }));
+    const diff = captureResponseDiff(capture({ client_response: null, stream_outcome: "success" }));
     expect(diff).toEqual({
       available: true,
       equivalent: true,
@@ -67,6 +77,50 @@ describe("capture structural diff", () => {
       entries: [],
       truncated: false
     });
+  });
+
+  it("checks structural equality at the depth boundary and still reports unrelated changes", () => {
+    const nested = (leaf: unknown) => Array.from({ length: 31 }).reduce<unknown>(value => [value], leaf);
+    const before = payload({ nested: nested({ a: 1, b: false }), side: 0 });
+    const same = payload({ side: 0, nested: nested({ b: false, a: 1 }) });
+    expect(diffCapturePayloads(before, same)).toMatchObject({ equivalent: true, entries: [], truncated: false });
+    expect(diffCapturePayloads(before, payload({ nested: nested({ b: false, a: 1 }), side: 1 }))).toMatchObject({
+      entries: [{ path: "$.side" }], truncated: false
+    });
+    expect(diffCapturePayloads(before, payload({ nested: nested({ b: true, a: 1 }), side: 0 }))).toMatchObject({
+      equivalent: false, entries: [{ path: "$.nested" + "[0]".repeat(31), kind: "changed" }], truncated: false
+    });
+  });
+
+  it.each([undefined, null, "upstream_request_error"] as const)("does not infer equality from missing client bytes with outcome %s", stream_outcome => {
+    expect(captureResponseDiff(capture({ client_response: null, stream_outcome }))).toMatchObject({
+      available: false, equivalent: false, reason: "unavailable"
+    });
+  });
+
+  it("distinguishes an unexamined deep branch from a known change and handles identical deep JSON", () => {
+    const raw = (leaf: string) => "[".repeat(12000) + leaf + "]".repeat(12000);
+    const body = (text: string) => ({ ...payload(null), body: { ...payload(null).body, text } });
+    const deep = body(raw("0"));
+    expect(diffCapturePayloads(deep, deep)).toMatchObject({ equivalent: true, entries: [], truncated: false });
+    expect(diffCapturePayloads(deep, body(raw("1")))).toMatchObject({
+      equivalent: false, entries: [], truncated: true, reason: "depth_limit"
+    });
+    const added = diffCapturePayloads(payload({}), body('{"addition":' + raw("1") + '}'));
+    expect(added.entries).toHaveLength(1);
+    expect(added.entries[0]).toMatchObject({ kind: "added", path: "$.addition", after: "[".repeat(240) + "..." });
+  });
+
+  it("only truncates after finding a genuine difference past the entry limit", () => {
+    const object = (changed: number, tail: number) => payload({
+      ...Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`k${i}`, changed])), tail: [tail]
+    });
+    const exact = diffCapturePayloads(object(0, 0), object(1, 0));
+    expect(exact.entries).toHaveLength(200);
+    expect(exact).toMatchObject({ truncated: false, equivalent: false, reason: null });
+    const overflow = diffCapturePayloads(object(0, 0), object(1, 1));
+    expect(overflow.entries).toHaveLength(200);
+    expect(overflow).toMatchObject({ truncated: true, reason: "diff_limit" });
   });
 
   it("bounds entries and refuses malformed or truncated payloads", () => {

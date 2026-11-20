@@ -38,8 +38,12 @@ if [[ "${1:-}" == "--fire" ]]; then
   echo "[$(timestamp)] Deferred start fired after ${2}s"
 
   if [[ -n "$(list_listener_pids)" ]]; then
-    echo "[$(timestamp)] $HOST:$PORT is already served; nothing to do"
-    exit 0
+    if wait_for_server "$LAUNCH_LABEL" >/dev/null; then
+      echo "[$(timestamp)] $LAUNCH_LABEL is healthy and listening on $HOST:$PORT"
+      exit 0
+    fi
+    echo "[$(timestamp)] Listener on $HOST:$PORT could not be verified as healthy $LAUNCH_LABEL"
+    exit 1
   fi
 
   echo "[$(timestamp)] No listener on $HOST:$PORT; starting $LAUNCH_LABEL"
@@ -49,7 +53,7 @@ if [[ "${1:-}" == "--fire" ]]; then
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_PLIST" 2>/dev/null || true
   launchctl kickstart "gui/$(id -u)/$LAUNCH_LABEL" 2>/dev/null || true
 
-  if wait_for_server 2>/dev/null; then
+  if wait_for_server "$LAUNCH_LABEL" >/dev/null; then
     echo "[$(timestamp)] Recovered; listening on $HOST:$PORT"
   else
     echo "[$(timestamp)] Still not listening after start attempt"

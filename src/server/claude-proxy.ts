@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { RouteKind } from "../shared/types.js";
 import { ConfigError, type ConfigStore } from "./config.js";
 import { prepareOAuthRequest } from "./oauth-transport.js";
+import { waitForRequestPreparation } from "./request-preparation.js";
 import { createCodexResponseTransform } from "./oauth-response.js";
 import { MAX_CLAUDE_LONG_CONTEXT_BYTES } from "./config-internals.js";
 import {
@@ -31,7 +32,6 @@ import {
   RequestBodyTooLargeError,
   readHeaderString,
   readRawBody,
-  sendJson,
   summaryForError
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
@@ -39,7 +39,8 @@ import {
   applyOpenAiProxyUpstreamResult,
   applyUpstreamFailureToTransaction,
   createOpenAiProxyTransactionState,
-  finalizeFromTransaction
+  finalizeFromTransaction,
+  sendTransactionJson
 } from "./openai-proxy-transaction.js";
 import { StudioEventBroadcaster } from "./studio-events.js";
 import {
@@ -69,7 +70,7 @@ import {
   createOpenAiInputTokensToAnthropicResponseTransform,
   createResponsesToAnthropicResponseTransform
 } from "./protocol-stream.js";
-import { buildUpstreamUrl, upstreamPathForEndpoint } from "./routing.js";
+import { assertAnthropicClientEndpoint, buildUpstreamUrl, isProtocolConversionRequest, upstreamPathForEndpoint } from "./routing.js";
 import { mergeUsage } from "./usage-merge.js";
 import { DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES } from "./upstream-response-buffer.js";
 
@@ -101,7 +102,7 @@ export async function proxyClaudeRequest(
   const strippedUpstreamPath = url.pathname.slice(ANTHROPIC_PROXY_PREFIX.length);
   const upstreamPath = strippedUpstreamPath || "/";
   const modelList = req.method === "GET" && (upstreamPath === "/models" || upstreamPath === "/v1/models");
-  const messagesRequest = req.method === "POST" && ["/messages", "/v1/messages", "/messages/count_tokens", "/v1/messages/count_tokens"].includes(upstreamPath);
+  const messagesRequest = isProtocolConversionRequest(req.method, upstreamPath, "anthropic");
   let upstream = buildClaudeUpstreamUrl(config.claude.primary.base_url, upstreamPath, url.search);
   let routing: ReturnType<typeof resolveClaudeRequestRouting> | null = null;
   const transaction = createOpenAiProxyTransactionState();
@@ -112,20 +113,17 @@ export async function proxyClaudeRequest(
   let keyName: string | null = null;
 
   try {
-    // Above `readRawBody`'s 10 MiB default because long-context routing keys off the
-    // body size: a body large enough to route must still be readable.
-    transaction.rawBody = await readRawBody(req, MAX_CLAUDE_LONG_CONTEXT_BYTES);
+    // Claude retains an explicit body cap independently of the shared reader's uncapped default.
+    transaction.rawBody = await waitForRequestPreparation(signal => readRawBody(req, MAX_CLAUDE_LONG_CONTEXT_BYTES, signal), {
+      req, res, startedAt, timeoutMs: config.timeouts.claude_ms, timeoutMessage: "Claude request timed out while reading its body."
+    });
     // Select and reserve from one current generation, never the pre-body
     // snapshot that may now contain replaced credentials.
     const baseConfig = configStore.get();
     const configRevision = configStore.revision;
     transaction.requestMetadata = extractRequestMetadata(upstreamPath, transaction.rawBody);
     transaction.requestType = transaction.requestMetadata.requestType;
-    if (["/chat/completions", "/responses", "/responses/compact"].includes(transaction.requestMetadata.endpoint)) {
-      throw new UnsupportedClientProtocolError(
-        "The /anthropic endpoint accepts Anthropic Messages, not OpenAI requests. Use /v1/chat/completions with an openai_chat upstream, or /v1/responses with Responses format."
-      );
-    }
+    assertAnthropicClientEndpoint(transaction.requestMetadata.endpoint);
     transaction.sourceModel = extractSourceModel(transaction.rawBody);
     routing = resolveClaudeRequestRouting(
       baseConfig,
@@ -136,7 +134,7 @@ export async function proxyClaudeRequest(
     );
     config = routing.config;
     if (claudeKeyPool) {
-      claudeKeySelection = claudeKeyPool.select(config, routing.profileId, req.headers);
+      claudeKeySelection = claudeKeyPool.select(config, routing.profileId, req.headers, !modelList);
     }
     if (claudeKeySelection) {
       config = {
@@ -278,7 +276,8 @@ export async function proxyClaudeRequest(
     }
 
     const oauthRequest = { upstream, requestHeaders: transaction.requestHeaders, upstreamBody: transaction.upstreamBody };
-    const oauthProvider = await prepareOAuthRequest(config.claude.primary, configStore.oauth, oauthRequest, req.method);
+    const oauthProvider = await prepareOAuthRequest(config.claude.primary, configStore.oauth, oauthRequest, req.method,
+      { req, res, startedAt, timeoutMs: config.timeouts.claude_ms, timeoutMessage: "Claude upstream request timed out." });
     if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     transaction.upstreamBody = oauthRequest.upstreamBody;
     const completedResult = await sendBufferedUpstreamRequest({
@@ -368,7 +367,7 @@ export async function proxyClaudeRequest(
         : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
-      sendJson(res, transaction.status, {
+      sendTransactionJson(transaction, res, {
         error: error instanceof UnsupportedClientProtocolError
           ? { type: "invalid_request_error", code: "unsupported_protocol", message: transaction.errorSummary }
           : transaction.errorSummary,
@@ -378,7 +377,7 @@ export async function proxyClaudeRequest(
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
   } finally {
-    if (claudeKeyPool && routing) {
+    if (claudeKeyPool && routing && !modelList) {
       claudeKeyPool.recordResult(
         claudeKeySelection,
         upstreamAttempted ? {

@@ -14,7 +14,7 @@ describe("unavailable studio snapshots", () => {
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>导出配置/);
   });
   it("does not count unknown routes as unhealthy on the dashboard", () => {
-    const markup = renderToStaticMarkup(<DashboardStatsGrid health={null} listen="127.0.0.1:7865" logCounts={null} />);
+    const markup = renderToStaticMarkup(<DashboardStatsGrid health={null} listen="127.0.0.1:7865" logCounts={null} onNavigate={() => undefined} />);
     expect(markup).not.toContain("3 条路由需要关注");
     expect(markup).not.toContain("0/3");
     expect(markup).toContain("等待健康数据");

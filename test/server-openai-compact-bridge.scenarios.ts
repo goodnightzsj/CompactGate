@@ -1,4 +1,5 @@
-import { gzipSync } from "node:zlib";
+import { sseDataFrames } from "../src/server/sse-frames.js";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { request } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
@@ -267,6 +268,24 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it("isolates the stored wire body from its caller and each replay", () => {
+    const store = new CompactionBridgeStore();
+    const input = { upstream: new URL("http://compact.invalid/v1"), authorization: null, body: Buffer.from("request") };
+    const body = Buffer.from("origin");
+    store.storeCompactDedupeResponse(input, {
+      status: 200, responseBody: body, responseHeaders: {},
+      compactResponseNormalized: false, compactResponseNormalizeReason: null, compactResponseSyntheticSource: null, firstTokenMs: null
+    });
+    body.fill(0);
+    const replay = store.getCachedCompactResponse(input)!;
+    expect(replay.responseBody.toString()).toBe("origin");
+    replay.responseBody.fill(1);
+    expect(replay).not.toHaveProperty("clientResponseBody");
+    expect(replay).not.toHaveProperty("clientResponseHeaders");
+    const next = store.getCachedCompactResponse(input)!;
+    expect(next.responseBody.toString()).toBe("origin");
+  });
+
   it("expires compact response dedupe entries after the short TTL", () => {
     let now = 1_000;
     const store = new CompactionBridgeStore({
@@ -283,8 +302,6 @@ describe("CompactGate OpenAI routing", () => {
       status: 200,
       responseBody: Buffer.from("{\"ok\":true}"),
       responseHeaders: { "content-type": "application/json" },
-      clientResponseBody: Buffer.from("{\"ok\":true}"),
-      clientResponseHeaders: { "content-type": "application/json" },
       compactResponseNormalized: false,
       compactResponseNormalizeReason: null,
       compactResponseSyntheticSource: null,
@@ -316,8 +333,6 @@ describe("CompactGate OpenAI routing", () => {
       status: 200,
       responseBody: Buffer.from("{\"ok\":true}"),
       responseHeaders: { "content-type": "application/json" },
-      clientResponseBody: Buffer.from("{\"ok\":true}"),
-      clientResponseHeaders: { "content-type": "application/json" },
       compactResponseNormalized: false,
       compactResponseNormalizeReason: null,
       compactResponseSyntheticSource: null,
@@ -945,6 +960,56 @@ describe("CompactGate OpenAI routing", () => {
     ]);
   });
 
+  it("replays the original Brotli compact stream and reports the upstream item count for both requests", async () => {
+    const item = { type: "compaction", encrypted_content: "A summary from the test upstream." };
+    const wire = brotliCompressSync(Buffer.from("data: " + JSON.stringify({
+      type: "response.completed", response: { status: "completed", output: [item] }
+    }) + "\n\n"));
+    const captured: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(captured, (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream", "content-encoding": "br" });
+      res.end(wire);
+    });
+    const app = await startApp(undefined, upstream.url);
+    for (let i = 0; i < 2; i++) {
+      const result = await new Promise<{ status?: number; encoding?: string; id: string; body: Buffer }>((resolve, reject) => {
+        const req = request(new URL("/v1/responses/compact", app.url), { method: "POST", headers: JSON_HEADERS }, res => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("error", reject);
+          res.on("end", () => resolve({ status: res.statusCode, encoding: res.headers["content-encoding"],
+            id: String(res.headers["x-compactgate-request-id"]), body: Buffer.concat(chunks) }));
+        });
+        req.on("error", reject);
+        req.end(JSON.stringify({ model: "fixture", input: "Summarize this fixture." }));
+      });
+      expect(result).toMatchObject({ status: 200, encoding: "br", body: wire });
+      const log = await waitForLogEntry(app.url, entry => entry.request_id === result.id);
+      expect(log).toMatchObject({ compact_response_synthetic_source: "upstream_response", compaction_diagnostics: { response_item_count: 1 } });
+    }
+    expect(captured).toHaveLength(1);
+  });
+
+  it("keeps bridge-only synthetic items out of wire diagnostics on fresh and cached responses", async () => {
+    const original = { output_text: "A verified summary for the internal bridge, not a wire compaction item." };
+    const wire = gzipSync(Buffer.from(JSON.stringify(original)));
+    const captured: CapturedRequest[] = [];
+    const upstream = await startCapturedOpenAiUpstream(captured, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "gzip" });
+      res.end(wire);
+    });
+    const app = await startApp(undefined, upstream.url);
+    for (let i = 0; i < 2; i++) {
+      const result = await postJson(app.url, "/v1/responses/compact", { model: "fixture", input: "Summarize this fixture." });
+      expect(result.status).toBe(200);
+      expect(result.headers.get("content-encoding")).toBe("gzip");
+      expect(await result.json()).toEqual(original);
+      const log = await waitForLogEntry(app.url, entry => entry.request_id === result.headers.get("x-compactgate-request-id"));
+      expect(log).toMatchObject({ compact_response_normalized: true, compaction_diagnostics: { response_item_count: 0 } });
+    }
+    expect(captured).toHaveLength(1);
+  });
+
   it("does not reuse compact responses across OpenAI projects", async () => {
     const compactRequests: CapturedRequest[] = [];
     const primary = await startCapturedOpenAiUpstream([], (_req, res) => {
@@ -1280,6 +1345,60 @@ describe("CompactGate OpenAI routing", () => {
     });
   });
 
+  it.each(["Keep the verified context from the upstream summary.", "使用蓝色。"])("uses the assistant summary present only in the final native V1 event: %s", async summary => {
+    const item = { type: "message", role: "assistant", content: [{ type: "output_text", text: summary }] };
+    const raw = `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", output: [item] } })}\n\n`;
+    const compact = await startCapturedOpenAiUpstream([], (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(raw);
+    });
+    const app = await startApp(undefined, compact.url);
+    const result = await postJson(app.url, "/v1/responses/compact", { model: "fixture", input: "A different request body long enough to use as a fallback." });
+    expect(await result.text()).toBe(raw);
+    const entry = await waitForLogEntry(app.url, log => log.route === "compact");
+    expect(entry.compact_response_synthetic_source).toBe("upstream_response");
+  });
+
+  it.each(["single", "multiline", "terminal", "rejected"])("continues native V1 %s SSE state with retention disabled", async framing => {
+    const state = { type: "compaction", id: "cmp_fixture", encrypted_content: "gAAA_synthetic_1pU=" };
+    const received: CapturedRequest[] = [];
+    const primary = await startCapturedOpenAiUpstream(received, (_req, res) => {
+      const sent = JSON.parse(received.at(-1)!.body).input as { type: string }[];
+      if (framing === "rejected" && sent.some(item => item.type === "compaction")) {
+        writeJsonResponse(res, { error: { type: "invalid_request_error", code: null, param: "",
+          message: "OpenAI Responses bad request: The encrypted content gAAA...1pU= could not be verified. Reason: Encrypted content could not be decrypted or parsed. [trace_id=synthetic]" } }, 400);
+      } else writeJsonResponse(res, { output: [] });
+    });
+    const compact = await startCapturedOpenAiUpstream([], (_req, res) => {
+      const frame = (event: unknown) => JSON.stringify(event, null, framing === "single" ? undefined : 2)
+        .split("\n").map(line => "data: " + line).join("\r\n") + "\r\n\r\n";
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      if (framing !== "terminal") res.write(frame({ type: "response.output_item.done", item: state }));
+      res.end(frame({ type: "response.completed", response: { status: "completed", output: [state] } }));
+    });
+    const app = await startApp(primary.url, compact.url, { compact: { upstream_mode: "split" }, primary_failover: { state_recovery_retention_hours: 0 } });
+    const result = await postJson(app.url, "/v1/responses/compact", { model: "gpt-synthetic", input: "Summarize the fixture." });
+    expect(result.status).toBe(200);
+    const events = sseDataFrames(await result.text()).map(data => JSON.parse(data));
+    const output = events.at(-1).response.output;
+    expect(output).toEqual([state]);
+    const entry = await waitForLogEntry(app.url, log => log.route === "compact");
+    expect(entry.compact_response_synthetic_source).toBe("upstream_response");
+    expect(entry.compaction_diagnostics?.response_item_count).toBe(1);
+    const visible = { type: "message", role: "user", content: "continue" };
+    const input = [...output, visible];
+    const followup = await postJson(app.url, "/v1/responses", { model: "gpt-synthetic", store: false, input });
+    expect(followup.status).toBe(200);
+    await followup.text();
+    const attempts = received.map(request => JSON.parse(request.body).input);
+    if (framing === "rejected") {
+      expect(followup.headers.get("x-compactgate-context-fidelity")).toBe("degraded");
+      expect(attempts[0]).toEqual(input);
+      expect(attempts[1]).toEqual([{ type: "compaction", encrypted_content: state.encrypted_content }, visible]);
+      expect(attempts.at(-1)).toEqual([visible]);
+    } else expect(attempts).toEqual([input]);
+  });
+
   it("does not reuse cached compaction state after the compact upstream changes", async () => {
     const primaryRequests: CapturedRequest[] = [];
     const firstCompactRequests: CapturedRequest[] = [];
@@ -1345,13 +1464,12 @@ describe("CompactGate OpenAI routing", () => {
     };
     const followUpResponse = await postJson(app.url, "/v1/responses", followUpBody);
 
-    expect(followUpResponse.status).toBe(422);
-    expect(await followUpResponse.json()).toMatchObject({
-      error: expect.stringContaining("could not bridge into a primary request")
-    });
+    expect(followUpResponse.status).toBe(200);
+    await followUpResponse.text();
     expect(firstCompactRequests).toHaveLength(1);
     expect(secondCompactRequests).toHaveLength(0);
-    expect(primaryRequests).toHaveLength(0);
+    expect(primaryRequests).toHaveLength(1);
+    expect(JSON.parse(primaryRequests[0].body).input).toEqual(followUpBody.input);
   });
 
   it("synthesizes assistant summaries from readable gzip compaction payloads", async () => {

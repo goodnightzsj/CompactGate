@@ -28,6 +28,24 @@ function events(sse: string): Array<Record<string, unknown>> {
 }
 
 describe("translated streams keep the numbers and the block positions", () => {
+  it.each([true, false])("finishes each signed thinking block once (item.done: %s)", async hasItemDone => {
+    const item = {
+      type: "reasoning", id: "rs_1", encrypted_content: "synthetic",
+      summary: [{ type: "summary_text", text: "A thought." }]
+    };
+    const frames: Array<[string, unknown]> = [];
+    if (hasItemDone) frames.push(["response.output_item.done", { type: "response.output_item.done", output_index: 0, item }]);
+    frames.push(["response.completed", { type: "response.completed", response: { output: [item] } }]);
+
+    const blockEvents = events(await pump(createResponsesToAnthropicStream(), frames)).filter(event => event.index === 0);
+    expect(blockEvents).toMatchObject([
+      { type: "content_block_start", content_block: { type: "thinking" } },
+      { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "A thought." } },
+      { type: "content_block_delta", delta: { type: "signature_delta", signature: expect.any(String) } },
+      { type: "content_block_stop" }
+    ]);
+  });
+
   it("reports the input and cache tokens a real upstream only sends at the end", async () => {
     // Every existing fixture put usage inside response.created, which real
     // upstreams leave null — the counts arrive on response.completed. message_start

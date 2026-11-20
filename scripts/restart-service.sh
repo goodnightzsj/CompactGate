@@ -93,12 +93,11 @@ restart_worker() {
   echo "[$(timestamp)] Kickstarting $LAUNCH_LABEL"
   launchctl kickstart -k "gui/$(id -u)/$LAUNCH_LABEL"
 
-  if wait_for_server; then
-    local pid
-    pid="$(launchctl print "gui/$(id -u)/$LAUNCH_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
-    echo "[$(timestamp)] Restart complete; PID ${pid:-unknown} is listening on $HOST:$PORT via $LAUNCH_LABEL"
+  local pid
+  if pid="$(wait_for_server "$LAUNCH_LABEL")"; then
+    echo "[$(timestamp)] Restart complete; PID $pid is listening on $HOST:$PORT via $LAUNCH_LABEL"
   else
-    echo "[$(timestamp)] Restart failed; server did not become healthy"
+    echo "[$(timestamp)] Restart failed; could not verify a healthy listener owned by $LAUNCH_LABEL at $HOST:$PORT"
     tail -n 80 "$SERVER_LOG" || true
     exit 1
   fi

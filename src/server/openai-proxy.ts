@@ -12,17 +12,19 @@ import {
 } from "./compaction-bridge.js";
 import { ConfigError, ConfigRevisionError, type ConfigStore } from "./config.js";
 import { FileCommitError } from "./config-file-repository.js";
-import { enabledApiKeyPool } from "./credentials.js";
+import { credentialCandidateId, DIRECT_API_KEY_ID, enabledApiKeyPool } from "./credentials.js";
+import { codexPrimaryCandidates } from "./primary-failover-candidates.js";
 import type { OAuthProviderId } from "../shared/oauth.js";
 import { prepareOAuthRequest } from "./oauth-transport.js";
+import { waitForRequestPreparation } from "./request-preparation.js";
 import { createCodexResponseTransform } from "./oauth-response.js";
 import type { DebugCaptureWriter } from "./debug-capture.js";
 import {
+  endpointFromPath,
   parseJsonRecord,
   RequestBodyTooLargeError,
   readHeaderString,
   readRawBody,
-  sendJson,
   summaryForError
 } from "./http-utils.js";
 import type { RequestLogger } from "./logger.js";
@@ -47,6 +49,7 @@ import {
   applyUpstreamFailureToTransaction,
   createOpenAiProxyTransactionState,
   finalizeFromTransaction,
+  sendTransactionJson,
   type OpenAiProxyTransactionState
 } from "./openai-proxy-transaction.js";
 import {
@@ -89,6 +92,7 @@ import {
   analyzeProviderState,
   ProviderStateRecoveryUnavailableError,
   type CompileProviderStateOptions,
+  type ProviderStateFidelity,
   type ProviderStateAnalysis
 } from "./provider-state-portability.js";
 import {
@@ -102,8 +106,7 @@ import {
 } from "./provider-state-binding.js";
 import {
   hashStateDomain,
-  stateDomainForPrimary,
-  stateDomainForProfile
+  stateDomainForPrimary
 } from "./provider-state-domain.js";
 import {
   isEligibleGenericProviderStateFailure,
@@ -142,6 +145,7 @@ export async function proxyOpenAiRequest(
   // extracted UA with a value no real client ever sent.
   observeCodexCliUserAgent(clientIdentity, readHeaderString(req.headers["user-agent"]));
   const baseConfig = configStore.get();
+  const checkpointGeneration = logger.providerStateRecovery.checkpointGeneration;
   const requestProfile = resolveRequestScopedProfile(
     baseConfig,
     "codex",
@@ -152,8 +156,34 @@ export async function proxyOpenAiRequest(
   const classification = classifyOpenAiRequest(url.pathname);
   const requestId = randomUUID();
 
-  if (classification.route === "compact" && classification.compactionMode !== "remote_v2") {
-    await proxyCompactRequest(
+  const pendingSyncs: Promise<void>[] = [];
+  try {
+    if (classification.route === "compact" && classification.compactionMode !== "remote_v2") {
+      await proxyCompactRequest(
+        req,
+        res,
+        url,
+        config,
+        configStore,
+        logger,
+        captureWriter,
+        compactionBridge,
+        studioEvents,
+        primaryFailover,
+        codexVersionMonitor,
+        clientIdentity,
+        requestId,
+        startedAtIso,
+        startedAt,
+        classification,
+        checkpointGeneration,
+        requestProfile,
+        pendingSyncs
+      );
+      return;
+    }
+
+    await proxyPrimaryRequest(
       req,
       res,
       url,
@@ -169,30 +199,14 @@ export async function proxyOpenAiRequest(
       requestId,
       startedAtIso,
       startedAt,
-      classification,
-      requestProfile
+      checkpointGeneration,
+      requestProfile,
+      pendingSyncs
     );
-    return;
+  } finally {
+    // Keep request ownership until timed-out profile commits and their notifications finish.
+    await Promise.all(pendingSyncs);
   }
-
-  await proxyPrimaryRequest(
-    req,
-    res,
-    url,
-    config,
-    configStore,
-    logger,
-    captureWriter,
-    compactionBridge,
-    studioEvents,
-    primaryFailover,
-    codexVersionMonitor,
-    clientIdentity,
-    requestId,
-    startedAtIso,
-    startedAt,
-    requestProfile
-  );
 }
 
 async function proxyPrimaryRequest(
@@ -211,7 +225,9 @@ async function proxyPrimaryRequest(
   requestId: string,
   startedAtIso: string,
   startedAt: number,
-  requestProfile: RequestScopedProfile | null
+  checkpointGeneration: number | null,
+  requestProfile: RequestScopedProfile | null,
+  pendingSyncs: Promise<void>[]
 ): Promise<void> {
   let route: RouteKind = "primary";
   let classification: OpenAiRequestClassification = {
@@ -221,9 +237,11 @@ async function proxyPrimaryRequest(
   };
   let delegatedToCompact = false;
   let attemptedUpstream = false;
+  const modelList = req.method === "GET" && endpointFromPath(url.pathname) === "/models";
+  const trackPrimarySelection = !requestProfile && !modelList;
   const sendUpstream: typeof sendOpenAiUpstreamRequest = (options) => {
     return sendOpenAiUpstreamRequest({ ...options, requireCompleteJsonResponse: true,
-      rejectHtmlResponse: options.req.method === "GET" && transaction.requestMetadata?.endpoint === "/models" ||
+      rejectHtmlResponse: modelList ||
         options.req.method === "POST" && ["/responses", "/chat/completions"].includes(transaction.requestMetadata?.endpoint ?? ""),
       maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES, onAttemptStarted: () => {
       if (!attemptedUpstream) {
@@ -241,7 +259,12 @@ async function proxyPrimaryRequest(
   const transaction = createOpenAiProxyTransactionState();
 
   try {
-    transaction.rawBody = await readRawBody(req);
+    // /responses can only be classified as local compact after its body arrives.
+    transaction.rawBody = await waitForRequestPreparation(signal => readRawBody(req, undefined, signal), {
+      req, res, startedAt, timeoutMessage: "Primary request timed out while reading its body.",
+      timeoutMs: req.method === "POST" && endpointFromPath(url.pathname) === "/responses"
+        ? Math.max(config.timeouts.primary_ms, config.timeouts.compact_ms) : config.timeouts.primary_ms
+    });
     // A slow body must not reconcile shared health back to an obsolete config.
     // Explicit profiles keep their isolated snapshot and never mutate that state.
     if (!requestProfile) {
@@ -270,7 +293,9 @@ async function proxyPrimaryRequest(
         startedAtIso,
         startedAt,
         classification,
+        checkpointGeneration,
         requestProfile,
+        pendingSyncs,
         {
           rawBody: transaction.rawBody,
           requestMetadata: transaction.requestMetadata
@@ -284,23 +309,26 @@ async function proxyPrimaryRequest(
       req.headers,
       transaction.requestMetadata.endpoint
     );
-    const inMemorySourceProfileId = requestProfile
+    const inMemorySourceCandidateId = requestProfile
       ? null
       : primaryFailover.boundProfileId(primaryRequestContext);
+    const candidates = requestProfile ? [] : codexPrimaryCandidates(config);
     const conversationIdentityHash = providerStateConversationHash(primaryRequestContext);
-    const primarySelectionOverride: PrimaryRouteSelection | undefined = requestProfile
+    const explicitPool = requestProfile ? enabledApiKeyPool(config.primary) : [];
+    const explicitKey = explicitPool.length === 1 && explicitPool[0].id === DIRECT_API_KEY_ID ? undefined : explicitPool[0];
+    const primarySelectionOverride: PrimaryRouteSelection = requestProfile
       ? {
           config,
           profileId: requestProfile.profileId,
-          keyId: null,
-          keyLabel: null,
-          candidateId: requestProfile.profileId,
+          keyId: explicitKey?.id ?? null,
+          keyLabel: explicitKey?.label || null,
+          candidateId: credentialCandidateId(requestProfile.profileId, explicitKey?.id ?? null),
           profileName: requestProfile.profileName,
           generation: 0,
           healthVersion: 0,
           context: normalizeRequestContext(primaryRequestContext)
         }
-      : undefined;
+      : primaryFailover.preview(config, primaryRequestContext, candidates);
 
     const plan = buildPrimaryOpenAiProxyPlan({
       config,
@@ -313,7 +341,7 @@ async function proxyPrimaryRequest(
       primaryFailover,
       preserveRemoteV2State: hasRemoteV2CompactionState(url.pathname, transaction.rawBody, req.headers),
       primarySelectionOverride,
-      reservePrimarySelection: !requestProfile,
+      reservePrimarySelection: trackPrimarySelection,
       synthesizeRemoteV2Compaction: classification.route === "compact" &&
         classification.compactionMode === "remote_v2",
       clientIdentity,
@@ -325,19 +353,24 @@ async function proxyPrimaryRequest(
     upstream = plan.upstream;
     primarySelection = plan.primarySelection;
     const oauthProvider = await prepareOAuthRequest(
-      primarySelection?.config.primary ?? config.primary, configStore.oauth, plan, req.method
+      primarySelection?.config.primary ?? config.primary, configStore.oauth, plan, req.method,
+      { req, res, startedAt, timeoutMs: plan.timeoutMs, timeoutMessage: plan.timeoutMessage }
     );
     if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
-    if (!requestProfile) {
-      await syncScheduledPrimaryProfile({
-        configRevision,
-        configStore,
-        logger,
-        primarySelection,
-        studioEvents,
-        codexVersionMonitor,
-        clientIdentity
-      });
+    if (trackPrimarySelection) {
+      await waitForRequestPreparation(() => {
+        const sync = syncScheduledPrimaryProfile({
+          configRevision,
+          configStore,
+          logger,
+          primarySelection,
+          studioEvents,
+          codexVersionMonitor,
+          clientIdentity
+        });
+        pendingSyncs.push(sync);
+        return sync;
+      }, { req, res, startedAt, timeoutMs: plan.timeoutMs, timeoutMessage: plan.timeoutMessage });
     }
     transaction.sourceModel = plan.sourceModel;
     transaction.targetModel = plan.targetModel;
@@ -363,9 +396,13 @@ async function proxyPrimaryRequest(
     };
     const bindingIdentityHashes = providerStateBindingIdentityHashes(primaryRequestContext);
     const persistedBinding = logger.findProviderStateBinding(bindingIdentityHashes);
-    const sourceProfileId = persistedBinding?.profileId ?? inMemorySourceProfileId;
+    const inMemorySourceCandidate = !persistedBinding && inMemorySourceCandidateId
+      ? candidates.find(candidate => candidate.id === inMemorySourceCandidateId)
+      : undefined;
+    const sourceProfileId = persistedBinding?.profileId ?? inMemorySourceCandidate?.profileId ?? null;
     const sourceStateDomain = persistedBinding?.stateDomainId ??
-      stateDomainForProfile(config, inMemorySourceProfileId);
+      (inMemorySourceCandidate ? stateDomainForPrimary(inMemorySourceCandidate.primary,
+        inMemorySourceCandidate.profileId, inMemorySourceCandidate.keyId) : null);
     const targetStateDomain = primarySelection
       ? stateDomainForPrimary(
           primarySelection.config.primary,
@@ -385,21 +422,24 @@ async function proxyPrimaryRequest(
       plan.upstreamProtocol === "openai_responses";
     const retentionHours = config.primary_failover.state_recovery_retention_hours ?? 0;
     const recoveryStore = logger.providerStateRecovery;
-    const canonicalBody = transaction.upstreamBody;
-    const resourceHeaders = new Set(["authorization", "api-key", "x-api-key", "openai-project", "openai-organization", "chatgpt-account-id",
-      ...plan.sensitiveHeaderNames.map(name => name.toLowerCase())]);
-    const headerIdentity = Object.entries(transaction.requestHeaders)
-      .filter(([name]) => resourceHeaders.has(name.toLowerCase()) && !(oauthProvider && name.toLowerCase() === "authorization"))
-      .sort(([left], [right]) => left.localeCompare(right));
-    const recoveryKey = conversationIdentityHash ? recoveryPlanKey(recoveryHash(
-      conversationIdentityHash, targetStateDomain, upstream.toString(), transaction.targetModel ?? "",
-      JSON.stringify(headerIdentity), plan.proxyUrl,
-      (primarySelection?.config.primary ?? config.primary).oauth_account_id ?? ""
-    ), canonicalBody) : null;
+    const attemptRecovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState;
+    let recoveryKey: string | null = null;
+    if (attemptRecovery && conversationIdentityHash) {
+      const resourceHeaders = new Set(["authorization", "api-key", "x-api-key", "openai-project", "openai-organization", "chatgpt-account-id",
+        ...plan.sensitiveHeaderNames.map(name => name.toLowerCase())]);
+      const headerIdentity = Object.entries(transaction.requestHeaders)
+        .filter(([name]) => resourceHeaders.has(name.toLowerCase()) && !(oauthProvider && name.toLowerCase() === "authorization"))
+        .sort(([left], [right]) => left.localeCompare(right));
+      recoveryKey = recoveryPlanKey(recoveryHash(
+        conversationIdentityHash, targetStateDomain, upstream.toString(), transaction.targetModel ?? "",
+        JSON.stringify(headerIdentity), plan.proxyUrl,
+        (primarySelection?.config.primary ?? config.primary).oauth_account_id ?? ""
+      ), transaction.upstreamBody);
+    }
     const recoverCompaction: CompileProviderStateOptions["recoverCompaction"] = conversationIdentityHash
       ? body => restoreProviderCheckpoint(recoveryStore, conversationIdentityHash, body, retentionHours) : undefined;
-    const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
-      ? await sendRecoveringPrimaryRequest({
+    const recovery = attemptRecovery
+      ? await sendRecoveringResponsesRequest({
           send: sendUpstream,
           req,
           res,
@@ -410,6 +450,7 @@ async function proxyPrimaryRequest(
           requestHeaders: transaction.requestHeaders,
           proxyUrl: plan.proxyUrl,
           canonicalBody: transaction.upstreamBody,
+          canonicalFidelity: plan.recoveredContextFidelity,
           extraResponseHeaders,
           targetStateDomain,
           recoverCompaction,
@@ -498,14 +539,16 @@ async function proxyPrimaryRequest(
       transaction.status < 300 &&
       transaction.streamOutcome === "success" &&
       transaction.errorSummary === null;
-    if (recoveryEnabled && recoveryKey && recovery?.policy && recovery.trigger && completedSuccessfully) {
+    if (recoveryKey && recovery?.policy && recovery.trigger && completedSuccessfully) {
       recoveryStore.rememberPolicy(recoveryKey, recovery.policy, Math.round((performance.timeOrigin + startedAt) * 1_000));
     }
-    if (completedSuccessfully && plan.translateResponses && plan.upstreamProtocol === "openai_responses") {
-      rememberProviderCheckpoint({ store: recoveryStore, conversationHash: conversationIdentityHash, retentionHours,
-        requestBody: transaction.upstreamBody, result, mode: "remote_v2" });
+    if (completedSuccessfully && plan.translateResponses) {
+      rememberProviderCheckpoint({ store: recoveryStore, checkpointGeneration, conversationHash: conversationIdentityHash, retentionHours,
+        requestBody: plan.responsesRequestBody ?? transaction.upstreamBody,
+        requestFidelity: recovery?.attempts.at(-1)?.compiled.fidelity ?? plan.recoveredContextFidelity,
+        result, mode: "remote_v2", upstreamProtocol: plan.upstreamProtocol });
     }
-    if (completedSuccessfully && !stateAnalysis.hasProviderOwnedState) {
+    if (completedSuccessfully && !modelList && !stateAnalysis.hasProviderOwnedState) {
       logger.rememberProviderStateRecoveryEvidence(
         targetHealthKey,
         "target_health",
@@ -514,7 +557,7 @@ async function proxyPrimaryRequest(
     }
     if (
       primarySelection?.profileId &&
-      completedSuccessfully
+      completedSuccessfully && !modelList
     ) {
       const responseId = readResponseId({
         responseId: transaction.responseId,
@@ -553,7 +596,7 @@ async function proxyPrimaryRequest(
         : 502;
     transaction.errorSummary = summaryForError(error);
     if (!res.headersSent) {
-      sendJson(res, transaction.status, {
+      sendTransactionJson(transaction, res, {
         error: error instanceof ProviderStateRecoveryUnavailableError
           ? { type: "invalid_request_error", code: error.code, message: transaction.errorSummary }
           : error instanceof UnsupportedClientProtocolError
@@ -569,7 +612,7 @@ async function proxyPrimaryRequest(
     // exception still propagating out of the try or the catch, so the delegation
     // check used to swallow whatever the compact path had thrown.
     if (!delegatedToCompact) {
-    if (primarySelection && !requestProfile) {
+    if (primarySelection && trackPrimarySelection) {
       primaryFailover.recordResult(primarySelection, attemptedUpstream ? {
         responseId: transaction.responseId,
         status: transaction.status,
@@ -604,7 +647,7 @@ async function proxyPrimaryRequest(
   }
 }
 
-async function sendRecoveringPrimaryRequest(input: {
+async function sendRecoveringResponsesRequest(input: {
   send: typeof sendOpenAiUpstreamRequest;
   req: IncomingMessage;
   res: ServerResponse;
@@ -615,6 +658,7 @@ async function sendRecoveringPrimaryRequest(input: {
   requestHeaders: Record<string, string>;
   proxyUrl: string;
   canonicalBody: Buffer;
+  canonicalFidelity?: ProviderStateFidelity;
   extraResponseHeaders: Record<string, string>;
   targetStateDomain: string;
   recoverCompaction?: CompileProviderStateOptions["recoverCompaction"];
@@ -627,6 +671,7 @@ async function sendRecoveringPrimaryRequest(input: {
 }): Promise<ProviderStateMigrationResult> {
   const recovery = await runProviderStateMigration({
     canonicalBody: input.canonicalBody,
+    canonicalFidelity: input.canonicalFidelity,
     targetStateDomain: input.targetStateDomain,
     recoverCompaction: input.recoverCompaction,
     cachedPolicy: input.cachedPolicy,
@@ -636,7 +681,7 @@ async function sendRecoveringPrimaryRequest(input: {
       !input.res.destroyed &&
       performance.now() - input.startedAt < input.timeoutMs,
     startGenericRecovery: input.startGenericRecovery,
-    send: (body, strategy, priorStrategy, compiled) => input.send({
+    send: (body, strategy, priorStrategy, compiled, recoverySource) => input.send({
       req: input.req,
       res: input.res,
       upstream: input.upstream,
@@ -654,8 +699,8 @@ async function sendRecoveringPrimaryRequest(input: {
       body,
       extraResponseHeaders: {
         ...input.extraResponseHeaders,
-        ...(strategy !== "original" || input.cachedPolicy ? {
-          "x-compactgate-state-recovery": input.cachedPolicy ? "cached" : "recovered",
+        ...(recoverySource ? {
+          "x-compactgate-state-recovery": recoverySource,
           "x-compactgate-context-fidelity": compiled.fidelity
         } : {})
       },
@@ -831,23 +876,29 @@ async function proxyCompactRequest(
   startedAtIso: string,
   startedAt: number,
   classification: Extract<OpenAiRequestClassification, { route: "compact" }>,
+  checkpointGeneration: number | null,
   requestProfile: RequestScopedProfile | null,
+  pendingSyncs: Promise<void>[],
   prepared?: {
     rawBody: Buffer;
     requestMetadata: RequestMetadata;
   }
 ): Promise<void> {
   const route: RouteKind = "compact";
+  let compactResponseItemCount: number | undefined;
   let configRevision = configStore.revision;
   let upstream = new URL(config.compact.base_url);
   let attemptedUpstream = false;
   // Public error status distinguishes preparation from transport, including preflight.
   let invokedTransport = false;
   let primarySelection: PrimaryRouteSelection | null = null;
+  let providerStatePortability: ProviderStatePortabilityLog | null = null;
   const transaction = createOpenAiProxyTransactionState();
 
   try {
-    transaction.rawBody = prepared?.rawBody ?? await readRawBody(req);
+    transaction.rawBody = prepared?.rawBody ?? await waitForRequestPreparation(signal => readRawBody(req, undefined, signal), {
+      req, res, startedAt, timeoutMs: config.timeouts.compact_ms, timeoutMessage: "Compact request timed out while reading its body."
+    });
     // Covers both direct /compact requests and primary's local-compact handoff.
     if (!requestProfile) {
       config = configStore.get();
@@ -876,21 +927,26 @@ async function proxyCompactRequest(
     if (selectedPrimary) {
       primaryFailover.reserveSelection(selectedPrimary, config.primary_failover.auto_schedule);
       primarySelection = selectedPrimary;
-      await syncScheduledPrimaryProfile({
-        configRevision,
-        configStore,
-        logger,
-        primarySelection,
-        studioEvents,
-        codexVersionMonitor,
-        clientIdentity
-      });
+      await waitForRequestPreparation(() => {
+        const sync = syncScheduledPrimaryProfile({
+          configRevision,
+          configStore,
+          logger,
+          primarySelection,
+          studioEvents,
+          codexVersionMonitor,
+          clientIdentity
+        });
+        pendingSyncs.push(sync);
+        return sync;
+      }, { req, res, startedAt, timeoutMs: plan.timeoutMs, timeoutMessage: plan.timeoutMessage });
     }
     upstream = plan.upstream;
     const selectedConfig = selectedPrimary?.config ?? config;
     const oauthProvider = await prepareOAuthRequest(
       selectedConfig.compact.upstream_mode === "primary" ? selectedConfig.primary : selectedConfig.compact,
-      configStore.oauth, plan, req.method
+      configStore.oauth, plan, req.method,
+      { req, res, startedAt, timeoutMs: plan.timeoutMs, timeoutMessage: plan.timeoutMessage }
     );
     if (res.destroyed) throw new ConfigError("Client disconnected during OAuth preparation.", 499);
     transaction.sourceModel = plan.sourceModel;
@@ -915,10 +971,11 @@ async function proxyCompactRequest(
       : null;
     if (cachedCompactResponse) {
       applyCachedCompactResponse(transaction, cachedCompactResponse);
+      compactResponseItemCount = cachedCompactResponse.compactResponseItemCount;
       if ((config.primary_failover.state_recovery_retention_hours ?? 0) > 0) {
         const observer = createOpenAiStreamObserver(cachedCompactResponse.responseHeaders);
         observer?.observe(cachedCompactResponse.responseBody);
-        rememberProviderCheckpoint({ store: logger.providerStateRecovery,
+        rememberProviderCheckpoint({ store: logger.providerStateRecovery, checkpointGeneration,
           conversationHash: providerStateConversationHash(primaryRouteRequestContextFromBody(transaction.rawBody, req.headers)),
           retentionHours: config.primary_failover.state_recovery_retention_hours ?? 0,
           requestBody: transaction.upstreamBody, mode: "remote_v1", result: {
@@ -926,9 +983,6 @@ async function proxyCompactRequest(
             streamSummary: await observer?.finish() ?? null, clientDisconnectPhase: res.destroyed ? "before_terminal" : "none"
           } });
       }
-      // 方案 B:Codex compact 期望原始上游 SSE 流,重放缓存的原始响应体而非归一化 JSON。
-      transaction.clientResponseBody = null;
-      transaction.clientResponseHeaders = null;
       writeBufferedUpstreamResult(
         res,
         cachedCompactResponse,
@@ -944,68 +998,89 @@ async function proxyCompactRequest(
     }
     invokedTransport = true;
 
+    const extraResponseHeaders = {
+      "x-compactgate-route": route,
+      ...compactionResponseHeaders(classification),
+      ...requestProfileResponseHeaders(requestProfile),
+      "x-compactgate-model": transaction.targetModel ?? "",
+      "x-compactgate-request-id": requestId
+    };
+    const conversationHash = providerStateConversationHash(primaryRouteRequestContextFromBody(transaction.rawBody, req.headers));
+    const targetStateDomain = selectedConfig.compact.upstream_mode === "primary"
+      ? stateDomainForPrimary(selectedConfig.primary, primarySelection?.profileId ?? requestProfile?.profileId, primarySelection?.keyId)
+      : upstream.origin;
+    const stateAnalysis = analyzeProviderState(transaction.upstreamBody);
+    const recoveryEnabled = config.primary_failover.state_portability === "recover_on_error" && plan.upstreamProtocol === "openai_responses";
+    let statusRetriesRemaining = 3;
+
     // 方案 B:流式转发原始上游 SSE 流给客户端。Codex compact 用 collect_compaction_output 逐事件消费,
     // 需要 response.created / response.output_item.done / response.completed 事件;缓冲后转 JSON 会让客户端
     // 长时间收不到任何字节而断开(Client disconnected before upstream response completed)。
     // 完整响应同时缓冲在 transaction.responseBody,供归一化、桥接存储与 dedupe 重放使用。
-    const result = await sendOpenAiUpstreamRequest({
-      req,
-      res,
-      upstream,
-      startedAt,
-      onAttemptStarted: () => {
-        if (!attemptedUpstream && selectedConfig.compact.upstream_mode === "primary") {
-          studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? requestProfile?.profileId ?? null,
-            primarySelection?.keyId ?? enabledApiKeyPool(selectedConfig.primary)[0]?.id ?? null, configRevision);
-        }
-        attemptedUpstream = true;
-      },
-      timeoutMs: plan.timeoutMs,
-      timeoutMessage: plan.timeoutMessage,
-      requestHeaders: transaction.requestHeaders,
-      proxyUrl: plan.proxyUrl,
-      body: transaction.upstreamBody,
-      extraResponseHeaders: {
-        "x-compactgate-route": route,
-        ...compactionResponseHeaders(classification),
-        ...requestProfileResponseHeaders(requestProfile),
-        "x-compactgate-model": transaction.targetModel ?? "",
-        "x-compactgate-request-id": requestId
-      },
-      maxBufferedResponseBytes: classification.compactionMode === "remote_v1" ? MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES : undefined,
-      requireCompleteResponse: classification.compactionMode === "remote_v1",
-      requireCompleteJsonResponse: true,
-      maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
-      retryHttpStatuses: [502, 503, 504],
-      maxHttpStatusRetries: 3,
-      streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
-      responseTransform: pickResponseTransform(
-        plan,
-        classification.compactionMode === "remote_v1",
-        transaction,
-        oauthProvider
-      )
-    });
+    const sendCompact: typeof sendOpenAiUpstreamRequest = options => {
+      let attempts = 0;
+      return sendOpenAiUpstreamRequest({
+        ...options,
+        onAttemptStarted: () => {
+          if (attempts++ > 0) statusRetriesRemaining--;
+          if (!attemptedUpstream && selectedConfig.compact.upstream_mode === "primary") {
+            studioEvents.broadcastKeyActivity("codex", primarySelection?.profileId ?? requestProfile?.profileId ?? null,
+              primarySelection?.keyId ?? enabledApiKeyPool(selectedConfig.primary)[0]?.id ?? null, configRevision);
+          }
+          attemptedUpstream = true;
+        },
+        maxBufferedResponseBytes: classification.compactionMode === "remote_v1" ? MAX_COMPLETE_UPSTREAM_RESPONSE_BYTES : undefined,
+        requireCompleteResponse: classification.compactionMode === "remote_v1",
+        requireCompleteJsonResponse: true,
+        maxObservedStreamEventBytes: DEFAULT_MAX_BUFFERED_UPSTREAM_RESPONSE_BYTES,
+        retryHttpStatuses: [502, 503, 504],
+        maxHttpStatusRetries: statusRetriesRemaining,
+        streamProtocol: plan.upstreamProtocol === "anthropic_messages" ? "anthropic" : "openai",
+        responseTransform: pickResponseTransform(
+          plan,
+          classification.compactionMode === "remote_v1",
+          transaction,
+          oauthProvider
+        )
+      });
+    };
+    const sendOptions = { req, res, upstream, startedAt, timeoutMs: plan.timeoutMs, timeoutMessage: plan.timeoutMessage,
+      requestHeaders: transaction.requestHeaders, proxyUrl: plan.proxyUrl, extraResponseHeaders };
+    const recovery = recoveryEnabled && stateAnalysis.hasProviderOwnedState
+      ? await sendRecoveringResponsesRequest({ ...sendOptions, send: sendCompact,
+          canonicalBody: transaction.upstreamBody, targetStateDomain,
+          recoverCompaction: conversationHash ? body => restoreProviderCheckpoint(logger.providerStateRecovery,
+            conversationHash, body, config.primary_failover.state_recovery_retention_hours ?? 0) : undefined,
+          startGenericRecovery: () => null
+        }) : null;
+    if (recovery) {
+      transaction.requestHeaders = requestHeadersForCompiledBody(transaction.requestHeaders, transaction.upstreamBody, recovery.body, false);
+      transaction.upstreamBody = recovery.body;
+    }
+    const result = recovery?.result ?? await sendCompact({ ...sendOptions, body: transaction.upstreamBody });
+    providerStatePortability = buildProviderStatePortabilityLog({ enabled: recoveryEnabled, conversationHash,
+      sourceProfileId: null, targetProfileId: primarySelection?.profileId ?? requestProfile?.profileId ?? null,
+      sourceStateDomain: null, targetStateDomain, targetStateFreeSuccess: false, analysis: stateAnalysis, recovery });
 
     applyOpenAiProxyUpstreamResult(transaction, result);
     applyClientResult(transaction, result, plan);
     if (classification.compactionMode === "remote_v1" && plan.upstreamProtocol === "openai_responses" &&
       transaction.streamOutcome === "success" && !transaction.errorSummary) {
-      rememberProviderCheckpoint({ store: logger.providerStateRecovery,
+      rememberProviderCheckpoint({ store: logger.providerStateRecovery, checkpointGeneration,
         conversationHash: providerStateConversationHash(primaryRouteRequestContextFromBody(transaction.rawBody, req.headers)),
         retentionHours: config.primary_failover.state_recovery_retention_hours ?? 0,
-        requestBody: transaction.upstreamBody, result, mode: "remote_v1" });
+        requestBody: transaction.upstreamBody, requestFidelity: recovery?.attempts.at(-1)?.compiled.fidelity, result, mode: "remote_v1" });
     }
     const clientResponseBody = result.clientResponseBody ?? transaction.responseBody;
     const clientResponseHeaders = result.clientResponseHeaders ?? transaction.responseHeaders;
     // 远程压缩归一化仅用于桥接存储和诊断日志,不写回客户端。本地摘要压缩返回普通
     // Responses 流,不能把它误记为缺失 compaction output。
     const unnormalizedResponse = {
-      body: clientResponseBody,
-      headers: clientResponseHeaders,
       normalized: false,
       reason: null,
-      syntheticSource: null
+      syntheticSource: null,
+      bridgeOutput: clientResponseBody,
+      responseItemCount: undefined
     };
     const normalizedResponse = classification.compactionMode === "remote_v1" &&
       plan.upstreamProtocol === "openai_responses"
@@ -1019,28 +1094,30 @@ async function proxyCompactRequest(
     transaction.compactResponseNormalized = normalizedResponse.normalized;
     transaction.compactResponseNormalizeReason = normalizedResponse.reason;
     transaction.compactResponseSyntheticSource = normalizedResponse.syntheticSource;
+    if (!result.clientResponseHeaders) compactResponseItemCount = normalizedResponse.responseItemCount;
     transaction.requestType = responseTransport(clientResponseHeaders) ?? transaction.requestType;
     if (
       transaction.status >= 200 &&
       transaction.status < 300 &&
+      transaction.streamOutcome === "success" &&
       !transaction.errorSummary &&
       plan.compactBridgeScope
     ) {
       if (classification.compactionMode === "remote_v1") {
-        compactionBridge.storeCompactResponse(normalizedResponse.body, {
+        compactionBridge.storeCompactResponse(normalizedResponse.bridgeOutput, {
           scope: plan.compactBridgeScope,
           source: normalizedResponse.normalized ? "synthetic" : "standard"
         });
-        if (canDedupeCompactResponse) {
+        // The wire cache cannot replay a response whose client protocol was transformed.
+        if (canDedupeCompactResponse && !result.clientResponseHeaders && !recovery?.trigger) {
           compactionBridge.storeCompactDedupeResponse(dedupeInput, {
             status: transaction.status,
             responseBody: transaction.responseBody,
             responseHeaders: transaction.responseHeaders,
-            clientResponseBody: normalizedResponse.body,
-            clientResponseHeaders: normalizedResponse.headers,
             compactResponseNormalized: transaction.compactResponseNormalized,
             compactResponseNormalizeReason: transaction.compactResponseNormalizeReason,
             compactResponseSyntheticSource: transaction.compactResponseSyntheticSource,
+            compactResponseItemCount: normalizedResponse.responseItemCount,
             firstTokenMs: transaction.firstTokenMs
           });
         }
@@ -1054,7 +1131,7 @@ async function proxyCompactRequest(
       ? error.status
       : error instanceof RequestBodyTooLargeError
         ? 413
-        : invokedTransport
+        : invokedTransport || error instanceof UpstreamRequestError
           ? 502
           : 400;
     transaction.errorSummary = summaryForError(error);
@@ -1065,7 +1142,7 @@ async function proxyCompactRequest(
     }
 
     if (!res.headersSent) {
-      sendJson(res, transaction.status, { error: transaction.errorSummary, request_id: requestId });
+      sendTransactionJson(transaction, res, { error: transaction.errorSummary, request_id: requestId });
     } else {
       res.destroy(error instanceof Error ? error : new Error(transaction.errorSummary));
     }
@@ -1088,6 +1165,7 @@ async function proxyCompactRequest(
       codexVersionMonitor,
       route,
       compactionMode: classification.compactionMode,
+      compactResponseItemCount,
       compactionDetectionSource: classification.detectionSource,
       req,
       url,
@@ -1095,6 +1173,7 @@ async function proxyCompactRequest(
       startedAtIso,
       upstream,
       requestId,
+      providerStatePortability,
       persistBody: config.logging.persist_body,
       keyName: null
     });
@@ -1134,8 +1213,8 @@ function pickResponseTransform(
 
 /**
  * Derive diagnostics before the outcome so late stream failures also reach
- * failover. A JSON adapter owns its source-stream validation; only its translated
- * client protocol can be diagnosed here, not the original provider events.
+ * failover. Explicit source failures already live in result.errorSummary; terminal
+ * completeness here follows the translated client protocol.
  */
 function applyClientResult(
   transaction: OpenAiProxyTransactionState,
@@ -1197,8 +1276,9 @@ function applyCachedCompactResponse(
   transaction.responseBody = cached.responseBody;
   transaction.responseBodyTruncated = false;
   transaction.responseHeaders = cached.responseHeaders;
-  transaction.clientResponseBody = cached.clientResponseBody;
-  transaction.clientResponseHeaders = cached.clientResponseHeaders;
+  // Compact replays the original wire response; normalized content is only used when building the bridge.
+  transaction.clientResponseBody = null;
+  transaction.clientResponseHeaders = null;
   transaction.compactResponseNormalized = cached.compactResponseNormalized;
   transaction.compactResponseNormalizeReason = cached.compactResponseNormalizeReason;
   transaction.compactResponseSyntheticSource = cached.compactResponseSyntheticSource;

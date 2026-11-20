@@ -1,6 +1,7 @@
 import type { CompactGateConfig } from "../shared/types.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
 import { factoryClientUserAgent } from "./config-defaults.js";
+import { buildAnthropicUpstreamHeaders } from "./claude-models.js";
 import { resolveRouteCredential } from "./credentials.js";
 import { buildUpstreamHeaders } from "./http-utils.js";
 import type { OAuthStore } from "./oauth-store.js";
@@ -40,13 +41,15 @@ export async function fetchOpenAiModels(
     ? clientIdentity.userAgentFor(identityKind)
     : factoryClientUserAgent(identityKind);
   if (config.primary.oauth_account_id) return fetchOAuthModels(config.primary, oauth, config.timeouts.primary_ms, userAgent);
+  const anthropic = config.primary.upstream_protocol === "anthropic_messages";
+  const buildHeaders = anthropic ? buildAnthropicUpstreamHeaders : buildUpstreamHeaders;
   return fetchUpstreamModels({
     baseUrl: config.primary.base_url,
     // Identity rides in as the request baseline, which `extra_headers` overwrites,
     // so an operator can still correct any of it per route.
-    headers: buildUpstreamHeaders(
+    headers: buildHeaders(
       {
-        ...CODEX_CLIENT_IDENTITY,
+        ...(anthropic ? { accept: "application/json", "anthropic-version": "2023-06-01" } : CODEX_CLIENT_IDENTITY),
         ...(userAgent ? { "user-agent": userAgent } : {})
       },
       credential.apiKey,

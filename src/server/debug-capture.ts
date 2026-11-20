@@ -13,11 +13,10 @@ export type { CaptureRecord } from "../shared/types.js";
 
 export type CaptureReadResult =
   | { status: "found"; record: CaptureRecord; content: Buffer }
+  | { status: "missing" }
   | { status: "unavailable" };
 
 const DEFAULT_MAX_CAPTURE_BODY_BYTES = 8 * 1024 * 1024;
-/** How far below the cap the in-memory estimate must sit to skip a full scan. */
-const PRUNE_SCAN_SKIP_MARGIN = 0.9;
 /** Longest a write-triggered prune may trust the in-memory estimate. */
 const PRUNE_SCAN_MAX_SKIP_MS = 60_000;
 const DEFAULT_MAX_CAPTURE_DIR_BYTES = 20 * 1024 * 1024 * 1024;
@@ -115,7 +114,13 @@ export class DebugCaptureWriter {
     return serializeBody(buffer, this.maxBodyBytes);
   }
 
-  async readCapture(capturePath: string, requestId: string, decodeBodies = true): Promise<CaptureReadResult> {
+  async readCapture(
+    capturePath: string,
+    requestId: string,
+    decodeBodies = true,
+    signal?: AbortSignal
+  ): Promise<CaptureReadResult> {
+    signal?.throwIfAborted();
     if (!path.isAbsolute(capturePath)) {
       return { status: "unavailable" };
     }
@@ -133,7 +138,8 @@ export class DebugCaptureWriter {
           return { status: "unavailable" };
         }
 
-        const content = await handle.readFile();
+        const content = await handle.readFile({ signal });
+        signal?.throwIfAborted();
         const parsed = JSON.parse(content.toString("utf8")) as unknown;
         if (!isRecord(parsed) || parsed.request_id !== requestId) {
           return { status: "unavailable" };
@@ -151,8 +157,10 @@ export class DebugCaptureWriter {
       } finally {
         await handle.close();
       }
-    } catch {
-      return { status: "unavailable" };
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") return { status: "missing" };
+      if (isRecord(error) && error.code === "ELOOP") return { status: "unavailable" };
+      throw error;
     }
   }
 
@@ -182,7 +190,9 @@ export class DebugCaptureWriter {
       this.protectedCapturePaths.delete(absolutePath);
       const effectiveMaxDirBytes = this.maxDirBytesByCaptureDir.get(captureDir) ?? this.maxDirBytes;
       this.addToDirectoryByteEstimate(captureDir, Buffer.byteLength(serialized));
-      void this.requestPrune(captureDir, effectiveMaxDirBytes);
+      if (!this.canSkipPruneScan(captureDir, effectiveMaxDirBytes)) {
+        void this.requestPrune(captureDir, effectiveMaxDirBytes);
+      }
     }
   }
 
@@ -197,7 +207,7 @@ export class DebugCaptureWriter {
     // change calls it after the cap moves — so skipping here let a directory that
     // this process did not fill (captures left by an earlier run, a second
     // instance, files dropped in by hand) stay unbounded forever.
-    return this.requestPrune(captureDir, this.maxDirBytes, { trustEstimate: false });
+    return this.requestPrune(captureDir, this.maxDirBytes);
   }
 
   /** Called after request writers drain, before their SQLite callback owner closes. */
@@ -226,27 +236,16 @@ export class DebugCaptureWriter {
 
   private canSkipPruneScan(captureDir: string, maxDirBytes: number): boolean {
     const known = this.directoryByteEstimates.get(captureDir);
-    if (known === undefined || known > maxDirBytes * PRUNE_SCAN_SKIP_MARGIN) {
+    if (known === undefined || known >= maxDirBytes) {
       return false;
     }
 
-    // Bounded staleness as well as a margin. The estimate only counts what this
-    // writer wrote, so anything else adding files would otherwise go unseen for as
-    // long as our own total stayed under the cap; a forced rescan every interval
-    // caps how far the directory can drift past it.
-    const lastScanAt = this.lastPruneScanAt.get(captureDir) ?? 0;
-    return Date.now() - lastScanAt < PRUNE_SCAN_MAX_SKIP_MS;
+    // External changes appear on the next write after the interval or an explicit scan.
+    const lastScanAt = this.lastPruneScanAt.get(captureDir);
+    return lastScanAt !== undefined && Date.now() - lastScanAt < PRUNE_SCAN_MAX_SKIP_MS;
   }
 
-  private requestPrune(
-    captureDir: string,
-    maxDirBytes: number,
-    options: { trustEstimate?: boolean } = {}
-  ): Promise<void> {
-    if (options.trustEstimate !== false && this.canSkipPruneScan(captureDir, maxDirBytes)) {
-      return Promise.resolve();
-    }
-
+  private requestPrune(captureDir: string, maxDirBytes: number): Promise<void> {
     let state = this.pruneStates.get(captureDir);
     if (!state) {
       state = {
@@ -283,15 +282,18 @@ export class DebugCaptureWriter {
   ): Promise<void> {
     do {
       state.requested = false;
-      await this.pruneOnce(captureDir, state.maxDirBytes);
+      if (await this.pruneOnce(captureDir, state)) state.requested = true;
     } while (state.requested);
   }
 
-  private async pruneOnce(captureDir: string, maxDirBytes: number): Promise<void> {
+  private async pruneOnce(captureDir: string, state: { maxDirBytes: number }): Promise<boolean> {
+    const estimateAtStart = this.directoryByteEstimates.get(captureDir) ?? 0;
+    this.directoryByteEstimates.set(captureDir, estimateAtStart);
     try {
       const files = await readdir(captureDir);
       const captureFiles = files.filter(isManagedCaptureFilename);
       const fileSizes: Array<{ path: string; size: number; mtime: Date }> = [];
+      let scanComplete = true;
 
       for (const file of captureFiles) {
         const fullPath = path.join(captureDir, file);
@@ -301,8 +303,11 @@ export class DebugCaptureWriter {
             continue;
           }
           fileSizes.push({ path: fullPath, size: stats.size, mtime: stats.mtime });
-        } catch {
-          // File may have been deleted; skip
+        } catch (error) {
+          if (!isRecord(error) || error.code !== "ENOENT") {
+            scanComplete = false;
+            console.error("[CompactGate] Failed to stat capture during cleanup.", error);
+          }
         }
       }
 
@@ -313,11 +318,10 @@ export class DebugCaptureWriter {
 
       let totalBytes = fileSizes.reduce((sum, f) => sum + f.size, 0);
       const purgedPaths: string[] = [];
-      this.directoryByteEstimates.set(captureDir, totalBytes);
-      this.lastPruneScanAt.set(captureDir, Date.now());
 
       for (const file of fileSizes) {
-        if (totalBytes <= maxDirBytes) {
+        // Configuration can change while scanning or waiting for the previous deletion.
+        if (totalBytes <= state.maxDirBytes) {
           break;
         }
         if (this.protectedCapturePaths.has(file.path)) {
@@ -326,23 +330,37 @@ export class DebugCaptureWriter {
         try {
           await unlink(file.path);
           totalBytes -= file.size;
-          this.directoryByteEstimates.set(captureDir, totalBytes);
           purgedPaths.push(file.path);
-        } catch {
-          // Ignore unlink errors
+        } catch (error) {
+          if (isRecord(error) && error.code === "ENOENT") totalBytes -= file.size;
+          else console.error("[CompactGate] Failed to unlink capture during cleanup.", error);
         }
       }
 
       if (purgedPaths.length > 0) {
         try {
           this.onCapturesPurged(purgedPaths);
-        } catch {
+        } catch (error) {
           // The files are already gone; a notification failure must not make the
           // next pass delete more to compensate.
+          console.error("[CompactGate] Failed to notify capture cleanup.", error);
         }
       }
-    } catch {
-      // Ignore readdir errors
+      // A write after readdir can be absent here. Carry overlapping writes forward;
+      // if they might cross the cap, verify against real file sizes before evicting.
+      const writtenDuringScan = this.directoryByteEstimates.get(captureDir)! - estimateAtStart;
+      if (!scanComplete) {
+        this.directoryByteEstimates.delete(captureDir);
+        return false;
+      }
+      const estimate = totalBytes + writtenDuringScan;
+      this.directoryByteEstimates.set(captureDir, estimate);
+      this.lastPruneScanAt.set(captureDir, Date.now());
+      return writtenDuringScan > 0 && estimate >= state.maxDirBytes;
+    } catch (error) {
+      this.directoryByteEstimates.delete(captureDir);
+      if (!isRecord(error) || error.code !== "ENOENT") console.error("[CompactGate] Failed to scan capture directory.", error);
+      return false;
     }
   }
 }

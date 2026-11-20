@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { DAY_MS } from "../shared/log-range.js";
 import type {
   LogStatsMetric,
   LogStatsSnapshot,
@@ -13,12 +14,9 @@ import {
   readNullableNumber
 } from "./logger-helpers.js";
 
-export interface LogStatsOptions {
-  from: string;
-  to: string;
-  includeOverview?: boolean;
+export type LogStatsOptions = LogStatsSnapshot["range"] & {
   view?: "usage";
-}
+};
 
 const validToken = (column: string) =>
   `(CASE WHEN typeof(${column}) = 'integer' AND ${column} >= 0 THEN ${column} ELSE NULL END)`;
@@ -73,7 +71,6 @@ const DISPLAY_ENDPOINT = `COALESCE(
 )`;
 
 const ANALYTICS_ROWS_SQL = `
-  WITH analytics_rows AS (
     SELECT
       time,
       route,
@@ -97,7 +94,6 @@ const ANALYTICS_ROWS_SQL = `
       ${EFFECTIVE_TOTAL} AS total_tokens
     FROM request_logs
     WHERE time >= ? AND time < ?
-  )
 `;
 
 const METRIC_SQL = `
@@ -132,88 +128,71 @@ export function readLogStats(db: DatabaseSync, options: LogStatsOptions): LogAna
 
 function readStatsSnapshot(db: DatabaseSync, options: LogStatsOptions): LogAnalyticsSnapshot {
   const params = [options.from, options.to];
+  const calendar = options.calendar_tz && calendarGroups(options.from, options.to, options.calendar_tz);
   const generatedAt = new Date().toISOString();
   const retained = db.prepare(
     `SELECT (SELECT MIN(time) FROM request_logs) AS oldest_at,
       (SELECT MAX(time) FROM request_logs) AS newest_at`
   ).get() as Record<string, unknown>;
 
-  const trend = db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT substr(time, 1, 13) || ':00:00.000Z' AS bucket_start, ${METRIC_SQL}
-    FROM analytics_rows
-    GROUP BY bucket_start
-    ORDER BY bucket_start
-  `).all(...params) as Array<Record<string, unknown>>;
-
-  const routes = options.view === "usage" ? [] : db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT route, ${METRIC_SQL}
-    FROM analytics_rows
-    GROUP BY route
-    ORDER BY requests DESC, route
-  `).all(...params) as Array<Record<string, unknown>>;
-
-  const hosts = options.view === "usage" ? [] : db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT upstream_host AS host, ${METRIC_SQL}
-    FROM analytics_rows
-    GROUP BY upstream_host
-    ORDER BY requests DESC, host
-    LIMIT 12
-  `).all(...params) as Array<Record<string, unknown>>;
-
-  const models = db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT
-      response_model AS model,
-      ${METRIC_SQL}
-    FROM analytics_rows
-    GROUP BY response_model
-    ORDER BY requests DESC, model
-    LIMIT 12
-  `).all(...params) as Array<Record<string, unknown>>;
-
-  const endpoints = db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT
-      endpoint,
-      COUNT(*) AS requests,
-      COALESCE(SUM(is_error), 0) AS error_requests,
-      COALESCE(SUM(total_tokens), 0) AS total_tokens
-    FROM analytics_rows
-    GROUP BY endpoint
-    ORDER BY requests DESC, endpoint
-    LIMIT 8
-  `).all(...params) as Array<Record<string, unknown>>;
-
-  const mappings = options.view === "usage" ? [] : db.prepare(`
-    ${ANALYTICS_ROWS_SQL}
-    SELECT
-      upstream_host AS host,
-      source_model,
-      target_model,
-      response_model,
-      ${METRIC_SQL}
-    FROM analytics_rows
-    GROUP BY upstream_host, source_model, target_model, response_model
-    ORDER BY requests DESC, host, source_model, target_model, response_model
-    LIMIT 20
-  `).all(...params) as Array<Record<string, unknown>>;
+  // One ephemeral projection per query, not a cache shared across snapshots.
+  const rows = db.prepare(`
+    WITH analytics_rows AS MATERIALIZED (${ANALYTICS_ROWS_SQL})
+    SELECT 'summary' AS dimension, NULL AS key1, NULL AS key2, NULL AS key3, NULL AS key4, ${METRIC_SQL} FROM analytics_rows
+    UNION ALL SELECT 'trend', * FROM (
+      SELECT substr(time, 1, 13) || ':00:00.000Z' AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY key1 ORDER BY key1
+    )
+    ${calendar ? `UNION ALL SELECT 'day', * FROM (
+      SELECT date(time, ${calendar.offsetSql}) AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY key1
+    )` : ""}
+    UNION ALL SELECT 'model', * FROM (
+      SELECT response_model AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY response_model ORDER BY requests DESC, key1 LIMIT 12
+    )
+    UNION ALL SELECT 'endpoint', * FROM (
+      SELECT endpoint AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY endpoint ORDER BY requests DESC, key1 LIMIT 8
+    )
+    ${options.view === "usage" ? "" : `
+    UNION ALL SELECT 'route', * FROM (
+      SELECT route AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY route ORDER BY requests DESC, key1
+    )
+    UNION ALL SELECT 'host', * FROM (
+      SELECT upstream_host AS key1, NULL, NULL, NULL, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY upstream_host ORDER BY requests DESC, key1 LIMIT 12
+    )
+    UNION ALL SELECT 'mapping', * FROM (
+      SELECT upstream_host AS key1, source_model AS key2, target_model AS key3, response_model AS key4, ${METRIC_SQL}
+      FROM analytics_rows GROUP BY upstream_host, source_model, target_model, response_model
+      ORDER BY requests DESC, key1, key2, key3, key4 LIMIT 20
+    )`}
+  `).all(...params, ...(calendar ? calendar.params : [])) as Array<Record<string, unknown>>;
+  const trend = rows.filter(row => row.dimension === "trend");
+  const routes = rows.filter(row => row.dimension === "route");
+  const hosts = rows.filter(row => row.dimension === "host");
+  const models = rows.filter(row => row.dimension === "model");
+  const endpoints = rows.filter(row => row.dimension === "endpoint");
+  const mappings = rows.filter(row => row.dimension === "mapping");
+  const summaryMetric = readMetric(rows.find(row => row.dimension === "summary")!);
+  const dailyRows = new Map(rows.filter(row => row.dimension === "day").map(row => [row.key1, row]));
 
   const common = {
     generated_at: generatedAt,
-    range: { from: options.from, to: options.to },
+    range: { from: options.from, to: options.to, ...(options.calendar_tz ? { calendar_tz: options.calendar_tz } : {}) },
     retained_range: {
       oldest_at: readString(retained.oldest_at),
       newest_at: readString(retained.newest_at)
     },
     trend: trend.map((row) => ({
-      bucket_start: String(row.bucket_start),
+      bucket_start: String(row.key1),
       ...readMetric(row)
     })),
+    ...(calendar ? { daily_trend: calendar.dates.map(date => ({ date, ...readMetric(dailyRows.get(date) ?? {}) })) } : {}),
     by_model: models.map((row) => ({
-      model: readString(row.model),
+      model: readString(row.key1),
       requests: readNumber(row.requests),
       error_requests: readNumber(row.error_requests),
       usage_observed_requests: readNumber(row.usage_observed_requests),
@@ -222,36 +201,78 @@ function readStatsSnapshot(db: DatabaseSync, options: LogStatsOptions): LogAnaly
       total_tokens: readNumber(row.total_tokens)
     })),
     by_endpoint: endpoints.map((row) => ({
-      endpoint: readString(row.endpoint) ?? "未知端点",
+      endpoint: readString(row.key1) ?? "未知端点",
       requests: readNumber(row.requests),
       error_requests: readNumber(row.error_requests),
       total_tokens: readNumber(row.total_tokens)
     }))
   };
   if (options.view === "usage") {
-    return { ...common, view: "usage", summary: readUsageSummary(db, options), overview: null };
+    return { ...common, view: "usage", summary: readUsageSummary(db, options, summaryMetric), overview: null };
   }
   return {
     ...common,
     range: options,
-    summary: readSummary(db, options),
+    summary: readSummary(db, options, summaryMetric),
     by_route: routes.map((row) => ({
-      route: normalizeRoute(row.route),
+      route: normalizeRoute(row.key1),
       ...readMetric(row)
     })),
     by_host: hosts.map((row) => ({
-      host: readString(row.host) ?? "未知 Host",
+      host: readString(row.key1) ?? "未知 Host",
       ...readMetric(row)
     })),
     model_mappings: mappings.map((row) => ({
-      host: readString(row.host) ?? "未知 Host",
-      source_model: readString(row.source_model),
-      target_model: readString(row.target_model),
-      response_model: readString(row.response_model),
+      host: readString(row.key1) ?? "未知 Host",
+      source_model: readString(row.key2),
+      target_model: readString(row.key3),
+      response_model: readString(row.key4),
       ...readMetric(row)
     })),
     overview: options.includeOverview ? readOverview(db, options.to, generatedAt) : null
   };
+}
+
+function calendarGroups(from: string, to: string, timeZone: string) {
+  const format = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" });
+  const offsetAt = (time: number) => {
+    const name = format.formatToParts(time).find(part => part.type === "timeZoneName")!.value;
+    const offset = name.slice(3); // ICU: GMT, GMT±HH:MM or historical GMT±HH:MM:SS.
+    if (!offset) return 0;
+    const [hours, minutes, seconds = 0] = offset.slice(1).split(":").map(Number);
+    return (offset[0] === "-" ? -1 : 1) * (hours * 3600 + minutes * 60 + seconds);
+  };
+  const start = Date.parse(from);
+  const end = Date.parse(to);
+  const segments = [{ start, offset: offsetAt(start) }];
+  // Find IANA offset changes once per query. SQLite groups the projected rows without an Intl call per log.
+  for (let cursor = start; cursor < end - 1;) {
+    const sample = Math.min(cursor + DAY_MS, end - 1);
+    const offset = offsetAt(sample);
+    if (offset !== segments[segments.length - 1].offset) {
+      let left = cursor;
+      let right = sample;
+      while (right - left > 1) {
+        const mid = left + Math.floor((right - left) / 2);
+        if (offsetAt(mid) === offset) right = mid;
+        else left = mid;
+      }
+      segments.push({ start: right, offset });
+    }
+    cursor = sample;
+  }
+  const dates = new Set<string>();
+  const params: string[] = [];
+  for (const [index, segment] of segments.entries()) {
+    const stop = segments[index + 1]?.start ?? end;
+    const shift = segment.offset * 1000;
+    const firstDate = Math.floor((segment.start + shift) / DAY_MS) * DAY_MS;
+    for (let day = firstDate; day < stop + shift; day += DAY_MS) dates.add(new Date(day).toISOString().split("T")[0]);
+    if (index + 1 < segments.length) params.push(new Date(stop).toISOString());
+    params.push(`${segment.offset} seconds`);
+  }
+  const offsetSql = segments.length === 1 ? "?" : `CASE ${"WHEN time < ? THEN ? ".repeat(segments.length - 1)}ELSE ? END`;
+  return { dates: [...dates].sort(), offsetSql, params };
 }
 
 function readOverview(
@@ -290,11 +311,11 @@ function readOverview(
   };
 }
 
-function readSummary(db: DatabaseSync, options: LogStatsOptions): LogStatsSummary {
+function readSummary(db: DatabaseSync, options: LogStatsOptions, metric?: LogStatsMetric): LogStatsSummary {
   const duration = readPercentiles(db, "duration_ms", options);
   const firstToken = readPercentiles(db, "first_token_ms", options);
   return {
-    ...readUsageSummary(db, options),
+    ...readUsageSummary(db, options, metric),
     duration_p50_ms: duration.p50,
     duration_p95_ms: duration.p95,
     first_token_p50_ms: firstToken.p50,
@@ -302,8 +323,9 @@ function readSummary(db: DatabaseSync, options: LogStatsOptions): LogStatsSummar
   };
 }
 
-function readUsageSummary(db: DatabaseSync, options: LogStatsOptions): LogUsageStatsSnapshot["summary"] {
-  const summaryMetric = readSummaryMetric(db, options.from, options.to);
+function readUsageSummary(db: DatabaseSync, options: LogStatsOptions,
+  summaryMetric = readSummaryMetric(db, options.from, options.to)
+): LogUsageStatsSnapshot["summary"] {
   const rangeMinutes = Math.max(1, (Date.parse(options.to) - Date.parse(options.from)) / 60_000);
   return {
     ...summaryMetric,
@@ -314,7 +336,7 @@ function readUsageSummary(db: DatabaseSync, options: LogStatsOptions): LogUsageS
 
 function readSummaryMetric(db: DatabaseSync, from: string, to: string): LogStatsMetric {
   const row = db.prepare(
-    `${ANALYTICS_ROWS_SQL} SELECT ${METRIC_SQL} FROM analytics_rows`
+    `WITH analytics_rows AS (${ANALYTICS_ROWS_SQL}) SELECT ${METRIC_SQL} FROM analytics_rows`
   ).get(from, to) as Record<string, unknown>;
   return readMetric(row);
 }

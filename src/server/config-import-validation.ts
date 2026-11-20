@@ -1,10 +1,14 @@
-import { CLAUDE_SCENES } from "./config-defaults.js";
+import { CLAUDE_SCENES, DEFAULT_CONFIG } from "./config-defaults.js";
 import { ConfigError, isRecord } from "./config-internals.js";
 
-/** Check raw containers before normalization can mistake malformed input for omission. */
+/** Check supplied values before normalization can mistake malformed input for omission. */
 export function validateImportedConfigContainers(config: Record<string, unknown>): void {
   validateRuntimeContainers(config, "");
-  readArray(config.route_url_presets, "route_url_presets");
+  validateScalars(config, { active_profile_id: null }, "");
+  for (const [index, preset] of readArray(config.route_url_presets, "route_url_presets").entries()) {
+    if (isRecord(preset)) validateScalars(preset, { id: "", kind: "", base_url: "", api_key: "", api_key_env: "",
+      created_at: "", updated_at: "", usage_count: 1 }, `route_url_presets[${index}].`);
+  }
   validateProfiles(config.profiles, "profiles");
   const scopes = readObject(config.profile_scopes, "profile_scopes");
   for (const scope of ["codex", "claude"] as const) {
@@ -15,6 +19,7 @@ export function validateImportedConfigContainers(config: Record<string, unknown>
 }
 
 function validateRuntimeContainers(config: Record<string, unknown>, prefix: string): void {
+  validateScalars(config, DEFAULT_CONFIG, prefix);
   for (const route of ["primary", "compact"] as const) {
     validateRouteContainers(readObject(config[route], `${prefix}${route}`), `${prefix}${route}`);
   }
@@ -24,6 +29,7 @@ function validateRuntimeContainers(config: Record<string, unknown>, prefix: stri
   const field = `${prefix}claude`;
   const claude = readObject(config.claude, field);
   // Legacy Claude configs put the connection directly under `claude`.
+  validateScalars(claude, DEFAULT_CONFIG.claude.primary, `${field}.`);
   validateRouteContainers(claude, field);
   for (const route of ["primary", "compact"] as const) {
     validateRouteContainers(readObject(claude[route], `${field}.${route}`), `${field}.${route}`);
@@ -37,16 +43,31 @@ function validateRuntimeContainers(config: Record<string, unknown>, prefix: stri
 
 function validateRouteContainers(route: Record<string, unknown>, field: string): void {
   readObject(route.extra_headers, `${field}.extra_headers`);
-  readArray(route.api_keys, `${field}.api_keys`);
+  for (const [index, key] of readArray(route.api_keys, `${field}.api_keys`).entries()) {
+    if (isRecord(key)) validateScalars(key, { id: "", label: "", api_key: "", enabled: true }, `${field}.api_keys[${index}].`);
+  }
 }
 
 function validateProfiles(value: unknown, field: string): void {
   for (const [index, profile] of readArray(value, field).entries()) {
     // The existing strict profile reader owns entry and field validation.
     if (!isRecord(profile)) continue;
+    validateScalars(profile, { id: "", name: "", created_at: "", updated_at: "" }, `${field}[${index}].`);
     const configField = `${field}[${index}].config`;
     const config = readObject(profile.config, configField);
     validateRuntimeContainers(config, `${configField}.`);
+  }
+}
+
+function validateScalars(value: Record<string, unknown>, defaults: object, prefix: string): void {
+  for (const [key, example] of Object.entries(defaults)) {
+    const supplied = value[key];
+    if (supplied === undefined || Array.isArray(example)) continue;
+    if (isRecord(example)) {
+      if (isRecord(supplied)) validateScalars(supplied, example, `${prefix}${key}.`);
+    } else if (example === null ? supplied !== null && typeof supplied !== "string" : typeof supplied !== typeof example) {
+      throw new ConfigError(`${prefix}${key} must be ${example === null ? "a string or null" : `a ${typeof example}`}.`);
+    }
   }
 }
 

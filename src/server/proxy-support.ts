@@ -234,7 +234,8 @@ export async function persistCapture(
 
   try {
     return await captureWriter.write(createRecord(), onWritten);
-  } catch {
+  } catch (error) {
+    console.error("[CompactGate] Failed to write request capture.", error);
     return null;
   }
 }

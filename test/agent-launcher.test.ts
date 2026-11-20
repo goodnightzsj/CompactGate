@@ -1,11 +1,35 @@
+import { spawn } from "node:child_process";
+import { constants } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeLaunch,
   buildCodexLaunch,
-  parseAgentCommand
+  parseAgentCommand,
+  runAgentLauncher
 } from "../src/server/agent-launcher.js";
 
 describe("agent launcher", () => {
+  it.each(["SIGINT", "SIGTERM", "SIGKILL"] as const)("preserves a real child's %s exit status", async signal => {
+    const listeners = process.listenerCount("SIGINT");
+    const spawnFixture = (() => spawn(process.execPath, ["-e", `process.kill(process.pid, '${signal}')`],
+      { stdio: "ignore", env: {} })) as typeof spawn;
+    expect(await runAgentLauncher(["codex"], spawnFixture)).toBe(128 + constants.signals[signal]);
+    expect(process.listenerCount("SIGINT")).toBe(listeners);
+  });
+
+  it.each([0, 7])("preserves an ordinary child exit status %s", async code => {
+    const spawnFixture = (() => spawn(process.execPath, ["-e", `process.exit(${code})`],
+      { stdio: "ignore", env: {} })) as typeof spawn;
+    expect(await runAgentLauncher(["claude"], spawnFixture)).toBe(code);
+  });
+
+  it("propagates a failed spawn and releases its signal listener", async () => {
+    const listeners = process.listenerCount("SIGINT");
+    const spawnFixture = (() => spawn("/nonexistent-compactgate-test-agent", [], { env: {}, stdio: "ignore" })) as typeof spawn;
+    await expect(runAgentLauncher(["codex"], spawnFixture)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(process.listenerCount("SIGINT")).toBe(listeners);
+  });
+
   it("builds a process-local Codex Responses provider and preserves arguments", () => {
     const plan = buildCodexLaunch({
       serverUrl: "http://127.0.0.1:8123/",

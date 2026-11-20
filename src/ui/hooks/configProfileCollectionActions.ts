@@ -14,7 +14,7 @@ export function createConfigProfileCollectionActions({
 }: {
   config: PublicConfig | null;
   profileDeleteCandidate: ProfileDeleteCandidate | null;
-  onConfigChange: (config: PublicConfig) => void;
+  onConfigChange: (config: PublicConfig) => Promise<void>;
   setProfileDeleteCandidate: Dispatch<SetStateAction<ProfileDeleteCandidate | null>>;
   scopedProfileAccessors: (scope: ConfigProfileScope) => ScopedProfileAccessors;
 }) {
@@ -49,20 +49,13 @@ export function createConfigProfileCollectionActions({
         method: "POST",
         body: JSON.stringify({
           scope,
-          profile_ids: profileIds
+          profile_ids: profileIds,
+          revision: config.revision
         })
       });
 
-      onConfigChange(nextConfig);
-      const nextScope = profileScopeState(nextConfig, scope);
-      const nextSelectedProfileId = accessors.selectedId && nextScope.profiles.some((profile) => profile.id === accessors.selectedId)
-        ? accessors.selectedId
-        : nextScope.active_profile_id ?? nextScope.profiles[0]?.id ?? "";
-      accessors.setSelectedId(nextSelectedProfileId);
-      // No explicit setName: reordering renames nothing, and `setName` resets the
-      // rename draft, so dragging a row used to snap a half-typed new name back
-      // to the stored one. The name sync effect adopts the stored name on its own
-      // and keeps a dirty draft that still belongs to the selected profile.
+      await onConfigChange(nextConfig);
+      // The live controls own selection and rename drafts throughout this reorder.
       accessors.setState("reordered");
       // Only clear the badge this call set. An unconditional reset belonging to an
       // earlier action would land mid-flight on the next one and drop its spinner.
@@ -72,7 +65,10 @@ export function createConfigProfileCollectionActions({
       );
     } catch (error) {
       accessors.setState("error");
-      accessors.setError(errorSummary(error));
+      const summary = errorSummary(error);
+      accessors.setError(/superseded revision/i.test(summary)
+        ? "配置已更新。请查看最新档案顺序后重新排序。"
+        : summary);
     }
   }
 
@@ -101,6 +97,14 @@ export function createConfigProfileCollectionActions({
       return false;
     }
 
+    if (targetScope === scope) selectConfigProfile(scope, sourceProfileId);
+    const selectionAtStart = {
+      selectedId: targetScope === scope ? sourceProfileId : accessors.selectedId,
+      name: targetScope === scope && sourceProfileId !== sourceAccessors.selectedId
+        ? sourceProfile.name : accessors.name,
+      interactionRevision: accessors.interactionRevision
+    };
+
     // Named after the source, so the in-progress rename it defers to is the source
     // panel's — the destination's name field is about a different profile.
     const copyName = options.name?.trim() || nextDuplicateProfileName({
@@ -128,13 +132,11 @@ export function createConfigProfileCollectionActions({
         .reverse()
         .find((profile) => profile.name === copyName);
 
-      onConfigChange(nextConfig);
+      await onConfigChange(nextConfig);
       // The source id is only a sane fallback within its own scope; across scopes
       // it names nothing the destination panel can select, so hold its selection.
       const fallbackId = targetScope === scope ? sourceProfileId : accessors.selectedId;
-      accessors.setSelectedId(copiedProfile?.id ?? fallbackId);
-      // The name follows the new selection through the sync effect; calling
-      // setName here would also drop an unrelated in-progress rename.
+      accessors.setSelectedId(copiedProfile?.id ?? fallbackId, selectionAtStart);
       accessors.setState("duplicated");
       window.setTimeout(
         () => accessors.setState((current) => current === "duplicated" ? "idle" : current),
@@ -158,7 +160,7 @@ export function createConfigProfileCollectionActions({
     }
 
     const profile = config ? profileScopeState(config, scope).profiles.find((item) => item.id === targetProfileId) : null;
-    if (!profile) {
+    if (!profile || !config) {
       accessors.setState("error");
       accessors.setError("没有找到要删除的配置档案。");
       return;
@@ -166,7 +168,7 @@ export function createConfigProfileCollectionActions({
 
     accessors.setSelectedId(profile.id);
     accessors.setError(null);
-    setProfileDeleteCandidate({ scope, profile });
+    setProfileDeleteCandidate({ scope, profile, revision: config.revision });
   }
 
   async function confirmDeleteSelectedProfile() {
@@ -184,12 +186,13 @@ export function createConfigProfileCollectionActions({
         method: "DELETE",
         body: JSON.stringify({
           scope: candidate.scope,
-          profile_id: candidate.profile.id
+          profile_id: candidate.profile.id,
+          revision: candidate.revision
         })
       });
       const nextScope = profileScopeState(nextConfig, candidate.scope);
 
-      onConfigChange(nextConfig);
+      await onConfigChange(nextConfig);
       const nextSelectedProfileId = nextScope.active_profile_id ?? nextScope.profiles[0]?.id ?? "";
       accessors.setSelectedId(nextSelectedProfileId);
       accessors.setName(nextScope.profiles.find((item) => item.id === nextSelectedProfileId)?.name ?? "");
@@ -200,8 +203,11 @@ export function createConfigProfileCollectionActions({
         1600
       );
     } catch (error) {
+      const summary = errorSummary(error);
       accessors.setState("error");
-      accessors.setError(errorSummary(error));
+      accessors.setError(/superseded revision/i.test(summary)
+        ? "配置已更新，档案未删除。请取消，查看最新档案后重新确认删除。"
+        : summary);
     }
   }
 

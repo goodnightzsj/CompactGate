@@ -13,6 +13,7 @@ import {
   resolveClaudeRequestRouting
 } from "./claude-models.js";
 import { buildUpstreamUrlWithMode } from "./upstream-url.js";
+import { assertChatSupportsTokenCount, ProtocolConversionError, UnsupportedClientProtocolError } from "./protocol-conversion.js";
 
 const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
 const ANTHROPIC_PROXY_PREFIX = "/anthropic";
@@ -231,6 +232,21 @@ export function compactUpstreamBaseUrl(config: CompactGateConfig): string {
     : config.primary.base_url;
 }
 
+export function assertAnthropicClientEndpoint(endpoint: string): void {
+  if (["/chat/completions", "/responses", "/responses/compact"].includes(endpoint)) {
+    throw new UnsupportedClientProtocolError(
+      "The /anthropic endpoint accepts Anthropic Messages, not OpenAI requests. Use /v1/chat/completions with an openai_chat upstream, or /v1/responses with Responses format."
+    );
+  }
+}
+
+export function compactUpstreamProtocol(protocol: UpstreamProtocol): Exclude<UpstreamProtocol, "openai_chat"> {
+  if (protocol === "openai_chat") {
+    throw new ProtocolConversionError("OpenAI Chat upstream cannot handle Responses compaction requests.");
+  }
+  return protocol;
+}
+
 export function upstreamPathForEndpoint(
   method: string,
   pathname: string,
@@ -238,6 +254,18 @@ export function upstreamPathForEndpoint(
   upstreamProtocol: UpstreamProtocol
 ): string {
   const endpoint = endpointFromPath(pathname);
+  if (ingress === "openai") {
+    if (endpoint === "/chat/completions" && upstreamProtocol !== "openai_chat") {
+      throw new UnsupportedClientProtocolError(
+        "Chat Completions requires an openai_chat upstream. Select a Chat profile, or use /v1/responses with Responses format."
+      );
+    }
+    if (endpoint === "/messages" || endpoint === "/messages/count_tokens") {
+      throw new UnsupportedClientProtocolError(
+        "Anthropic Messages requires the /anthropic/v1/messages endpoint and Messages format."
+      );
+    }
+  }
   if (method === "GET" && endpoint === "/models") return "/v1/models";
   if (method !== "POST") return pathname;
   if (ingress === "openai") {
@@ -247,9 +275,19 @@ export function upstreamPathForEndpoint(
       : upstreamProtocol === "openai_chat" ? "/v1/chat/completions" : pathname;
   }
   if (endpoint !== "/messages" && endpoint !== "/messages/count_tokens") return pathname;
+  if (upstreamProtocol === "openai_chat") {
+    assertChatSupportsTokenCount(endpoint === "/messages/count_tokens");
+    return "/v1/chat/completions";
+  }
   return upstreamProtocol === "anthropic_messages" ? `/v1${endpoint}`
-    : upstreamProtocol === "openai_chat" ? "/v1/chat/completions"
-      : endpoint === "/messages/count_tokens" ? "/v1/responses/input_tokens" : "/v1/responses";
+    : endpoint === "/messages/count_tokens" ? "/v1/responses/input_tokens" : "/v1/responses";
+}
+
+export function isProtocolConversionRequest(method: string | undefined, pathname: string, ingress: "openai" | "anthropic"): boolean {
+  const endpoint = endpointFromPath(pathname);
+  return method === "POST" && (ingress === "openai"
+    ? endpoint === "/responses"
+    : endpoint === "/messages" || endpoint === "/messages/count_tokens");
 }
 
 export function previewRoute(
@@ -271,13 +309,17 @@ export function previewRoute(
       ? config.compact
       : config.primary;
   const upstreamBase = upstreamConfig.base_url;
-  const upstreamPath = upstreamPathForEndpoint(method, parsedUrl.pathname, "openai", upstreamConfig.upstream_protocol);
+  const upstreamProtocol = usesPrimaryPlan ? upstreamConfig.upstream_protocol : compactUpstreamProtocol(upstreamConfig.upstream_protocol);
+  const upstreamPath = !usesPrimaryPlan && upstreamProtocol === "anthropic_messages"
+    ? "/v1/messages"
+    : upstreamPathForEndpoint(method, parsedUrl.pathname, "openai", upstreamProtocol);
   const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? buildClaudeUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search)
     : buildUpstreamUrl(upstreamBase, upstreamPath, parsedUrl.search);
   const endpoint = endpointFromPath(parsedUrl.pathname);
   const ingressProtocol = endpoint === "/chat/completions" ? "openai_chat" : "openai_responses";
-  const translationMode = endpoint === "/models" || upstreamConfig.upstream_protocol === ingressProtocol ? "passthrough" : "translate";
+  const convertsBody = !usesPrimaryPlan || isProtocolConversionRequest(method, parsedUrl.pathname, "openai");
+  const translationMode = convertsBody && upstreamConfig.upstream_protocol !== ingressProtocol ? "translate" : "passthrough";
 
   if (usesPrimaryPlan) {
     const rewrite = rewritePrimaryBody(previewBodyToBuffer(body), config, parsedUrl.pathname);
@@ -333,6 +375,7 @@ function previewClaudeRoute(
   headers?: IncomingHttpHeaders
 ): RoutePreviewResponse {
   const requestPath = parsedUrl.pathname.slice(ANTHROPIC_PROXY_PREFIX.length) || "/";
+  assertAnthropicClientEndpoint(endpointFromPath(requestPath));
   const rawBody = previewBodyToBuffer(body);
   const parsedBody = parseJsonBody(body);
   const sourceModel = typeof parsedBody?.model === "string" ? parsedBody.model : null;
@@ -348,7 +391,8 @@ function previewClaudeRoute(
   const upstream = upstreamConfig.upstream_protocol === "anthropic_messages"
     ? buildClaudeUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search)
     : buildUpstreamUrl(upstreamConfig.base_url, upstreamPath, parsedUrl.search);
-  const targetModel = routing.sceneModel ??
+  const modelList = method === "GET" && endpointFromPath(requestPath) === "/models";
+  const targetModel = modelList ? null : routing.sceneModel ??
     resolveClaudeMappedModel(sourceModel, routing.config, rawBody) ??
     sourceModel;
   return {
@@ -361,7 +405,7 @@ function previewClaudeRoute(
     upstream_host: upstream.host,
     ingress_protocol: "anthropic_messages",
     upstream_protocol: upstreamConfig.upstream_protocol,
-    translation_mode: endpointFromPath(requestPath) === "/models" || upstreamConfig.upstream_protocol === "anthropic_messages" ? "passthrough" : "translate",
+    translation_mode: isProtocolConversionRequest(method, requestPath, "anthropic") && upstreamConfig.upstream_protocol !== "anthropic_messages" ? "translate" : "passthrough",
     source_model: sourceModel,
     target_model: targetModel,
     body_rewritten: Boolean(sourceModel && targetModel && sourceModel !== targetModel),

@@ -154,7 +154,7 @@ it("shows only unlabeled generation speed in every log summary while retaining b
     generation_sample: { first_output_ms: 500, duration_ms: 500, output_tokens: 50 } };
   const desktop = renderToStaticMarkup(<table><tbody><tr><LogRowCells entry={entry} showAllColumns={false} /></tr></tbody></table>);
   const full = renderToStaticMarkup(<table><tbody><tr><LogRowCells entry={entry} showAllColumns /></tr></tbody></table>);
-  const mobile = renderToStaticMarkup(<LogMobileCard entry={entry} logKey="test" detailId="detail-test" expanded={false} onToggle={() => {}} />);
+  const mobile = renderToStaticMarkup(<LogMobileCard entry={entry} logKey="test" detailId="detail-test" expanded={false} onToggle={() => {}} reduceMotion={false} />);
   for (const markup of [desktop, full, mobile]) {
     expect(markup).toContain("响应声明不同");
     expect(markup).toContain("declared-other");
@@ -302,6 +302,13 @@ describe("LogCaptureViewer", () => {
     expect(unavailable).toContain("正文已截断");
     expect(changed).toContain("$.model");
     expect(changed).toContain("已达到 Diff 上限");
+    const incomplete = renderToStaticMarkup(<CaptureDiffPanel diff={{ available: true, equivalent: false,
+      reason: "depth_limit", truncated: true, entries: [] }} />);
+    expect(incomplete).toContain("深层内容未完整比较");
+    expect(incomplete).not.toContain("0 项差异");
+    const missing = renderToStaticMarkup(<CaptureDiffPanel diff={{ available: false, equivalent: false,
+      reason: "unavailable", truncated: false, entries: [] }} />);
+    expect(missing).toContain("客户端响应未完整记录");
   });
 });
 

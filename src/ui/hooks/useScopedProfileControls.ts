@@ -2,6 +2,7 @@ import {
   type Dispatch,
   type SetStateAction,
   useEffect,
+  useRef,
   useState
 } from "react";
 import type { ConfigProfileScope, PublicConfig } from "../../shared/types.js";
@@ -14,10 +15,12 @@ import type {
 export type ScopedProfileAccessors = {
   name: string;
   selectedId: string;
+  readonly selectionRevision: number;
+  readonly interactionRevision: number;
   state: ProfileActionState;
   setName: (name: string) => void;
-  commitSavedName: (expected: Pick<ProfileNameSyncResult, "name" | "selectedId">, profileId: string, name: string) => void;
-  setSelectedId: Dispatch<SetStateAction<string>>;
+  commitSavedName: (expected: Pick<ScopedProfileAccessors, "name" | "selectedId" | "selectionRevision">, profileId: string, name: string) => void;
+  setSelectedId: (value: SetStateAction<string>, expected?: Pick<ScopedProfileAccessors, "name" | "selectedId" | "interactionRevision">) => void;
   setState: Dispatch<SetStateAction<ProfileActionState>>;
   setError: Dispatch<SetStateAction<string | null>>;
 };
@@ -62,6 +65,8 @@ export function useScopedProfileControls(config: PublicConfig | null) {
 }
 
 function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfileScope) {
+  const selectionRevision = useRef(0);
+  const interactionRevision = useRef(0);
   const [nameState, setNameState] = useState<ProfileNameSyncResult>({
     name: "", selectedId: "", sourceProfileId: null, dirty: false
   });
@@ -93,20 +98,24 @@ function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfile
     selectedId,
     state,
     setDraftName(nextName: string): void {
+      interactionRevision.current += 1;
       setNameState((current) => ({ ...current, name: nextName, dirty: true }));
     },
     accessors: {
       name,
       selectedId,
+      get selectionRevision() { return selectionRevision.current; },
+      get interactionRevision() { return interactionRevision.current; },
       state,
       setName(nextName: string): void {
+        interactionRevision.current += 1;
         setNameState((current) => ({ ...current, name: nextName, sourceProfileId: null, dirty: false }));
       },
       commitSavedName(expected, profileId, savedName): void {
         setNameState((current) => {
-          // A response acknowledges its submitted draft, not a later selection
-          // or rename. New-profile saves rebind any newer draft to the saved ID.
-          if (current.selectedId !== expected.selectedId) return current;
+          // Selection round trips supersede a save; name-only edits still bind to the saved ID.
+          if (selectionRevision.current !== expected.selectionRevision
+            || current.selectedId !== expected.selectedId) return current;
           const edited = current.name !== expected.name;
           return {
             selectedId: profileId,
@@ -116,10 +125,17 @@ function useScopedProfileState(config: PublicConfig | null, scope: ConfigProfile
           };
         });
       },
-      setSelectedId(value): void {
-        setNameState((current) => ({ ...current,
-          selectedId: typeof value === "function" ? value(current.selectedId) : value
-        }));
+      setSelectedId(value, expected): void {
+        if (!expected) {
+          selectionRevision.current += 1;
+          interactionRevision.current += 1;
+        }
+        setNameState((current) => {
+          // Returning to the same selection/name still supersedes pending auto-selection.
+          if (expected && (interactionRevision.current !== expected.interactionRevision
+            || current.selectedId !== expected.selectedId || current.name !== expected.name)) return current;
+          return { ...current, selectedId: typeof value === "function" ? value(current.selectedId) : value };
+        });
       },
       setState,
       setError

@@ -5,6 +5,7 @@ import {
   analyzeProviderState,
   compileProviderStateAttempt,
   hashProviderStateBody,
+  lowerFidelity,
   failureTargetsCompaction,
   recoverCompactionItemIds,
   stripCompactionItemIds,
@@ -13,9 +14,11 @@ import {
   type CompiledProviderStateAttempt,
   type ProviderStateBaseStrategy,
   type ProviderStateErrorCode,
+  type ProviderStateFidelity,
   type ProviderStateStrategy
 } from "./provider-state-portability.js";
 import type { ProviderStateRecoveryPolicy } from "./provider-state-recovery-store.js";
+import { isEligibleGenericProviderStateFailure } from "./provider-state-evidence.js";
 
 export type ProviderStateRecoveryTrigger =
   | "explicit_400"
@@ -42,6 +45,7 @@ export interface ProviderStateMigrationResult {
 
 interface RunProviderStateMigrationOptions {
   canonicalBody: Buffer;
+  canonicalFidelity?: ProviderStateFidelity;
   targetStateDomain: string;
   recoverCompaction?: CompileProviderStateOptions["recoverCompaction"];
   cachedPolicy?: ProviderStateRecoveryPolicy | null;
@@ -54,7 +58,8 @@ interface RunProviderStateMigrationOptions {
     body: Buffer,
     strategy: ProviderStateStrategy,
     priorStrategy: ProviderStateBaseStrategy,
-    compiled: CompiledProviderStateAttempt
+    compiled: CompiledProviderStateAttempt,
+    recoverySource: "cached" | "recovered" | null
   ) => Promise<BufferedUpstreamResult>;
 }
 
@@ -112,6 +117,7 @@ export async function runProviderStateMigration(
       trigger = null;
       continue;
     }
+    compiled.fidelity = lowerFidelity(options.canonicalFidelity ?? "exact", compiled.fidelity);
     if (resourceRepair) compiled.metrics.providerItemIdsRemoved += resourceRepair.removedIds;
     attemptedStrategies.add(strategy);
     if (attemptedBodyHashes.has(compiled.bodyHash)) {
@@ -134,7 +140,9 @@ export async function runProviderStateMigration(
     }
 
     attemptedBodyHashes.add(compiled.bodyHash);
-    const result = await options.send(compiled.body, strategy, priorStrategy, compiled);
+    const appliedRepair = compiled.body !== options.canonicalBody || strategy === "cross_domain" || priorStrategy === "cross_domain";
+    const recoverySource = attempts.length === 0 && trigger === "cached_recovery" ? "cached" : "recovered";
+    const result = await options.send(compiled.body, strategy, priorStrategy, compiled, appliedRepair ? recoverySource : null);
     finalResult = result;
     finalBody = compiled.body;
     const responseFailure = result.deferredProviderStateFailure ?? classifyProviderStateFailure(result.status, result.responseBody, result.responseHeaders);
@@ -151,6 +159,8 @@ export async function runProviderStateMigration(
       return finish();
     }
 
+    const located = locateFailure(compiled.body, responseFailure);
+    if (responseFailure?.contentIndex !== undefined && located.length === 0) return finish();
     const idRepair = recoverCompactionItemIds(compiled.body, responseFailure);
     if (idRepair) {
       if (resourceRepair || idRepair.removedIds === 0 ||
@@ -182,13 +192,15 @@ export async function runProviderStateMigration(
       if (errorCode === "invalid_encrypted_content" && failure) priorEncryptedFailures.push(failure);
       strategy = "error_400";
       errorCode = responseErrorCode;
-      failure = locateFailure(compiled.body, responseFailure) ?? undefined;
+      failure = located.pop();
+      priorEncryptedFailures.push(...located);
       rejectedCompaction ||= compactionOnlyFailure;
       continue;
     }
 
     // A resource-ID experiment can continue only for an explicit state failure, never a generic destructive fallback.
     if (resourceRepair) return finish();
+    if (genericRecoveryStarted && !isEligibleGenericProviderStateFailure(result)) return finish();
 
     if (!genericRecoveryStarted && !genericRecoveryEvaluated) {
       genericRecoveryEvaluated = true;
@@ -211,13 +223,27 @@ export async function runProviderStateMigration(
   return finish();
 }
 
-function locateFailure(body: Buffer, failure: ProviderStateFailure | null): ProviderStateFailure | null {
-  if (!failure || failure.encryptedContentHash) return failure;
+function locateFailure(body: Buffer, failure: ProviderStateFailure | null): ProviderStateFailure[] {
+  if (!failure) return [];
+  const stable = { ...failure, itemId: null, inputIndex: null, contentIndex: undefined };
   const input = parseJsonRecord(body)?.input;
   const item = Array.isArray(input) ? failure.inputIndex !== null ? input[failure.inputIndex]
     : input.find(item => isRecord(item) && failure.itemId !== null && item.id === failure.itemId) : null;
-  return isRecord(item) && typeof item.encrypted_content === "string"
-    ? { ...failure, itemId: null, inputIndex: null, encryptedContentHash: hashProviderStateBody(Buffer.from(item.encrypted_content)) } : failure;
+  if (failure.contentIndex !== undefined) {
+    const block = isRecord(item) && item.type === "agent_message" && Array.isArray(item.content) ? item.content[failure.contentIndex] : null;
+    if (!isRecord(block) || block.type !== "encrypted_content" || typeof block.encrypted_content !== "string") return [];
+  }
+  if (failure.encryptedContentHash) return [stable];
+  if (!isRecord(item)) return [failure];
+  const blocks = item.type === "agent_message" && Array.isArray(item.content)
+    ? failure.contentIndex === undefined ? item.content : [item.content[failure.contentIndex]] : [];
+  const ciphertexts = blocks.filter(block => isRecord(block) && block.type === "encrypted_content")
+    .map(block => block.encrypted_content).filter((value): value is string => typeof value === "string");
+  if (failure.contentIndex === undefined && typeof item.encrypted_content === "string") ciphertexts.push(item.encrypted_content);
+  // Resolve coordinates against the sent body before rebuilding from the immutable original.
+  return ciphertexts.length ? ciphertexts.map(value => ({ ...stable, encryptedContentHash: hashProviderStateBody(Buffer.from(value)) }))
+    : [typeof item.id === "string" ? { ...failure, itemId: item.id, inputIndex: null }
+      : { ...stable, inputItemHash: hashProviderStateBody(Buffer.from(JSON.stringify(item))) }];
 }
 
 function nextStrategyAfterFailure(

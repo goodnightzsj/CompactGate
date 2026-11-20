@@ -9,10 +9,11 @@ import { useConfigActions } from "../src/ui/hooks/useConfigActions.js";
 function Page({ tab, scope = "codex" }: { tab: ConfigTab; scope?: ConfigDisplayScope }) {
   const form = emptyForm();
   const noop = () => undefined;
+  const asyncNoop = async () => undefined;
   const actions = useConfigActions({
-    config: null, form, linkedCompactModel: "", draftRevision: 0, formRevision: null,
-    commitConfig: noop, rebaseFormRevision: noop, applyRemoteConfig: noop,
-    applyProfileConfig: noop, setConfig: noop, setForm: noop, setHealth: noop, setPageError: noop
+    config: null, form, linkedCompactModel: "", draftRevision: 0, formRevision: null, formBaseline: null,
+    commitConfig: asyncNoop, applyWrittenConfig: asyncNoop,
+    applyProfileConfig: asyncNoop, setConfig: asyncNoop, setForm: noop, refreshHealthAfterWrite: asyncNoop
   });
   return <ConfigPage config={null} actions={actions} form={form} configTab={tab}
     displayScope={scope} onDisplayScopeChange={noop} hasPendingChanges={false}

@@ -1,5 +1,5 @@
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,35 @@ function deferred() {
 }
 
 describe("server resource shutdown", () => {
+  it.each([false, true])("closes the logger even when identity persistence failed (OAuth also fails=%s)", async oauthAlsoFails => {
+    const dir = await makeConfigDir();
+    const config = await ConfigStore.load(path.join(dir, "config.json"));
+    const identityPath = path.join(dir, "identity.json");
+    const identity = new ClientIdentityStore({ statePath: identityPath, fetchLatestVersion: async () => null });
+    await identity.start();
+    const logger = createRequestLogger(config);
+    const server = await createCompactGateServer(config, logger, undefined, undefined, undefined,
+      new CodexVersionMonitor({ probe: () => null }), identity);
+    await listen(server);
+    const closeLogger = vi.spyOn(logger, "close");
+    const oauthFailure = new Error("synthetic OAuth persistence failure");
+    if (oauthAlsoFails) vi.spyOn(config.oauth, "flush").mockRejectedValueOnce(oauthFailure);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await mkdir(`${identityPath}.${process.pid}.tmp`);
+      await expect(identity.update({ enabled: false })).rejects.toMatchObject({ code: "EISDIR" });
+      await expect(server.shutdown(20)).rejects.toMatchObject(oauthAlsoFails
+        ? { cause: expect.objectContaining({ code: "EISDIR" }), errors: [expect.objectContaining({ code: "EISDIR" }), oauthFailure] }
+        : { code: "EISDIR" });
+      expect(server.listening).toBe(false);
+      expect(closeLogger).toHaveBeenCalledOnce();
+    } finally {
+      await server.shutdown(20).catch(() => undefined);
+      await logger.close();
+      errors.mockRestore();
+    }
+  });
+
   it.each([[false, false], [true, false], [false, true], [true, true]])(
     "cleans failed construction without taking the caller's logger (provided=%s, writer fails=%s)", async (provided, writerFails) => {
     const dir = await makeConfigDir();

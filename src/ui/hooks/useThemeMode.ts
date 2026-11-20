@@ -13,7 +13,11 @@ export function useThemeMode() {
       root.dataset.themeMode = themeMode;
       root.dataset.theme = resolvedTheme;
       root.style.colorScheme = resolvedTheme;
-      window.localStorage.setItem("compactgate-theme-mode", themeMode);
+      try {
+        window.localStorage.setItem("compactgate-theme-mode", themeMode);
+      } catch (error) {
+        console.warn("Theme preference could not be saved.", error);
+      }
       updateThemeColorMeta(root, resolvedTheme);
     }
 

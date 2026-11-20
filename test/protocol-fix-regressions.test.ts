@@ -39,6 +39,25 @@ function parsed(text: string): Array<Record<string, unknown>> {
     .map((data) => JSON.parse(data) as Record<string, unknown>);
 }
 
+describe("terminal refusal and truncation outrank streamed tools", () => {
+  it.each(["function_call", "custom_tool_call"])("preserves every terminal reason after a %s block", async (type) => {
+    for (const [reason, expected] of [["content_filter", "refusal"], ["max_output_tokens", "max_tokens"], [null, "tool_use"]]) {
+      const item = { type, call_id: "synthetic-call", name: "shell", arguments: "{}", input: "ls" };
+      const out = await drain(createResponsesToAnthropicStream(), [
+        sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item }),
+        sse(reason ? "response.incomplete" : "response.completed", {
+          type: reason ? "response.incomplete" : "response.completed",
+          response: { status: reason ? "incomplete" : "completed", incomplete_details: reason ? { reason } : null, output: [] }
+        })
+      ]);
+      const events = parsed(out);
+      expect(events.some(event => event.type === "content_block_start")).toBe(true);
+      expect(events.find(event => event.type === "message_delta")?.delta).toMatchObject({ stop_reason: expected });
+      expect(events.filter(event => event.type === "message_stop")).toHaveLength(1);
+    }
+  });
+});
+
 describe("a translated Anthropic usage is not mistaken for the additive dialect", () => {
   it("reports the cache write without adding the cache on top of a total that has it", () => {
     // anthropicUsageToResponses emits OpenAI semantics: input_tokens already
@@ -133,7 +152,10 @@ describe("a Chat upstream that omits tool_call index still produces one usable c
         choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_a", type: "function", function: { name: "read", arguments: "{\"a\":1}" } }] } }]
       }),
       sse("chunk", {
-        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_b", type: "function", function: { name: "write", arguments: "{\"b\":2}" } }] }, finish_reason: "tool_calls" }]
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_b", type: "function", function: { name: "write", arguments: "{\"b\":" } }] } }]
+      }),
+      sse("chunk", {
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "2}" } }] }, finish_reason: "tool_calls" }]
       }),
       "data: [DONE]\n\n"
     ]);
@@ -143,6 +165,7 @@ describe("a Chat upstream that omits tool_call index still produces one usable c
     const calls = output.filter((item) => item.type === "function_call");
     expect(calls).toHaveLength(2);
     expect(calls.map((call) => call.name)).toEqual(["read", "write"]);
+    expect(calls.map((call) => call.arguments)).toEqual(["{\"a\":1}", "{\"b\":2}"]);
   });
 
   it("keeps one call together when the index only appears after the first frame", async () => {
@@ -156,7 +179,10 @@ describe("a Chat upstream that omits tool_call index still produces one usable c
         choices: [{ index: 0, delta: { tool_calls: [{ id: "call_a", type: "function", function: { name: "read" } }] } }]
       }),
       sse("chunk", {
-        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_a", function: { arguments: "{\"a\":1}" } }] }, finish_reason: "tool_calls" }]
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_a", function: { arguments: "{\"a\":" } }] } }]
+      }),
+      sse("chunk", {
+        choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: "1}" } }] }, finish_reason: "tool_calls" }]
       }),
       "data: [DONE]\n\n"
     ]);
@@ -473,6 +499,16 @@ describe("a 2xx whose body fails translation is not scored as a healthy profile"
 });
 
 describe("a custom tool call survives the non-streaming response leg", () => {
+  it.each(["function_call", "custom_tool_call"])("preserves normal and exceptional stop reasons for JSON %s", (type) => {
+    for (const [reason, expected] of [[null, "tool_use"], ["content_filter", "refusal"], ["max_output_tokens", "max_tokens"]]) {
+      const response = JSON.parse(openAiResponseToAnthropic(Buffer.from(JSON.stringify({
+        status: reason ? "incomplete" : "completed", incomplete_details: reason ? { reason } : null,
+        output: [{ type, call_id: "synthetic-call", name: "shell", arguments: "{}", input: "ls" }]
+      })), 200).toString());
+      expect(response.content).toHaveLength(1);
+      expect(response.stop_reason).toBe(expected);
+    }
+  });
   it("translates custom_tool_call the way the request and streaming legs already do", () => {
     const anthropic = JSON.parse(openAiResponseToAnthropic(Buffer.from(JSON.stringify({
       id: "resp_1",
@@ -495,6 +531,7 @@ describe("a custom tool call survives the non-streaming response leg", () => {
       name: "shell",
       input: { input: "ls -la" }
     }]);
+    expect(anthropic.stop_reason).toBe("tool_use");
   });
 });
 

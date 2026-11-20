@@ -1,10 +1,7 @@
 import { gzipSync, zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/server/config.js";
-import {
-  CompactionBridgeStore,
-  UnresolvedCompactionStateError
-} from "../src/server/compaction-bridge.js";
+import { CompactionBridgeStore } from "../src/server/compaction-bridge.js";
 import { buildPrimaryOpenAiProxyPlan } from "../src/server/openai-proxy-plan.js";
 import {
   candidateSignature,
@@ -175,7 +172,7 @@ describe("PrimaryFailoverState", () => {
     expect(kept.input[0].id).toBe("msg_02e22a5d85dec6d5006aa7a6be80d881");
   });
 
-  it("rejects plans whose split compaction state cannot be bridged locally", () => {
+  it("preserves known opaque split compaction for the native primary", () => {
     const config = configWithCodexProfiles([
       codexProfile("codex-a", "Codex A", "http://127.0.0.1:9101/v1"),
       codexProfile("codex-b", "Codex B", "http://127.0.0.1:9102/v1")
@@ -199,7 +196,7 @@ describe("PrimaryFailoverState", () => {
       input: [{ type: "compaction", encrypted_content: encryptedContent }]
     }));
 
-    expect(() => buildPrimaryOpenAiProxyPlan({
+    const plan = buildPrimaryOpenAiProxyPlan({
       config,
       url: new URL("http://compactgate.local/v1/responses"),
       headers: { "content-type": "application/json" },
@@ -207,7 +204,8 @@ describe("PrimaryFailoverState", () => {
       endpoint: "/responses",
       compactionBridge: bridge,
       primaryFailover: state
-    })).toThrow(UnresolvedCompactionStateError);
+    });
+    expect(plan.upstreamBody).toEqual(rawBody);
   });
 
   it("resets empty-stream failure counts after a successful primary stream", () => {
@@ -230,6 +228,25 @@ describe("PrimaryFailoverState", () => {
       "OpenAI stream closed before response.completed."
     );
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+  });
+
+  it("invalidates affinities and in-flight selections when the last candidate disappears", () => {
+    const { state } = createState();
+    const config = configWithCodexProfiles([codexProfile("a", "A", "http://a.invalid/v1")]);
+    config.primary_failover.auto_schedule = true;
+    const old = selectAndReserve(state, config, { sessionKey: "earlier" });
+    expect(state.boundProfileId({ sessionKey: "earlier" })).toBe("a");
+    const empty = configWithCodexProfiles([]);
+    const cleared = state.preview(empty);
+    expect(cleared).toMatchObject({ candidateId: null, generation: old.generation + 1 });
+    expect(state.boundProfileId({ sessionKey: "earlier" })).toBeNull();
+    expect(state.preview(empty).generation).toBe(cleared.generation);
+    const fresh = selectAndReserve(state, config, { sessionKey: "current" });
+    state.recordResult(old, { status: 200, errorSummary: null, responseId: "old-response" });
+    state.recordResult(old, 403);
+    expect(state.boundProfileId({ previousResponseId: "old-response" })).toBeNull();
+    state.recordResult(fresh, { status: 200, errorSummary: null, responseId: "fresh-response" });
+    expect(state.boundProfileId({ previousResponseId: "fresh-response" })).toBe("a");
   });
 
   it("discards a verdict earned before the profile was disabled and re-enabled", () => {
@@ -779,6 +796,22 @@ describe("PrimaryFailoverState", () => {
     // is higher (it is the active profile, order 0), but it stays blocked for
     // half an hour while B recovers almost immediately.
     expect(state.preview(config, { model: "gpt-5.5" }).profileId).toBe("codex-b");
+  });
+
+  it("does not let a success from before a manual switch reclaim the session", () => {
+    const config = configWithCodexProfiles([
+      codexProfile("codex-a", "A", "http://127.0.0.1:9101/v1"),
+      codexProfile("codex-b", "B", "http://127.0.0.1:9102/v1")
+    ]);
+    const { state } = createState();
+    const context = { sessionKey: "same-session" };
+    const old = selectAndReserve(state, config, context);
+    expect(old.profileId).toBe("codex-a");
+    state.forceNextProfileSelection(config, "codex-b");
+    const next = selectAndReserve(state, config, context);
+    state.recordResult(next, 200, null);
+    state.recordResult(old, 200, null);
+    expect(state.preview(config, context).profileId).toBe("codex-b");
   });
 
   it("lifts a quarantine and a model cooldown once the profile succeeds again", () => {

@@ -57,7 +57,8 @@ export interface PrimaryCandidate {
   name: string;
   /** Admission tier within this profile only; does not affect its identity. */
   keyPriority: number;
-  config: CompactGateConfig;
+  readonly config: CompactGateConfig;
+  readonly primary: CompactGateConfig["primary"];
   order: number;
   active: boolean;
   /** Account-bound credential: automatic rotation must skip it, manual use must not. */

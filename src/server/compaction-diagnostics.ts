@@ -13,6 +13,7 @@ export function buildCompactionDiagnostics(input: {
   requestHeaders: IncomingHttpHeaders;
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
+  responseItemCount?: number;
 }): CompactionDiagnostics {
   const request = parseJsonRecord(input.requestBody);
   const items = Array.isArray(request?.input) ? request.input : [];
@@ -20,7 +21,7 @@ export function buildCompactionDiagnostics(input: {
     implementation: compactionImplementation(input.mode, request, input.requestHeaders),
     request_item_count: countItems(items, "compaction"),
     request_trigger_count: countItems(items, "compaction_trigger"),
-    response_item_count: countCompactResponseItems(input.responseBody, input.responseHeaders)
+    response_item_count: input.responseItemCount ?? countCompactResponseItems(input.responseBody, input.responseHeaders)
   };
 }
 

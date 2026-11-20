@@ -16,20 +16,15 @@ export class UnsupportedClientProtocolError extends ProtocolConversionError {
 }
 
 const COMPACT_GATE_STATE_PREFIX = "cg1_";
-const MAX_COMPACT_GATE_STATE_BYTES = 1024 * 1024;
+const MAX_COMPACT_GATE_STATE_BYTES = 8 * 1024 * 1024;
 const ANTHROPIC_COMPACTION_TRIGGER_TOKENS = 50_000;
 
 export function encodeCompactGateState(value: Record<string, unknown>): string {
   const serialized = JSON.stringify({ v: 1, ...value });
   const encoded = Buffer.from(serialized);
-  // decodeCompactGateState rejects > 1MB, and an over-size state would cause
-  // *every subsequent request in that session* to fail at decode time with no way
-  // to recover without clearing the conversation. No existing gate state mechanism
-  // can produce payloads anywhere near this size (the largest is a few KB), but
-  // bounding here stops a hypothetical bug from burning a session.
+  // Share the decode budget so emitted state remains replayable next turn.
   if (encoded.byteLength > MAX_COMPACT_GATE_STATE_BYTES) {
-    // 502, not the default: every caller encodes state while translating an
-    // upstream response, so an over-size payload is an upstream-shaped fault.
+    // Preserve the existing 502 contract when translated state cannot be emitted.
     throw new ProtocolConversionError(
       `CompactGate state payload exceeds ${MAX_COMPACT_GATE_STATE_BYTES} bytes.`,
       502
@@ -82,7 +77,7 @@ function responsesRecordToAnthropic(
   if (typeof body.model !== "string" || body.model.trim().length === 0) {
     throw new ProtocolConversionError("Responses request requires a string model.", 400);
   }
-  if (Object.hasOwn(body, "previous_response_id") || Object.hasOwn(body, "previousResponseId")) {
+  if (body.previous_response_id != null || body.previousResponseId != null) {
     throw new ProtocolConversionError(
       "previous_response_id cannot be translated without the provider-owned response history."
     );
@@ -93,6 +88,18 @@ function responsesRecordToAnthropic(
     model: body.model,
     messages: input.messages
   };
+  if (body.text !== undefined) {
+    if (!isRecord(body.text) || Object.keys(body.text).some(key => key !== "format" && key !== "verbosity")) {
+      throw new ProtocolConversionError("Responses text cannot be translated to Anthropic Messages.");
+    }
+    const format = body.text.format;
+    if (format !== undefined) {
+      if (!isRecord(format) || (format.type !== "text" && (format.type !== "json_schema" || !isRecord(format.schema)))) {
+        throw new ProtocolConversionError("Responses text.format cannot be translated to Anthropic Messages.");
+      }
+      if (format.type === "json_schema") translated.output_config = { format: { type: "json_schema", schema: format.schema } };
+    }
+  }
   const system = [...responsesSystem(body.instructions), ...input.system];
   if (system.length > 0) {
     translated.system = system;
@@ -347,13 +354,17 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
   if (!body) {
     throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
   }
+  return Buffer.from(JSON.stringify(responsesRecordToChat(body)));
+}
+
+function responsesRecordToChat(body: Record<string, unknown>) {
   if (typeof body.model !== "string" || body.model.trim().length === 0) {
     throw new ProtocolConversionError("Responses request requires a string model.", 400);
   }
   rejectUnsupportedResponsesChatFields(body);
 
   const input = responsesInputToChatMessages(body.instructions, body.input);
-  const translated: Record<string, unknown> = {
+  const translated: Record<string, unknown> & { messages: Array<Record<string, unknown>> } = {
     model: body.model,
     messages: input.messages
   };
@@ -409,7 +420,7 @@ export function responsesRequestToChat(rawBody: Buffer): Buffer {
     translated.stream_options = { include_usage: true };
   }
 
-  return Buffer.from(JSON.stringify(translated));
+  return translated;
 }
 
 export function responsesRemoteV2CompactionToChat(rawBody: Buffer): Buffer {
@@ -417,36 +428,31 @@ export function responsesRemoteV2CompactionToChat(rawBody: Buffer): Buffer {
   if (!body) {
     throw new ProtocolConversionError("Responses request body must be a JSON object.", 400);
   }
-  const input = Array.isArray(body.input) ? body.input : [];
-  const retained = input.filter((item) => !isRecord(item) || item.type !== "compaction_trigger");
-  retained.push({
-    type: "message",
+  const input = Array.isArray(body.input)
+    ? body.input.filter((item) => !isRecord(item) || item.type !== "compaction_trigger")
+    : body.input === undefined ? [] : body.input;
+  const translated = responsesRecordToChat({ ...body, input, stream: false });
+  translated.messages.push({
     role: "user",
-    content: [{
-      type: "input_text",
-      text: "Create a concise summary of the conversation so far. Respond with summary text only."
-    }]
+    content: "Create a concise summary of the conversation so far. Respond with summary text only."
   });
-  const rewritten: Record<string, unknown> = {
-    ...body,
-    input: retained,
-    stream: false
-  };
-  delete rewritten.previous_response_id;
-  delete rewritten.previousResponseId;
-  return responsesRequestToChat(Buffer.from(JSON.stringify(rewritten)));
+  return Buffer.from(JSON.stringify(translated));
+}
+
+export function assertChatSupportsTokenCount(countTokens: boolean): void {
+  if (countTokens) {
+    throw new ProtocolConversionError(
+      "OpenAI Chat upstream does not provide an Anthropic count_tokens equivalent.",
+      501
+    );
+  }
 }
 
 export function anthropicRequestToChat(
   rawBody: Buffer,
   options: { countTokens?: boolean } = {}
 ): Buffer {
-  if (options.countTokens === true) {
-    throw new ProtocolConversionError(
-      "OpenAI Chat upstream does not provide an Anthropic count_tokens equivalent.",
-      501
-    );
-  }
+  assertChatSupportsTokenCount(options.countTokens === true);
   const body = parseJsonRecord(rawBody);
   if (!body) {
     throw new ProtocolConversionError("Anthropic request body must be a JSON object.", 400);
@@ -693,7 +699,7 @@ export function openAiStopReason(
     return "refusal";
   }
   const output = Array.isArray(response.output) ? response.output : [];
-  return output.some((item) => isRecord(item) && item.type === "function_call")
+  return output.some((item) => isRecord(item) && (item.type === "function_call" || item.type === "custom_tool_call"))
     ? "tool_use"
     : "end_turn";
 }
@@ -792,6 +798,9 @@ function rejectUnsupportedResponsesChatFields(body: Record<string, unknown>): vo
     "prompt",
     "truncation"
   ]) {
+    if ((field === "previous_response_id" || field === "previousResponseId") && body[field] == null) {
+      continue;
+    }
     if (field === "reasoning" && chatReasoningEffort(body.reasoning) !== null) {
       continue;
     }
@@ -868,16 +877,19 @@ function responsesInputToChatMessages(
   }
 
   for (const item of value) {
-    if (!isRecord(item) || typeof item.type !== "string") {
+    if (!isRecord(item)) {
       throw new ProtocolConversionError("Responses input items must be objects.", 400);
     }
-    if (item.type === "message") {
+    if (item.type === "message" || item.type === undefined) {
+      if (typeof item.content !== "string" && !Array.isArray(item.content)) {
+        throw new ProtocolConversionError("Responses message content must be a string or array.", 400);
+      }
       if (!["developer", "system", "user", "assistant"].includes(String(item.role))) {
         throw new ProtocolConversionError(`Unsupported Responses message role for OpenAI Chat: ${String(item.role)}.`);
       }
       messages.push({
         role: item.role,
-        content: responsesContentToChat(item.content, item.role === "user" ? "user" : "text")
+        content: responsesContentToChat(item.content, item.role === "user" || item.role === "assistant" ? item.role : "text")
       });
       continue;
     }
@@ -952,7 +964,7 @@ function appendChatToolCall(
 
 function responsesContentToChat(
   value: unknown,
-  mode: "user" | "text"
+  mode: "user" | "assistant" | "text"
 ): string | Array<Record<string, unknown>> {
   if (typeof value === "string") {
     return value;
@@ -966,6 +978,9 @@ function responsesContentToChat(
     }
     if ((block.type === "input_text" || block.type === "output_text") && typeof block.text === "string") {
       return { type: "text", text: block.text };
+    }
+    if (mode === "assistant" && block.type === "refusal" && typeof block.refusal === "string") {
+      return { type: "refusal", refusal: block.refusal };
     }
     if (mode === "user" && block.type === "input_image" && typeof block.image_url === "string") {
       return {
@@ -1607,8 +1622,14 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
     if (!isRecord(item)) {
       throw new ProtocolConversionError("Responses input items must be objects.", 400);
     }
-    if (item.type === "message") {
-      const content = responsesContentToAnthropic(item.content);
+    if (item.type === "message" || item.type === undefined) {
+      if (!["developer", "system", "user", "assistant"].includes(String(item.role))) {
+        throw new ProtocolConversionError(`Unsupported Responses message role for Anthropic Messages: ${String(item.role)}.`);
+      }
+      if (typeof item.content !== "string" && !Array.isArray(item.content)) {
+        throw new ProtocolConversionError("Responses message content must be a string or array.", 400);
+      }
+      const content = responsesContentToAnthropic(item.content, item.role === "assistant");
       if (item.role === "system" || item.role === "developer") {
         system.push(...content.filter(isRecord));
       } else {
@@ -1646,7 +1667,7 @@ function responsesInputToAnthropicMessages(value: unknown, allowCompactionTrigge
       pushAnthropicMessage(messages, "user", [{
         type: "tool_result",
         tool_use_id: item.call_id,
-        content: toolOutputText(item.output)
+        content: Array.isArray(item.output) ? responsesContentToAnthropic(item.output) : toolOutputText(item.output)
       }]);
     } else if (item.type === "reasoning") {
       const state = decodeCompactGateState(item.encrypted_content);
@@ -1695,7 +1716,7 @@ function pushAnthropicMessage(
   messages.push({ role, content });
 }
 
-function responsesContentToAnthropic(value: unknown): unknown[] {
+function responsesContentToAnthropic(value: unknown, assistant = false): unknown[] {
   if (typeof value === "string") {
     return [{ type: "text", text: value }];
   }
@@ -1708,6 +1729,9 @@ function responsesContentToAnthropic(value: unknown): unknown[] {
     }
     if ((block.type === "input_text" || block.type === "output_text") && typeof block.text === "string") {
       return { type: "text", text: block.text };
+    }
+    if (assistant && block.type === "refusal" && typeof block.refusal === "string") {
+      return { type: "text", text: block.refusal };
     }
     if (block.type === "input_image") {
       return responsesImageToAnthropic(block);

@@ -1,9 +1,10 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { createHash } from "node:crypto";
 import type { CompactGateConfig, StreamOutcome } from "../shared/types.js";
-import { enabledApiKeyPool } from "./credentials.js";
+import { credentialCandidateId, enabledApiKeyPool } from "./credentials.js";
 import { readTrimmedString } from "./http-utils.js";
 import { enforceMaxEntries, rememberMapEntry } from "./primary-failover-limits.js";
+import { rateLimitCooldownMs } from "./primary-failover-result.js";
 
 /**
  * Claude-scope key pool selection. Codex gets its rotation from
@@ -19,8 +20,6 @@ const AUTH_QUARANTINE_MS = 30 * 60 * 1000;
 const TRANSIENT_THRESHOLD = 3;
 const TRANSIENT_COOLDOWN_MS = 60 * 1000;
 const TRANSIENT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
-const RATE_LIMIT_MAX_MS = 10 * 60 * 1000;
-const RATE_LIMIT_FALLBACK_MS = 60 * 1000;
 const SESSION_STICKY_TTL_MS = 30 * 60 * 1000;
 const UNBLOCK_JITTER_MS = 2_000;
 /** Same bound the codex stickiness store uses; sessions arrive from clients. */
@@ -65,7 +64,7 @@ export class ClaudeKeyPoolState {
     reserveMs: number;
   }>();
 
-  /** sessionKey -> profile/key composite, the prompt-cache affinity. */
+  /** profile/session -> profile/key composite, the prompt-cache affinity. */
   private readonly sessionStickiness = new Map<string, { keyId: string; expiresAt: number }>();
 
   private readonly now: () => number;
@@ -86,7 +85,8 @@ export class ClaudeKeyPoolState {
   select(
     config: CompactGateConfig,
     profileId: string | null,
-    headers: IncomingHttpHeaders
+    headers: IncomingHttpHeaders,
+    reserve = true
   ): ClaudeKeySelection | null {
     const entries = enabledApiKeyPool(config.claude.primary);
     this.reconcile(config, profileId);
@@ -97,24 +97,28 @@ export class ClaudeKeyPoolState {
     const now = this.elapsedNow();
     const stickyNow = this.now();
     this.cleanupStickiness(stickyNow);
-    const sessionKey = extractClaudeSessionKey(headers);
+    const session = extractClaudeSessionKey(headers);
+    const sessionKey = session === null ? null : JSON.stringify([profileId, session]);
+    const selectKey = (entry: (typeof entries)[number]) => reserve
+      ? this.reserve(entry, profileId, sessionKey, config, now)
+      : { keyId: entry.id, apiKey: entry.api_key };
     // Explicit fixed selection overrides affinity, even while the key is cooling.
     if (config.claude.primary.rotation_opt_out === true) {
-      return this.reserve(entries[0], profileId, sessionKey, config, now);
+      return selectKey(entries[0]);
     }
     if (sessionKey) {
       const pin = this.sessionStickiness.get(sessionKey);
       if (pin && pin.expiresAt > stickyNow) {
-        const pinned = entries.find((entry) => `${profileId}#${entry.id}` === pin.keyId);
-        if (pinned && !this.isBlocked(`${profileId}#${pinned.id}`, now)) {
-          return this.reserve(pinned, profileId, sessionKey, config, now);
+        const pinned = entries.find((entry) => credentialCandidateId(profileId, entry.id) === pin.keyId);
+        if (pinned && !this.isBlocked(credentialCandidateId(profileId, pinned.id), now)) {
+          return selectKey(pinned);
         }
       }
     }
 
     const spread = config.claude.primary.key_strategy === "spread";
     const candidates = entries.map((entry, index) => ({
-      id: `${profileId}#${entry.id}`,
+      id: credentialCandidateId(profileId, entry.id),
       entry,
       order: spread ? 0 : index
     }));
@@ -146,7 +150,7 @@ export class ClaudeKeyPoolState {
               : left.order - right.order;
           })[0] ?? candidates[0];
 
-    return this.reserve(pick.entry, profileId, sessionKey, config, now);
+    return selectKey(pick.entry);
   }
 
   private reserve(
@@ -156,7 +160,7 @@ export class ClaudeKeyPoolState {
     config: CompactGateConfig,
     now: number
   ): ClaudeKeySelection {
-    const composite = `${profileId}#${key.id}`;
+    const composite = credentialCandidateId(profileId, key.id);
     const health = this.healthFor(composite);
     health.inFlight += 1;
     health.lastSelectedAt = now;
@@ -221,7 +225,7 @@ export class ClaudeKeyPoolState {
       health.version += 1;
       health.rateLimitUntil = Math.max(
         health.rateLimitUntil,
-        now + retryAfterCooldownMs(result.responseHeaders, Date.now())
+        now + rateLimitCooldownMs(result.responseHeaders, 1, this.now())
       );
       // Same reasoning as the codex route: when the cooldown expires the upstream
       // has only said "try me later", not "I am whole again", so the key stays
@@ -259,7 +263,7 @@ export class ClaudeKeyPoolState {
     const previous = this.signatures.get(profileId);
     for (const [keyId, signature] of previous ?? []) {
       if (next.get(keyId) === signature) continue;
-      const composite = `${profileId}#${keyId}`;
+      const composite = credentialCandidateId(profileId, keyId);
       this.health.delete(composite);
       for (const [session, pin] of this.sessionStickiness) {
         if (pin.keyId === composite) this.sessionStickiness.delete(session);
@@ -274,7 +278,7 @@ export class ClaudeKeyPoolState {
   }
 
   blockState(profileId: string, keyId: string): number | null {
-    const health = this.health.get(`${profileId}#${keyId}`);
+    const health = this.health.get(credentialCandidateId(profileId, keyId));
     if (!health) {
       return null;
     }
@@ -357,29 +361,6 @@ function rollAmong<T extends { order: number }>(
     return ties[0];
   }
   return ties[Math.min(ties.length - 1, Math.floor(random() * ties.length))];
-}
-
-/**
- * Retry-After for Anthropic routes: an HTTP-date, a numeric seconds count, or
- * nothing (then the fixed fallback backoff). A ten minute cap keeps a hostile
- * or absurd header from exiling a key; the fallback keeps a 429 without a
- * reset time from being forgotten entirely.
- */
-function retryAfterCooldownMs(headers: IncomingHttpHeaders, now: number): number {
-  const value = readTrimmedString(Array.isArray(headers["retry-after"])
-    ? headers["retry-after"][0]
-    : headers["retry-after"]);
-  if (value) {
-    const seconds = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-    if (Number.isFinite(seconds) && seconds > 0) {
-      return Math.min(RATE_LIMIT_MAX_MS, Math.round(seconds * 1000));
-    }
-    const timestamp = Date.parse(value);
-    if (!Number.isNaN(timestamp) && timestamp > now) {
-      return Math.min(RATE_LIMIT_MAX_MS, Math.max(0, timestamp - now));
-    }
-  }
-  return Math.min(RATE_LIMIT_MAX_MS, RATE_LIMIT_FALLBACK_MS);
 }
 
 export function extractClaudeSessionKey(headers: IncomingHttpHeaders): string | null {

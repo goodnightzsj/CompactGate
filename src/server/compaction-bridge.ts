@@ -12,7 +12,6 @@ export interface PrimaryBridgeResult {
   body: Buffer;
   replacedCompactionCount: number;
   remainingCompactionCount: number;
-  knownMissingCompactionCount: number;
 }
 
 export interface CompactionBridgeScope {
@@ -50,12 +49,11 @@ export interface CachedCompactResponse {
   status: number;
   responseBody: Buffer;
   responseHeaders: IncomingHttpHeaders;
-  clientResponseBody: Buffer;
-  clientResponseHeaders: IncomingHttpHeaders;
   compactResponseNormalized: boolean;
   compactResponseNormalizeReason: CompactResponseNormalizeReason | null;
   compactResponseSyntheticSource: CompactResponseSyntheticSource | null;
   firstTokenMs: number | null;
+  compactResponseItemCount?: number;
 }
 
 interface CachedCompactResponseEntry extends CachedCompactResponse {
@@ -86,8 +84,6 @@ const DEFAULT_MAX_COMPACT_DEDUPE_ENTRIES = 128;
 
 export class CompactionBridgeStore {
   private readonly fallbackItemsByKey = new Map<string, CachedFallbackItems>();
-
-  private readonly knownCompactionStateByContent = new Map<string, number>();
 
   private readonly compactResponsesByKey = new Map<string, CachedCompactResponseEntry>();
 
@@ -121,11 +117,10 @@ export class CompactionBridgeStore {
       status: entry.status,
       responseBody: Buffer.from(entry.responseBody),
       responseHeaders: { ...entry.responseHeaders },
-      clientResponseBody: Buffer.from(entry.clientResponseBody),
-      clientResponseHeaders: { ...entry.clientResponseHeaders },
       compactResponseNormalized: entry.compactResponseNormalized,
       compactResponseNormalizeReason: entry.compactResponseNormalizeReason,
       compactResponseSyntheticSource: entry.compactResponseSyntheticSource,
+      compactResponseItemCount: entry.compactResponseItemCount,
       firstTokenMs: entry.firstTokenMs
     };
   }
@@ -141,11 +136,10 @@ export class CompactionBridgeStore {
       status: response.status,
       responseBody: Buffer.from(response.responseBody),
       responseHeaders: withoutSessionHeaders(response.responseHeaders),
-      clientResponseBody: Buffer.from(response.clientResponseBody),
-      clientResponseHeaders: withoutSessionHeaders(response.clientResponseHeaders),
       compactResponseNormalized: response.compactResponseNormalized,
       compactResponseNormalizeReason: response.compactResponseNormalizeReason,
       compactResponseSyntheticSource: response.compactResponseSyntheticSource,
+      compactResponseItemCount: response.compactResponseItemCount,
       firstTokenMs: response.firstTokenMs,
       expiresAt: now + this.compactDedupeTtlMs
     });
@@ -153,16 +147,15 @@ export class CompactionBridgeStore {
   }
 
   storeCompactResponse(
-    responseBody: Buffer,
+    response: Buffer | unknown[],
     options: { scope: CompactionBridgeScope; source?: CompactionBridgeFallbackSource }
   ): void {
-    const parsed = parseJsonRecord(responseBody);
-    const output = Array.isArray(parsed?.output) ? parsed.output : null;
+    const output = Array.isArray(response) ? response : parseJsonRecord(response)?.output;
     const now = this.now();
     const expiresAt = now + this.ttlMs;
     this.pruneExpired(now);
 
-    if (!output || output.length === 0) {
+    if (!Array.isArray(output) || output.length === 0) {
       return;
     }
 
@@ -171,17 +164,14 @@ export class CompactionBridgeStore {
         continue;
       }
 
-      const key = compactionKey(options.scope, item.encrypted_content);
       // Retained output messages are not proof of what the opaque compaction summarized.
       const summary = synthesizeAssistantMessage(item.encrypted_content);
-      const fallbackItems = summary ? [summary] : [];
-      rememberMapEntry(this.knownCompactionStateByContent, sha256(item.encrypted_content), expiresAt);
-      if (fallbackItems.length === 0) {
+      if (!summary) {
         continue;
       }
 
-      rememberMapEntry(this.fallbackItemsByKey, key, {
-        items: deepCloneJsonArray(fallbackItems),
+      rememberMapEntry(this.fallbackItemsByKey, compactionKey(options.scope, item.encrypted_content), {
+        items: [summary],
         expiresAt,
         source: options.source ?? "standard"
       });
@@ -206,14 +196,12 @@ export class CompactionBridgeStore {
       return {
         body: rawBody,
         replacedCompactionCount: 0,
-        remainingCompactionCount: 0,
-        knownMissingCompactionCount: 0
+        remainingCompactionCount: 0
       };
     }
 
     let replacedCompactionCount = 0;
     let remainingCompactionCount = 0;
-    let knownMissingCompactionCount = 0;
     const rewrittenInput: unknown[] = [];
 
     for (const item of input) {
@@ -240,7 +228,6 @@ export class CompactionBridgeStore {
       if (!synthesizedMessage) {
         rewrittenInput.push(item);
         remainingCompactionCount += 1;
-        knownMissingCompactionCount += this.knownCompactionStateByContent.has(sha256(item.encrypted_content)) ? 1 : 0;
         continue;
       }
 
@@ -252,8 +239,7 @@ export class CompactionBridgeStore {
       return {
         body: rawBody,
         replacedCompactionCount: 0,
-        remainingCompactionCount,
-        knownMissingCompactionCount
+        remainingCompactionCount
       };
     }
 
@@ -261,8 +247,7 @@ export class CompactionBridgeStore {
     return {
       body: Buffer.from(JSON.stringify(parsed)),
       replacedCompactionCount,
-      remainingCompactionCount,
-      knownMissingCompactionCount
+      remainingCompactionCount
     };
   }
 
@@ -270,12 +255,6 @@ export class CompactionBridgeStore {
     for (const [key, fallback] of this.fallbackItemsByKey.entries()) {
       if (fallback.expiresAt <= now) {
         this.fallbackItemsByKey.delete(key);
-      }
-    }
-
-    for (const [encryptedContent, expiresAt] of this.knownCompactionStateByContent.entries()) {
-      if (expiresAt <= now) {
-        this.knownCompactionStateByContent.delete(encryptedContent);
       }
     }
 

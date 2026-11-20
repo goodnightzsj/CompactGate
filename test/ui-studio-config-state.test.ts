@@ -198,10 +198,9 @@ describe("Studio config ownership", () => {
     });
     expect(conflicted.formRevision).toBe("rDIFFERENTBOOT-0");
 
-    // ...and the operator can deliberately override it without losing the draft.
-    const overridden = reduceStudioConfigState(conflicted, { type: "rebase_form_revision" });
-    expect(overridden.formRevision).toBe("rOTHER-9");
-    expect(overridden.form.codexPrimaryBaseUrl).toBe("http://draft.local/v1");
+    // Explicit override needs the ancestor; advancing revision alone would mix credentials.
+    expect(conflicted.formBaseline).toEqual(afterRestart);
+    expect(conflicted.form.codexPrimaryBaseUrl).toBe("http://draft.local/v1");
   });
 
   it("re-bases the draft on this tab's own successful writes", async () => {

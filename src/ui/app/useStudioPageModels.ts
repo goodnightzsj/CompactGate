@@ -37,18 +37,23 @@ export function useStudioPageModels({
     setConfig,
     health,
     setHealth,
+    healthRevision,
+    setCodexStatus,
+    setClientIdentity,
+    applyHealthRefreshResult,
+    pageErrorRevision,
     form,
     setForm,
     draftRevision,
     formRevision,
+    formBaseline,
     applyRemoteConfig,
+    applyWrittenConfig,
     applyProfileConfig,
     commitConfig,
     notifyServerRecovered,
     pageError,
-    setPageError,
     retryBootstrap,
-    rebaseFormRevision,
     bootstrapFailed
   } = useStudioBootstrap(pageMode);
   const hasConfig = config !== null;
@@ -60,12 +65,16 @@ export function useStudioPageModels({
     logPageLimit,
     applyRemoteConfig,
     onServerRecovered: notifyServerRecovered,
-    setHealth
+    setHealth,
+    setCodexStatus
   });
   const healthRefresh = useHealthRefresh({
     enabled: healthMode,
+    health,
+    healthRevision,
+    pageErrorRevision,
     setHealth,
-    setPageError
+    applyHealthRefreshResult
   });
   const logs = logFeed.logPage.logs;
   const documentVisible = useSyncExternalStore(
@@ -91,14 +100,14 @@ export function useStudioPageModels({
     draftRevision,
     formRevision,
     commitConfig,
-    rebaseFormRevision,
-    applyRemoteConfig,
+    formBaseline,
+    applyWrittenConfig,
     applyProfileConfig,
     setConfig,
     setForm,
-    setHealth,
-    setPageError
+    refreshHealthAfterWrite: healthRefresh.refreshHealthAfterWrite
   });
+  const displayedPageError = [pageError, configActions.exportError].filter(Boolean).join("; ") || null;
   const effectiveCompactModel =
     form.modelMode === "linked" ? linkedCompactModel : form.modelOverride || "手动模型";
   const previewRoute = configActions.preview?.route ?? null;
@@ -122,8 +131,8 @@ export function useStudioPageModels({
     pageOutlet: {
       currentPage,
       healthMode,
-      pageError,
-      onRetry: retryBootstrap,
+      pageError: displayedPageError,
+      onRetry: pageError || !configActions.exportError ? retryBootstrap : () => { void configActions.retryExport(); },
       onLogDrilldown: ({ host, ...filter }) => {
         logFeed.setRouteFilter("all");
         logFeed.setStatusFilter("all");
@@ -131,8 +140,7 @@ export function useStudioPageModels({
         logFeed.setSearchFilter("");
         logFeed.setDrilldown(filter);
       },
-      // Only the load path leaves stale data on screen; other page errors (a
-      // failed export, say) sit over data that is perfectly current.
+      // An export error does not change whether the loaded data is stale.
       hasStaleData: hasConfig && bootstrapFailed,
       healthPage: {
         health,
@@ -168,14 +176,17 @@ export function useStudioPageModels({
         onRetryLogs: logFeed.retryLogs,
         codexStatus: health?.codex ?? null,
         clientIdentity: health?.client_identity ?? null,
+        onClientIdentityChange: setClientIdentity,
         previewPanel: {
           isPreviewing: configActions.isPreviewing,
           previewPath: configActions.previewPath,
+          previewMethod: configActions.previewMethod,
           previewBody: configActions.previewBody,
           previewHeaders: configActions.previewHeaders,
           preview: configActions.preview,
           previewError: configActions.previewError,
           onPathChange: configActions.setPreviewPath,
+          onMethodChange: configActions.setPreviewMethod,
           onBodyChange: configActions.setPreviewBody,
           onHeadersChange: configActions.setPreviewHeaders,
           onPreviewSubmit: configActions.previewRoute,

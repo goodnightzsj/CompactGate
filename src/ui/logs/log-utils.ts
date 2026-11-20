@@ -130,6 +130,10 @@ export function logStatusToneClass(entry: RequestLogEntry): "is-ok" | "is-err" {
   return logStatusKind(entry) === "error" ? "is-err" : "is-ok";
 }
 
+export function logErrorDetail(entry: RequestLogEntry): string {
+  return entry.error_summary ?? [`HTTP ${entry.status}`, entry.stream_outcome, entry.stream_terminal_event].filter(Boolean).join(" · ");
+}
+
 export function buildHostFilterOptions(
   hostCounts: HostLogCount[],
   selectedHost: string
@@ -193,7 +197,7 @@ export async function fetchLogPage({
   drilldown?: LogDrilldownFilter;
   limit: number;
   offset: number;
-}): Promise<RequestLogPage> {
+}, signal?: AbortSignal): Promise<RequestLogPage> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset)
@@ -215,13 +219,14 @@ export async function fetchLogPage({
   if (drilldown) {
     params.set("from", drilldown.from);
     params.set("to", drilldown.to);
+    if (drilldown.calendar_tz) params.set("calendar_tz", drilldown.calendar_tz);
     if (drilldown.model !== undefined) params.set("model", drilldown.model ?? "");
   }
   if (keyword.length > 0) {
     params.set("search", keyword);
   }
 
-  return api<RequestLogPage>(`/api/logs/recent?${params.toString()}`);
+  return api<RequestLogPage>(`/api/logs/recent?${params.toString()}`, { signal });
 }
 
 export function appendLogPage(previous: RequestLogPage, nextPage: RequestLogPage): RequestLogPage {

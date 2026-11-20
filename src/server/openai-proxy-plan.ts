@@ -10,7 +10,7 @@ import { appendHeaderToken, buildUpstreamHeaders, parseJsonRecord } from "./http
 import { applyHostBodyQuirks, applyHostQuirks, type HostBodyQuirkContext } from "./host-quirks.js";
 import { applyClientIdentityUserAgent, isNativeCliRequest } from "./client-identity.js";
 import type { ClientIdentityStore } from "./client-identity-store.js";
-import { analyzeProviderState, type CompileProviderStateOptions, type ProviderStateFidelity } from "./provider-state-portability.js";
+import { analyzeProviderState, lowerFidelity, type CompileProviderStateOptions, type ProviderStateFidelity } from "./provider-state-portability.js";
 import {
   buildAnthropicUpstreamHeaders,
   buildClaudeUpstreamUrl
@@ -23,7 +23,9 @@ import {
 import {
   buildUpstreamUrl,
   compactUpstreamBaseUrl,
+  compactUpstreamProtocol,
   deriveCompactModel,
+  isProtocolConversionRequest,
   rewriteCompactBody,
   rewritePrimaryBody,
   upstreamPathForEndpoint
@@ -32,9 +34,7 @@ import {
   responsesRequestToChat,
   responsesRemoteV2CompactionToChat,
   responsesCompactRequestToAnthropic,
-  responsesRequestToAnthropic,
-  ProtocolConversionError,
-  UnsupportedClientProtocolError
+  responsesRequestToAnthropic
 } from "./protocol-conversion.js";
 
 const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
@@ -46,6 +46,7 @@ export interface OpenAiProxyPlan {
   timeoutMessage: string;
   requestHeaders: Record<string, string>;
   upstreamBody: Buffer;
+  responsesRequestBody?: Buffer;
   sourceModel: string | null;
   targetModel: string | null;
   compactBridgeReplacements: number;
@@ -103,56 +104,43 @@ export function buildPrimaryOpenAiProxyPlan({
     targetModel: sourceModel ? deriveCompactModel(sourceModel, config) : null
   };
   const upstreamProtocol = selectedPrimaryConfig.primary.upstream_protocol;
-  const translateResponses = method === "POST" && endpoint === "/responses";
-  if (endpoint === "/chat/completions" && upstreamProtocol !== "openai_chat") {
-    throw new UnsupportedClientProtocolError(
-      "Chat Completions requires an openai_chat upstream. Select a Chat profile, or use /v1/responses with Responses format."
-    );
-  }
-  if (endpoint === "/messages" || endpoint === "/messages/count_tokens") {
-    throw new UnsupportedClientProtocolError(
-      "Anthropic Messages requires the /anthropic/v1/messages endpoint and Messages format."
-    );
-  }
+  const translateResponses = isProtocolConversionRequest(method, endpoint, "openai");
+  const upstreamPath = upstreamPathForEndpoint(method, url.pathname, "openai", upstreamProtocol);
   const splitCompactMode = config.compact.upstream_mode === "split";
   const preserveProviderState = preserveRemoteV2State && upstreamProtocol === "openai_responses";
+  const chatCompactionFallback = synthesizeRemoteV2Compaction && upstreamProtocol === "openai_chat";
+  const continuation = translateResponses && upstreamProtocol !== "openai_responses" && primarySelection.context.previousResponseId
+    ? restoreCompaction?.(modelRewrite.body)
+    : null;
+  const bodyWithHistory = continuation?.body ?? modelRewrite.body;
   let bridgeResult = !translateResponses || preserveProviderState
     ? {
-        body: modelRewrite.body,
+        body: bodyWithHistory,
         replacedCompactionCount: 0,
-        remainingCompactionCount: 0,
-        knownMissingCompactionCount: 0
+        remainingCompactionCount: 0
       }
-    : compactionBridge.rewritePrimaryBody(modelRewrite.body, compactBridgeScope, {
+    : compactionBridge.rewritePrimaryBody(bodyWithHistory, compactBridgeScope, {
         includeStandardFallbacks: splitCompactMode,
         includeSyntheticFallbacks: true,
         allowReadableFallback: splitCompactMode
       });
-  let recoveredContextFidelity: ProviderStateFidelity | undefined = bridgeResult.replacedCompactionCount > 0 ? "summary" : undefined;
-  if (
-    !preserveProviderState &&
-    (
-      upstreamProtocol === "openai_responses"
-        ? splitCompactMode && bridgeResult.knownMissingCompactionCount > 0
-        : bridgeResult.remainingCompactionCount > 0
-    )
-  ) {
-    const recovered = restoreCompaction?.(modelRewrite.body);
+  let recoveredContextFidelity = continuation?.fidelity;
+  if (bridgeResult.replacedCompactionCount > 0) {
+    recoveredContextFidelity = lowerFidelity(continuation?.fidelity ?? "exact", "summary");
+  }
+  if (upstreamProtocol !== "openai_responses" && bridgeResult.remainingCompactionCount > 0) {
+    const recovered = restoreCompaction?.(bodyWithHistory);
     if (!recovered || analyzeProviderState(recovered.body).compactionItemCount > 0) {
       throw new UnresolvedCompactionStateError(bridgeResult.remainingCompactionCount);
     }
-    recoveredContextFidelity = recovered.fidelity;
+    recoveredContextFidelity = lowerFidelity(continuation?.fidelity ?? "exact", recovered.fidelity);
     bridgeResult = { body: recovered.body, replacedCompactionCount: bridgeResult.replacedCompactionCount + bridgeResult.remainingCompactionCount,
-      remainingCompactionCount: 0, knownMissingCompactionCount: 0 };
+      remainingCompactionCount: 0 };
   }
 
-  const chatCompactionFallback = synthesizeRemoteV2Compaction &&
-    upstreamProtocol === "openai_chat";
   const upstreamBody = chatCompactionFallback
-    ? responsesRemoteV2CompactionToChat(modelRewrite.body)
+    ? responsesRemoteV2CompactionToChat(bridgeResult.body)
     : translateResponses ? translateOpenAiRequest(bridgeResult.body, upstreamProtocol) : modelRewrite.body;
-  const upstreamPath = upstreamPathForEndpoint(method, url.pathname, "openai", upstreamProtocol);
-
   const plan = withRequestHeaders(
     headers,
     resolveRouteCredential("primary", selectedPrimaryConfig).apiKey ?? "",
@@ -166,6 +154,7 @@ export function buildPrimaryOpenAiProxyPlan({
       timeoutMs: config.timeouts.primary_ms,
       timeoutMessage: "Primary upstream request timed out.",
       upstreamBody,
+      responsesRequestBody: translateResponses && upstreamProtocol !== "openai_responses" ? bridgeResult.body : undefined,
       sourceModel,
       targetModel: modelRewrite.targetModel,
       compactBridgeReplacements: bridgeResult.replacedCompactionCount,
@@ -201,9 +190,9 @@ export function buildCompactOpenAiProxyPlan({
   clientIdentity?: ClientIdentityStore;
 }): OpenAiProxyPlan {
   const rewrite = rewriteCompactBody(rawBody, config);
-  const upstreamProtocol = config.compact.upstream_mode === "split"
+  const upstreamProtocol = compactUpstreamProtocol(config.compact.upstream_mode === "split"
     ? config.compact.upstream_protocol
-    : config.primary.upstream_protocol;
+    : config.primary.upstream_protocol);
   const upstreamBody = translateCompactOpenAiRequest(rewrite.body, upstreamProtocol, nativeCompaction);
   const upstreamPath = upstreamProtocol === "anthropic_messages" ? "/v1/messages" : url.pathname;
   const credential = resolveRouteCredential("compact", config);
@@ -329,18 +318,15 @@ function translateOpenAiRequest(body: Buffer, protocol: UpstreamProtocol): Buffe
 
 function translateCompactOpenAiRequest(
   body: Buffer,
-  protocol: UpstreamProtocol,
+  protocol: Exclude<UpstreamProtocol, "openai_chat">,
   nativeCompaction: boolean
 ): Buffer {
   if (protocol === "openai_responses") {
     return body;
   }
-  if (protocol === "anthropic_messages") {
-    return nativeCompaction
-      ? responsesCompactRequestToAnthropic(body)
-      : responsesRequestToAnthropic(body);
-  }
-  throw new ProtocolConversionError("OpenAI Chat upstream cannot handle Responses compaction requests.");
+  return nativeCompaction
+    ? responsesCompactRequestToAnthropic(body)
+    : responsesRequestToAnthropic(body);
 }
 
 function buildAnthropicRequestHeaders(

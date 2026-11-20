@@ -6,15 +6,18 @@ import type {
 import { upstreamHealthBadge } from "../health/health-status.js";
 import { pagePathForStudioPage } from "../routing.js";
 import { errorSummary } from "../shared/api.js";
+import type { StudioPage } from "../app-types.js";
 
 export function DashboardStatsGrid({
   health,
   listen,
-  logCounts
+  logCounts,
+  onNavigate
 }: {
   health: HealthResponse | null;
   listen: string | null;
   logCounts: Record<"all" | RouteKind, number> | null;
+  onNavigate: (page: StudioPage) => void;
 }) {
   const codexPrimaryOk = upstreamHealthBadge(health?.primary).tone === "good";
   const codexCompactOk = upstreamHealthBadge(health?.compact).tone === "good";
@@ -58,7 +61,11 @@ export function DashboardStatsGrid({
           <div className="dashboard-health-summary-meta">
             {!health ? "等待健康数据" : allReady ? "全部配置就绪" : `${totalRoutes - readyRoutes} 条路由需要关注`}
           </div>
-          <a className="dashboard-health-summary-link" href={pagePathForStudioPage("health")}>查看详情 →</a>
+          <a className="dashboard-health-summary-link" href={pagePathForStudioPage("health")} onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            onNavigate("health");
+          }}>查看详情 →</a>
         </div>
       </div>
     </div>

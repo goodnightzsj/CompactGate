@@ -11,6 +11,21 @@ import {
 } from "../src/server/http-utils.js";
 
 describe("usage metadata extraction", () => {
+  it.each(["metadata", "output", "content", "tool_result", "choices"])("ignores token-shaped data inside %s", key => {
+    const usage = { input_tokens: 12345, output_tokens: 6789 };
+    for (const content of [usage, { usage }, [{ usage }]]) {
+      expect(extractResponseUsage(Buffer.from(JSON.stringify({ usage: null, [key]: content })))).toMatchObject({
+        inputTokens: null, outputTokens: null, totalTokens: null
+      });
+    }
+  });
+
+  it("retains root usage records and protocol-envelope usage", () => {
+    const usage = { input_tokens: 10, output_tokens: 2 };
+    for (const value of [usage, { usage }, { response: { usage } }, { message: { usage } }, { usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2 } }]) {
+      expect(extractResponseUsage(Buffer.from(JSON.stringify(value)))).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
+    }
+  });
   it("extracts usage from Brotli encoded Anthropic responses", () => {
     const body = brotliCompressSync(Buffer.from(JSON.stringify({
       type: "message",
@@ -414,10 +429,22 @@ describe("usage metadata extraction", () => {
     })).toBe("Upstream returned HTTP 500.");
   });
 
+  it("only treats protocol-declared JSON failures as errors under HTTP 200", () => {
+    for (const body of [
+      { status: "failed", error: { code: "server_error", message: "synthetic" } },
+      { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+      { error: { type: "api_error", message: "synthetic" } }
+    ]) expect(extractResponseErrorSummary(200, Buffer.from(JSON.stringify(body)))).toBeTruthy();
+    for (const body of [
+      { status: "completed", error: null, output: [{ error: "user content" }] },
+      { metadata: { status: "failed", error: "user content" }, message: "ordinary message" }
+    ]) expect(extractResponseErrorSummary(200, Buffer.from(JSON.stringify(body)))).toBeNull();
+  });
+
   it("bounds generic gzip text and JSON decoding helpers", () => {
     const body = gzipSync(Buffer.from(JSON.stringify({
       ok: true,
-      padding: "x".repeat(9 * 1024 * 1024)
+      padding: "x".repeat(33 * 1024 * 1024)
     })));
 
     expect(decodeBodyText(body)).toBe("");
